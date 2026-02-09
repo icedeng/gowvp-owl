@@ -233,3 +233,12 @@ PRODUCTION_HOST = remoteHost
 release/push:
 	@scp build/linux_amd64/bin $(PRODUCTION_HOST):/home/app/$(MODULE_NAME)
 	@echo "push Successed"
+
+
+# 不包含 ai 功能的融合镜像 ARM64
+docker/build/zlm_tar/arm64: build/clean build/linux
+	@docker buildx build --platform linux/arm64 --output type=docker,dest=./build/gowvp-arm64.tar -t gowvp:arm64 -f Dockerfile_zlm .
+# scp homenvr-arm64.tar <user>@<server>:/home/app/<dir>/
+# 服务器上
+# docker load -i /home/app/<dir>/gowvp-arm64.tar
+# docker run --rm -it gowvp:arm64
