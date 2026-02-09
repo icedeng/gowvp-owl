@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gowvp/owl/internal/conf"
+	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/ixugo/goddd/domain/version/versionapi"
 	"github.com/ixugo/goddd/pkg/logger"
 	"github.com/ixugo/goddd/pkg/server"
@@ -32,6 +33,16 @@ func Run(bc *conf.Bootstrap) {
 	if bc.Server.Recording.StorageDir == "" {
 		bc.Server.Recording.StorageDir = "./configs/recordings"
 	}
+	switch bc.Server.Recording.DefaultMode {
+	case "", "always", "ai", "none":
+		if bc.Server.Recording.DefaultMode == "" {
+			bc.Server.Recording.DefaultMode = "always"
+		}
+	default:
+		slog.Warn("invalid recording default mode, fallback to always", "mode", bc.Server.Recording.DefaultMode)
+		bc.Server.Recording.DefaultMode = "always"
+	}
+	ipc.SetDefaultRecordMode(bc.Server.Recording.DefaultMode)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

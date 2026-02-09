@@ -16,6 +16,22 @@ const (
 	TypeRTMP    = "RTMP"
 )
 
+var defaultRecordMode = "always"
+
+func normalizeRecordMode(mode string) string {
+	switch mode {
+	case "always", "ai", "none":
+		return mode
+	default:
+		return "always"
+	}
+}
+
+// SetDefaultRecordMode 设置全局默认录像模式（仅用于通道未配置 record_mode 的场景）。
+func SetDefaultRecordMode(mode string) {
+	defaultRecordMode = normalizeRecordMode(mode)
+}
+
 func GetType(stream string) string {
 	switch true {
 	case bz.IsGB28181(stream):
@@ -47,21 +63,21 @@ type DeviceExt struct {
 
 func (e *DeviceExt) GetRecordMode() string {
 	if e.RecordMode == "" {
-		return "always"
+		return defaultRecordMode
 	}
-	return e.RecordMode
+	return normalizeRecordMode(e.RecordMode)
 }
 
 func (e *DeviceExt) IsAlwaysRecord() bool {
-	return e.RecordMode == "always" || e.RecordMode == ""
+	return e.GetRecordMode() == "always"
 }
 
 func (e *DeviceExt) IsAIRecord() bool {
-	return e.RecordMode == "ai"
+	return e.GetRecordMode() == "ai"
 }
 
 func (e *DeviceExt) IsNoneRecord() bool {
-	return e.RecordMode == "none"
+	return e.GetRecordMode() == "none"
 }
 
 // Scan implements orm.Scaner.

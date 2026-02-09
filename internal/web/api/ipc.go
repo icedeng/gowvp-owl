@@ -114,12 +114,18 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 
 func (a IPCAPI) findDevice(c *gin.Context, in *ipc.FindDeviceInput) (any, error) {
 	items, total, err := a.ipc.FindDevice(c.Request.Context(), in)
+	fillDeviceRecordMode(items)
 	return gin.H{"items": items, "total": total}, err
 }
 
 func (a IPCAPI) getDevice(c *gin.Context, _ *struct{}) (any, error) {
 	deviceID := c.Param("id")
-	return a.ipc.GetDevice(c.Request.Context(), deviceID)
+	dev, err := a.ipc.GetDevice(c.Request.Context(), deviceID)
+	if err != nil {
+		return nil, err
+	}
+	fillDeviceRecordMode([]*ipc.Device{dev})
+	return dev, nil
 }
 
 func (a IPCAPI) editDevice(c *gin.Context, in *ipc.EditDeviceInput) (any, error) {
@@ -165,6 +171,7 @@ func (a IPCAPI) queryCatalog(c *gin.Context, _ *struct{}) (any, error) {
 func (a IPCAPI) FindChannelsForDevice(c *gin.Context, in *ipc.FindDeviceInput) (any, error) {
 	ctx := c.Request.Context()
 	items, total, err := a.ipc.FindChannelsForDevice(ctx, in)
+	fillDeviceRecordMode(items)
 
 	// 收集所有通道 ID 用于批量查询录像
 	var cids []string
@@ -197,6 +204,22 @@ func (a IPCAPI) FindChannelsForDevice(c *gin.Context, in *ipc.FindDeviceInput) (
 	})
 
 	return gin.H{"items": items, "total": total}, err
+}
+
+// fillDeviceRecordMode 统一设备接口返回：record_mode 为空时回填默认值。
+func fillDeviceRecordMode(items []*ipc.Device) {
+	for _, dev := range items {
+		if dev == nil {
+			continue
+		}
+		dev.Ext.RecordMode = dev.Ext.GetRecordMode()
+		for _, ch := range dev.Children {
+			if ch == nil {
+				continue
+			}
+			ch.Ext.RecordMode = ch.Ext.GetRecordMode()
+		}
+	}
 }
 
 // >>> channel >>>>>>>>>>>>>>>>>>>>

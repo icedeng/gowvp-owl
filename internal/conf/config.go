@@ -31,6 +31,7 @@ type Server struct {
 // 默认所有录制均开启，通过 Disabled 字段关闭特定类型的录制
 type ServerRecording struct {
 	Disabled           bool    `comment:"是否禁用录制（全局开关，true=禁用）"`
+	DefaultMode        string  `comment:"通道未设置时的默认录像模式：always/ai/none"`
 	StorageDir         string  `comment:"录像存储根目录（相对于工作目录）"`
 	RetainDays         int     `comment:"录像保留天数（超过则清理）"`
 	DiskUsageThreshold float64 `comment:"磁盘使用率阈值（百分比），超过则触发循环覆盖"`
