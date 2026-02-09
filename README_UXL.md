@@ -14,7 +14,9 @@ git remote add uxlabs ssh://git@git.uxlabs.me:2222/labs/gowvp-owl.git
 # 推送到 uxlabs：
 git push uxlabs main
 
-# 从特定地址拉取： 
-git pull origin
-
+# 抓取源作者的更新
+git fetch origin
+# 合并到修改的本地分支
+git checkout uxl-main
+git merge origin/main
 ```
