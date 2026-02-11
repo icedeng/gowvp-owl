@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -91,11 +92,8 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 
 // filterUnknowDevices 国标 ID 校验，正常是长度为 20 的纯数字字符串
 func filterUnknowDevices(deviceID string) error {
-	if len(deviceID) < 18 {
-		return fmt.Errorf("device id too short")
-	}
-	if len(deviceID) > 20 {
-		return fmt.Errorf("device id too long")
+	if len(deviceID) != 20 {
+		return fmt.Errorf("device id must be 20 digits")
 	}
 	// 验证必须全是数字
 	for _, ch := range deviceID {
@@ -113,25 +111,29 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		return
 	}
 
-	dev, err := g.core.GetDeviceByDeviceID(ctx.DeviceID)
-	if err != nil {
-		ctx.Log.Error("GetDeviceByDeviceID", "err", err)
-		ctx.String(http.StatusInternalServerError, "server db error")
-		return
+	var (
+		dev      ipc.Device
+		isNewDev bool
+	)
+	if err := g.core.Store().Device().Get(context.TODO(), &dev, orm.Where("device_id=?", ctx.DeviceID)); err != nil {
+		if !orm.IsErrRecordNotFound(err) {
+			ctx.Log.Error("GetDeviceByDeviceID", "err", err)
+			ctx.String(http.StatusInternalServerError, "server db error")
+			return
+		}
+		isNewDev = true
 	}
-	g.svr.memoryStorer.LoadOrStore(ctx.DeviceID, &Device{
-		conn:   ctx.Request.GetConnection(),
-		source: ctx.Source,
-		to:     ctx.To,
-	})
 
-	password := dev.Password
-	if password == "" {
-		password = g.cfg.Password
-	}
-	// 免鉴权
-	if dev.Password == ignorePassword {
-		password = ""
+	password := g.cfg.Password
+	if !isNewDev {
+		password = dev.Password
+		if password == "" {
+			password = g.cfg.Password
+		}
+		// 免鉴权
+		if dev.Password == ignorePassword {
+			password = ""
+		}
 	}
 
 	if password != "" {
@@ -145,7 +147,11 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		authenticateHeader := hdrs[0].(*sip.GenericHeader)
 		auth := sip.AuthFromValue(authenticateHeader.Contents)
 		auth.SetPassword(password)
-		auth.SetUsername(dev.GetGB28181DeviceID())
+		if !isNewDev {
+			auth.SetUsername(dev.GetGB28181DeviceID())
+		} else {
+			auth.SetUsername(ctx.DeviceID)
+		}
 		auth.SetMethod(ctx.Request.Method())
 		auth.SetURI(auth.Get("uri"))
 		if auth.CalcResponse() != auth.Get("response") {
@@ -154,6 +160,24 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 			return
 		}
 	}
+
+	// 鉴权通过后，未知设备才自动建档
+	if isNewDev {
+		d, err := g.core.GetDeviceByDeviceID(ctx.DeviceID)
+		if err != nil {
+			ctx.Log.Error("create device by device_id failed", "err", err)
+			ctx.String(http.StatusInternalServerError, "server db error")
+			return
+		}
+		dev = *d
+	}
+
+	// 仅在通过校验后更新内存状态，避免未授权请求污染内存
+	g.svr.memoryStorer.LoadOrStore(ctx.DeviceID, &Device{
+		conn:   ctx.Request.GetConnection(),
+		source: ctx.Source,
+		to:     ctx.To,
+	})
 
 	respFn := func() {
 		resp := sip.NewResponseFromRequest("", ctx.Request, http.StatusOK, "OK", nil)
