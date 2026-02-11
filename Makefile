@@ -235,10 +235,18 @@ release/push:
 	@echo "push Successed"
 
 
-# 不包含 ai 功能的融合镜像 ARM64
-docker/build/zlm_tar/arm64: build/clean build/linux
+# 不包含 ai 功能的融合镜像（本地导出 tar，支持 amd64/arm64）
+docker/build/zlm_tar/linux: build/clean build/linux docker/build/zlm_tar/amd64 docker/build/zlm_tar/arm64
+
+docker/build/zlm_tar/amd64:
+	@docker buildx build --platform linux/amd64 --output type=docker,dest=./build/gowvp-amd64.tar -t gowvp:amd64 -f Dockerfile_zlm .
+
+docker/build/zlm_tar/arm64:
 	@docker buildx build --platform linux/arm64 --output type=docker,dest=./build/gowvp-arm64.tar -t gowvp:arm64 -f Dockerfile_zlm .
-# scp homenvr-arm64.tar <user>@<server>:/home/app/<dir>/
+
+# 上传到服务器
+# scp gowvp-arm64.tar <user>@<server>:/home/app/<dir>/
 # 服务器上
+# docker load -i /home/app/<dir>/gowvp-amd64.tar
 # docker load -i /home/app/<dir>/gowvp-arm64.tar
-# docker run --rm -it gowvp:arm64
+# docker run --rm -it gowvp:amd64   # 或 gowvp:arm64
