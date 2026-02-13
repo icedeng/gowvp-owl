@@ -45,3 +45,4 @@ __pycache__/
 *.remember/
 *.mp4
 owl
+.DS_Store
