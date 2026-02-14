@@ -17,14 +17,14 @@ type MessageID string
 // It's nicer to avoid using raw strings to represent methods, so the following standard
 // method names are defined here as constants for convenience.
 const (
-	MethodInvite   = "INVITE"
-	MethodACK      = "ACK"
-	MethodCancel   = "CANCEL"
-	MethodBYE      = "BYE"
-	MethodRegister = "REGISTER"
-	MethodOptions  = "OPTIONS"
-	// SUBSCRIBE  = "SUBSCRIBE"
-	MethodNotify = "NOTIFY"
+	MethodInvite    = "INVITE"
+	MethodACK       = "ACK"
+	MethodCancel    = "CANCEL"
+	MethodBYE       = "BYE"
+	MethodRegister  = "REGISTER"
+	MethodOptions   = "OPTIONS"
+	MethodSubscribe = "SUBSCRIBE"
+	MethodNotify    = "NOTIFY"
 	// REFER    = "REFER"
 	MethodInfo    = "INFO"
 	MethodMessage = "MESSAGE"

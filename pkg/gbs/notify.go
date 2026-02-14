@@ -18,6 +18,8 @@ const (
 	NotifyMethodChannelsActive = "channels.active"
 	// NotifyMethodRecordStop 视频录制结束
 	NotifyMethodRecordStop = "records.stop"
+	// NotifyMethodAlarm 报警事件通知
+	NotifyMethodAlarm = "events.alarm"
 )
 
 // Notify 消息通知结构
@@ -82,5 +84,13 @@ func notifyRecordStop(url string, req url.Values) *Notify {
 	return &Notify{
 		Method: NotifyMethodRecordStop,
 		Data:   d,
+	}
+}
+
+func notifyAlarm(event *AlarmEvent) *Notify {
+	// 统一报警通知事件，便于外部系统订阅。
+	return &Notify{
+		Method: NotifyMethodAlarm,
+		Data:   event,
 	}
 }

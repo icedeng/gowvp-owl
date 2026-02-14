@@ -20,7 +20,7 @@ type MessageDeviceListResponse struct {
 
 // sipMessageCatalog 设备目录信息查询应答
 // GB/T28181 90 页 A.2.6.4
-func (g GB28181API) sipMessageCatalog(ctx *sip.Context) {
+func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 	var msg MessageDeviceListResponse
 	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
 		slog.Error("Message Unmarshal xml", "err", err)
@@ -63,6 +63,11 @@ func (g GB28181API) sipMessageCatalog(ctx *sip.Context) {
 		// }
 	}
 
+	// 命中通用查询等待队列（A.2.4 Catalog 查询等待）。
+	g.resolvePendingDeviceQuery(ctx.DeviceID, msg.CmdType, msg.SN, "", ctx.Request.Body(), msg.DeviceID)
+	// 9.11 事件源侧：目录变化事件推送给订阅方。
+	g.publishEventNotify("Catalog", ctx.DeviceID, ctx.Request.Body())
+
 	ctx.String(200, "OK")
 }
 
@@ -91,6 +96,10 @@ type Targeter interface {
 	Source() net.Addr
 }
 
+type gbVersioner interface {
+	GBVersion() string
+}
+
 type RequestOption func(*sip.Request)
 
 func (s *Server) wrapRequest(t Targeter, method string, contentType *sip.ContentType, body []byte, opts ...RequestOption) (*sip.Transaction, error) {
@@ -107,6 +116,20 @@ func (s *Server) wrapRequest(t Targeter, method string, contentType *sip.Content
 		AddVia(&sip.ViaHop{
 			Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
 		})
+
+	if v, ok := t.(gbVersioner); ok {
+		switch v.GBVersion() {
+		case "2011":
+			hb.SetXGBVerValue("1.0")
+		case "2016":
+			hb.SetXGBVerValue("2.0")
+		case "2022":
+			hb.SetXGBVerValue("3.0")
+		default:
+			// 未知版本保持默认 3.0，兼容 2022 设备。
+			hb.SetXGBVerValue("3.0")
+		}
+	}
 
 	req := sip.NewRequest("", method, to.URI, sip.DefaultSipVersion, hb.Build(), body)
 	req.SetConnection(conn)

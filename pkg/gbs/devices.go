@@ -27,9 +27,10 @@ type Device struct {
 	// 播放互斥锁也可以移动到 channel 属性
 	playMutex sync.Mutex
 
-	IsOnline bool
-	Address  string
-	Password string
+	IsOnline  bool
+	Address   string
+	Password  string
+	gbVersion string
 
 	conn   sip.Connection
 	source net.Addr
@@ -68,9 +69,15 @@ func NewDevice(conn sip.Connection, d *ipc.Device) *Device {
 		LastRegisterAt:  d.RegisteredAt.Time,
 		IsOnline:        d.IsOnline,
 		Password:        d.Password,
+		gbVersion:       d.Ext.GBVersion,
 	}
 
 	return &c
+}
+
+// GBVersion 返回设备声明的国标版本（2011/2016/2022）。
+func (d *Device) GBVersion() string {
+	return d.gbVersion
 }
 
 // CheckConnection 检查 udp 设备能否通信
@@ -124,6 +131,14 @@ type Channel struct {
 	to     *sip.Address
 
 	device *Device
+}
+
+// GBVersion 返回通道所属设备的国标版本。
+func (c *Channel) GBVersion() string {
+	if c.device == nil {
+		return ""
+	}
+	return c.device.gbVersion
 }
 
 // Conn implements Targeter.

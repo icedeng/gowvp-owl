@@ -9,7 +9,7 @@ import (
 
 // QueryDeviceInfo 设备信息查询请求
 // GB/T28181 81 页 A.2.4.4
-func (g GB28181API) QueryDeviceInfo(ctx *sip.Context) {
+func (g *GB28181API) QueryDeviceInfo(ctx *sip.Context) {
 	tx, err := ctx.SendRequest(sip.MethodMessage, sip.GetDeviceInfoXML(ctx.DeviceID))
 	if err != nil {
 		ctx.Log.Error("sipDeviceInfo", "err", err)
@@ -35,7 +35,7 @@ type MessageDeviceInfoResponse struct {
 
 // sipMessageDeviceInfo 设备信息查询应答
 // GB/T28181 91 页 A.2.6.5
-func (g GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
+func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 	var msg MessageDeviceInfoResponse
 	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
 		ctx.Log.Error("sipMessageDeviceInfo", "err", err, "body", hex.EncodeToString(ctx.Request.Body()))
@@ -56,6 +56,11 @@ func (g GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 		ctx.String(500, ErrDatabase.Error())
 		return
 	}
+
+	// 命中通用查询等待队列（A.2.4 DeviceInfo 查询等待）。
+	g.resolvePendingDeviceQuery(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID)
+	// 9.11 事件源侧：设备信息变化通知。
+	g.publishEventNotify(msg.CmdType, ctx.DeviceID, ctx.Request.Body())
 
 	ctx.String(200, "OK")
 }

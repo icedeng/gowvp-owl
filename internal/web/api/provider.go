@@ -1,8 +1,12 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/wire"
@@ -90,8 +94,66 @@ func NewHTTPHandler(uc *Usecase) http.Handler {
 	}
 
 	setupRouter(g, uc) // 设置路由处理函数
+	// 将 SIP 层 GB 报警上报桥接到事件中心，统一落库到 events 表。
+	setupGBAlarmBridge(uc)
 	uc.Version.RecordVersion()
 	return g // 返回配置好的 Gin 实例作为 http.Handler
+}
+
+// setupGBAlarmBridge 注册 GB 报警回调，并把报警转成标准事件记录。
+func setupGBAlarmBridge(uc *Usecase) {
+	if uc == nil || uc.SipServer == nil {
+		return
+	}
+
+	uc.SipServer.SetAlarmHandler(func(ctx context.Context, in *gbs.AlarmEvent) {
+		if in == nil || strings.TrimSpace(in.DeviceID) == "" {
+			return
+		}
+
+		// 1) 设备国标编码 -> 内部设备ID。
+		dev, err := uc.GB28181API.ipc.GetDeviceByDeviceID(ctx, in.DeviceID)
+		if err != nil {
+			slog.Warn("alarm: device not found", "deviceID", in.DeviceID, "err", err)
+			return
+		}
+
+		var cid string
+		if in.ChannelID != "" && in.ChannelID != in.DeviceID {
+			// 2) 通道国标编码 -> 内部通道ID（查不到时允许为空）。
+			ch, err := uc.GB28181API.ipc.GetChannelByDeviceChannelID(ctx, in.DeviceID, in.ChannelID)
+			if err == nil {
+				cid = ch.ID
+			}
+		}
+
+		started := orm.Now()
+		if t, ok := in.ParseTime(); ok {
+			// 使用设备上报时间；解析失败时退化为服务端当前时间。
+			started = orm.Time{Time: t}
+		}
+
+		label := "gb_alarm"
+		if in.AlarmMethod != "" {
+			// 按报警方式细分标签，如 gb_alarm_4。
+			label = "gb_alarm_" + in.AlarmMethod
+		}
+
+		// 原始报警内容序列化到 zones 字段，便于审计和回溯。
+		zones, _ := json.Marshal(in)
+		if _, err := uc.EventAPI.eventCore.AddEvent(ctx, &event.AddEventInput{
+			DID:       dev.ID,
+			CID:       cid,
+			StartedAt: started,
+			EndedAt:   orm.Time{Time: started.Time.Add(1 * time.Second)},
+			Label:     label,
+			Score:     1,
+			Zones:     string(zones),
+			Model:     "GB28181",
+		}); err != nil {
+			slog.Warn("alarm: save event failed", "deviceID", in.DeviceID, "channelID", in.ChannelID, "err", err)
+		}
+	})
 }
 
 // NewUniqueID 唯一 id 生成器

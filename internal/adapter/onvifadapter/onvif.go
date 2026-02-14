@@ -6,15 +6,21 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gowvp/onvif"
+	imaging "github.com/gowvp/onvif/Imaging"
 	devicemodel "github.com/gowvp/onvif/device"
 	m "github.com/gowvp/onvif/media"
+	p "github.com/gowvp/onvif/ptz"
+	sdk "github.com/gowvp/onvif/sdk"
 	sdkdevice "github.com/gowvp/onvif/sdk/device"
 	sdkmedia "github.com/gowvp/onvif/sdk/media"
+	sdkptz "github.com/gowvp/onvif/sdk/ptz"
+	"github.com/gowvp/onvif/xsd"
 	xsdonvif "github.com/gowvp/onvif/xsd/onvif"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/sms"
@@ -255,6 +261,224 @@ func buildPlayURL(rawurl, username, password string) string {
 		return strings.Replace(rawurl, "rtsp://", fmt.Sprintf("rtsp://%s:%s@", username, password), 1)
 	}
 	return rawurl
+}
+
+func (a *Adapter) PTZControl(ctx context.Context, dev *ipc.Device, ch *ipc.Channel, in *ipc.PTZControlInput) error {
+	onvifDev, ok := a.devices.Load(dev.ID)
+	if !ok {
+		return fmt.Errorf("ONVIF 设备未初始化")
+	}
+	action := strings.ToLower(strings.TrimSpace(in.Action))
+	if in.Speed == 0 {
+		in.Speed = 40
+	}
+	if in.Timeout <= 0 {
+		in.Timeout = 6
+	}
+	profileToken := xsdonvif.ReferenceToken(ch.ChannelID)
+
+	switch action {
+	case "preset_set", "set_preset":
+		if in.Preset < 1 || in.Preset > 255 {
+			return fmt.Errorf("preset must be in [1,255]")
+		}
+		_, err := sdkptz.Call_SetPreset(ctx, onvifDev.Device, p.SetPreset{
+			ProfileToken: profileToken,
+			PresetName:   xsd.String(fmt.Sprintf("Preset-%d", in.Preset)),
+			PresetToken:  xsdonvif.ReferenceToken(fmt.Sprintf("%d", in.Preset)),
+		})
+		return err
+	case "preset_call", "goto_preset":
+		if in.Preset < 1 || in.Preset > 255 {
+			return fmt.Errorf("preset must be in [1,255]")
+		}
+		_, err := sdkptz.Call_GotoPreset(ctx, onvifDev.Device, p.GotoPreset{
+			ProfileToken: profileToken,
+			PresetToken:  xsdonvif.ReferenceToken(fmt.Sprintf("%d", in.Preset)),
+		})
+		return err
+	case "preset_delete", "del_preset", "remove_preset":
+		if in.Preset < 1 || in.Preset > 255 {
+			return fmt.Errorf("preset must be in [1,255]")
+		}
+		_, err := sdkptz.Call_RemovePreset(ctx, onvifDev.Device, p.RemovePreset{
+			ProfileToken: profileToken,
+			PresetToken:  xsdonvif.ReferenceToken(fmt.Sprintf("%d", in.Preset)),
+		})
+		return err
+	case "focus_add", "focus_near", "focus_plus":
+		return a.imagingFocusMove(ctx, onvifDev.Device, profileToken, float64(in.Speed)/255.0)
+	case "focus_sub", "focus_far", "focus_minus":
+		return a.imagingFocusMove(ctx, onvifDev.Device, profileToken, -float64(in.Speed)/255.0)
+	case "iris_add", "iris_open", "aperture_add":
+		return a.imagingIrisAdjust(ctx, onvifDev.Device, profileToken, float64(in.Speed)/255.0)
+	case "iris_sub", "iris_close", "aperture_sub":
+		return a.imagingIrisAdjust(ctx, onvifDev.Device, profileToken, -float64(in.Speed)/255.0)
+	}
+
+	if action == "stop" {
+		_, err := sdkptz.Call_Stop(ctx, onvifDev.Device, p.Stop{
+			ProfileToken: profileToken,
+			PanTilt:      true,
+			Zoom:         true,
+		})
+		return err
+	}
+
+	normalizedSpeed := math.Min(1.0, math.Max(0.0, float64(in.Speed)/255.0))
+	cmd := p.ContinuousMove{
+		ProfileToken: profileToken,
+		Velocity: xsdonvif.PTZSpeed{
+			PanTilt: xsdonvif.Vector2D{},
+			Zoom:    xsdonvif.Vector1D{},
+		},
+		Timeout: xsd.Duration("PT1S"),
+	}
+
+	switch action {
+	case "left":
+		cmd.Velocity.PanTilt.X = -normalizedSpeed
+	case "right":
+		cmd.Velocity.PanTilt.X = normalizedSpeed
+	case "up":
+		cmd.Velocity.PanTilt.Y = normalizedSpeed
+	case "down":
+		cmd.Velocity.PanTilt.Y = -normalizedSpeed
+	case "left_up":
+		cmd.Velocity.PanTilt.X = -normalizedSpeed
+		cmd.Velocity.PanTilt.Y = normalizedSpeed
+	case "left_down":
+		cmd.Velocity.PanTilt.X = -normalizedSpeed
+		cmd.Velocity.PanTilt.Y = -normalizedSpeed
+	case "right_up":
+		cmd.Velocity.PanTilt.X = normalizedSpeed
+		cmd.Velocity.PanTilt.Y = normalizedSpeed
+	case "right_down":
+		cmd.Velocity.PanTilt.X = normalizedSpeed
+		cmd.Velocity.PanTilt.Y = -normalizedSpeed
+	case "zoom_in":
+		cmd.Velocity.Zoom.X = normalizedSpeed
+	case "zoom_out":
+		cmd.Velocity.Zoom.X = -normalizedSpeed
+	default:
+		return fmt.Errorf("unsupported ptz action: %s", action)
+	}
+
+	_, err := sdkptz.Call_ContinuousMove(ctx, onvifDev.Device, cmd)
+	return err
+}
+
+func (a *Adapter) imagingFocusMove(ctx context.Context, dev *onvif.Device, profileToken xsdonvif.ReferenceToken, speed float64) error {
+	token, err := a.getVideoSourceToken(ctx, dev, profileToken)
+	if err != nil {
+		return err
+	}
+	req := imaging.Move{
+		VideoSourceToken: token,
+		Focus: xsdonvif.FocusMove{
+			Continuous: xsdonvif.ContinuousFocus{Speed: xsd.Float(speed)},
+		},
+	}
+
+	httpReply, err := dev.CallMethod(req)
+	if err != nil {
+		return err
+	}
+	type envelope struct {
+		Header struct{}
+		Body   struct {
+			MoveResponse struct{} `xml:"MoveResponse"`
+		}
+	}
+	var reply envelope
+	return sdk.ReadAndParse(ctx, httpReply, &reply, "Move")
+}
+
+func (a *Adapter) imagingIrisAdjust(ctx context.Context, dev *onvif.Device, profileToken xsdonvif.ReferenceToken, delta float64) error {
+	// 通过成像参数接口调节光圈，delta>0 放大，delta<0 缩小。
+	token, err := a.getVideoSourceToken(ctx, dev, profileToken)
+	if err != nil {
+		return err
+	}
+	settings, err := a.getImagingSettings(ctx, dev, token)
+	if err != nil {
+		return err
+	}
+	if settings.Exposure == nil {
+		settings.Exposure = &xsdonvif.Exposure20{}
+	}
+
+	// 光圈值通常为 0~1 区间，按速度做增量调整。
+	step := math.Max(0.02, math.Min(0.3, math.Abs(delta)))
+	next := settings.Exposure.Iris
+	if delta >= 0 {
+		next += step
+	} else {
+		next -= step
+	}
+	if next < 0 {
+		next = 0
+	}
+	if next > 1 {
+		next = 1
+	}
+
+	settings.Exposure.Mode = xsdonvif.ExposureMode("MANUAL")
+	settings.Exposure.Iris = next
+	return a.setImagingSettings(ctx, dev, token, settings)
+}
+
+// getImagingSettings 获取当前视频源成像参数（用于光圈增减前读取基线值）。
+func (a *Adapter) getImagingSettings(ctx context.Context, dev *onvif.Device, token xsdonvif.ReferenceToken) (xsdonvif.ImagingSettings20, error) {
+	httpReply, err := dev.CallMethod(imaging.GetImagingSettings{VideoSourceToken: token})
+	if err != nil {
+		return xsdonvif.ImagingSettings20{}, err
+	}
+	type envelope struct {
+		Header struct{}
+		Body   struct {
+			GetImagingSettingsResponse struct {
+				ImagingSettings xsdonvif.ImagingSettings20 `xml:"ImagingSettings"`
+			} `xml:"GetImagingSettingsResponse"`
+		}
+	}
+	var reply envelope
+	if err := sdk.ReadAndParse(ctx, httpReply, &reply, "GetImagingSettings"); err != nil {
+		return xsdonvif.ImagingSettings20{}, err
+	}
+	return reply.Body.GetImagingSettingsResponse.ImagingSettings, nil
+}
+
+// setImagingSettings 写回成像参数（光圈、曝光等）。
+func (a *Adapter) setImagingSettings(ctx context.Context, dev *onvif.Device, token xsdonvif.ReferenceToken, settings xsdonvif.ImagingSettings20) error {
+	httpReply, err := dev.CallMethod(imaging.SetImagingSettings{
+		VideoSourceToken: token,
+		ImagingSettings:  settings,
+		ForcePersistence: xsd.Boolean(true),
+	})
+	if err != nil {
+		return err
+	}
+	type envelope struct {
+		Header struct{}
+		Body   struct {
+			SetImagingSettingsResponse struct{} `xml:"SetImagingSettingsResponse"`
+		}
+	}
+	var reply envelope
+	return sdk.ReadAndParse(ctx, httpReply, &reply, "SetImagingSettings")
+}
+
+// getVideoSourceToken 通过 ProfileToken 解析视频源 token。
+func (a *Adapter) getVideoSourceToken(ctx context.Context, dev *onvif.Device, profileToken xsdonvif.ReferenceToken) (xsdonvif.ReferenceToken, error) {
+	resp, err := sdkmedia.Call_GetProfile(ctx, dev, m.GetProfile{ProfileToken: profileToken})
+	if err != nil {
+		return "", err
+	}
+	if resp.Profile.VideoSourceConfiguration.SourceToken == "" {
+		return "", fmt.Errorf("video source token is empty")
+	}
+	return resp.Profile.VideoSourceConfiguration.SourceToken, nil
 }
 
 func (a *Adapter) Discover(ctx context.Context, w io.Writer) error {

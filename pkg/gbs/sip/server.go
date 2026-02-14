@@ -77,6 +77,19 @@ func (s *Server) Notify(handler ...HandlerFunc) *RouteGroup {
 	return newRouteGroup(MethodNotify, s, handler...)
 }
 
+// Subscribe 注册 SUBSCRIBE 请求处理器。
+// 主要用于 9.11 事件源侧订阅流程。
+func (s *Server) Subscribe(handler ...HandlerFunc) *RouteGroup {
+	s.addRoute(MethodSubscribe, handler...)
+	return newRouteGroup(MethodSubscribe, s, handler...)
+}
+
+// Handle 注册通用 SIP 方法处理器，用于扩展 INVITE/BYE/ACK 等流程。
+func (s *Server) Handle(method string, handler ...HandlerFunc) *RouteGroup {
+	s.addRoute(method, handler...)
+	return newRouteGroup(method, s, handler...)
+}
+
 func (s *Server) getTX(key string) *Transaction {
 	return s.txs.getTX(key)
 }

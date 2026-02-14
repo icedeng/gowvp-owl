@@ -61,3 +61,180 @@ type PlayResponse struct {
 	Stream string // 流 ID
 	RTSP   string // RTSP 地址 (ONVIF)
 }
+
+type PTZControlInput struct {
+	Action  string
+	Speed   uint8
+	Timeout int // seconds
+	Preset  int
+	Group   uint8
+	Aux     uint8
+	Value   uint16
+}
+
+type PTZCapable interface {
+	PTZControl(ctx context.Context, device *Device, channel *Channel, in *PTZControlInput) error
+}
+
+// GBDeviceControlInput 是 GB 附录 A.2.3 统一控制输入。
+type GBDeviceControlInput struct {
+	TargetID string
+	Action   string
+	Timeout  int // seconds
+
+	PTZCmd      string
+	PTZCmdParam *GBPTZCmdParamInput
+
+	StreamNumber int
+	AlarmMethod  string
+	AlarmType    string
+
+	DragZoom     *GBDragZoomInput
+	HomePosition *GBHomePositionInput
+	PTZPrecise   *GBPTZPreciseInput
+	SDCardID     int
+}
+
+type GBDragZoomInput struct {
+	Length    int
+	Width     int
+	MidPointX int
+	MidPointY int
+	LengthX   int
+	LengthY   int
+}
+
+type GBHomePositionInput struct {
+	Enabled     *int
+	ResetTime   *int
+	PresetIndex *int
+}
+
+type GBPTZPreciseInput struct {
+	Pan  *float64
+	Tilt *float64
+	Zoom *float64
+}
+
+type GBPTZCmdParamInput struct {
+	PresetName      string
+	CruiseTrackName string
+}
+
+type GBDeviceControlOutput struct {
+	SN       int    `json:"sn"`
+	DeviceID string `json:"device_id"`
+	TargetID string `json:"target_id"`
+	Result   string `json:"result"`
+}
+
+type GBDeviceControlCapable interface {
+	DeviceControl(ctx context.Context, device *Device, in *GBDeviceControlInput) (*GBDeviceControlOutput, error)
+}
+
+// GBDeviceQueryInput 是 GB 附录 A.2.4 统一查询输入。
+type GBDeviceQueryInput struct {
+	TargetID string
+	Action   string
+	Timeout  int // seconds
+
+	ConfigType string
+	Interval   int
+	Start      int64 // record_info start unix seconds
+	End        int64 // record_info end unix seconds
+}
+
+type GBDeviceQueryOutput struct {
+	SN       int    `json:"sn"`
+	CmdType  string `json:"cmd_type"`
+	DeviceID string `json:"device_id"`
+	Result   string `json:"result,omitempty"`
+	XML      string `json:"xml"`
+	Data     any    `json:"data,omitempty"`
+}
+
+type GBDeviceQueryCapable interface {
+	DeviceQuery(ctx context.Context, device *Device, in *GBDeviceQueryInput) (*GBDeviceQueryOutput, error)
+}
+
+// RecordQueryInput 录像目录查询参数。
+type RecordQueryInput struct {
+	StartAt int64 // unix seconds
+	EndAt   int64 // unix seconds
+	Timeout int   // seconds
+}
+
+// RecordSegment 单段录像时间范围。
+type RecordSegment struct {
+	Start int64 `json:"start"`
+	End   int64 `json:"end"`
+}
+
+// RecordDate 某一天的录像片段列表。
+type RecordDate struct {
+	Date  string          `json:"date"`
+	Items []RecordSegment `json:"items"`
+}
+
+// RecordQueryOutput 录像目录查询结果。
+type RecordQueryOutput struct {
+	DayTotal int          `json:"daynum"`
+	TimeNum  int          `json:"timenum"`
+	Data     []RecordDate `json:"list"`
+}
+
+// RecordQueryable 协议层可选能力：查询设备录像目录。
+type RecordQueryable interface {
+	QueryRecords(ctx context.Context, device *Device, channel *Channel, in *RecordQueryInput) (*RecordQueryOutput, error)
+}
+
+type UpgradeInput struct {
+	ChannelID    string
+	Firmware     string
+	FileURL      string
+	Manufacturer string
+	SessionID    string
+	Timeout      int // seconds
+}
+
+type UpgradeCapable interface {
+	Upgrade(ctx context.Context, device *Device, channel *Channel, in *UpgradeInput) error
+}
+
+type HistoryControlInput struct {
+	StartAt int64  // unix seconds
+	EndAt   int64  // unix seconds
+	Mode    string // playback/download
+	Cmd     string // INFO 控制命令（原文透传）
+	Action  string // 结构化动作：play/pause/speed/seek
+	Scale   float64
+	SeekAt  int64 // unix seconds
+}
+
+type HistoryCapable interface {
+	StartHistory(ctx context.Context, device *Device, channel *Channel, in *HistoryControlInput) error
+	StopHistory(ctx context.Context, device *Device, channel *Channel, in *HistoryControlInput) error
+	ControlHistory(ctx context.Context, device *Device, channel *Channel, in *HistoryControlInput) error
+}
+
+type TimeSyncCapable interface {
+	SyncTime(ctx context.Context, device *Device) error
+}
+
+type SubscribeInput struct {
+	Event   string
+	Expires int
+}
+
+type SubscribeCapable interface {
+	Subscribe(ctx context.Context, device *Device, in *SubscribeInput) error
+}
+
+type VoiceControlInput struct {
+	Mode string // talk/broadcast
+}
+
+type VoiceCapable interface {
+	StartVoice(ctx context.Context, device *Device, channel *Channel, in *VoiceControlInput) error
+	StopVoice(ctx context.Context, device *Device, channel *Channel, in *VoiceControlInput) error
+}

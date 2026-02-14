@@ -62,7 +62,37 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	msg.Handle("DeviceInfo", api.sipMessageDeviceInfo)
 	msg.Handle("ConfigDownload", api.sipMessageConfigDownload)
 	msg.Handle("DeviceConfig", api.handleDeviceConfig)
-	// msg.Handle("RecordInfo", api.handlerMessage)
+	msg.Handle("DeviceControl", api.sipMessageDeviceControl)
+	msg.Handle("RecordInfo", api.sipMessageRecordInfo)
+
+	// 报警既可能由 MESSAGE 上报，也可能由 NOTIFY 上报，二者均接入。
+	notify := svr.Notify()
+	notify.Handle("Alarm", api.sipNotifyAlarm)
+	notify.Handle("Catalog", api.sipNotifyCatalog)
+	notify.Handle("MobilePosition", api.sipNotifyMobilePosition)
+	notify.Handle("PTZPosition", api.sipMessageQueryGeneric)
+	notify.Handle("DeviceStatus", api.sipMessageQueryGeneric)
+	notify.Handle("PresetQuery", api.sipMessageQueryGeneric)
+	notify.Handle("HomePositionQuery", api.sipMessageQueryGeneric)
+	notify.Handle("SDCardStatus", api.sipMessageQueryGeneric)
+	notify.Handle("ConfigDownload", api.sipMessageQueryGeneric)
+	msg.Handle("Alarm", api.sipMessageAlarm)
+
+	// 9.11 事件源侧：接收上级订阅请求（SUBSCRIBE）。
+	svr.Subscribe(api.sipSubscribeEvent)
+	// 9.2 被叫侧会话兼容：接收入向 INVITE/BYE/ACK。
+	svr.Handle(sip.MethodInvite, api.sipInviteGeneric)
+	svr.Handle(sip.MethodBYE, api.sipByeGeneric)
+	svr.Handle(sip.MethodACK, api.sipAckGeneric)
+
+	// A.2.4 查询响应补齐：注册缺失查询命令响应处理。
+	msg.Handle("DeviceStatus", api.sipMessageQueryGeneric)
+	msg.Handle("PresetQuery", api.sipMessageQueryGeneric)
+	msg.Handle("HomePositionQuery", api.sipMessageQueryGeneric)
+	msg.Handle("PTZPosition", api.sipMessageQueryGeneric)
+	msg.Handle("SDCardStatus", api.sipMessageQueryGeneric)
+	msg.Handle("MobilePosition", api.sipMessageQueryGeneric)
+	msg.Handle("Broadcast", api.sipMessageQueryGeneric)
 
 	c := Server{
 		Server:       svr,
@@ -264,6 +294,63 @@ func (s *Server) Play(in *PlayInput) error {
 
 func (s *Server) StopPlay(ctx context.Context, in *StopPlayInput) error {
 	return s.gb.StopPlay(ctx, in)
+}
+
+func (s *Server) PTZ(ctx context.Context, in *PTZInput) (*PTZOutput, error) {
+	return s.gb.PTZ(in)
+}
+
+// DeviceControl 执行附录 A.2.3 设备控制命令。
+func (s *Server) DeviceControl(ctx context.Context, in *DeviceControlInput) (*DeviceControlOutput, error) {
+	return s.gb.DeviceControl(ctx, in)
+}
+
+// DeviceQuery 执行附录 A.2.4 设备查询命令。
+func (s *Server) DeviceQuery(ctx context.Context, in *DeviceQueryInput) (*DeviceQueryOutput, error) {
+	return s.gb.DeviceQuery(ctx, in)
+}
+
+// QueryRecordList 查询设备录像目录（RecordInfo）。
+func (s *Server) QueryRecordList(ctx context.Context, in *RecordQueryInput) (*Records, error) {
+	return s.gb.QueryRecordList(ctx, in)
+}
+
+// SetAlarmHandler 注册报警回调。
+func (s *Server) SetAlarmHandler(fn func(context.Context, *AlarmEvent)) {
+	s.gb.SetAlarmHandler(fn)
+}
+
+// Upgrade 执行设备软件升级（GB/T 28181-2022 9.13）。
+func (s *Server) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOutput, error) {
+	return s.gb.Upgrade(ctx, in)
+}
+
+func (s *Server) StartHistory(ctx context.Context, in *HistoryInput) error {
+	return s.gb.StartHistory(ctx, in)
+}
+
+func (s *Server) StopHistory(ctx context.Context, in *StopHistoryInput) error {
+	return s.gb.StopHistory(ctx, in)
+}
+
+func (s *Server) ControlHistory(ctx context.Context, in *ControlHistoryInput) error {
+	return s.gb.ControlHistory(ctx, in)
+}
+
+func (s *Server) SyncTime(ctx context.Context, in *TimeSyncInput) error {
+	return s.gb.SyncTime(ctx, in)
+}
+
+func (s *Server) Subscribe(ctx context.Context, in *SubscribeInput) error {
+	return s.gb.Subscribe(ctx, in)
+}
+
+func (s *Server) StartVoice(ctx context.Context, in *VoiceInput) error {
+	return s.gb.StartVoice(ctx, in)
+}
+
+func (s *Server) StopVoice(ctx context.Context, in *StopVoiceInput) error {
+	return s.gb.StopVoice(ctx, in)
 }
 
 // QuerySnapshot 厂商实现抓图的少，sip 层已实现，先搁置

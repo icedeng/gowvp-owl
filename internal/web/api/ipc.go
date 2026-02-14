@@ -69,8 +69,18 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		if err != nil {
 			panic(err)
 		}
-		if err := os.WriteFile(orm.GenerateRandomString(10)+".jpg", b, 0o644); err != nil {
-			slog.ErrorContext(c.Request.Context(), "write cover", "err", err)
+		channelID := strings.TrimSpace(c.Query("channel_id"))
+		if channelID == "" {
+			// 兼容设备不回传 channel_id 的场景，退化到 device_id 作为快照主键。
+			channelID = strings.TrimSpace(c.Query("device_id"))
+		}
+		if channelID == "" {
+			channelID = orm.GenerateRandomString(10)
+		}
+		if len(b) > 0 {
+			if err := writeCover(api.uc.Conf.ConfigDir, channelID, b); err != nil {
+				slog.ErrorContext(c.Request.Context(), "write cover", "err", err, "channel_id", channelID)
+			}
 		}
 		c.JSON(200, gin.H{"msg": "ok"})
 	})
@@ -85,6 +95,8 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.DELETE("/:id", web.WrapH(api.delDevice))               // 删除设备（所有协议）
 		group.GET("/channels", web.WrapH(api.FindChannelsForDevice)) // 设备与通道列表（所有协议）
 		group.POST("/:id/catalog", web.WrapH(api.queryCatalog))
+		group.POST("/:id/gb/control", web.WrapH(api.gbDeviceControl)) // GB 附录A.2.3 设备控制
+		group.POST("/:id/gb/query", web.WrapH(api.gbDeviceQuery))     // GB 附录A.2.4 设备查询
 	}
 	{
 		// group := g.Group("/onvif", handler...)
@@ -95,11 +107,19 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 	// 统一的通道管理 API（支持所有协议）
 	{
 		group := g.Group("/channels", handler...)
-		group.GET("", web.WrapH(api.findChannel))                    // 通道列表（所有协议）
-		group.POST("", web.WrapH(api.addChannel))                    // 添加通道（RTMP/RTSP）
-		group.PUT("/:id", web.WrapH(api.editChannel))                // 修改通道（所有协议）
-		group.DELETE("/:id", web.WrapH(api.delChannel))              // 删除通道（RTMP/RTSP）
-		group.POST("/:id/play", web.WrapH(api.play))                 // 播放（所有协议）
+		group.GET("", web.WrapH(api.findChannel))                     // 通道列表（所有协议）
+		group.POST("", web.WrapH(api.addChannel))                     // 添加通道（RTMP/RTSP）
+		group.PUT("/:id", web.WrapH(api.editChannel))                 // 修改通道（所有协议）
+		group.DELETE("/:id", web.WrapH(api.delChannel))               // 删除通道（RTMP/RTSP）
+		group.POST("/:id/play", web.WrapH(api.play))                  // 播放（所有协议）
+		group.POST("/:id/records/query", web.WrapH(api.queryRecords)) // 录像目录查询（GB28181）
+		group.POST("/:id/ptz", web.WrapH(api.ptzControl))             // 云台控制（GB28181/ONVIF）
+		group.POST("/:id/upgrade", web.WrapH(api.upgradeDevice))      // 设备升级（GB28181-2022）
+		group.POST("/:id/history/start", web.WrapH(api.startHistory)) // 历史回放/下载开始（GB28181）
+		group.POST("/:id/history/stop", web.WrapH(api.stopHistory))   // 历史回放/下载停止（GB28181）
+		group.POST("/:id/history/control", web.WrapH(api.controlHistory))
+		group.POST("/:id/voice/start", web.WrapH(api.startVoice))    // 语音对讲/广播开始（GB28181）
+		group.POST("/:id/voice/stop", web.WrapH(api.stopVoice))      // 语音对讲/广播停止（GB28181）
 		group.POST("/:id/snapshot", web.WrapH(api.refreshSnapshot))  // 图像抓拍（所有协议）
 		group.GET("/:id/snapshot", api.getSnapshot)                  // 获取图像（所有协议）
 		group.POST("/:id/zones", web.WrapH(api.addZone))             // 添加区域（所有协议）
@@ -107,6 +127,11 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/ai/enable", web.WrapH(api.enableAI))        // 启用 AI 检测
 		group.POST("/:id/ai/disable", web.WrapH(api.disableAI))      // 禁用 AI 检测
 		group.POST("/:id/record_mode", web.WrapH(api.setRecordMode)) // 设置录像模式
+	}
+	{
+		group := g.Group("/devices", handler...)
+		group.POST("/:id/time_sync", web.WrapH(api.syncTime))  // 校时（GB28181）
+		group.POST("/:id/subscribe", web.WrapH(api.subscribe)) // 订阅（GB28181）
 	}
 }
 
@@ -454,6 +479,322 @@ type refreshSnapshotInput struct {
 	URL string `json:"url"`
 }
 
+type ptzControlInput struct {
+	Action  string `json:"action"`
+	Speed   uint8  `json:"speed"`
+	Timeout int    `json:"timeout"` // seconds
+	Preset  int    `json:"preset"`
+	Group   uint8  `json:"group"`
+	Aux     uint8  `json:"aux"`
+	Value   uint16 `json:"value"`
+}
+
+type queryRecordsInput struct {
+	StartAt int64 `json:"start_at"` // unix 秒
+	EndAt   int64 `json:"end_at"`   // unix 秒
+	Timeout int   `json:"timeout"`  // seconds
+}
+
+type upgradeDeviceInput struct {
+	Firmware     string `json:"firmware"`
+	FileURL      string `json:"file_url"`
+	Manufacturer string `json:"manufacturer"`
+	SessionID    string `json:"session_id"`
+	Timeout      int    `json:"timeout"` // seconds
+}
+
+type historyControlInput struct {
+	Mode    string  `json:"mode"` // playback/download
+	StartAt int64   `json:"start_at"`
+	EndAt   int64   `json:"end_at"`
+	Cmd     string  `json:"cmd"`
+	Action  string  `json:"action"`
+	Scale   float64 `json:"scale"`
+	SeekAt  int64   `json:"seek_at"`
+}
+
+type voiceControlInput struct {
+	Mode string `json:"mode"` // talk/broadcast
+}
+
+type subscribeInput struct {
+	Event   string `json:"event"`
+	Expires int    `json:"expires"`
+}
+
+type gbDragZoomInput struct {
+	Length    int `json:"length"`
+	Width     int `json:"width"`
+	MidPointX int `json:"mid_point_x"`
+	MidPointY int `json:"mid_point_y"`
+	LengthX   int `json:"length_x"`
+	LengthY   int `json:"length_y"`
+}
+
+type gbHomePositionInput struct {
+	Enabled     *int `json:"enabled"`
+	ResetTime   *int `json:"reset_time"`
+	PresetIndex *int `json:"preset_index"`
+}
+
+type gbPTZPreciseInput struct {
+	Pan  *float64 `json:"pan"`
+	Tilt *float64 `json:"tilt"`
+	Zoom *float64 `json:"zoom"`
+}
+
+type gbPTZCmdParamInput struct {
+	PresetName      string `json:"preset_name"`
+	CruiseTrackName string `json:"cruise_track_name"`
+}
+
+type gbDeviceControlInput struct {
+	TargetID     string               `json:"target_id"`
+	Action       string               `json:"action"`
+	Timeout      int                  `json:"timeout"`
+	PTZCmd       string               `json:"ptz_cmd"`
+	PTZCmdParam  *gbPTZCmdParamInput  `json:"ptz_cmd_param"`
+	StreamNumber int                  `json:"stream_number"`
+	AlarmMethod  string               `json:"alarm_method"`
+	AlarmType    string               `json:"alarm_type"`
+	DragZoom     *gbDragZoomInput     `json:"drag_zoom"`
+	HomePosition *gbHomePositionInput `json:"home_position"`
+	PTZPrecise   *gbPTZPreciseInput   `json:"ptz_precise"`
+	SDCardID     int                  `json:"sdcard_id"`
+}
+
+type gbDeviceQueryInput struct {
+	TargetID   string `json:"target_id"`
+	Action     string `json:"action"`
+	Timeout    int    `json:"timeout"`
+	ConfigType string `json:"config_type"`
+	Interval   int    `json:"interval"`
+	Start      int64  `json:"start"`
+	End        int64  `json:"end"`
+}
+
+// queryRecords 查询通道录像目录（当前由 GB28181 协议实现）。
+func (a IPCAPI) queryRecords(c *gin.Context, in *queryRecordsInput) (any, error) {
+	channelID := c.Param("id")
+	out, err := a.ipc.QueryRecords(c.Request.Context(), channelID, &ipc.RecordQueryInput{
+		StartAt: in.StartAt,
+		EndAt:   in.EndAt,
+		Timeout: in.Timeout,
+	})
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return out, nil
+}
+
+// upgradeDevice 执行设备软件升级（GB/T 28181-2022 9.13）。
+// 若设备协议版本低于 2022，返回“协议不支持”。
+func (a IPCAPI) upgradeDevice(c *gin.Context, in *upgradeDeviceInput) (any, error) {
+	channelID := c.Param("id")
+	err := a.ipc.UpgradeDevice(c.Request.Context(), channelID, &ipc.UpgradeInput{
+		Firmware:     in.Firmware,
+		FileURL:      in.FileURL,
+		Manufacturer: in.Manufacturer,
+		SessionID:    in.SessionID,
+		Timeout:      in.Timeout,
+	})
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return gin.H{"msg": "ok"}, nil
+}
+
+// startHistory 启动历史回放/下载会话。
+func (a IPCAPI) startHistory(c *gin.Context, in *historyControlInput) (any, error) {
+	channelID := c.Param("id")
+	err := a.ipc.StartHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
+		Mode:    in.Mode,
+		StartAt: in.StartAt,
+		EndAt:   in.EndAt,
+	})
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return gin.H{"msg": "ok"}, nil
+}
+
+// stopHistory 停止历史回放/下载会话。
+func (a IPCAPI) stopHistory(c *gin.Context, in *historyControlInput) (any, error) {
+	channelID := c.Param("id")
+	err := a.ipc.StopHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
+		Mode: in.Mode,
+	})
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return gin.H{"msg": "ok"}, nil
+}
+
+// controlHistory 下发历史回放/下载控制命令（INFO/MANSRTSP）。
+func (a IPCAPI) controlHistory(c *gin.Context, in *historyControlInput) (any, error) {
+	channelID := c.Param("id")
+	err := a.ipc.ControlHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
+		Mode:   in.Mode,
+		Cmd:    in.Cmd,
+		Action: in.Action,
+		Scale:  in.Scale,
+		SeekAt: in.SeekAt,
+	})
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return gin.H{"msg": "ok"}, nil
+}
+
+// startVoice 启动语音会话（对讲/广播）。
+func (a IPCAPI) startVoice(c *gin.Context, in *voiceControlInput) (any, error) {
+	channelID := c.Param("id")
+	err := a.ipc.StartVoice(c.Request.Context(), channelID, &ipc.VoiceControlInput{
+		Mode: in.Mode,
+	})
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return gin.H{"msg": "ok"}, nil
+}
+
+// stopVoice 停止语音会话（对讲/广播）。
+func (a IPCAPI) stopVoice(c *gin.Context, in *voiceControlInput) (any, error) {
+	channelID := c.Param("id")
+	err := a.ipc.StopVoice(c.Request.Context(), channelID, &ipc.VoiceControlInput{
+		Mode: in.Mode,
+	})
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return gin.H{"msg": "ok"}, nil
+}
+
+// syncTime 执行设备校时。
+func (a IPCAPI) syncTime(c *gin.Context, _ *struct{}) (any, error) {
+	deviceID := c.Param("id")
+	if err := a.ipc.SyncTime(c.Request.Context(), deviceID); err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return gin.H{"msg": "ok"}, nil
+}
+
+// subscribe 发起事件订阅。
+func (a IPCAPI) subscribe(c *gin.Context, in *subscribeInput) (any, error) {
+	deviceID := c.Param("id")
+	if err := a.ipc.Subscribe(c.Request.Context(), deviceID, &ipc.SubscribeInput{
+		Event:   in.Event,
+		Expires: in.Expires,
+	}); err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return gin.H{"msg": "ok"}, nil
+}
+
+// gbDeviceControl 执行 GB 附录 A.2.3 统一设备控制命令。
+func (a IPCAPI) gbDeviceControl(c *gin.Context, in *gbDeviceControlInput) (any, error) {
+	deviceID := c.Param("id")
+	out, err := a.ipc.GBDeviceControl(c.Request.Context(), deviceID, &ipc.GBDeviceControlInput{
+		TargetID:     in.TargetID,
+		Action:       in.Action,
+		Timeout:      in.Timeout,
+		PTZCmd:       in.PTZCmd,
+		PTZCmdParam:  toIPCPTZCmdParam(in.PTZCmdParam),
+		StreamNumber: in.StreamNumber,
+		AlarmMethod:  in.AlarmMethod,
+		AlarmType:    in.AlarmType,
+		SDCardID:     in.SDCardID,
+		DragZoom:     toIPCDragZoom(in.DragZoom),
+		HomePosition: toIPCHomePosition(in.HomePosition),
+		PTZPrecise:   toIPCPTZPrecise(in.PTZPrecise),
+	})
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return out, nil
+}
+
+// gbDeviceQuery 执行 GB 附录 A.2.4 统一设备查询命令。
+func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, error) {
+	deviceID := c.Param("id")
+	out, err := a.ipc.GBDeviceQuery(c.Request.Context(), deviceID, &ipc.GBDeviceQueryInput{
+		TargetID:   in.TargetID,
+		Action:     in.Action,
+		Timeout:    in.Timeout,
+		ConfigType: in.ConfigType,
+		Interval:   in.Interval,
+		Start:      in.Start,
+		End:        in.End,
+	})
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return out, nil
+}
+
+func toIPCDragZoom(in *gbDragZoomInput) *ipc.GBDragZoomInput {
+	if in == nil {
+		return nil
+	}
+	return &ipc.GBDragZoomInput{
+		Length:    in.Length,
+		Width:     in.Width,
+		MidPointX: in.MidPointX,
+		MidPointY: in.MidPointY,
+		LengthX:   in.LengthX,
+		LengthY:   in.LengthY,
+	}
+}
+
+func toIPCHomePosition(in *gbHomePositionInput) *ipc.GBHomePositionInput {
+	if in == nil {
+		return nil
+	}
+	return &ipc.GBHomePositionInput{
+		Enabled:     in.Enabled,
+		ResetTime:   in.ResetTime,
+		PresetIndex: in.PresetIndex,
+	}
+}
+
+func toIPCPTZPrecise(in *gbPTZPreciseInput) *ipc.GBPTZPreciseInput {
+	if in == nil {
+		return nil
+	}
+	return &ipc.GBPTZPreciseInput{
+		Pan:  in.Pan,
+		Tilt: in.Tilt,
+		Zoom: in.Zoom,
+	}
+}
+
+func toIPCPTZCmdParam(in *gbPTZCmdParamInput) *ipc.GBPTZCmdParamInput {
+	if in == nil {
+		return nil
+	}
+	return &ipc.GBPTZCmdParamInput{
+		PresetName:      in.PresetName,
+		CruiseTrackName: in.CruiseTrackName,
+	}
+}
+
+func (a IPCAPI) ptzControl(c *gin.Context, in *ptzControlInput) (any, error) {
+	channelID := c.Param("id")
+	err := a.ipc.PTZControl(c.Request.Context(), channelID, &ipc.PTZControlInput{
+		Action:  in.Action,
+		Speed:   in.Speed,
+		Timeout: in.Timeout,
+		Preset:  in.Preset,
+		Group:   in.Group,
+		Aux:     in.Aux,
+		Value:   in.Value,
+	})
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return gin.H{"msg": "ok"}, nil
+}
+
 func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, error) {
 	channelID := c.Param("id")
 
@@ -471,6 +812,20 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 	if err == nil {
 		if fileInfo.ModTime().Unix() > time.Now().Unix()-in.WithinSeconds {
 			return gin.H{"link": fmt.Sprintf("%s/channels/%s/snapshot?token=%s", prefix, channelID, token)}, nil
+		}
+	}
+
+	if bz.IsGB28181(channelID) {
+		// GB28181 优先走 9.14 抓拍流程，由设备回传图片到 /gb28181/snapshot。
+		ch, err := a.ipc.GetChannel(c.Request.Context(), channelID)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = a.ipc.GetDevice(c.Request.Context(), ch.DID); err != nil {
+			return nil, err
+		}
+		if err := a.uc.SipServer.QuerySnapshot(ch.DeviceID, ch.ChannelID); err != nil {
+			return nil, ErrDevice.SetMsg(err.Error())
 		}
 	}
 

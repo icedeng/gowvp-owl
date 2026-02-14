@@ -108,6 +108,18 @@ func (hb *HeadersBuilder) SetXGBVer() *HeadersBuilder {
 	return hb
 }
 
+// SetXGBVerValue 设置 X-GB-Ver，支持 1.0/2.0/3.0。
+func (hb *HeadersBuilder) SetXGBVerValue(ver string) *HeadersBuilder {
+	v := strings.TrimSpace(ver)
+	if v == "" {
+		hb.XGBVer = nil
+		return hb
+	}
+	s := XGBVer(v)
+	hb.XGBVer = &s
+	return hb
+}
+
 // SetMethod SetMethod
 func (hb *HeadersBuilder) SetMethod(method string) *HeadersBuilder {
 	hb.method = method
@@ -1372,7 +1384,16 @@ func (ua *UserAgentHeader) Equals(other any) bool {
 
 // ==================   AllowHeader   ================
 
-var defaultAllowMethods = &AllowHeader{MethodInvite, MethodACK, MethodCancel, MethodMessage, MethodRegister}
+var defaultAllowMethods = &AllowHeader{
+	MethodInvite,
+	MethodACK,
+	MethodCancel,
+	MethodMessage,
+	MethodRegister,
+	MethodSubscribe,
+	MethodNotify,
+	MethodInfo,
+}
 
 // AllowHeader AllowHeader
 type AllowHeader []string

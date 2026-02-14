@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -21,12 +24,30 @@ const ignorePassword = "#"
 
 type GB28181API struct {
 	cfg  *conf.SIP
+	boot *conf.Bootstrap
 	core ipc.Adapter
 
 	catalog *sip.Collector[Channels]
 
 	// TODO: 待替换成 redis
 	streams *conc.Map[string, *Streams]
+	// key=deviceID:sn，用于等待 DeviceControl 的业务响应。
+	pendingDeviceControl sync.Map
+	// key=deviceID:cmdType:sn，用于等待设备查询响应。
+	pendingDeviceQuery sync.Map
+	// 报警回调，供上层业务（事件中心）注册。
+	alarmHandlerMu sync.RWMutex
+	alarmHandler   func(context.Context, *AlarmEvent)
+	// 事件源侧订阅表（9.11），用于向订阅方发送 NOTIFY。
+	eventSubscribers sync.Map
+	// key=deviceID:sn，用于等待 DeviceConfig 业务应答（9.7/9.14）。
+	pendingDeviceConfig sync.Map
+	// key=deviceID，保存结构化查询/状态结果（9.5/9.6/A.2.4）。
+	queryStates sync.Map
+	// 设备控制命令全局序列号，避免 PTZ 与 DeviceControl 并发冲突。
+	controlSN atomic.Uint32
+	// 设备查询命令全局序列号，避免随机 SN 碰撞。
+	querySN atomic.Uint32
 
 	svr *Server
 
@@ -36,6 +57,7 @@ type GB28181API struct {
 func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager) *GB28181API {
 	g := GB28181API{
 		cfg:  &cfg.Sip,
+		boot: cfg,
 		core: store,
 		sms:  sms,
 		catalog: sip.NewCollector(func(c1, c2 *Channels) bool {
@@ -43,6 +65,13 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 		}),
 		streams: &conc.Map[string, *Streams]{},
 	}
+	if _recordList == nil {
+		// 录像查询聚合缓存，确保未调用 LoadSYSInfo 场景下也可用。
+		_recordList = &sync.Map{}
+	}
+	g.controlSN.Store(uint32(sip.RandInt(100000, 999999)))
+	g.querySN.Store(uint32(sip.RandInt(100000, 999999)))
+	go g.startEventSubscriberCleaner()
 	go g.catalog.Start(func(s string, channel []*Channels) {
 		// 零值不做变更，没有通道又何必注册上来
 		if len(channel) == 0 {
@@ -108,6 +137,24 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	if err := filterUnknowDevices(ctx.DeviceID); err != nil {
 		slog.Error("过滤设备，拒绝注册", "device_id", ctx.DeviceID, "err", err)
 		ctx.String(http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// 9.1.2.3 注册重定向：当网关层注入 X-GB-Redirect 时返回 302。
+	// 示例值：sip:34020000002000000001@10.0.0.8:5060
+	if redirect := strings.TrimSpace(ctx.GetHeader("X-GB-Redirect")); redirect != "" {
+		uri, err := sip.ParseSipURI(redirect)
+		if err != nil {
+			ctx.String(http.StatusBadRequest, "invalid redirect uri")
+			return
+		}
+		resp := sip.NewResponseFromRequest("", ctx.Request, http.StatusFound, "Moved Temporarily", nil)
+		resp.AppendHeader(&sip.ContactHeader{
+			DisplayName: sip.String{Str: "redirect"},
+			Address:     &uri,
+			Params:      sip.NewParams(),
+		})
+		_ = ctx.Tx.Respond(resp)
 		return
 	}
 
@@ -230,6 +277,9 @@ func (g GB28181API) login(ctx *sip.Context, fn func(d *ipc.Device) error) {
 		d.conn = ctx.Request.GetConnection()
 		d.source = ctx.Source
 		d.to = ctx.To
+		if ctx.XGBVer != "" {
+			d.gbVersion = ctx.XGBVer
+		}
 	})
 }
 

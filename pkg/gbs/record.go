@@ -1,9 +1,9 @@
 package gbs
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"sort"
 	"sync"
 	"time"
@@ -11,45 +11,73 @@ import (
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
-// 获取录像文件列表
-func SipRecordList(to *Channels, start, end int64) (*Records, error) {
+type RecordQueryInput struct {
+	DeviceID  string
+	ChannelID string
+	Start     int64 // 查询起始时间（unix 秒）
+	End       int64 // 查询结束时间（unix 秒）
+	Timeout   time.Duration
+}
+
+// QueryRecordList 查询设备录像目录（RecordInfo）
+func (g *GB28181API) QueryRecordList(_ context.Context, in *RecordQueryInput) (*Records, error) {
+	if in == nil || in.DeviceID == "" || in.ChannelID == "" {
+		return nil, errors.New("invalid record query input")
+	}
+	if in.Start <= 0 || in.End <= in.Start {
+		return nil, errors.New("invalid record query time range")
+	}
+
+	ipc, ok := g.svr.memoryStorer.Load(in.DeviceID)
+	if !ok || !ipc.IsOnline {
+		return nil, ErrDeviceOffline
+	}
+	ch, ok := g.svr.memoryStorer.GetChannel(in.DeviceID, in.ChannelID)
+	if !ok {
+		return nil, ErrChannelNotExist
+	}
+
+	if in.Timeout <= 0 {
+		in.Timeout = 10 * time.Second
+	}
+
 	sn := sip.RandInt(100000, 999999)
 	resp := make(chan Records, 1)
-	defer close(resp)
-	device, ok := _activeDevices.Get(to.DeviceID)
-	if !ok {
-		return nil, errors.New("设备不在线")
-	}
-	channelURI, _ := sip.ParseURI(to.URIStr)
-	to.addr = &sip.Address{URI: channelURI}
-	recordKey := fmt.Sprintf("%s%d", to.ChannelID, sn)
-	_recordList.Store(recordKey, recordList{channelid: to.ChannelID, resp: resp, data: [][]int64{}, l: &sync.Mutex{}, s: start, e: end})
+	recordKey := fmt.Sprintf("%s%d", in.ChannelID, sn)
+	// 以 channelID+SN 作为聚合键，收集分片返回。
+	_recordList.Store(recordKey, recordList{
+		channelid: in.ChannelID,
+		resp:      resp,
+		data:      [][]int64{},
+		l:         &sync.Mutex{},
+		s:         in.Start,
+		e:         in.End,
+	})
 	defer _recordList.Delete(recordKey)
-	hb := sip.NewHeaderBuilder().SetTo(to.addr).SetFrom(_serverDevices.addr).AddVia(&sip.ViaHop{
-		Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
-	}).SetContentType(&sip.ContentTypeXML).SetMethod(sip.MethodMessage)
-	req := sip.NewRequest("", sip.MethodMessage, to.addr.URI, sip.DefaultSipVersion, hb.Build(), sip.GetRecordInfoXML(to.ChannelID, sn, start, end))
-	req.SetDestination(device.source)
-	tx, err := svr.Request(req)
+
+	// 按 GB28181 A.2.4.9 发送 RecordInfo 查询命令。
+	tx, err := g.svr.wrapRequest(ch, sip.MethodMessage, &sip.ContentTypeXML, sip.GetRecordInfoXML(in.ChannelID, sn, in.Start, in.End))
 	if err != nil {
 		return nil, err
 	}
-	response := tx.GetResponse()
-	if response.StatusCode() != http.StatusOK {
-		return nil, errors.New(response.Reason())
+	if _, err = sipResponse(tx); err != nil {
+		return nil, err
 	}
-	tick := time.NewTicker(10 * time.Second)
+
+	timer := time.NewTimer(in.Timeout)
+	defer timer.Stop()
+
 	select {
 	case res := <-resp:
 		return &res, nil
-	case <-tick.C:
-		// 10秒未完成返回当前获取到的数据
+	case <-timer.C:
+		// 超时返回已收集到的数据（兼容分包不完整场景）
 		if list, ok := _recordList.Load(recordKey); ok {
 			info := list.(recordList)
 			data := transRecordList(info.data)
 			return &data, nil
 		}
-		return nil, errors.New("获取数据超时")
+		return nil, errors.New("query record list timeout")
 	}
 }
 
@@ -77,51 +105,72 @@ type RecordItem struct {
 }
 
 type recordList struct {
-	channelid string
+	channelid string // 通道国标编码
 	resp      chan Records
-	num       int
-	data      [][]int64
+	num       int       // 已累计条数
+	data      [][]int64 // 时间段集合 [start,end]
 	l         *sync.Mutex
-	s, e      int64
+	s, e      int64 // 查询窗口，超出窗口的数据会被截断
 }
 
 // 当前获取目录文件设备集合
 var _recordList *sync.Map
 
-func sipMessageRecordInfo(u Devices, body []byte) error {
+func (g *GB28181API) sipMessageRecordInfo(ctx *sip.Context) {
 	message := &MessageRecordInfoResponse{}
-	if err := sip.XMLDecode(body, message); err != nil {
-		// logrus.Errorln("Message Unmarshal xml err:", err, "body:", string(body))
-		return err
+	if err := sip.XMLDecode(ctx.Request.Body(), message); err != nil {
+		ctx.String(400, ErrXMLDecode.Error())
+		return
 	}
+
+	// RecordInfo 响应的 DeviceID 通常是通道ID，兼容部分设备返回设备ID的场景
 	recordKey := fmt.Sprintf("%s%d", message.DeviceID, message.SN)
-	if list, ok := _recordList.Load(recordKey); ok {
-		info := list.(recordList)
-		info.l.Lock()
-		defer info.l.Unlock()
-		info.num += len(message.Item)
-		var sint, eint int64
-		for _, item := range message.Item {
-			s, _ := time.ParseInLocation("2006-01-02T15:04:05", item.StartTime, time.Local)
-			e, _ := time.ParseInLocation("2006-01-02T15:04:05", item.EndTime, time.Local)
-			sint = s.Unix()
-			eint = e.Unix()
-			if sint < info.s {
-				sint = info.s
-			}
-			if eint > info.e {
-				eint = info.e
-			}
+	if !g.consumeRecordInfo(recordKey, message) && ctx.DeviceID != "" && ctx.DeviceID != message.DeviceID {
+		// 某些设备会把 DeviceID 回写成设备ID，此时按设备ID再尝试一次。
+		recordKey = fmt.Sprintf("%s%d", ctx.DeviceID, message.SN)
+		g.consumeRecordInfo(recordKey, message)
+	}
+
+	ctx.String(200, "OK")
+}
+
+func (g *GB28181API) consumeRecordInfo(recordKey string, message *MessageRecordInfoResponse) bool {
+	list, ok := _recordList.Load(recordKey)
+	if !ok {
+		return false
+	}
+
+	info := list.(recordList)
+	info.l.Lock()
+	defer info.l.Unlock()
+
+	info.num += len(message.Item)
+	var sint, eint int64
+	for _, item := range message.Item {
+		s, _ := time.ParseInLocation("2006-01-02T15:04:05", item.StartTime, time.Local)
+		e, _ := time.ParseInLocation("2006-01-02T15:04:05", item.EndTime, time.Local)
+		sint = s.Unix()
+		eint = e.Unix()
+		if sint < info.s {
+			sint = info.s
+		}
+		if eint > info.e {
+			eint = info.e
+		}
+		if sint < eint {
+			// 只保留合法时间段，避免异常数据污染结果。
 			info.data = append(info.data, []int64{sint, eint})
 		}
-		if info.num == message.SumNum {
-			// 获取到完整数据
-			info.resp <- transRecordList(info.data)
-		}
-		_recordList.Store(recordKey, info)
-		return nil
 	}
-	return errors.New("recordlist devices not found")
+	if info.num >= message.SumNum && message.SumNum >= 0 {
+		// 获取到完整数据，或设备返回条数异常时尽量收敛
+		select {
+		case info.resp <- transRecordList(info.data):
+		default:
+		}
+	}
+	_recordList.Store(recordKey, info)
+	return true
 }
 
 // Records Records

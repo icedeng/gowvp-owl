@@ -112,7 +112,7 @@ func (c *Context) GetHeader(key string) string {
 	headers := c.Request.GetHeaders(key)
 	if len(headers) > 0 {
 		header := headers[0]
-		splits := strings.Split(header.String(), ":")
+		splits := strings.SplitN(header.String(), ":", 2)
 		if len(splits) == 2 {
 			return strings.TrimSpace(splits[1])
 		}
