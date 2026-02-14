@@ -3,6 +3,8 @@ FROM zlmediakit/zlmediakit:master AS zlm
 FROM ubuntu:24.04
 
 ENV TZ=Asia/Shanghai
+ENV PYTHONPATH=/opt/media/bin/python
+ENV PATH=/opt/media/bin:$PATH
 WORKDIR /opt/media/bin/
 
 # 配置 apt 源使用阿里云镜像加速
@@ -14,7 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     tzdata \
     libssl3 \
+    python3 \
     libpython3.12 \
+    python3-dev \
+    python3-venv \
+    python3-pip \
     libstdc++6 \
     libgcc-s1 \
     zlib1g \
@@ -28,7 +34,7 @@ ARG TARGETARCH
 ADD ./build/linux_${TARGETARCH}/bin ./gowvp
 ADD ./www ./www
 
-RUN mkdir -p configs
+RUN mkdir -p configs python
 
 RUN ln -sf /usr/local/bin/ffmpeg /usr/bin/ffmpeg && \
     chmod +x /usr/local/bin/ffmpeg
