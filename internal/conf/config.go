@@ -87,6 +87,14 @@ type SIP struct {
 	ID       string `comment:"gb/t28181 20 位国标 ID" json:"id"`
 	Domain   string `comment:"域" json:"domain"`
 	Password string `comment:"注册密码" json:"password"`
+
+	EnableTLS bool   `comment:"是否启用 SIP-TLS 监听" json:"enable_tls"`
+	TLSPort   int    `comment:"SIP-TLS 监听端口，0 表示与 port 相同" json:"tls_port"`
+	TLSCert   string `comment:"SIP-TLS 证书文件路径" json:"tls_cert"`
+	TLSKey    string `comment:"SIP-TLS 私钥文件路径" json:"tls_key"`
+
+	StrictSourceCheck  bool `comment:"是否校验设备上报源IP与注册源IP一致" json:"strict_source_check"`
+	RequireMessageAuth bool `comment:"是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权" json:"require_message_auth"`
 }
 
 type Media struct {

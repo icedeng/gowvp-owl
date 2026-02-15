@@ -1,6 +1,9 @@
 package gbs
 
 import (
+	"context"
+	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,6 +27,8 @@ type QueryState struct {
 	MobilePosition *MobilePositionData  `json:"mobile_position,omitempty"`
 	ConfigDownload *ConfigDownloadState `json:"config_download,omitempty"`
 	DeviceConfig   *DeviceConfigState   `json:"device_config,omitempty"`
+	// AppendixA4 保存附录 A.4 扩展对象结构化快照。
+	AppendixA4 []AppendixA4Object `json:"appendix_a4,omitempty"`
 }
 
 // DeviceStatusData 对应 DeviceStatus 查询结果。
@@ -127,6 +132,10 @@ func (g *GB28181API) decodeAndStoreQueryData(deviceID, cmdType string, body []by
 	if cmd == "" || len(body) == 0 || deviceID == "" {
 		return nil
 	}
+	if ext := g.decodeAppendixA4Objects(cmd, body); len(ext) > 0 {
+		g.storeAppendixA4State(deviceID, ext)
+		g.persistAppendixA4Objects(deviceID, ext)
+	}
 	var data any
 	switch cmd {
 	case "DeviceStatus":
@@ -213,6 +222,109 @@ func (g *GB28181API) storeDeviceConfigState(deviceID string, state *DeviceConfig
 	curr.UpdatedAt = time.Now()
 	curr.DeviceConfig = state
 	g.queryStates.Store(deviceID, curr)
+}
+
+func (g *GB28181API) storeAppendixA4State(deviceID string, objs []AppendixA4Object) {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" || len(objs) == 0 {
+		return
+	}
+	state := &QueryState{}
+	if v, ok := g.queryStates.Load(deviceID); ok {
+		if old, ok := v.(*QueryState); ok && old != nil {
+			*state = *old
+		}
+	}
+	state.UpdatedAt = time.Now()
+	state.AppendixA4 = mergeAppendixA4Objects(state.AppendixA4, objs, 128)
+	g.queryStates.Store(deviceID, state)
+}
+
+// persistAppendixA4Objects 将附录 A.4 结构化结果持久化到设备 ext 字段。
+func (g *GB28181API) persistAppendixA4Objects(deviceID string, objs []AppendixA4Object) {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" || len(objs) == 0 {
+		return
+	}
+	var dev ipc.Device
+	if err := g.core.Store().Device().Edit(context.TODO(), &dev, func(d *ipc.Device) error {
+		exist := fromIPCAppendixA4Objects(d.Ext.GBAppendixA4)
+		merged := mergeAppendixA4Objects(exist, objs, 256)
+		d.Ext.GBAppendixA4 = toIPCAppendixA4Objects(merged)
+		return nil
+	}, orm.Where("device_id=?", deviceID)); err != nil {
+		slog.Warn("persist appendix a4 failed", "device_id", deviceID, "err", err)
+	}
+}
+
+func mergeAppendixA4Objects(base, inc []AppendixA4Object, max int) []AppendixA4Object {
+	if max <= 0 {
+		max = 128
+	}
+	cache := make(map[string]AppendixA4Object, len(base)+len(inc))
+	for _, item := range base {
+		cache[appendixA4ObjectKey(item)] = item
+	}
+	for _, item := range inc {
+		key := appendixA4ObjectKey(item)
+		if old, ok := cache[key]; ok {
+			// 取更新的记录，避免旧值覆盖新值。
+			if item.UpdatedAt < old.UpdatedAt {
+				item.UpdatedAt = old.UpdatedAt
+			}
+		}
+		cache[key] = item
+	}
+	out := make([]AppendixA4Object, 0, len(cache))
+	for _, item := range cache {
+		out = append(out, item)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].UpdatedAt == out[j].UpdatedAt {
+			return out[i].Type < out[j].Type
+		}
+		return out[i].UpdatedAt > out[j].UpdatedAt
+	})
+	if len(out) > max {
+		out = out[:max]
+	}
+	return out
+}
+
+func toIPCAppendixA4Objects(in []AppendixA4Object) []ipc.GBAppendixA4Object {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ipc.GBAppendixA4Object, 0, len(in))
+	for _, item := range in {
+		out = append(out, ipc.GBAppendixA4Object{
+			Type:      item.Type,
+			CmdType:   item.CmdType,
+			Path:      item.Path,
+			Fields:    item.Fields,
+			RawXML:    item.RawXML,
+			UpdatedAt: item.UpdatedAt,
+		})
+	}
+	return out
+}
+
+func fromIPCAppendixA4Objects(in []ipc.GBAppendixA4Object) []AppendixA4Object {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]AppendixA4Object, 0, len(in))
+	for _, item := range in {
+		out = append(out, AppendixA4Object{
+			Type:      item.Type,
+			CmdType:   item.CmdType,
+			Path:      item.Path,
+			Fields:    item.Fields,
+			RawXML:    item.RawXML,
+			UpdatedAt: item.UpdatedAt,
+		})
+	}
+	return out
 }
 
 func (g *GB28181API) applyDeviceStatus(deviceID string, in *DeviceStatusData) {

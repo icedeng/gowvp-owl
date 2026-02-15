@@ -84,6 +84,18 @@
   Domain = '3402000000'
   # 注册密码
   Password = ''
+  # 是否启用 SIP-TLS 监听
+  EnableTLS = false
+  # SIP-TLS 监听端口，0 表示与 Port 相同
+  TLSPort = 15061
+  # SIP-TLS 证书文件路径（PEM）
+  TLSCert = ''
+  # SIP-TLS 私钥文件路径（PEM）
+  TLSKey = ''
+  # 是否校验设备上报源IP与注册源IP一致
+  StrictSourceCheck = false
+  # 是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权
+  RequireMessageAuth = false
 
 [Media]
   # 媒体服务器 IP

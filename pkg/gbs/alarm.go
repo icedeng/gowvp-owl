@@ -121,6 +121,12 @@ func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 		SourceMethod:     sourceMethod,
 	}
 
+	// 抽取附录 A.4 扩展对象并做结构化落库。
+	if ext := g.decodeAppendixA4Objects(msg.CmdType, ctx.Request.Body()); len(ext) > 0 {
+		g.storeAppendixA4State(deviceID, ext)
+		g.persistAppendixA4Objects(deviceID, ext)
+	}
+
 	g.alarmHandlerMu.RLock()
 	handler := g.alarmHandler
 	g.alarmHandlerMu.RUnlock()

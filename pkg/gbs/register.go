@@ -44,6 +44,8 @@ type GB28181API struct {
 	pendingDeviceConfig sync.Map
 	// key=deviceID，保存结构化查询/状态结果（9.5/9.6/A.2.4）。
 	queryStates sync.Map
+	// key=Call-ID，保存入向 INVITE 会话状态（9.2 被叫侧会话）。
+	inviteDialogs sync.Map
 	// 设备控制命令全局序列号，避免 PTZ 与 DeviceControl 并发冲突。
 	controlSN atomic.Uint32
 	// 设备查询命令全局序列号，避免随机 SN 碰撞。
@@ -72,6 +74,7 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 	g.controlSN.Store(uint32(sip.RandInt(100000, 999999)))
 	g.querySN.Store(uint32(sip.RandInt(100000, 999999)))
 	go g.startEventSubscriberCleaner()
+	go g.startInviteDialogCleaner()
 	go g.catalog.Start(func(s string, channel []*Channels) {
 		// 零值不做变更，没有通道又何必注册上来
 		if len(channel) == 0 {

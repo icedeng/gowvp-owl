@@ -173,6 +173,10 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 		SnapShot: msg.SnapShotConfig,
 	}
 	g.storeDeviceConfigState(ctx.DeviceID, state)
+	if ext := g.decodeAppendixA4Objects(msg.CmdType, ctx.Request.Body()); len(ext) > 0 {
+		g.storeAppendixA4State(ctx.DeviceID, ext)
+		g.persistAppendixA4Objects(ctx.DeviceID, ext)
+	}
 
 	waitKey := buildPendingDeviceConfigKey(ctx.DeviceID, msg.SN)
 	if v, ok := g.pendingDeviceConfig.Load(waitKey); ok {

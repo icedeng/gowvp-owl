@@ -224,6 +224,13 @@ func (a *Adapter) Subscribe(ctx context.Context, device *ipc.Device, in *ipc.Sub
 	})
 }
 
+func (a *Adapter) ProbeOptions(ctx context.Context, device *ipc.Device, in *ipc.OptionsProbeInput) error {
+	return a.gbs.ProbeOptions(ctx, &gbs.OptionsProbeInput{
+		DeviceID: device.DeviceID,
+		Timeout:  time.Duration(in.Timeout) * time.Second,
+	})
+}
+
 func (a *Adapter) StartVoice(ctx context.Context, device *ipc.Device, channel *ipc.Channel, in *ipc.VoiceControlInput) error {
 	svr, err := a.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
 	if err != nil {
@@ -294,12 +301,13 @@ func (a *Adapter) DeviceQuery(ctx context.Context, device *ipc.Device, in *ipc.G
 		return nil, err
 	}
 	return &ipc.GBDeviceQueryOutput{
-		SN:       out.SN,
-		CmdType:  out.CmdType,
-		DeviceID: out.DeviceID,
-		Result:   out.Result,
-		XML:      out.XML,
-		Data:     out.Data,
+		SN:         out.SN,
+		CmdType:    out.CmdType,
+		DeviceID:   out.DeviceID,
+		Result:     out.Result,
+		XML:        out.XML,
+		Data:       out.Data,
+		AppendixA4: toIPCAppendixA4(out.AppendixA4),
 	}, nil
 }
 
@@ -347,4 +355,22 @@ func toGBPTZCmdParam(in *ipc.GBPTZCmdParamInput) *gbs.PTZCmdParam {
 		PresetName:      in.PresetName,
 		CruiseTrackName: in.CruiseTrackName,
 	}
+}
+
+func toIPCAppendixA4(in []gbs.AppendixA4Object) []ipc.GBAppendixA4Object {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ipc.GBAppendixA4Object, 0, len(in))
+	for _, item := range in {
+		out = append(out, ipc.GBAppendixA4Object{
+			Type:      item.Type,
+			CmdType:   item.CmdType,
+			Path:      item.Path,
+			Fields:    item.Fields,
+			RawXML:    item.RawXML,
+			UpdatedAt: item.UpdatedAt,
+		})
+	}
+	return out
 }

@@ -56,9 +56,24 @@ type DeviceExt struct {
 	GBVersion    string `json:"gb_version"`   // GB版本
 	Zones        []Zone `json:"zones"`        // 区域
 	EnabledAI    bool   `json:"enabled_ai"`   // 是否启用 AI
+	// GBAppendixA4 保存 GB/T 28181-2022 附录 A.4 扩展对象最新快照（结构化落库）。
+	GBAppendixA4 []GBAppendixA4Object `json:"gb_appendix_a4"`
 
 	// 空串表示 always
 	RecordMode string `json:"record_mode"` // 录像模式, 一直录制:always, 按AI触发:ai, 不录制:none
+}
+
+// GBAppendixA4Object 是附录 A.4 扩展对象的统一结构化模型。
+// 该模型同时用于：
+// 1) 设备 ext 字段持久化；
+// 2) GB 查询接口返回。
+type GBAppendixA4Object struct {
+	Type      string            `json:"type"`                 // 扩展对象名称（如 doorType、alarmType）
+	CmdType   string            `json:"cmd_type,omitempty"`   // 来源命令类型（如 DeviceStatus/Alarm）
+	Path      string            `json:"path,omitempty"`       // 在 XML 中的路径
+	Fields    map[string]string `json:"fields,omitempty"`     // 首层结构化字段
+	RawXML    string            `json:"raw_xml,omitempty"`    // 原始 XML 片段，便于兼容厂商私有字段
+	UpdatedAt int64             `json:"updated_at,omitempty"` // 最近更新时间（unix 秒）
 }
 
 func (e *DeviceExt) GetRecordMode() string {

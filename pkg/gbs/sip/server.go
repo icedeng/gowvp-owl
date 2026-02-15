@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
@@ -32,6 +33,7 @@ type Server struct {
 
 	tcpPort     *Port
 	tcpListener *net.TCPListener
+	tlsListener net.Listener
 
 	tcpaddr net.Addr
 
@@ -193,6 +195,42 @@ func (s *Server) ListenTCPServer(addr string) {
 	}
 }
 
+// ListenTLSServer 启动 TLS 服务器并监听指定地址。
+func (s *Server) ListenTLSServer(addr, certFile, keyFile string) error {
+	tcpaddr, err := net.ResolveTCPAddr("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("net.ResolveTCPAddr err[%w]", err)
+	}
+
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return fmt.Errorf("tls.LoadX509KeyPair err[%w]", err)
+	}
+	ln, err := tls.Listen("tcp", tcpaddr.String(), &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	})
+	if err != nil {
+		return fmt.Errorf("tls.Listen err[%w]", err)
+	}
+
+	s.tlsListener = ln
+	for {
+		select {
+		case <-s.ctx.Done():
+			slog.Info("ListenTLSServer Has Been Exits")
+			return nil
+		default:
+			conn, err := ln.Accept()
+			if err != nil {
+				slog.Error("tls.Accept", "err", err, "addr", addr)
+				return err
+			}
+			go s.ProcessTcpConn(conn)
+		}
+	}
+}
+
 func (s *Server) Close() {
 	if s.cancel != nil {
 		s.cancel()
@@ -205,6 +243,10 @@ func (s *Server) Close() {
 	if s.tcpListener != nil {
 		s.tcpListener.Close()
 		s.tcpListener = nil
+	}
+	if s.tlsListener != nil {
+		s.tlsListener.Close()
+		s.tlsListener = nil
 	}
 }
 
@@ -266,17 +308,17 @@ func (s *Server) handlerListen(msgs chan Message) {
 		case *Request:
 			req := tmsg
 
-			// dst := s.udpaddr
-			if req.conn.Network() == "tcp" {
-				req.SetDestination(s.tcpaddr)
+			// 对面向连接传输（TCP/TLS），响应源地址使用当前连接本地地址。
+			if req.conn != nil && req.conn.Network() == "tcp" {
+				req.SetDestination(req.conn.LocalAddr())
 			}
 
 			s.handlerRequest(req)
 		case *Response:
 			resp := tmsg
 
-			if resp.conn.Network() == "tcp" {
-				resp.SetDestination(s.tcpaddr)
+			if resp.conn != nil && resp.conn.Network() == "tcp" {
+				resp.SetDestination(resp.conn.LocalAddr())
 			}
 			s.handlerResponse(resp)
 		default:
@@ -293,16 +335,16 @@ func (s *Server) handlerRequest(msg *Request) {
 	if key == MethodMessage || key == MethodNotify {
 
 		if l, ok := msg.ContentLength(); !ok || l.Equals(0) {
-			slog.Error("ContentLength is empty")
+			_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusBadRequest, "empty body", nil))
 			return
 		}
 		body := msg.Body()
-		var msg MessageReceive
-		if err := XMLDecode(body, &msg); err != nil {
-			slog.Error("xml decode err")
+		var parsed MessageReceive
+		if err := XMLDecode(body, &parsed); err != nil {
+			_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusBadRequest, "invalid xml", nil))
 			return
 		}
-		key += "-" + msg.CmdType
+		key += "-" + parsed.CmdType
 	}
 	handlers, ok := s.route.Load(strings.ToUpper(key))
 	if !ok {

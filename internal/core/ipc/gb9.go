@@ -136,6 +136,26 @@ func (c Core) Subscribe(ctx context.Context, deviceID string, in *SubscribeInput
 	return s.Subscribe(ctx, dev, in)
 }
 
+// ProbeOptions 发起 OPTIONS 探活（9.2 协议探测）。
+func (c Core) ProbeOptions(ctx context.Context, deviceID string, in *OptionsProbeInput) error {
+	if in == nil {
+		return reason.ErrBadRequest.SetMsg("invalid options probe request")
+	}
+	dev, err := c.GetDevice(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	p, ok := c.protocols[dev.GetType()]
+	if !ok {
+		return reason.ErrBadRequest.SetMsg("unsupported protocol")
+	}
+	s, ok := p.(OptionsProbeCapable)
+	if !ok {
+		return reason.ErrBadRequest.SetMsg("protocol does not support options probe")
+	}
+	return s.ProbeOptions(ctx, dev, in)
+}
+
 // StartVoice 启动语音会话（9.12），mode=talk/broadcast。
 func (c Core) StartVoice(ctx context.Context, channelID string, in *VoiceControlInput) error {
 	if in == nil {

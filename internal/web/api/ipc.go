@@ -97,6 +97,7 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/catalog", web.WrapH(api.queryCatalog))
 		group.POST("/:id/gb/control", web.WrapH(api.gbDeviceControl)) // GB 附录A.2.3 设备控制
 		group.POST("/:id/gb/query", web.WrapH(api.gbDeviceQuery))     // GB 附录A.2.4 设备查询
+		group.GET("/:id/gb/a4_snapshot", web.WrapH(api.gbAppendixA4Snapshot))
 	}
 	{
 		// group := g.Group("/onvif", handler...)
@@ -132,6 +133,7 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group := g.Group("/devices", handler...)
 		group.POST("/:id/time_sync", web.WrapH(api.syncTime))  // 校时（GB28181）
 		group.POST("/:id/subscribe", web.WrapH(api.subscribe)) // 订阅（GB28181）
+		group.POST("/:id/options_probe", web.WrapH(api.optionsProbe))
 	}
 }
 
@@ -522,6 +524,10 @@ type subscribeInput struct {
 	Expires int    `json:"expires"`
 }
 
+type optionsProbeInput struct {
+	Timeout int `json:"timeout"`
+}
+
 type gbDragZoomInput struct {
 	Length    int `json:"length"`
 	Width     int `json:"width"`
@@ -571,6 +577,42 @@ type gbDeviceQueryInput struct {
 	Interval   int    `json:"interval"`
 	Start      int64  `json:"start"`
 	End        int64  `json:"end"`
+}
+
+// gbAppendixA4SnapshotInput 为附录 A.4 快照查询参数。
+type gbAppendixA4SnapshotInput struct {
+	CmdType string `form:"cmd_type" json:"cmd_type"`
+	Limit   int    `form:"limit" json:"limit"`
+}
+
+// gbAppendixA4Output 是附录 A.4 扩展对象 API 出参模型。
+type gbAppendixA4Output struct {
+	Type      string            `json:"type"`
+	CmdType   string            `json:"cmd_type,omitempty"`
+	Path      string            `json:"path,omitempty"`
+	Fields    map[string]string `json:"fields,omitempty"`
+	RawXML    string            `json:"raw_xml,omitempty"`
+	UpdatedAt int64             `json:"updated_at,omitempty"`
+}
+
+// gbDeviceQueryOutput 是 GB 附录 A.2.4 查询 API 出参模型。
+// 说明：appendix_a4 字段用于承接附录 A.4 扩展对象结构化结果。
+type gbDeviceQueryOutput struct {
+	SN         int                  `json:"sn"`
+	CmdType    string               `json:"cmd_type"`
+	DeviceID   string               `json:"device_id"`
+	Result     string               `json:"result,omitempty"`
+	XML        string               `json:"xml"`
+	Data       any                  `json:"data,omitempty"`
+	AppendixA4 []gbAppendixA4Output `json:"appendix_a4,omitempty"`
+}
+
+// gbAppendixA4SnapshotOutput 为附录 A.4 快照查询 API 出参模型。
+type gbAppendixA4SnapshotOutput struct {
+	DeviceID string               `json:"device_id"`
+	Filter   string               `json:"filter,omitempty"`
+	Total    int                  `json:"total"`
+	Items    []gbAppendixA4Output `json:"items"`
 }
 
 // queryRecords 查询通道录像目录（当前由 GB28181 协议实现）。
@@ -691,6 +733,17 @@ func (a IPCAPI) subscribe(c *gin.Context, in *subscribeInput) (any, error) {
 	return gin.H{"msg": "ok"}, nil
 }
 
+// optionsProbe 发起设备 OPTIONS 探测。
+func (a IPCAPI) optionsProbe(c *gin.Context, in *optionsProbeInput) (any, error) {
+	deviceID := c.Param("id")
+	if err := a.ipc.ProbeOptions(c.Request.Context(), deviceID, &ipc.OptionsProbeInput{
+		Timeout: in.Timeout,
+	}); err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return gin.H{"msg": "ok"}, nil
+}
+
 // gbDeviceControl 执行 GB 附录 A.2.3 统一设备控制命令。
 func (a IPCAPI) gbDeviceControl(c *gin.Context, in *gbDeviceControlInput) (any, error) {
 	deviceID := c.Param("id")
@@ -729,7 +782,56 @@ func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, erro
 	if err != nil {
 		return nil, ErrDevice.SetMsg(err.Error())
 	}
-	return out, nil
+	resp := gbDeviceQueryOutput{
+		SN:         out.SN,
+		CmdType:    out.CmdType,
+		DeviceID:   out.DeviceID,
+		Result:     out.Result,
+		XML:        out.XML,
+		Data:       out.Data,
+		AppendixA4: make([]gbAppendixA4Output, 0, len(out.AppendixA4)),
+	}
+	for _, item := range out.AppendixA4 {
+		resp.AppendixA4 = append(resp.AppendixA4, gbAppendixA4Output{
+			Type:      item.Type,
+			CmdType:   item.CmdType,
+			Path:      item.Path,
+			Fields:    item.Fields,
+			RawXML:    item.RawXML,
+			UpdatedAt: item.UpdatedAt,
+		})
+	}
+	return resp, nil
+}
+
+// gbAppendixA4Snapshot 查询已落库的附录 A.4 快照（只读）。
+// 支持按 cmd_type 过滤，cmd_type 可传逗号分隔多值。
+func (a IPCAPI) gbAppendixA4Snapshot(c *gin.Context, in *gbAppendixA4SnapshotInput) (any, error) {
+	deviceID := c.Param("id")
+	out, err := a.ipc.GBAppendixA4Snapshot(c.Request.Context(), deviceID, &ipc.GBAppendixA4SnapshotInput{
+		CmdType: in.CmdType,
+		Limit:   in.Limit,
+	})
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	resp := gbAppendixA4SnapshotOutput{
+		DeviceID: out.DeviceID,
+		Filter:   out.Filter,
+		Total:    out.Total,
+		Items:    make([]gbAppendixA4Output, 0, len(out.Items)),
+	}
+	for _, item := range out.Items {
+		resp.Items = append(resp.Items, gbAppendixA4Output{
+			Type:      item.Type,
+			CmdType:   item.CmdType,
+			Path:      item.Path,
+			Fields:    item.Fields,
+			RawXML:    item.RawXML,
+			UpdatedAt: item.UpdatedAt,
+		})
+	}
+	return resp, nil
 }
 
 func toIPCDragZoom(in *gbDragZoomInput) *ipc.GBDragZoomInput {

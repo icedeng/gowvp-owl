@@ -54,6 +54,8 @@ type DeviceQueryOutput struct {
 	Result   string `json:"result,omitempty"`
 	XML      string `json:"xml"`
 	Data     any    `json:"data,omitempty"`
+	// AppendixA4 为附录 A.4 扩展对象结构化结果。
+	AppendixA4 []AppendixA4Object `json:"appendix_a4,omitempty"`
 }
 
 type pendingQueryWait struct {
@@ -318,6 +320,7 @@ func (g *GB28181API) resolvePendingDeviceQuery(deviceID, cmdType string, sn int,
 			out.DeviceID = strings.TrimSpace(deviceID)
 		}
 		out.Data = g.decodeAndStoreQueryData(out.DeviceID, out.CmdType, body)
+		out.AppendixA4 = g.decodeAppendixA4Objects(out.CmdType, body)
 		select {
 		case v.(*pendingQueryWait).wait <- out:
 		default:

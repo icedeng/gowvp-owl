@@ -151,10 +151,28 @@ type GBDeviceQueryOutput struct {
 	Result   string `json:"result,omitempty"`
 	XML      string `json:"xml"`
 	Data     any    `json:"data,omitempty"`
+	// AppendixA4 为附录 A.4 扩展对象结构化结果。
+	AppendixA4 []GBAppendixA4Object `json:"appendix_a4,omitempty"`
 }
 
 type GBDeviceQueryCapable interface {
 	DeviceQuery(ctx context.Context, device *Device, in *GBDeviceQueryInput) (*GBDeviceQueryOutput, error)
+}
+
+// GBAppendixA4SnapshotInput 是附录 A.4 快照查询参数。
+type GBAppendixA4SnapshotInput struct {
+	// CmdType 可选，支持逗号分隔多值（如 "Alarm,DeviceStatus"）。
+	CmdType string `json:"cmd_type"`
+	// Limit 可选，<=0 表示默认 200，最大 1000。
+	Limit int `json:"limit"`
+}
+
+// GBAppendixA4SnapshotOutput 是附录 A.4 快照查询结果。
+type GBAppendixA4SnapshotOutput struct {
+	DeviceID string               `json:"device_id"`
+	Filter   string               `json:"filter,omitempty"`
+	Total    int                  `json:"total"`
+	Items    []GBAppendixA4Object `json:"items"`
 }
 
 // RecordQueryInput 录像目录查询参数。
@@ -228,6 +246,14 @@ type SubscribeInput struct {
 
 type SubscribeCapable interface {
 	Subscribe(ctx context.Context, device *Device, in *SubscribeInput) error
+}
+
+type OptionsProbeInput struct {
+	Timeout int // seconds
+}
+
+type OptionsProbeCapable interface {
+	ProbeOptions(ctx context.Context, device *Device, in *OptionsProbeInput) error
 }
 
 type VoiceControlInput struct {

@@ -56,7 +56,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 
 	svr = sip.NewServer(&from)
 	svr.Register(api.handlerRegister)
-	msg := svr.Message()
+	msg := svr.Message(api.sipAccessControlMiddleware)
 	msg.Handle("Keepalive", api.sipMessageKeepalive)
 	msg.Handle("Catalog", api.sipMessageCatalog)
 	msg.Handle("DeviceInfo", api.sipMessageDeviceInfo)
@@ -66,7 +66,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	msg.Handle("RecordInfo", api.sipMessageRecordInfo)
 
 	// 报警既可能由 MESSAGE 上报，也可能由 NOTIFY 上报，二者均接入。
-	notify := svr.Notify()
+	notify := svr.Notify(api.sipAccessControlMiddleware)
 	notify.Handle("Alarm", api.sipNotifyAlarm)
 	notify.Handle("Catalog", api.sipNotifyCatalog)
 	notify.Handle("MobilePosition", api.sipNotifyMobilePosition)
@@ -84,6 +84,8 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	svr.Handle(sip.MethodInvite, api.sipInviteGeneric)
 	svr.Handle(sip.MethodBYE, api.sipByeGeneric)
 	svr.Handle(sip.MethodACK, api.sipAckGeneric)
+	// OPTIONS 探测（入向）兼容。
+	svr.Handle(sip.MethodOptions, api.sipOptionsGeneric)
 
 	// A.2.4 查询响应补齐：注册缺失查询命令响应处理。
 	msg.Handle("DeviceStatus", api.sipMessageQueryGeneric)
@@ -105,6 +107,17 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 
 	go svr.ListenUDPServer(fmt.Sprintf(":%d", cfg.Sip.Port))
 	go svr.ListenTCPServer(fmt.Sprintf(":%d", cfg.Sip.Port))
+	if cfg.Sip.EnableTLS {
+		tlsPort := cfg.Sip.TLSPort
+		if tlsPort <= 0 {
+			tlsPort = cfg.Sip.Port
+		}
+		go func() {
+			if err := svr.ListenTLSServer(fmt.Sprintf(":%d", tlsPort), cfg.Sip.TLSCert, cfg.Sip.TLSKey); err != nil {
+				slog.Error("listen tls server failed", "port", tlsPort, "err", err)
+			}
+		}()
+	}
 	go c.startTickerCheck()
 	// 等待 UDP 连接
 	for {
@@ -171,6 +184,15 @@ func (s *Server) startTickerCheck() {
 
 			// 心跳超时或连接丢失，判定设备离线
 			if sub := now.Sub(dev.LastKeepaliveAt); sub >= timeout || dev.conn == nil {
+				// 对 TCP/TLS 设备在离线判定前先做一次 OPTIONS 探测，避免瞬时抖动误判离线。
+				if sub >= timeout && dev.conn != nil && dev.source != nil && dev.source.Network() != "udp" {
+					if err := s.gb.ProbeOptions(context.Background(), &OptionsProbeInput{
+						DeviceID: key,
+						Timeout:  3 * time.Second,
+					}); err == nil {
+						return true
+					}
+				}
 				slog.Info("device offline detected",
 					"device_id", key,
 					"last_keepalive", dev.LastKeepaliveAt,
@@ -339,6 +361,11 @@ func (s *Server) ControlHistory(ctx context.Context, in *ControlHistoryInput) er
 
 func (s *Server) SyncTime(ctx context.Context, in *TimeSyncInput) error {
 	return s.gb.SyncTime(ctx, in)
+}
+
+// ProbeOptions 发起 OPTIONS 探活。
+func (s *Server) ProbeOptions(ctx context.Context, in *OptionsProbeInput) error {
+	return s.gb.ProbeOptions(ctx, in)
 }
 
 func (s *Server) Subscribe(ctx context.Context, in *SubscribeInput) error {
