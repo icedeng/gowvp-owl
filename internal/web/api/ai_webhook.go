@@ -163,9 +163,18 @@ func (a AIWebhookAPI) onStopped(c *gin.Context, in *AIStoppedInput) (AIWebhookOu
 	return newAIWebhookOutputOK(), nil
 }
 
-// StartAISyncLoop 启动 AI 任务同步协程，每 5 分钟检测一次数据库中 enabled_ai 状态与内存 aiTasks 的差异并同步
+// StartAISyncLoop 启动 AI 任务同步协程，启动后立即执行一次同步，之后每 5 分钟检测一次
+// 立即执行是为了在服务重启后尽快恢复之前开启的 AI 分析任务
 func (a *AIWebhookAPI) StartAISyncLoop(ctx context.Context, smsCore sms.Core) {
 	go func() {
+		// 延迟 30 秒再首次同步，等待设备注册和 catalog 更新完成，避免读到过期状态
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(30 * time.Second):
+			a.syncAITasks(ctx, smsCore)
+		}
+
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 
@@ -187,9 +196,10 @@ func (a *AIWebhookAPI) syncAITasks(ctx context.Context, smsCore sms.Core) {
 		return
 	}
 
-	// 查询所有通道
+	// 查询所有在线通道
 	channels, _, err := a.ipcCore.FindChannel(ctx, &ipc.FindChannelInput{
 		PagerFilter: web.PagerFilter{Page: 1, Size: 999},
+		IsOnline:    "true",
 	})
 	if err != nil {
 		a.log.ErrorContext(ctx, "sync ai tasks: find channels failed", "err", err)

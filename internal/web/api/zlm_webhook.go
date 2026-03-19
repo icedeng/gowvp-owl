@@ -218,9 +218,13 @@ func (w WebHookAPI) onStreamNoneReader(c *gin.Context, in *onStreamNoneReaderInp
 	ctx := c.Request.Context()
 	w.log.InfoContext(ctx, "webhook onStreamNoneReader", "app", in.App, "stream", in.Stream, "mediaServerID", in.MediaServerID)
 
-	// 更新通道的播放状态为未播放（所有协议统一处理）
-	if _, err := w.ipcCore.EditChannelPlaying(ctx, in.Stream, false); err != nil {
-		w.log.WarnContext(ctx, "更新播放状态失败", "stream", in.Stream, "err", err)
+	// 禁用录像时，直接关闭流
+	if w.uc.Conf.Server.Recording.Disabled {
+		// 更新通道的播放状态为未播放（所有协议统一处理）
+		if _, err := w.ipcCore.EditChannelPlaying(ctx, in.Stream, false); err != nil {
+			w.log.WarnContext(ctx, "更新播放状态失败", "stream", in.Stream, "err", err)
+		}
+		return onStreamNoneReaderOutput{Close: true}, nil
 	}
 
 	// 根据录像模式判断是否关闭流：
@@ -236,8 +240,15 @@ func (w WebHookAPI) onStreamNoneReader(c *gin.Context, in *onStreamNoneReaderInp
 	// 如果录像模式为 none，则关闭流；否则保持流不关闭以继续录制
 	shouldClose := ch.Ext.IsNoneRecord()
 	w.log.InfoContext(ctx, "无人观看判断", "stream", in.Stream, "record_mode", ch.Ext.GetRecordMode(), "close", shouldClose)
+	if shouldClose {
+		// 更新通道的播放状态为未播放（所有协议统一处理）
+		if _, err := w.ipcCore.EditChannelPlaying(ctx, in.Stream, false); err != nil {
+			w.log.WarnContext(ctx, "更新播放状态失败", "stream", in.Stream, "err", err)
+		}
+		return onStreamNoneReaderOutput{Close: true}, nil
+	}
 
-	return onStreamNoneReaderOutput{Close: shouldClose}, nil
+	return onStreamNoneReaderOutput{Close: false}, nil
 }
 
 // onRTPServerTimeout RTP 服务器超时事件

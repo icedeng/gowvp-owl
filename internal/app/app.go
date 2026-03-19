@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -109,11 +110,41 @@ func SetupLog(bc *conf.Bootstrap) (*slog.Logger, func()) {
 	})
 }
 
+// isContainerEnv 兼容 Docker/containerd/Podman/Kubernetes 等多种容器运行时的检测
+func isContainerEnv() bool {
+	// Docker 运行时标志文件
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	// Podman 运行时标志文件
+	if _, err := os.Stat("/run/.containerenv"); err == nil {
+		return true
+	}
+	// 通过 cgroup 信息检测 containerd / Kubernetes / Docker 等运行时
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		s := string(data)
+		for _, keyword := range []string{"docker", "kubepods", "containerd", "lxc", "podman"} {
+			if strings.Contains(s, keyword) {
+				return true
+			}
+		}
+	}
+	// cgroup v2 场景下 /proc/1/cgroup 可能只有 "0::/"，需要额外检查 mountinfo
+	if data, err := os.ReadFile("/proc/self/mountinfo"); err == nil {
+		s := string(data)
+		for _, keyword := range []string{"/docker/", "/containerd/", "/kubepods/", "/podman/"} {
+			if strings.Contains(s, keyword) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func setupZLM(ctx context.Context, dir string) {
-	// 检查是否在 Docker 环境中
-	_, err := os.Stat("/.dockerenv")
-	if !(err == nil || os.Getenv("NVR_STREAM") == "ZLM") {
-		slog.Info("未在 Docker 环境中运行，跳过启动 zlm")
+	// 兼容多种容器运行时以及通过环境变量强制启用
+	if !(isContainerEnv() || os.Getenv("NVR_STREAM") == "ZLM") {
+		slog.Info("未在容器环境中运行，跳过启动 zlm")
 		return
 	}
 

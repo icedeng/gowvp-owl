@@ -156,11 +156,14 @@ func (g Adapter) SaveChannels(channels []*Channel) error {
 		currentChannelIDs = append(currentChannelIDs, channel.ChannelID)
 
 		if existing, ok := existingMap[channel.ChannelID]; ok {
-			// 通道已存在，更新信息
+			// 只更新设备上报的字段，保留用户手动配置的 EnabledAI / Zones / RecordMode
 			_ = g.store.Channel().Edit(ctx, existing, func(c *Channel) error {
 				c.Name = channel.Name
 				c.IsOnline = channel.IsOnline
-				c.Ext = channel.Ext
+				c.Ext.Manufacturer = channel.Ext.Manufacturer
+				c.Ext.Firmware = channel.Ext.Firmware
+				c.Ext.GBVersion = channel.Ext.GBVersion
+				c.Ext.Model = channel.Ext.Model
 				return nil
 			}, orm.Where("id=?", existing.ID))
 		} else {
