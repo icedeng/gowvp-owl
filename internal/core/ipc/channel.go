@@ -458,3 +458,30 @@ func (c *Core) EditChannelOnlineAndPlaying(ctx context.Context, stream string, i
 	}
 	return &out, nil
 }
+
+// MarkPTZVerified 将通道标记为已通过 PTZ 实际探测验证。
+// 同时会将父设备标记为已验证，便于设备列表直接展示聚合结果。
+func (c *Core) MarkPTZVerified(ctx context.Context, channelID string) (*Channel, error) {
+	var out Channel
+	if err := c.store.Channel().Edit(ctx, &out, func(ch *Channel) error {
+		ch.Ext.PTZVerified = true
+		return nil
+	}, orm.Where("id=?", channelID)); err != nil {
+		if orm.IsErrRecordNotFound(err) {
+			return nil, reason.ErrNotFound.Withf(`Channel not found id[%s]`, channelID)
+		}
+		return nil, reason.ErrDB.Withf(`Edit err[%s]`, err.Error())
+	}
+
+	if out.DID != "" {
+		var dev Device
+		if err := c.store.Device().Edit(ctx, &dev, func(d *Device) error {
+			d.Ext.PTZVerified = true
+			return nil
+		}, orm.Where("id=?", out.DID)); err != nil {
+			slog.WarnContext(ctx, "更新设备 PTZ 验证标记失败", "deviceID", out.DID, "err", err)
+		}
+	}
+
+	return &out, nil
+}

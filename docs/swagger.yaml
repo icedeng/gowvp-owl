@@ -557,6 +557,30 @@ definitions:
         example: ok
         type: string
     type: object
+  api.SwaggerPTZBatchProbeOutput:
+    properties:
+      device_id:
+        description: 设备 ID
+        example: GB_34020000002000000001
+        type: string
+      failed_count:
+        description: 探测失败数
+        example: 1
+        type: integer
+      items:
+        description: 每个通道的探测结果
+        items:
+          $ref: '#/definitions/api.SwaggerPTZProbeOutput'
+        type: array
+      success_count:
+        description: 探测成功数
+        example: 3
+        type: integer
+      total:
+        description: 总通道数
+        example: 4
+        type: integer
+    type: object
   api.SwaggerPTZControlInput:
     properties:
       action:
@@ -587,6 +611,44 @@ definitions:
         description: 通用附加值，用于聚焦/光圈/扫描等扩展动作
         example: 50
         type: integer
+    type: object
+  api.SwaggerPTZProbeInput:
+    properties:
+      action:
+        description: 探测动作，默认使用 stop
+        example: stop
+        type: string
+      speed:
+        description: 速度值
+        example: 30
+        type: integer
+      timeout:
+        description: 等待设备应答超时时间，单位秒
+        example: 5
+        type: integer
+    type: object
+  api.SwaggerPTZProbeOutput:
+    properties:
+      channel_id:
+        description: 通道 ID
+        example: GB_34020000001320000001
+        type: string
+      message:
+        description: 探测结果说明
+        example: ok
+        type: string
+      ptz_capable:
+        description: 静态或探测后判断的 PTZ 能力
+        example: true
+        type: boolean
+      ptz_verified:
+        description: 是否已通过实际命令验证
+        example: true
+        type: boolean
+      verified_now:
+        description: 本次是否探测成功
+        example: true
+        type: boolean
     type: object
   api.SwaggerRecordModeOutput:
     properties:
@@ -1426,6 +1488,14 @@ definitions:
       name:
         description: 通道名称
         type: string
+      ptz_capable:
+        description: 是否具备 PTZ 静态能力
+        example: true
+        type: boolean
+      ptz_verified:
+        description: 是否已通过实际命令验证支持 PTZ
+        example: true
+        type: boolean
       ptztype:
         description: 云台类型
         type: integer
@@ -1484,6 +1554,14 @@ definitions:
         type: string
       port:
         type: integer
+      ptz_capable:
+        description: 是否具备 PTZ 静态能力（聚合值）
+        example: true
+        type: boolean
+      ptz_verified:
+        description: 是否已通过实际命令验证支持 PTZ（聚合值）
+        example: true
+        type: boolean
       registered_at:
         description: 注册时间
         type: string
@@ -1527,6 +1605,9 @@ definitions:
       name:
         description: 设备名
         type: string
+      ptz_verified:
+        description: 是否已通过实际命令验证支持 PTZ
+        type: boolean
       record_mode:
         description: 空串表示 always
         type: string
@@ -2427,6 +2508,44 @@ paths:
       summary: PTZ 控制
       tags:
       - PTZ
+  /channels/{id}/ptz_probe:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        对指定通道发送一次轻量 PTZ 命令探测实际控制能力，默认使用 `stop` 动作。
+        调用前置条件：1. 通道存在；2. 设备已在线；3. 对应协议适配器实现了 PTZ 控制。
+        失败场景：1. 通道不存在；2. 设备离线；3. 协议不支持 PTZ；4. 设备未返回应答。
+        成功后会持久化 `ptz_verified=true`，后续设备/通道查询接口会直接返回该状态。
+        请求示例：`{ "action": "stop", "timeout": 5 }`
+        响应示例：`{ "channel_id": "GB_34020000001320000001", "ptz_capable": true, "ptz_verified": true, "verified_now": true, "message": "ok" }`
+      parameters:
+      - description: 通道ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: PTZ 探测参数
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/api.SwaggerPTZProbeInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerPTZProbeOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: PTZ 能力探测
+      tags:
+      - PTZ
   /channels/{id}/record_mode:
     post:
       consumes:
@@ -3066,6 +3185,42 @@ paths:
       summary: 发起 OPTIONS 探测
       tags:
       - Device
+  /devices/{id}/ptz_probe:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        对指定设备下的所有通道逐个执行 PTZ 探测，并汇总返回结果。
+        调用前置条件：设备存在，且设备下已存在可探测通道。
+        失败场景：1. 设备不存在；2. 设备下没有通道；3. 单个通道离线或协议不支持时会体现在对应 item.message 中。
+        请求示例：`{ "action": "stop", "timeout": 5 }`
+      parameters:
+      - description: 设备ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 批量探测参数
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/api.SwaggerPTZProbeInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerPTZBatchProbeOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 批量 PTZ 能力探测
+      tags:
+      - PTZ
   /devices/{id}/subscribe:
     post:
       consumes:

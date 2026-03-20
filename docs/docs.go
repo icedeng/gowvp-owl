@@ -775,6 +775,57 @@ const docTemplate = `{
                 }
             }
         },
+        "/channels/{id}/ptz_probe": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "对指定通道发送一次轻量 PTZ 命令探测实际控制能力，默认使用 ` + "`" + `stop` + "`" + ` 动作。\n调用前置条件：1. 通道存在；2. 设备已在线；3. 对应协议适配器实现了 PTZ 控制。\n失败场景：1. 通道不存在；2. 设备离线；3. 协议不支持 PTZ；4. 设备未返回应答。\n成功后会持久化 ` + "`" + `ptz_verified=true` + "`" + `，后续设备/通道查询接口会直接返回该状态。\n请求示例：` + "`" + `{ \"action\": \"stop\", \"timeout\": 5 }` + "`" + `\n响应示例：` + "`" + `{ \"channel_id\": \"GB_34020000001320000001\", \"ptz_capable\": true, \"ptz_verified\": true, \"verified_now\": true, \"message\": \"ok\" }` + "`" + `",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "PTZ"
+                ],
+                "summary": "PTZ 能力探测",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "通道ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "PTZ 探测参数",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerPTZProbeInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerPTZProbeOutput"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/channels/{id}/record_mode": {
             "post": {
                 "security": [
@@ -1784,6 +1835,57 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/api.SwaggerMessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/devices/{id}/ptz_probe": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "对指定设备下的所有通道逐个执行 PTZ 探测，并汇总返回结果。\n调用前置条件：设备存在，且设备下已存在可探测通道。\n失败场景：1. 设备不存在；2. 设备下没有通道；3. 单个通道离线或协议不支持时会体现在对应 item.message 中。\n请求示例：` + "`" + `{ \"action\": \"stop\", \"timeout\": 5 }` + "`" + `",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "PTZ"
+                ],
+                "summary": "批量 PTZ 能力探测",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "批量探测参数",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerPTZProbeInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerPTZBatchProbeOutput"
                         }
                     },
                     "400": {
@@ -4023,6 +4125,38 @@ const docTemplate = `{
                 }
             }
         },
+        "api.SwaggerPTZBatchProbeOutput": {
+            "type": "object",
+            "properties": {
+                "device_id": {
+                    "description": "设备 ID",
+                    "type": "string",
+                    "example": "GB_34020000002000000001"
+                },
+                "failed_count": {
+                    "description": "探测失败数",
+                    "type": "integer",
+                    "example": 1
+                },
+                "items": {
+                    "description": "每个通道的探测结果",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.SwaggerPTZProbeOutput"
+                    }
+                },
+                "success_count": {
+                    "description": "探测成功数",
+                    "type": "integer",
+                    "example": 3
+                },
+                "total": {
+                    "description": "总通道数",
+                    "type": "integer",
+                    "example": 4
+                }
+            }
+        },
         "api.SwaggerPTZControlInput": {
             "type": "object",
             "properties": {
@@ -4060,6 +4194,56 @@ const docTemplate = `{
                     "description": "通用附加值，用于聚焦/光圈/扫描等扩展动作",
                     "type": "integer",
                     "example": 50
+                }
+            }
+        },
+        "api.SwaggerPTZProbeInput": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "description": "探测动作，默认使用 stop",
+                    "type": "string",
+                    "example": "stop"
+                },
+                "speed": {
+                    "description": "速度值",
+                    "type": "integer",
+                    "example": 30
+                },
+                "timeout": {
+                    "description": "等待设备应答超时时间，单位秒",
+                    "type": "integer",
+                    "example": 5
+                }
+            }
+        },
+        "api.SwaggerPTZProbeOutput": {
+            "type": "object",
+            "properties": {
+                "channel_id": {
+                    "description": "通道 ID",
+                    "type": "string",
+                    "example": "GB_34020000001320000001"
+                },
+                "message": {
+                    "description": "探测结果说明",
+                    "type": "string",
+                    "example": "ok"
+                },
+                "ptz_capable": {
+                    "description": "静态或探测后判断的 PTZ 能力",
+                    "type": "boolean",
+                    "example": true
+                },
+                "ptz_verified": {
+                    "description": "是否已通过实际命令验证",
+                    "type": "boolean",
+                    "example": true
+                },
+                "verified_now": {
+                    "description": "本次是否探测成功",
+                    "type": "boolean",
+                    "example": true
                 }
             }
         },
@@ -5198,6 +5382,16 @@ const docTemplate = `{
                     "description": "通道名称",
                     "type": "string"
                 },
+                "ptz_capable": {
+                    "description": "是否具备 PTZ 静态能力",
+                    "type": "boolean",
+                    "example": true
+                },
+                "ptz_verified": {
+                    "description": "是否已通过实际命令验证支持 PTZ",
+                    "type": "boolean",
+                    "example": true
+                },
                 "ptztype": {
                     "description": "云台类型",
                     "type": "integer"
@@ -5279,6 +5473,16 @@ const docTemplate = `{
                 "port": {
                     "type": "integer"
                 },
+                "ptz_capable": {
+                    "description": "是否具备 PTZ 静态能力（聚合值）",
+                    "type": "boolean",
+                    "example": true
+                },
+                "ptz_verified": {
+                    "description": "是否已通过实际命令验证支持 PTZ（聚合值）",
+                    "type": "boolean",
+                    "example": true
+                },
                 "registered_at": {
                     "description": "注册时间",
                     "type": "string"
@@ -5337,6 +5541,10 @@ const docTemplate = `{
                 "name": {
                     "description": "设备名",
                     "type": "string"
+                },
+                "ptz_verified": {
+                    "description": "是否已通过实际命令验证支持 PTZ",
+                    "type": "boolean"
                 },
                 "record_mode": {
                     "description": "空串表示 always",

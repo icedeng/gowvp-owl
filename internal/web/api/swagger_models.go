@@ -132,6 +132,31 @@ type SwaggerPTZControlInput struct {
 	Value   uint16 `json:"value" example:"50"`    // 通用附加值，用于聚焦/光圈/扫描等扩展动作
 }
 
+// SwaggerPTZProbeInput 是 PTZ 能力探测请求体。
+type SwaggerPTZProbeInput struct {
+	Action  string `json:"action" example:"stop"` // 探测动作，默认使用 stop
+	Speed   uint8  `json:"speed" example:"30"`    // 速度值
+	Timeout int    `json:"timeout" example:"5"`   // 等待设备应答超时时间，单位秒
+}
+
+// SwaggerPTZProbeOutput 是 PTZ 能力探测响应。
+type SwaggerPTZProbeOutput struct {
+	ChannelID   string `json:"channel_id" example:"GB_34020000001320000001"` // 通道 ID
+	PTZCapable  bool   `json:"ptz_capable" example:"true"`                   // 静态或探测后判断的 PTZ 能力
+	PTZVerified bool   `json:"ptz_verified" example:"true"`                  // 是否已通过实际命令验证
+	VerifiedNow bool   `json:"verified_now" example:"true"`                  // 本次是否探测成功
+	Message     string `json:"message" example:"ok"`                         // 探测结果说明
+}
+
+// SwaggerPTZBatchProbeOutput 是设备级批量 PTZ 探测响应。
+type SwaggerPTZBatchProbeOutput struct {
+	DeviceID     string                  `json:"device_id" example:"GB_34020000002000000001"` // 设备 ID
+	Total        int                     `json:"total" example:"4"`                           // 总通道数
+	SuccessCount int                     `json:"success_count" example:"3"`                   // 探测成功数
+	FailedCount  int                     `json:"failed_count" example:"1"`                    // 探测失败数
+	Items        []SwaggerPTZProbeOutput `json:"items"`                                       // 每个通道的探测结果
+}
+
 // SwaggerGBDragZoomInput 是拉框控制参数。
 type SwaggerGBDragZoomInput struct {
 	Length    int `json:"length" example:"1920"`     // 图像总长度

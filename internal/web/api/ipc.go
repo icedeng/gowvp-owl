@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -97,6 +98,7 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/play", web.WrapH(api.play))                  // 播放（所有协议）
 		group.POST("/:id/records/query", web.WrapH(api.queryRecords)) // 录像目录查询（GB28181）
 		group.POST("/:id/ptz", web.WrapH(api.ptzControl))             // 云台控制（GB28181/ONVIF）
+		group.POST("/:id/ptz_probe", web.WrapH(api.ptzProbe))         // 云台能力探测（GB28181/ONVIF）
 		group.POST("/:id/upgrade", web.WrapH(api.upgradeDevice))      // 设备升级（GB28181-2022）
 		group.POST("/:id/history/start", web.WrapH(api.startHistory)) // 历史回放/下载开始（GB28181）
 		group.POST("/:id/history/stop", web.WrapH(api.stopHistory))   // 历史回放/下载停止（GB28181）
@@ -112,10 +114,32 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/record_mode", web.WrapH(api.setRecordMode)) // 设置录像模式
 	}
 	{
+		group := g.Group("/gb28181/devices/:device_id/channels/:channel_id", handler...)
+		group.PUT("", web.WrapH(api.editChannel))
+		group.POST("/play", web.WrapH(api.play))
+		group.POST("/records/query", web.WrapH(api.queryRecords))
+		group.POST("/ptz", web.WrapH(api.ptzControl))
+		group.POST("/ptz_probe", web.WrapH(api.ptzProbe))
+		group.POST("/upgrade", web.WrapH(api.upgradeDevice))
+		group.POST("/history/start", web.WrapH(api.startHistory))
+		group.POST("/history/stop", web.WrapH(api.stopHistory))
+		group.POST("/history/control", web.WrapH(api.controlHistory))
+		group.POST("/voice/start", web.WrapH(api.startVoice))
+		group.POST("/voice/stop", web.WrapH(api.stopVoice))
+		group.POST("/snapshot", web.WrapH(api.refreshSnapshot))
+		group.GET("/snapshot", api.getSnapshot)
+		group.POST("/zones", web.WrapH(api.addZone))
+		group.GET("/zones", web.WrapH(api.getZones))
+		group.POST("/ai/enable", web.WrapH(api.enableAI))
+		group.POST("/ai/disable", web.WrapH(api.disableAI))
+		group.POST("/record_mode", web.WrapH(api.setRecordMode))
+	}
+	{
 		group := g.Group("/devices", handler...)
 		group.POST("/:id/time_sync", web.WrapH(api.syncTime))  // 校时（GB28181）
 		group.POST("/:id/subscribe", web.WrapH(api.subscribe)) // 订阅（GB28181）
 		group.POST("/:id/options_probe", web.WrapH(api.optionsProbe))
+		group.POST("/:id/ptz_probe", web.WrapH(api.devicePTZProbe))
 	}
 }
 
@@ -141,6 +165,45 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// resolveDeviceParamID 将设备路径参数统一解析为内部 id，兼容传入 device_id。
+func (a IPCAPI) resolveDeviceParamID(ctx context.Context, raw string) (string, error) {
+	dev, err := a.ipc.GetDevice(ctx, raw)
+	if err != nil {
+		return "", err
+	}
+	return dev.ID, nil
+}
+
+// resolveChannelParamID 支持两种通道定位方式：
+// 1. 旧接口：/channels/:id，直接传内部通道 id
+// 2. 新接口：/gb28181/devices/:device_id/channels/:channel_id
+func (a IPCAPI) resolveChannelParamID(c *gin.Context) (string, error) {
+	if id := strings.TrimSpace(c.Param("id")); id != "" {
+		return id, nil
+	}
+
+	deviceID := strings.TrimSpace(c.Param("device_id"))
+	channelID := strings.TrimSpace(c.Param("channel_id"))
+	if deviceID == "" || channelID == "" {
+		return "", reason.ErrBadRequest.SetMsg("device_id and channel_id are required")
+	}
+
+	ch, err := a.ipc.GetChannelByDeviceChannelID(c.Request.Context(), deviceID, channelID)
+	if err != nil {
+		return "", err
+	}
+	return ch.ID, nil
+}
+
+func channelSnapshotPath(c *gin.Context, channelID string) string {
+	deviceID := strings.TrimSpace(c.Param("device_id"))
+	gbChannelID := strings.TrimSpace(c.Param("channel_id"))
+	if deviceID != "" && gbChannelID != "" {
+		return fmt.Sprintf("/gb28181/devices/%s/channels/%s/snapshot", deviceID, gbChannelID)
+	}
+	return fmt.Sprintf("/channels/%s/snapshot", channelID)
 }
 
 // gbSnapshotUpload godoc
@@ -177,10 +240,11 @@ func (a IPCAPI) gbSnapshotUpload(c *gin.Context) {
 		coverKey = orm.GenerateRandomString(10)
 	}
 	if len(payload) > 0 {
+		detectedContentType := http.DetectContentType(payload)
 		if err := writeCover(a.uc.Conf.ConfigDir, coverKey, payload); err != nil {
 			slog.ErrorContext(c.Request.Context(), "write cover", "err", err, "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID)
 		} else {
-			slog.InfoContext(c.Request.Context(), "GBSNAPSHOT_UPLOAD_OK", "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID, "size", len(payload), "payload_type", payloadType)
+			slog.InfoContext(c.Request.Context(), "GBSNAPSHOT_UPLOAD_OK", "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID, "size", len(payload), "payload_type", payloadType, "content_type", detectedContentType)
 		}
 	}
 	c.JSON(200, gin.H{"msg": "ok"})
@@ -215,7 +279,10 @@ func (a IPCAPI) findDevice(c *gin.Context, in *ipc.FindDeviceInput) (any, error)
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id} [get]
 func (a IPCAPI) getDevice(c *gin.Context, _ *struct{}) (any, error) {
-	deviceID := c.Param("id")
+	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
 	dev, err := a.ipc.GetDevice(c.Request.Context(), deviceID)
 	if err != nil {
 		return nil, err
@@ -236,7 +303,10 @@ func (a IPCAPI) getDevice(c *gin.Context, _ *struct{}) (any, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id} [put]
 func (a IPCAPI) editDevice(c *gin.Context, in *ipc.EditDeviceInput) (any, error) {
-	deviceID := c.Param("id")
+	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
 	return a.ipc.EditDevice(c.Request.Context(), in, deviceID)
 }
 
@@ -281,7 +351,10 @@ func (a IPCAPI) addDevice(c *gin.Context, in *ipc.AddDeviceInput) (any, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id} [delete]
 func (a IPCAPI) delDevice(c *gin.Context, _ *struct{}) (any, error) {
-	did := c.Param("id")
+	did, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
 	return a.ipc.DelDevice(c.Request.Context(), did)
 }
 
@@ -295,7 +368,10 @@ func (a IPCAPI) delDevice(c *gin.Context, _ *struct{}) (any, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id}/catalog [post]
 func (a IPCAPI) queryCatalog(c *gin.Context, _ *struct{}) (any, error) {
-	did := c.Param("id")
+	did, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
 
 	if err := a.ipc.QueryCatalog(c.Request.Context(), did); err != nil {
 		return nil, ErrDevice.SetMsg(err.Error())
@@ -360,12 +436,37 @@ func fillDeviceRecordMode(items []*ipc.Device) {
 			continue
 		}
 		dev.Ext.RecordMode = dev.Ext.GetRecordMode()
+		dev.PTZVerified = dev.Ext.PTZVerified
+		dev.PTZCapable = dev.PTZVerified || dev.IsOnvif()
 		for _, ch := range dev.Children {
 			if ch == nil {
 				continue
 			}
 			ch.Ext.RecordMode = ch.Ext.GetRecordMode()
+			fillChannelPTZStatus(ch)
+			if ch.PTZCapable {
+				dev.PTZCapable = true
+			}
+			if ch.PTZVerified {
+				dev.PTZVerified = true
+			}
 		}
+	}
+}
+
+// fillChannelPTZStatus 统一回填通道 PTZ 静态能力与验证状态。
+func fillChannelPTZStatus(ch *ipc.Channel) {
+	if ch == nil {
+		return
+	}
+	ch.PTZVerified = ch.Ext.PTZVerified
+	switch {
+	case ch.IsOnvif():
+		ch.PTZCapable = true
+	case ch.IsGB28181():
+		ch.PTZCapable = ch.PTZType > 0 || ch.PTZVerified
+	default:
+		ch.PTZCapable = false
 	}
 }
 
@@ -388,6 +489,9 @@ func (a IPCAPI) findChannel(c *gin.Context, in *ipc.FindChannelInput) (any, erro
 	items, total, err := a.ipc.FindChannel(c.Request.Context(), in)
 	if err != nil {
 		return nil, err
+	}
+	for _, item := range items {
+		fillChannelPTZStatus(item)
 	}
 
 	// 为 RTMP 类型通道生成推流地址
@@ -444,7 +548,10 @@ func (a IPCAPI) fillRTMPPushAddr(c *gin.Context, items []*ipc.Channel) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id} [put]
 func (a IPCAPI) editChannel(c *gin.Context, in *ipc.EditChannelInput) (any, error) {
-	cid := c.Param("id")
+	cid, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
 	return a.ipc.EditChannel(c.Request.Context(), in, cid)
 }
 
@@ -480,7 +587,10 @@ func (a IPCAPI) addChannel(c *gin.Context, in *ipc.AddChannelInput) (any, error)
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id} [delete]
 func (a IPCAPI) delChannel(c *gin.Context, _ *struct{}) (any, error) {
-	channelID := c.Param("id")
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
 
 	// 仅允许删除 RTMP/RTSP 类型通道
 	if !bz.IsRTMP(channelID) && !bz.IsRTSP(channelID) {
@@ -500,7 +610,10 @@ func (a IPCAPI) delChannel(c *gin.Context, _ *struct{}) (any, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/play [post]
 func (a IPCAPI) play(c *gin.Context, _ *struct{}) (*playOutput, error) {
-	channelID := c.Param("id")
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
 
 	var app, appStream, host, stream, session, mediaServerID string
 
@@ -665,6 +778,20 @@ type ptzControlInput struct {
 	Value   uint16 `json:"value" example:"50"`    // 通用附加值
 }
 
+type ptzProbeInput struct {
+	Action  string `json:"action" example:"stop"` // 探测动作，默认 stop
+	Speed   uint8  `json:"speed" example:"30"`    // 速度值
+	Timeout int    `json:"timeout" example:"5"`   // 等待设备应答超时时间，单位秒
+}
+
+type ptzProbeOutput struct {
+	ChannelID   string `json:"channel_id"`   // 通道 ID
+	PTZCapable  bool   `json:"ptz_capable"`  // 是否具备 PTZ 能力
+	PTZVerified bool   `json:"ptz_verified"` // 是否已通过实际命令验证
+	VerifiedNow bool   `json:"verified_now"` // 本次是否探测成功
+	Message     string `json:"message"`      // 探测结果说明
+}
+
 type queryRecordsInput struct {
 	StartAt int64 `json:"start_at" example:"1710864000"` // 查询开始时间，Unix 秒
 	EndAt   int64 `json:"end_at" example:"1710950400"`   // 查询结束时间，Unix 秒
@@ -808,7 +935,10 @@ type gbAppendixA4SnapshotOutput struct {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/records/query [post]
 func (a IPCAPI) queryRecords(c *gin.Context, in *queryRecordsInput) (any, error) {
-	channelID := c.Param("id")
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
 	out, err := a.ipc.QueryRecords(c.Request.Context(), channelID, &ipc.RecordQueryInput{
 		StartAt: in.StartAt,
 		EndAt:   in.EndAt,
@@ -834,8 +964,11 @@ func (a IPCAPI) queryRecords(c *gin.Context, in *queryRecordsInput) (any, error)
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/upgrade [post]
 func (a IPCAPI) upgradeDevice(c *gin.Context, in *upgradeDeviceInput) (any, error) {
-	channelID := c.Param("id")
-	err := a.ipc.UpgradeDevice(c.Request.Context(), channelID, &ipc.UpgradeInput{
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
+	err = a.ipc.UpgradeDevice(c.Request.Context(), channelID, &ipc.UpgradeInput{
 		Firmware:     in.Firmware,
 		FileURL:      in.FileURL,
 		Manufacturer: in.Manufacturer,
@@ -867,8 +1000,11 @@ func (a IPCAPI) upgradeDevice(c *gin.Context, in *upgradeDeviceInput) (any, erro
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/history/start [post]
 func (a IPCAPI) startHistory(c *gin.Context, in *historyControlInput) (any, error) {
-	channelID := c.Param("id")
-	err := a.ipc.StartHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
+	err = a.ipc.StartHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
 		Mode:    in.Mode,
 		StartAt: in.StartAt,
 		EndAt:   in.EndAt,
@@ -896,8 +1032,11 @@ func (a IPCAPI) startHistory(c *gin.Context, in *historyControlInput) (any, erro
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/history/stop [post]
 func (a IPCAPI) stopHistory(c *gin.Context, in *historyControlInput) (any, error) {
-	channelID := c.Param("id")
-	err := a.ipc.StopHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
+	err = a.ipc.StopHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
 		Mode: in.Mode,
 	})
 	if err != nil {
@@ -927,8 +1066,11 @@ func (a IPCAPI) stopHistory(c *gin.Context, in *historyControlInput) (any, error
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/history/control [post]
 func (a IPCAPI) controlHistory(c *gin.Context, in *historyControlInput) (any, error) {
-	channelID := c.Param("id")
-	err := a.ipc.ControlHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
+	err = a.ipc.ControlHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
 		Mode:   in.Mode,
 		Cmd:    in.Cmd,
 		Action: in.Action,
@@ -957,8 +1099,11 @@ func (a IPCAPI) controlHistory(c *gin.Context, in *historyControlInput) (any, er
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/voice/start [post]
 func (a IPCAPI) startVoice(c *gin.Context, in *voiceControlInput) (any, error) {
-	channelID := c.Param("id")
-	err := a.ipc.StartVoice(c.Request.Context(), channelID, &ipc.VoiceControlInput{
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
+	err = a.ipc.StartVoice(c.Request.Context(), channelID, &ipc.VoiceControlInput{
 		Mode: in.Mode,
 	})
 	if err != nil {
@@ -983,8 +1128,11 @@ func (a IPCAPI) startVoice(c *gin.Context, in *voiceControlInput) (any, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/voice/stop [post]
 func (a IPCAPI) stopVoice(c *gin.Context, in *voiceControlInput) (any, error) {
-	channelID := c.Param("id")
-	err := a.ipc.StopVoice(c.Request.Context(), channelID, &ipc.VoiceControlInput{
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
+	err = a.ipc.StopVoice(c.Request.Context(), channelID, &ipc.VoiceControlInput{
 		Mode: in.Mode,
 	})
 	if err != nil {
@@ -1004,7 +1152,10 @@ func (a IPCAPI) stopVoice(c *gin.Context, in *voiceControlInput) (any, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id}/time_sync [post]
 func (a IPCAPI) syncTime(c *gin.Context, _ *struct{}) (any, error) {
-	deviceID := c.Param("id")
+	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
 	if err := a.ipc.SyncTime(c.Request.Context(), deviceID); err != nil {
 		return nil, ErrDevice.SetMsg(err.Error())
 	}
@@ -1028,7 +1179,10 @@ func (a IPCAPI) syncTime(c *gin.Context, _ *struct{}) (any, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id}/subscribe [post]
 func (a IPCAPI) subscribe(c *gin.Context, in *subscribeInput) (any, error) {
-	deviceID := c.Param("id")
+	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
 	if err := a.ipc.Subscribe(c.Request.Context(), deviceID, &ipc.SubscribeInput{
 		Event:   in.Event,
 		Expires: in.Expires,
@@ -1054,7 +1208,10 @@ func (a IPCAPI) subscribe(c *gin.Context, in *subscribeInput) (any, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id}/options_probe [post]
 func (a IPCAPI) optionsProbe(c *gin.Context, in *optionsProbeInput) (any, error) {
-	deviceID := c.Param("id")
+	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
 	if err := a.ipc.ProbeOptions(c.Request.Context(), deviceID, &ipc.OptionsProbeInput{
 		Timeout: in.Timeout,
 	}); err != nil {
@@ -1083,7 +1240,10 @@ func (a IPCAPI) optionsProbe(c *gin.Context, in *optionsProbeInput) (any, error)
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id}/gb/control [post]
 func (a IPCAPI) gbDeviceControl(c *gin.Context, in *gbDeviceControlInput) (any, error) {
-	deviceID := c.Param("id")
+	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
 	out, err := a.ipc.GBDeviceControl(c.Request.Context(), deviceID, &ipc.GBDeviceControlInput{
 		TargetID:     in.TargetID,
 		Action:       in.Action,
@@ -1123,7 +1283,10 @@ func (a IPCAPI) gbDeviceControl(c *gin.Context, in *gbDeviceControlInput) (any, 
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id}/gb/query [post]
 func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, error) {
-	deviceID := c.Param("id")
+	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
 	out, err := a.ipc.GBDeviceQuery(c.Request.Context(), deviceID, &ipc.GBDeviceQueryInput{
 		TargetID:   in.TargetID,
 		Action:     in.Action,
@@ -1171,7 +1334,10 @@ func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, erro
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id}/gb/a4_snapshot [get]
 func (a IPCAPI) gbAppendixA4Snapshot(c *gin.Context, in *gbAppendixA4SnapshotInput) (any, error) {
-	deviceID := c.Param("id")
+	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
 	out, err := a.ipc.GBAppendixA4Snapshot(c.Request.Context(), deviceID, &ipc.GBAppendixA4SnapshotInput{
 		CmdType: in.CmdType,
 		Limit:   in.Limit,
@@ -1272,8 +1438,11 @@ func toIPCPTZCmdParam(in *gbPTZCmdParamInput) *ipc.GBPTZCmdParamInput {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/ptz [post]
 func (a IPCAPI) ptzControl(c *gin.Context, in *ptzControlInput) (any, error) {
-	channelID := c.Param("id")
-	err := a.ipc.PTZControl(c.Request.Context(), channelID, &ipc.PTZControlInput{
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
+	err = a.ipc.PTZControl(c.Request.Context(), channelID, &ipc.PTZControlInput{
 		Action:  in.Action,
 		Speed:   in.Speed,
 		Timeout: in.Timeout,
@@ -1288,6 +1457,144 @@ func (a IPCAPI) ptzControl(c *gin.Context, in *ptzControlInput) (any, error) {
 	return gin.H{"msg": "ok"}, nil
 }
 
+// ptzProbe godoc
+// @Summary PTZ 能力探测
+// @Description 对指定通道发送一次轻量 PTZ 命令探测实际控制能力，默认使用 `stop` 动作。
+// @Description 调用前置条件：1. 通道存在；2. 设备已在线；3. 对应协议适配器实现了 PTZ 控制。
+// @Description 失败场景：1. 通道不存在；2. 设备离线；3. 协议不支持 PTZ；4. 设备未返回应答。
+// @Description 成功后会持久化 `ptz_verified=true`，后续设备/通道查询接口会直接返回该状态。
+// @Description 请求示例：`{ "action": "stop", "timeout": 5 }`
+// @Description 响应示例：`{ "channel_id": "GB_34020000001320000001", "ptz_capable": true, "ptz_verified": true, "verified_now": true, "message": "ok" }`
+// @Tags PTZ
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body SwaggerPTZProbeInput false "PTZ 探测参数"
+// @Success 200 {object} SwaggerPTZProbeOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/ptz_probe [post]
+func (a IPCAPI) ptzProbe(c *gin.Context, in *ptzProbeInput) (any, error) {
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
+	out, err := a.probeChannelPTZ(c.Request.Context(), channelID, in)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (a IPCAPI) probeChannelPTZ(ctx context.Context, channelID string, in *ptzProbeInput) (*ptzProbeOutput, error) {
+	ch, err := a.ipc.GetChannel(ctx, channelID)
+	if err != nil {
+		return nil, err
+	}
+	fillChannelPTZStatus(ch)
+
+	req := &ipc.PTZControlInput{
+		Action:  strings.TrimSpace(in.Action),
+		Speed:   in.Speed,
+		Timeout: in.Timeout,
+	}
+	if req.Action == "" {
+		req.Action = "stop"
+	}
+
+	out := &ptzProbeOutput{
+		ChannelID:   channelID,
+		PTZCapable:  ch.PTZCapable,
+		PTZVerified: ch.PTZVerified,
+		VerifiedNow: false,
+	}
+
+	if err := a.ipc.PTZControl(ctx, channelID, req); err != nil {
+		out.Message = err.Error()
+		return out, nil
+	}
+
+	verifiedChannel, err := a.ipc.MarkPTZVerified(ctx, channelID)
+	if err == nil {
+		ch = verifiedChannel
+	}
+	fillChannelPTZStatus(ch)
+	out.PTZCapable = ch.PTZCapable
+	out.PTZVerified = ch.PTZVerified
+	out.VerifiedNow = true
+	out.Message = "ok"
+	return out, nil
+}
+
+// devicePTZProbe godoc
+// @Summary 批量 PTZ 能力探测
+// @Description 对指定设备下的所有通道逐个执行 PTZ 探测，并汇总返回结果。
+// @Description 调用前置条件：设备存在，且设备下已存在可探测通道。
+// @Description 失败场景：1. 设备不存在；2. 设备下没有通道；3. 单个通道离线或协议不支持时会体现在对应 item.message 中。
+// @Description 请求示例：`{ "action": "stop", "timeout": 5 }`
+// @Tags PTZ
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "设备ID"
+// @Param body body SwaggerPTZProbeInput false "批量探测参数"
+// @Success 200 {object} SwaggerPTZBatchProbeOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id}/ptz_probe [post]
+func (a IPCAPI) devicePTZProbe(c *gin.Context, in *ptzProbeInput) (any, error) {
+	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
+	dev, err := a.ipc.GetDevice(c.Request.Context(), deviceID)
+	if err != nil {
+		return nil, err
+	}
+
+	channels, _, err := a.ipc.FindChannel(c.Request.Context(), &ipc.FindChannelInput{
+		DID:         deviceID,
+		PagerFilter: web.PagerFilter{Page: 1, Size: 1000},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(channels) == 0 {
+		return nil, reason.ErrBadRequest.SetMsg("设备下无可探测通道")
+	}
+
+	resp := struct {
+		DeviceID     string            `json:"device_id"`
+		Total        int               `json:"total"`
+		SuccessCount int               `json:"success_count"`
+		FailedCount  int               `json:"failed_count"`
+		Items        []*ptzProbeOutput `json:"items"`
+	}{
+		DeviceID: dev.ID,
+		Total:    len(channels),
+		Items:    make([]*ptzProbeOutput, 0, len(channels)),
+	}
+
+	for _, ch := range channels {
+		item, probeErr := a.probeChannelPTZ(c.Request.Context(), ch.ID, in)
+		if probeErr != nil {
+			item = &ptzProbeOutput{
+				ChannelID:   ch.ID,
+				PTZCapable:  false,
+				PTZVerified: false,
+				VerifiedNow: false,
+				Message:     probeErr.Error(),
+			}
+		}
+		resp.Items = append(resp.Items, item)
+		if item.VerifiedNow {
+			resp.SuccessCount++
+		} else {
+			resp.FailedCount++
+		}
+	}
+	return resp, nil
+}
+
 // refreshSnapshot godoc
 // @Summary 刷新通道快照
 // @Tags Channel
@@ -1300,7 +1607,10 @@ func (a IPCAPI) ptzControl(c *gin.Context, in *ptzControlInput) (any, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/snapshot [post]
 func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, error) {
-	channelID := c.Param("id")
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
 
 	path := readCoverPath(a.uc.Conf.ConfigDir, channelID)
 	requestAt := time.Now()
@@ -1316,7 +1626,7 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 	fileInfo, err := os.Stat(path)
 	if err == nil {
 		if fileInfo.ModTime().Unix() > time.Now().Unix()-in.WithinSeconds {
-			return gin.H{"link": fmt.Sprintf("%s/channels/%s/snapshot?token=%s", prefix, channelID, token)}, nil
+			return gin.H{"link": fmt.Sprintf("%s%s?token=%s", prefix, channelSnapshotPath(c, channelID), token)}, nil
 		}
 	}
 
@@ -1366,7 +1676,7 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 		}
 	}
 
-	return gin.H{"link": fmt.Sprintf("%s/channels/%s/snapshot?token=%s", prefix, channelID, token)}, nil
+	return gin.H{"link": fmt.Sprintf("%s%s?token=%s", prefix, channelSnapshotPath(c, channelID), token)}, nil
 }
 
 // addZone godoc
@@ -1381,7 +1691,10 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/zones [post]
 func (a IPCAPI) addZone(c *gin.Context, in *ipc.AddZoneInput) (gin.H, error) {
-	channelID := c.Param("id")
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
 	if len(in.Labels) == 0 {
 		in.Labels = []string{"person", "car", "cat", "dog"}
 	}
@@ -1399,7 +1712,10 @@ func (a IPCAPI) addZone(c *gin.Context, in *ipc.AddZoneInput) (gin.H, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/zones [get]
 func (a IPCAPI) getZones(c *gin.Context, _ *struct{}) (any, error) {
-	channelID := c.Param("id")
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
 	return a.ipc.GetZones(c.Request.Context(), channelID)
 }
 
@@ -1412,13 +1728,17 @@ func (a IPCAPI) getZones(c *gin.Context, _ *struct{}) (any, error) {
 // @Failure 404 {object} SwaggerErrorResponse
 // @Router /channels/{id}/snapshot [get]
 func (a IPCAPI) getSnapshot(c *gin.Context) {
-	channelID := c.Param("id")
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		web.Fail(c, err)
+		return
+	}
 	body, err := readCover(a.uc.Conf.ConfigDir, channelID)
 	if err != nil {
 		web.Fail(c, reason.ErrNotFound.SetMsg(err.Error()))
 		return
 	}
-	c.Data(200, "image/jpeg", body)
+	c.Data(200, http.DetectContentType(body), body)
 }
 
 // discover godoc
@@ -1486,7 +1806,10 @@ var (
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/ai/enable [post]
 func (a IPCAPI) enableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
-	channelID := c.Param("id")
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
 	ctx := c.Request.Context()
 
 	// 检查全局 AI 配置
@@ -1536,7 +1859,10 @@ func (a IPCAPI) enableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/ai/disable [post]
 func (a IPCAPI) disableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
-	channelID := c.Param("id")
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
 	ctx := c.Request.Context()
 
 	// 检查全局 AI 配置
@@ -1616,7 +1942,10 @@ type setRecordModeInput struct {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/record_mode [post]
 func (a IPCAPI) setRecordMode(c *gin.Context, in *setRecordModeInput) (gin.H, error) {
-	channelID := c.Param("id")
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
 	ctx := c.Request.Context()
 
 	// 更新通道的录像模式

@@ -36,7 +36,9 @@ type Device struct {
 	Ext          DeviceExt `gorm:"column:ext;notNull;default:'{}';type:jsonb;comment:设备属性" json:"ext"` // 设备属性
 	Username     string    `gorm:"column:username;notNull;default:'';comment:用户名" json:"username"`
 
-	Children []*Channel `gorm:"-" json:"children,omitzero"`
+	Children    []*Channel `gorm:"-" json:"children,omitzero"`
+	PTZCapable  bool       `gorm:"-" json:"ptz_capable" example:"true"`  // 是否具备 PTZ 静态能力（聚合值）
+	PTZVerified bool       `gorm:"-" json:"ptz_verified" example:"true"` // 是否已通过实际命令验证支持 PTZ（聚合值）
 }
 
 func (d *Device) IsOnvif() bool {

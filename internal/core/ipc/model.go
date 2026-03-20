@@ -56,6 +56,7 @@ type DeviceExt struct {
 	GBVersion    string `json:"gb_version"`   // GB版本
 	Zones        []Zone `json:"zones"`        // 区域
 	EnabledAI    bool   `json:"enabled_ai"`   // 是否启用 AI
+	PTZVerified  bool   `json:"ptz_verified"` // 是否已通过实际命令验证支持 PTZ
 	// GBAppendixA4 保存 GB/T 28181-2022 附录 A.4 扩展对象最新快照（结构化落库）。
 	GBAppendixA4 []GBAppendixA4Object `json:"gb_appendix_a4"`
 

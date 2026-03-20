@@ -74,14 +74,7 @@ func (c Core) FindDevice(ctx context.Context, in *FindDeviceInput) ([]*Device, i
 
 // GetDevice Query a single object
 func (c Core) GetDevice(ctx context.Context, id string) (*Device, error) {
-	var out Device
-	if err := c.store.Device().Get(ctx, &out, orm.Where("id=?", id)); err != nil {
-		if orm.IsErrRecordNotFound(err) {
-			return nil, reason.ErrNotFound.Withf(`Get err[%s]`, err.Error())
-		}
-		return nil, reason.ErrDB.Withf(`Get err[%s]`, err.Error())
-	}
-	return &out, nil
+	return c.resolveDevice(ctx, id)
 }
 
 func (c Core) GetDeviceByDeviceID(ctx context.Context, deviceID string) (*Device, error) {
@@ -140,6 +133,11 @@ func (c Core) AddDevice(ctx context.Context, in *AddDeviceInput) (*Device, error
 
 // EditDevice Update object information
 func (c Core) EditDevice(ctx context.Context, in *EditDeviceInput, id string) (*Device, error) {
+	dev, err := c.resolveDevice(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
 	var out Device
 	if err := c.store.Device().Edit(ctx, &out, func(b *Device) error {
 		if err := copier.Copy(b, in); err != nil {
@@ -155,8 +153,8 @@ func (c Core) EditDevice(ctx context.Context, in *EditDeviceInput, id string) (*
 		}
 
 		return nil
-	}, orm.Where("id=?", id)); err != nil {
-		return nil, reason.ErrDB.Withf(`Edit err[%s] id[%s]`, err.Error(), id)
+	}, orm.Where("id=?", dev.ID)); err != nil {
+		return nil, reason.ErrDB.Withf(`Edit err[%s] id[%s]`, err.Error(), dev.ID)
 	}
 
 	protocol, ok := c.protocols[out.GetType()]
@@ -170,13 +168,18 @@ func (c Core) EditDevice(ctx context.Context, in *EditDeviceInput, id string) (*
 
 // DelDevice Delete object
 func (c Core) DelDevice(ctx context.Context, id string) (*Device, error) {
+	target, err := c.resolveDevice(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
 	var dev Device
-	if err := c.store.Device().Del(ctx, &dev, orm.Where("id=?", id)); err != nil {
+	if err := c.store.Device().Del(ctx, &dev, orm.Where("id=?", target.ID)); err != nil {
 		return nil, reason.ErrDB.Withf(`Del err[%s]`, err.Error())
 	}
 
 	if err := c.store.Channel().Session(ctx, func(tx *gorm.DB) error {
-		if err := orm.Delete(tx, &dev, orm.Where("id=?", id)); err != nil {
+		if err := orm.Delete(tx, &dev, orm.Where("id=?", target.ID)); err != nil {
 			return err
 		}
 		if protocol, ok := c.protocols[dev.GetType()]; ok {
@@ -186,7 +189,7 @@ func (c Core) DelDevice(ctx context.Context, id string) (*Device, error) {
 		}
 		return nil
 	}, func(d *gorm.DB) error {
-		return d.Where("did=?", id).Delete(&Channel{}).Error
+		return d.Where("did=?", target.ID).Delete(&Channel{}).Error
 	}); err != nil {
 		return nil, reason.ErrDB.Withf(`DelChannel err[%s]`, err.Error())
 	}
@@ -195,7 +198,7 @@ func (c Core) DelDevice(ctx context.Context, id string) (*Device, error) {
 }
 
 func (c Core) QueryCatalog(ctx context.Context, deviceID string) error {
-	device, err := c.GetDeviceByDeviceID(ctx, deviceID)
+	device, err := c.GetDevice(ctx, deviceID)
 	if err != nil {
 		return err
 	}
