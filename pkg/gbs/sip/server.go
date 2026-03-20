@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -357,7 +358,7 @@ func (s *Server) handlerRequest(msg *Request) {
 	ctx.handlers = handlers
 	ctx.From = s.from
 	ctx.svr = s
-	go ctx.Next()
+	go s.runContextSafely(ctx)
 }
 
 func (s *Server) handlerResponse(msg *Response) {
@@ -392,4 +393,42 @@ func (s *Server) Request(req *Request) (*Transaction, error) {
 func handlerMethodNotAllowed(req *Request, tx *Transaction) {
 	resp := NewResponseFromRequest("", req, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed), []byte{})
 	tx.Respond(resp)
+}
+
+func (s *Server) runContextSafely(ctx *Context) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("recover panic in SIP request handler", s.requestPanicLogArgs(ctx, recovered)...)
+		}
+	}()
+
+	ctx.Next()
+}
+
+func (s *Server) requestPanicLogArgs(ctx *Context, recovered any) []any {
+	args := []any{
+		"panic", recovered,
+		"stack", string(debug.Stack()),
+	}
+
+	if ctx == nil || ctx.Request == nil {
+		return args
+	}
+
+	req := ctx.Request
+	args = append(args, "method", req.Method())
+
+	if callID, ok := req.CallID(); ok && callID != nil {
+		args = append(args, "call_id", string(*callID))
+	}
+
+	if from, ok := req.From(); ok && from != nil {
+		args = append(args, "from", from.String())
+	}
+
+	if remote := req.Source(); remote != nil {
+		args = append(args, "remote_addr", remote.String())
+	}
+
+	return args
 }

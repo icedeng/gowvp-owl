@@ -64,36 +64,8 @@ func NewIPCAPI(bundle IPCBundle, recordingCore recording.Core) IPCAPI {
 
 func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 	// GB28181 协议特有的回调接口
-	snapshotHandler := func(c *gin.Context) {
-		b, err := io.ReadAll(c.Request.Body)
-		if err != nil {
-			panic(err)
-		}
-		payload, payloadType, err := decodeGBSnapshotBody(c.Request, b)
-		if err != nil {
-			slog.ErrorContext(c.Request.Context(), "decode gb snapshot body", "err", err, "content_type", c.GetHeader("Content-Type"))
-			c.JSON(400, gin.H{"msg": "invalid snapshot body"})
-			return
-		}
-		deviceID, coverKey, sessionID := resolveGBSnapshotUploadTarget(c)
-		if coverKey == "" {
-			// 兼容设备不回传 cover_key 的场景，退化到 device_id 作为快照主键。
-			coverKey = deviceID
-		}
-		if coverKey == "" {
-			coverKey = orm.GenerateRandomString(10)
-		}
-		if len(payload) > 0 {
-			if err := writeCover(api.uc.Conf.ConfigDir, coverKey, payload); err != nil {
-				slog.ErrorContext(c.Request.Context(), "write cover", "err", err, "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID)
-			} else {
-				slog.InfoContext(c.Request.Context(), "GBSNAPSHOT_UPLOAD_OK", "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID, "size", len(payload), "payload_type", payloadType)
-			}
-		}
-		c.JSON(200, gin.H{"msg": "ok"})
-	}
-	g.Any("/gb28181/snapshot", snapshotHandler)
-	g.Any("/gb28181/snapshot/:device_id/:cover_key/:session_id", snapshotHandler)
+	g.Any("/gb28181/snapshot", api.gbSnapshotUpload)
+	g.Any("/gb28181/snapshot/:device_id/:cover_key/:session_id", api.gbSnapshotUpload)
 
 	// 统一的设备管理 API（支持所有协议）
 	{
@@ -171,14 +143,77 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// gbSnapshotUpload godoc
+// @Summary GB28181 抓拍图片上传回调
+// @Description 接收设备按 GB/T 28181 抓拍流程回传的图片数据并写入本地快照目录
+// @Tags GB28181
+// @Accept multipart/form-data
+// @Accept octet-stream
+// @Produce json
+// @Param device_id path string false "设备ID"
+// @Param cover_key path string false "快照键"
+// @Param session_id path string false "会话ID"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /gb28181/snapshot [post]
+// @Router /gb28181/snapshot/{device_id}/{cover_key}/{session_id} [post]
+func (a IPCAPI) gbSnapshotUpload(c *gin.Context) {
+	b, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		panic(err)
+	}
+	payload, payloadType, err := decodeGBSnapshotBody(c.Request, b)
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "decode gb snapshot body", "err", err, "content_type", c.GetHeader("Content-Type"))
+		c.JSON(400, gin.H{"msg": "invalid snapshot body"})
+		return
+	}
+	deviceID, coverKey, sessionID := resolveGBSnapshotUploadTarget(c)
+	if coverKey == "" {
+		// 兼容设备不回传 cover_key 的场景，退化到 device_id 作为快照主键。
+		coverKey = deviceID
+	}
+	if coverKey == "" {
+		coverKey = orm.GenerateRandomString(10)
+	}
+	if len(payload) > 0 {
+		if err := writeCover(a.uc.Conf.ConfigDir, coverKey, payload); err != nil {
+			slog.ErrorContext(c.Request.Context(), "write cover", "err", err, "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID)
+		} else {
+			slog.InfoContext(c.Request.Context(), "GBSNAPSHOT_UPLOAD_OK", "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID, "size", len(payload), "payload_type", payloadType)
+		}
+	}
+	c.JSON(200, gin.H{"msg": "ok"})
+}
+
 // >>> device >>>>>>>>>>>>>>>>>>>>
 
+// findDevice godoc
+// @Summary 查询设备列表
+// @Tags Device
+// @Security BearerAuth
+// @Produce json
+// @Param page query int false "页码"
+// @Param size query int false "每页数量"
+// @Param key query string false "关键字"
+// @Success 200 {object} SwaggerDevicesResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices [get]
 func (a IPCAPI) findDevice(c *gin.Context, in *ipc.FindDeviceInput) (any, error) {
 	items, total, err := a.ipc.FindDevice(c.Request.Context(), in)
 	fillDeviceRecordMode(items)
 	return gin.H{"items": items, "total": total}, err
 }
 
+// getDevice godoc
+// @Summary 查询设备详情
+// @Tags Device
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "设备ID"
+// @Success 200 {object} ipc.Device
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id} [get]
 func (a IPCAPI) getDevice(c *gin.Context, _ *struct{}) (any, error) {
 	deviceID := c.Param("id")
 	dev, err := a.ipc.GetDevice(c.Request.Context(), deviceID)
@@ -189,6 +224,17 @@ func (a IPCAPI) getDevice(c *gin.Context, _ *struct{}) (any, error) {
 	return dev, nil
 }
 
+// editDevice godoc
+// @Summary 修改设备
+// @Tags Device
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "设备ID"
+// @Param body body ipc.EditDeviceInput true "设备更新参数"
+// @Success 200 {object} ipc.Device
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id} [put]
 func (a IPCAPI) editDevice(c *gin.Context, in *ipc.EditDeviceInput) (any, error) {
 	deviceID := c.Param("id")
 	return a.ipc.EditDevice(c.Request.Context(), in, deviceID)
@@ -206,6 +252,17 @@ func (a IPCAPI) editDevice(c *gin.Context, in *ipc.EditDeviceInput) (any, error)
 //
 //	POST /devices
 //	{ "type": "ONVIF", "ip": "192.168.1.100", "port": 80, "username": "admin", "password": "12345" }
+//
+// addDevice godoc
+// @Summary 添加设备
+// @Tags Device
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param body body ipc.AddDeviceInput true "设备信息"
+// @Success 200 {object} ipc.Device
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices [post]
 func (a IPCAPI) addDevice(c *gin.Context, in *ipc.AddDeviceInput) (any, error) {
 	in.Type = strings.ToUpper(in.Type)
 	if !slices.Contains([]string{ipc.TypeGB28181, ipc.TypeOnvif}, in.Type) {
@@ -214,11 +271,29 @@ func (a IPCAPI) addDevice(c *gin.Context, in *ipc.AddDeviceInput) (any, error) {
 	return a.ipc.AddDevice(c.Request.Context(), in)
 }
 
+// delDevice godoc
+// @Summary 删除设备
+// @Tags Device
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "设备ID"
+// @Success 200 {object} ipc.Device
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id} [delete]
 func (a IPCAPI) delDevice(c *gin.Context, _ *struct{}) (any, error) {
 	did := c.Param("id")
 	return a.ipc.DelDevice(c.Request.Context(), did)
 }
 
+// queryCatalog godoc
+// @Summary 查询设备目录
+// @Tags Device
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "设备ID"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id}/catalog [post]
 func (a IPCAPI) queryCatalog(c *gin.Context, _ *struct{}) (any, error) {
 	did := c.Param("id")
 
@@ -229,6 +304,17 @@ func (a IPCAPI) queryCatalog(c *gin.Context, _ *struct{}) (any, error) {
 	return gin.H{"msg": "ok"}, nil
 }
 
+// FindChannelsForDevice godoc
+// @Summary 查询设备及其通道列表
+// @Tags Device
+// @Security BearerAuth
+// @Produce json
+// @Param page query int false "页码"
+// @Param size query int false "每页数量"
+// @Param key query string false "关键字"
+// @Success 200 {object} SwaggerDevicesResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/channels [get]
 func (a IPCAPI) FindChannelsForDevice(c *gin.Context, in *ipc.FindDeviceInput) (any, error) {
 	ctx := c.Request.Context()
 	items, total, err := a.ipc.FindChannelsForDevice(ctx, in)
@@ -285,6 +371,19 @@ func fillDeviceRecordMode(items []*ipc.Device) {
 
 // >>> channel >>>>>>>>>>>>>>>>>>>>
 
+// findChannel godoc
+// @Summary 查询通道列表
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param page query int false "页码"
+// @Param size query int false "每页数量"
+// @Param did query string false "设备ID"
+// @Param key query string false "关键字"
+// @Param type query string false "协议类型"
+// @Success 200 {object} SwaggerChannelsResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels [get]
 func (a IPCAPI) findChannel(c *gin.Context, in *ipc.FindChannelInput) (any, error) {
 	items, total, err := a.ipc.FindChannel(c.Request.Context(), in)
 	if err != nil {
@@ -333,12 +432,34 @@ func (a IPCAPI) fillRTMPPushAddr(c *gin.Context, items []*ipc.Channel) {
 // 	return a.gb28181Core.GetChannel(c.Request.Context(), channelID)
 // }
 
+// editChannel godoc
+// @Summary 修改通道
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body ipc.EditChannelInput true "通道更新参数"
+// @Success 200 {object} ipc.Channel
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id} [put]
 func (a IPCAPI) editChannel(c *gin.Context, in *ipc.EditChannelInput) (any, error) {
 	cid := c.Param("id")
 	return a.ipc.EditChannel(c.Request.Context(), in, cid)
 }
 
 // addChannel 添加 RTMP/RTSP 通道
+// addChannel godoc
+// @Summary 添加通道
+// @Description 仅支持 RTMP/RTSP 类型通道
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param body body ipc.AddChannelInput true "通道信息"
+// @Success 200 {object} ipc.Channel
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels [post]
 func (a IPCAPI) addChannel(c *gin.Context, in *ipc.AddChannelInput) (any, error) {
 	in.Type = strings.ToUpper(in.Type)
 	if !slices.Contains([]string{ipc.TypeRTMP, ipc.TypeRTSP}, in.Type) {
@@ -348,6 +469,16 @@ func (a IPCAPI) addChannel(c *gin.Context, in *ipc.AddChannelInput) (any, error)
 }
 
 // delChannel 删除 RTMP/RTSP 通道
+// delChannel godoc
+// @Summary 删除通道
+// @Description 仅支持 RTMP/RTSP 类型通道
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "通道ID"
+// @Success 200 {object} ipc.Channel
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id} [delete]
 func (a IPCAPI) delChannel(c *gin.Context, _ *struct{}) (any, error) {
 	channelID := c.Param("id")
 
@@ -359,6 +490,15 @@ func (a IPCAPI) delChannel(c *gin.Context, _ *struct{}) (any, error) {
 	return a.ipc.DelChannel(c.Request.Context(), channelID)
 }
 
+// play godoc
+// @Summary 开始播放
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "通道ID"
+// @Success 200 {object} playOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/play [post]
 func (a IPCAPI) play(c *gin.Context, _ *struct{}) (*playOutput, error) {
 	channelID := c.Param("id")
 
@@ -509,147 +649,164 @@ func (a IPCAPI) play(c *gin.Context, _ *struct{}) (*playOutput, error) {
 }
 
 type refreshSnapshotInput struct {
-	// 指定获取多少秒内创建的快照
-	WithinSeconds int64 `json:"within_seconds"`
-	// 取快照的链接地址
-	URL string `json:"url"`
+	// 指定允许复用多少秒内已生成的快照；超过该时间则重新抓拍。
+	WithinSeconds int64 `json:"within_seconds" example:"30"`
+	// 对 RTSP/RTMP/ONVIF 通道，可显式指定抓拍使用的流地址；GB28181 通道通常可留空。
+	URL string `json:"url" example:"rtsp://127.0.0.1:554/live/test"`
 }
 
 type ptzControlInput struct {
-	Action  string `json:"action"`
-	Speed   uint8  `json:"speed"`
-	Timeout int    `json:"timeout"` // seconds
-	Preset  int    `json:"preset"`
-	Group   uint8  `json:"group"`
-	Aux     uint8  `json:"aux"`
-	Value   uint16 `json:"value"`
+	Action  string `json:"action" example:"left"` // 云台动作，如 left/right/up/down/zoom_in/iris_add/focus_sub/preset_call
+	Speed   uint8  `json:"speed" example:"30"`    // 速度值
+	Timeout int    `json:"timeout" example:"5"`   // 执行时长，单位秒
+	Preset  int    `json:"preset" example:"1"`    // 预置位编号
+	Group   uint8  `json:"group" example:"1"`     // 巡航组编号
+	Aux     uint8  `json:"aux" example:"1"`       // 辅助开关编号
+	Value   uint16 `json:"value" example:"50"`    // 通用附加值
 }
 
 type queryRecordsInput struct {
-	StartAt int64 `json:"start_at"` // unix 秒
-	EndAt   int64 `json:"end_at"`   // unix 秒
-	Timeout int   `json:"timeout"`  // seconds
+	StartAt int64 `json:"start_at" example:"1710864000"` // 查询开始时间，Unix 秒
+	EndAt   int64 `json:"end_at" example:"1710950400"`   // 查询结束时间，Unix 秒
+	Timeout int   `json:"timeout" example:"10"`          // 等待设备应答超时时间，单位秒
 }
 
 type upgradeDeviceInput struct {
-	Firmware     string `json:"firmware"`
-	FileURL      string `json:"file_url"`
-	Manufacturer string `json:"manufacturer"`
-	SessionID    string `json:"session_id"`
-	Timeout      int    `json:"timeout"` // seconds
+	Firmware     string `json:"firmware" example:"V1.2.3"`                     // 升级固件版本描述
+	FileURL      string `json:"file_url" example:"https://example.com/fw.bin"` // 升级文件完整下载地址
+	Manufacturer string `json:"manufacturer" example:"Hikvision"`              // 设备厂商
+	SessionID    string `json:"session_id" example:"upgrade-session-001"`      // 升级流程会话 ID
+	Timeout      int    `json:"timeout" example:"10"`                          // 等待设备应答超时时间，单位秒
 }
 
 type historyControlInput struct {
-	Mode    string  `json:"mode"` // playback/download
-	StartAt int64   `json:"start_at"`
-	EndAt   int64   `json:"end_at"`
-	Cmd     string  `json:"cmd"`
-	Action  string  `json:"action"`
-	Scale   float64 `json:"scale"`
-	SeekAt  int64   `json:"seek_at"`
+	Mode    string  `json:"mode" example:"playback"`       // 会话模式：playback 回放，download 下载
+	StartAt int64   `json:"start_at" example:"1710864000"` // 开始时间，Unix 秒；start 时必填
+	EndAt   int64   `json:"end_at" example:"1710950400"`   // 结束时间，Unix 秒；start 时必填
+	Cmd     string  `json:"cmd" example:"PLAY"`            // 原始控制命令透传值
+	Action  string  `json:"action" example:"pause"`        // 结构化动作，如 play/pause/seek/speed
+	Scale   float64 `json:"scale" example:"2"`             // 倍速值，Action=speed 时使用
+	SeekAt  int64   `json:"seek_at" example:"1710867600"`  // 跳转目标时间，Action=seek 时使用
 }
 
 type voiceControlInput struct {
-	Mode string `json:"mode"` // talk/broadcast
+	Mode string `json:"mode" example:"talk"` // 语音模式：talk 对讲，broadcast 广播
 }
 
 type subscribeInput struct {
-	Event   string `json:"event"`
-	Expires int    `json:"expires"`
+	Event   string `json:"event" example:"alarm"`  // 订阅事件类型，如 alarm/mobile_position/catalog/device_position
+	Expires int    `json:"expires" example:"3600"` // 订阅有效期，单位秒
 }
 
 type optionsProbeInput struct {
-	Timeout int `json:"timeout"`
+	Timeout int `json:"timeout" example:"5"` // 探测等待超时，单位秒
 }
 
 type gbDragZoomInput struct {
-	Length    int `json:"length"`
-	Width     int `json:"width"`
-	MidPointX int `json:"mid_point_x"`
-	MidPointY int `json:"mid_point_y"`
-	LengthX   int `json:"length_x"`
-	LengthY   int `json:"length_y"`
+	Length    int `json:"length" example:"1920"`     // 图像总长度
+	Width     int `json:"width" example:"1080"`      // 图像总宽度
+	MidPointX int `json:"mid_point_x" example:"960"` // 拉框中心 X
+	MidPointY int `json:"mid_point_y" example:"540"` // 拉框中心 Y
+	LengthX   int `json:"length_x" example:"400"`    // 拉框宽度
+	LengthY   int `json:"length_y" example:"300"`    // 拉框高度
 }
 
 type gbHomePositionInput struct {
-	Enabled     *int `json:"enabled"`
-	ResetTime   *int `json:"reset_time"`
-	PresetIndex *int `json:"preset_index"`
+	Enabled     *int `json:"enabled" example:"1"`      // 是否启用看守位
+	ResetTime   *int `json:"reset_time" example:"60"`  // 空闲回位时间，单位秒
+	PresetIndex *int `json:"preset_index" example:"1"` // 预置位编号
 }
 
 type gbPTZPreciseInput struct {
-	Pan  *float64 `json:"pan"`
-	Tilt *float64 `json:"tilt"`
-	Zoom *float64 `json:"zoom"`
+	Pan  *float64 `json:"pan" example:"10.5"` // 精确水平角度
+	Tilt *float64 `json:"tilt" example:"5.2"` // 精确垂直角度
+	Zoom *float64 `json:"zoom" example:"2.0"` // 精确变倍值
 }
 
 type gbPTZCmdParamInput struct {
-	PresetName      string `json:"preset_name"`
-	CruiseTrackName string `json:"cruise_track_name"`
+	PresetName      string `json:"preset_name" example:"大门"`         // 预置位名称
+	CruiseTrackName string `json:"cruise_track_name" example:"白天巡航"` // 巡航名称
 }
 
 type gbDeviceControlInput struct {
-	TargetID     string               `json:"target_id"`
-	Action       string               `json:"action"`
-	Timeout      int                  `json:"timeout"`
-	PTZCmd       string               `json:"ptz_cmd"`
-	PTZCmdParam  *gbPTZCmdParamInput  `json:"ptz_cmd_param"`
-	StreamNumber int                  `json:"stream_number"`
-	AlarmMethod  string               `json:"alarm_method"`
-	AlarmType    string               `json:"alarm_type"`
-	DragZoom     *gbDragZoomInput     `json:"drag_zoom"`
-	HomePosition *gbHomePositionInput `json:"home_position"`
-	PTZPrecise   *gbPTZPreciseInput   `json:"ptz_precise"`
-	SDCardID     int                  `json:"sdcard_id"`
+	TargetID     string               `json:"target_id" example:"34020000001320000001"` // 目标设备或通道编码
+	Action       string               `json:"action" example:"ptz_cmd"`                 // 统一控制动作
+	Timeout      int                  `json:"timeout" example:"5"`                      // 超时时间，秒
+	PTZCmd       string               `json:"ptz_cmd" example:"preset_call"`            // PTZCmd 子动作
+	PTZCmdParam  *gbPTZCmdParamInput  `json:"ptz_cmd_param"`                            // PTZCmd 扩展参数
+	StreamNumber int                  `json:"stream_number" example:"1"`                // 码流序号
+	AlarmMethod  string               `json:"alarm_method" example:"2"`                 // 报警方式
+	AlarmType    string               `json:"alarm_type" example:"1"`                   // 报警类型
+	DragZoom     *gbDragZoomInput     `json:"drag_zoom"`                                // 拉框参数
+	HomePosition *gbHomePositionInput `json:"home_position"`                            // 看守位参数
+	PTZPrecise   *gbPTZPreciseInput   `json:"ptz_precise"`                              // 精确 PTZ 参数
+	SDCardID     int                  `json:"sdcard_id" example:"1"`                    // SD 卡编号
 }
 
 type gbDeviceQueryInput struct {
-	TargetID   string `json:"target_id"`
-	Action     string `json:"action"`
-	Timeout    int    `json:"timeout"`
-	ConfigType string `json:"config_type"`
-	Interval   int    `json:"interval"`
-	Start      int64  `json:"start"`
-	End        int64  `json:"end"`
+	TargetID   string `json:"target_id" example:"34020000001320000001"` // 目标设备或通道编码
+	Action     string `json:"action" example:"device_status"`           // 统一查询动作
+	Timeout    int    `json:"timeout" example:"5"`                      // 超时时间，秒
+	ConfigType string `json:"config_type" example:"basic_param"`        // 配置查询类型
+	Interval   int    `json:"interval" example:"60"`                    // 间隔秒数
+	Start      int64  `json:"start" example:"1710864000"`               // 开始时间，Unix 秒
+	End        int64  `json:"end" example:"1710950400"`                 // 结束时间，Unix 秒
 }
 
 // gbAppendixA4SnapshotInput 为附录 A.4 快照查询参数。
 type gbAppendixA4SnapshotInput struct {
-	CmdType string `form:"cmd_type" json:"cmd_type"`
-	Limit   int    `form:"limit" json:"limit"`
+	CmdType string `form:"cmd_type" json:"cmd_type" example:"Alarm,DeviceStatus"` // 过滤的命令类型，可逗号分隔
+	Limit   int    `form:"limit" json:"limit" example:"100"`                      // 最大返回条数
 }
 
 // gbAppendixA4Output 是附录 A.4 扩展对象 API 出参模型。
 type gbAppendixA4Output struct {
-	Type      string            `json:"type"`
-	CmdType   string            `json:"cmd_type,omitempty"`
-	Path      string            `json:"path,omitempty"`
-	Fields    map[string]string `json:"fields,omitempty"`
-	RawXML    string            `json:"raw_xml,omitempty"`
-	UpdatedAt int64             `json:"updated_at,omitempty"`
+	Type      string            `json:"type"`                 // 扩展对象类型
+	CmdType   string            `json:"cmd_type,omitempty"`   // 来源命令类型
+	Path      string            `json:"path,omitempty"`       // XML 路径
+	Fields    map[string]string `json:"fields,omitempty"`     // 结构化字段
+	RawXML    string            `json:"raw_xml,omitempty"`    // 原始 XML
+	UpdatedAt int64             `json:"updated_at,omitempty"` // 更新时间
 }
 
 // gbDeviceQueryOutput 是 GB 附录 A.2.4 查询 API 出参模型。
 // 说明：appendix_a4 字段用于承接附录 A.4 扩展对象结构化结果。
 type gbDeviceQueryOutput struct {
-	SN         int                  `json:"sn"`
-	CmdType    string               `json:"cmd_type"`
-	DeviceID   string               `json:"device_id"`
-	Result     string               `json:"result,omitempty"`
-	XML        string               `json:"xml"`
-	Data       any                  `json:"data,omitempty"`
-	AppendixA4 []gbAppendixA4Output `json:"appendix_a4,omitempty"`
+	SN         int                  `json:"sn"`                    // 命令序列号
+	CmdType    string               `json:"cmd_type"`              // 命令类型
+	DeviceID   string               `json:"device_id"`             // 设备编码
+	Result     string               `json:"result,omitempty"`      // 返回结果
+	XML        string               `json:"xml"`                   // 原始 XML
+	Data       any                  `json:"data,omitempty"`        // 主体数据
+	AppendixA4 []gbAppendixA4Output `json:"appendix_a4,omitempty"` // A.4 扩展对象
 }
 
 // gbAppendixA4SnapshotOutput 为附录 A.4 快照查询 API 出参模型。
 type gbAppendixA4SnapshotOutput struct {
-	DeviceID string               `json:"device_id"`
-	Filter   string               `json:"filter,omitempty"`
-	Total    int                  `json:"total"`
-	Items    []gbAppendixA4Output `json:"items"`
+	DeviceID string               `json:"device_id"`        // 设备编码
+	Filter   string               `json:"filter,omitempty"` // 实际过滤条件
+	Total    int                  `json:"total"`            // 返回数量
+	Items    []gbAppendixA4Output `json:"items"`            // 快照列表
 }
 
 // queryRecords 查询通道录像目录（当前由 GB28181 协议实现）。
+// queryRecords godoc
+// @Summary 查询设备录像目录
+// @Description 查询指定 GB28181 通道在一段时间内的录像目录。
+// @Description 调用前置条件：1. 通道必须属于 GB28181 设备；2. 设备在线；3. 设备支持录像目录查询。
+// @Description 失败场景：1. 通道不存在；2. 设备离线；3. 设备协议版本或厂商实现不支持；4. 查询超时未应答。
+// @Description 请求示例：`{ "start_at": 1710864000, "end_at": 1710950400, "timeout": 10 }`
+// @Description 响应中 `daynum` 表示有录像的日期数，`timenum` 表示录像片段总数，`list` 按日期归类。
+// @Description 响应示例：`{ "daynum": 2, "timenum": 3, "list": [ { "date": "2024-03-20", "items": [ { "start": 1710864000, "end": 1710867600 } ] } ] }`
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body queryRecordsInput true "录像目录查询参数"
+// @Success 200 {object} SwaggerRecordQueryOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/records/query [post]
 func (a IPCAPI) queryRecords(c *gin.Context, in *queryRecordsInput) (any, error) {
 	channelID := c.Param("id")
 	out, err := a.ipc.QueryRecords(c.Request.Context(), channelID, &ipc.RecordQueryInput{
@@ -665,6 +822,17 @@ func (a IPCAPI) queryRecords(c *gin.Context, in *queryRecordsInput) (any, error)
 
 // upgradeDevice 执行设备软件升级（GB/T 28181-2022 9.13）。
 // 若设备协议版本低于 2022，返回“协议不支持”。
+// upgradeDevice godoc
+// @Summary 设备升级
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body upgradeDeviceInput true "升级参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/upgrade [post]
 func (a IPCAPI) upgradeDevice(c *gin.Context, in *upgradeDeviceInput) (any, error) {
 	channelID := c.Param("id")
 	err := a.ipc.UpgradeDevice(c.Request.Context(), channelID, &ipc.UpgradeInput{
@@ -681,6 +849,23 @@ func (a IPCAPI) upgradeDevice(c *gin.Context, in *upgradeDeviceInput) (any, erro
 }
 
 // startHistory 启动历史回放/下载会话。
+// startHistory godoc
+// @Summary 启动历史会话
+// @Description 启动历史回放或历史下载会话。
+// @Description `mode` 可选：`playback` 表示回放，`download` 表示下载。
+// @Description 调用前置条件：1. 通道必须存在；2. 设备在线；3. 目标时间段内存在可用录像；4. 设备支持历史回放或下载。
+// @Description 失败场景：1. 通道不存在；2. 设备离线；3. 无录像可回放；4. 设备返回协议不支持；5. 会话建立超时。
+// @Description 请求示例：`{ "mode": "playback", "start_at": 1710864000, "end_at": 1710950400 }`
+// @Description 成功响应示例：`{ "msg": "ok" }`
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body historyControlInput true "历史会话参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/history/start [post]
 func (a IPCAPI) startHistory(c *gin.Context, in *historyControlInput) (any, error) {
 	channelID := c.Param("id")
 	err := a.ipc.StartHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
@@ -695,6 +880,21 @@ func (a IPCAPI) startHistory(c *gin.Context, in *historyControlInput) (any, erro
 }
 
 // stopHistory 停止历史回放/下载会话。
+// stopHistory godoc
+// @Summary 停止历史会话
+// @Description 停止已创建的历史回放或历史下载会话。
+// @Description 调用前置条件：历史会话已经启动。
+// @Description 失败场景：1. 会话不存在；2. 设备已离线；3. 设备拒绝停止命令。
+// @Description 请求示例：`{ "mode": "playback" }`
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body historyControlInput true "历史会话参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/history/stop [post]
 func (a IPCAPI) stopHistory(c *gin.Context, in *historyControlInput) (any, error) {
 	channelID := c.Param("id")
 	err := a.ipc.StopHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
@@ -707,6 +907,25 @@ func (a IPCAPI) stopHistory(c *gin.Context, in *historyControlInput) (any, error
 }
 
 // controlHistory 下发历史回放/下载控制命令（INFO/MANSRTSP）。
+// controlHistory godoc
+// @Summary 控制历史会话
+// @Description 对历史回放/下载会话执行暂停、恢复、倍速、跳转等控制。
+// @Description `action` 枚举：`play` 恢复播放、`pause` 暂停、`speed` 调整倍速、`seek` 跳转到指定时间。
+// @Description 调用前置条件：历史会话已经启动。
+// @Description 失败场景：1. 会话不存在；2. action 不受支持；3. 跳转时间越界；4. 设备未返回控制应答。
+// @Description 暂停示例：`{ "mode":"playback", "action":"pause" }`
+// @Description 倍速示例：`{ "mode":"playback", "action":"speed", "scale":2 }`
+// @Description 跳转示例：`{ "mode":"playback", "action":"seek", "seek_at":1710867600 }`
+// @Description 成功响应示例：`{ "msg": "ok" }`
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body historyControlInput true "历史控制参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/history/control [post]
 func (a IPCAPI) controlHistory(c *gin.Context, in *historyControlInput) (any, error) {
 	channelID := c.Param("id")
 	err := a.ipc.ControlHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
@@ -723,6 +942,20 @@ func (a IPCAPI) controlHistory(c *gin.Context, in *historyControlInput) (any, er
 }
 
 // startVoice 启动语音会话（对讲/广播）。
+// startVoice godoc
+// @Summary 启动语音会话
+// @Description 启动对讲或广播会话
+// @Description 调用前置条件：1. 通道存在；2. 设备在线；3. 设备支持语音对讲或广播。
+// @Description 失败场景：1. 设备不支持语音能力；2. 会话建立失败；3. 设备离线。
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body voiceControlInput true "语音参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/voice/start [post]
 func (a IPCAPI) startVoice(c *gin.Context, in *voiceControlInput) (any, error) {
 	channelID := c.Param("id")
 	err := a.ipc.StartVoice(c.Request.Context(), channelID, &ipc.VoiceControlInput{
@@ -735,6 +968,20 @@ func (a IPCAPI) startVoice(c *gin.Context, in *voiceControlInput) (any, error) {
 }
 
 // stopVoice 停止语音会话（对讲/广播）。
+// stopVoice godoc
+// @Summary 停止语音会话
+// @Description 停止已建立的对讲或广播会话。
+// @Description 调用前置条件：语音会话已启动。
+// @Description 失败场景：1. 会话不存在；2. 设备离线；3. 设备拒绝停止。
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body voiceControlInput true "语音参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/voice/stop [post]
 func (a IPCAPI) stopVoice(c *gin.Context, in *voiceControlInput) (any, error) {
 	channelID := c.Param("id")
 	err := a.ipc.StopVoice(c.Request.Context(), channelID, &ipc.VoiceControlInput{
@@ -747,6 +994,15 @@ func (a IPCAPI) stopVoice(c *gin.Context, in *voiceControlInput) (any, error) {
 }
 
 // syncTime 执行设备校时。
+// syncTime godoc
+// @Summary 设备校时
+// @Tags Device
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "设备ID"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id}/time_sync [post]
 func (a IPCAPI) syncTime(c *gin.Context, _ *struct{}) (any, error) {
 	deviceID := c.Param("id")
 	if err := a.ipc.SyncTime(c.Request.Context(), deviceID); err != nil {
@@ -756,6 +1012,21 @@ func (a IPCAPI) syncTime(c *gin.Context, _ *struct{}) (any, error) {
 }
 
 // subscribe 发起事件订阅。
+// subscribe godoc
+// @Summary 发起事件订阅
+// @Description 对指定设备发起事件订阅。
+// @Description `event` 常见值：`alarm`、`mobile_position`、`catalog`、`device_position`、`ptz_position`。
+// @Description 调用前置条件：设备在线，且协议/厂商实现支持订阅。
+// @Description 失败场景：1. 设备离线；2. 订阅事件类型不支持；3. 设备未返回 200/OK。
+// @Tags Device
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "设备ID"
+// @Param body body subscribeInput true "订阅参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id}/subscribe [post]
 func (a IPCAPI) subscribe(c *gin.Context, in *subscribeInput) (any, error) {
 	deviceID := c.Param("id")
 	if err := a.ipc.Subscribe(c.Request.Context(), deviceID, &ipc.SubscribeInput{
@@ -768,6 +1039,20 @@ func (a IPCAPI) subscribe(c *gin.Context, in *subscribeInput) (any, error) {
 }
 
 // optionsProbe 发起设备 OPTIONS 探测。
+// optionsProbe godoc
+// @Summary 发起 OPTIONS 探测
+// @Description 主动向设备发送 SIP OPTIONS 探测，通常用于 TCP/TLS 设备在线状态验证。
+// @Description 调用前置条件：设备必须已注册。
+// @Description 失败场景：1. 设备未注册；2. 设备离线；3. 超时未应答。
+// @Tags Device
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "设备ID"
+// @Param body body optionsProbeInput true "探测参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id}/options_probe [post]
 func (a IPCAPI) optionsProbe(c *gin.Context, in *optionsProbeInput) (any, error) {
 	deviceID := c.Param("id")
 	if err := a.ipc.ProbeOptions(c.Request.Context(), deviceID, &ipc.OptionsProbeInput{
@@ -778,7 +1063,25 @@ func (a IPCAPI) optionsProbe(c *gin.Context, in *optionsProbeInput) (any, error)
 	return gin.H{"msg": "ok"}, nil
 }
 
-// gbDeviceControl 执行 GB 附录 A.2.3 统一设备控制命令。
+// gbDeviceControl godoc
+// @Summary GB 设备控制
+// @Description 执行 GB/T 28181 附录 A.2.3 统一设备控制命令。
+// @Description 常见 `action`：`ptz_cmd`、`teleboot`、`record_cmd`、`guard_cmd`、`alarm_cmd`、`ifame_cmd`、`drag_zoom_in`、`drag_zoom_out`、`home_position`、`ptz_precise`。
+// @Description `ptz_cmd` 常见值：`stop`、`left`、`right`、`up`、`down`、`left_up`、`left_down`、`right_up`、`right_down`、`zoom_in`、`zoom_out`、`focus_near`、`focus_far`、`iris_open`、`iris_close`、`preset_set`、`preset_call`、`preset_delete`、`cruise_add`、`cruise_del`、`cruise_speed`、`cruise_stay`、`cruise_start`、`scan_start`、`scan_left`、`scan_right`、`scan_speed`、`aux_on`、`aux_off`。
+// @Description 调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 所选动作受设备能力和协议版本支持。
+// @Description 失败场景：1. `action` 或 `ptz_cmd` 非法；2. 2016/2022 差异导致设备不支持；3. 设备离线；4. 等待 Response 超时。
+// @Description PTZCmd 示例：`{ "target_id": "34020000001320000001", "action": "ptz_cmd", "ptz_cmd": "preset_call", "timeout": 5 }`
+// @Description 精确 PTZ 示例：`{ "action": "ptz_precise", "ptz_precise": { "pan": 10.5, "tilt": 5.2, "zoom": 2.0 }, "timeout": 5 }`
+// @Description 成功响应示例：`{ "sn": 12, "device_id": "34020000002000000001", "target_id": "34020000001320000001", "result": "OK" }`
+// @Tags GB28181
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "设备ID"
+// @Param body body SwaggerGBDeviceControlInput true "GB 控制参数"
+// @Success 200 {object} ipc.GBDeviceControlOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id}/gb/control [post]
 func (a IPCAPI) gbDeviceControl(c *gin.Context, in *gbDeviceControlInput) (any, error) {
 	deviceID := c.Param("id")
 	out, err := a.ipc.GBDeviceControl(c.Request.Context(), deviceID, &ipc.GBDeviceControlInput{
@@ -801,7 +1104,24 @@ func (a IPCAPI) gbDeviceControl(c *gin.Context, in *gbDeviceControlInput) (any, 
 	return out, nil
 }
 
-// gbDeviceQuery 执行 GB 附录 A.2.4 统一设备查询命令。
+// gbDeviceQuery godoc
+// @Summary GB 设备查询
+// @Description 执行 GB/T 28181 附录 A.2.4 统一设备查询命令。
+// @Description 常见 `action`：`device_status`、`catalog`、`config_download`、`preset_query`、`record_info`、`mobile_position`。
+// @Description 调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 查询动作被设备支持。
+// @Description 失败场景：1. `action` 不支持；2. 设备离线；3. 查询超时；4. 2016 协议设备不支持 2022 扩展查询。
+// @Description 请求示例：`{ "action": "device_status", "target_id": "34020000001320000001", "timeout": 5 }`
+// @Description 录像查询示例：`{ "action": "record_info", "target_id": "34020000001320000001", "start": 1710864000, "end": 1710950400, "timeout": 10 }`
+// @Description 响应中 `xml` 为原始 XML，`data` 为解析后的主体数据，`appendix_a4` 为 2022 版附录 A.4 扩展对象。
+// @Tags GB28181
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "设备ID"
+// @Param body body SwaggerGBDeviceQueryInput true "GB 查询参数"
+// @Success 200 {object} SwaggerGBDeviceQueryOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id}/gb/query [post]
 func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, error) {
 	deviceID := c.Param("id")
 	out, err := a.ipc.GBDeviceQuery(c.Request.Context(), deviceID, &ipc.GBDeviceQueryInput{
@@ -838,8 +1158,18 @@ func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, erro
 	return resp, nil
 }
 
-// gbAppendixA4Snapshot 查询已落库的附录 A.4 快照（只读）。
-// 支持按 cmd_type 过滤，cmd_type 可传逗号分隔多值。
+// gbAppendixA4Snapshot godoc
+// @Summary 查询附录 A.4 快照
+// @Description 只读查询已落库的 GB/T 28181-2022 附录 A.4 扩展对象快照，支持按 cmd_type 过滤
+// @Tags GB28181
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "设备ID"
+// @Param cmd_type query string false "命令类型过滤，支持逗号分隔"
+// @Param limit query int false "返回数量上限"
+// @Success 200 {object} SwaggerGBAppendixA4SnapshotOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id}/gb/a4_snapshot [get]
 func (a IPCAPI) gbAppendixA4Snapshot(c *gin.Context, in *gbAppendixA4SnapshotInput) (any, error) {
 	deviceID := c.Param("id")
 	out, err := a.ipc.GBAppendixA4Snapshot(c.Request.Context(), deviceID, &ipc.GBAppendixA4SnapshotInput{
@@ -914,6 +1244,33 @@ func toIPCPTZCmdParam(in *gbPTZCmdParamInput) *ipc.GBPTZCmdParamInput {
 	}
 }
 
+// ptzControl godoc
+// @Summary PTZ 控制
+// @Description 通道级统一 PTZ 接口，同时兼容 GB28181 与 ONVIF。
+// @Description 常见动作包括方向移动、停止、变倍、光圈、聚焦、预置位设置/调用/删除。
+// @Description `action` 支持值：
+// @Description 1. 基础方向：`stop`、`left`、`right`、`up`、`down`、`left_up`、`left_down`、`right_up`、`right_down`
+// @Description 2. 变倍：`zoom_in`、`zoom_out`
+// @Description 3. 光圈：`iris_open`、`iris_close`、`iris_add`、`iris_sub`
+// @Description 4. 聚焦：`focus_near`、`focus_far`、`focus_add`、`focus_sub`
+// @Description 5. 预置位：`preset_set`、`preset_call`、`preset_delete`
+// @Description 6. 巡航：`cruise_add`、`cruise_del`、`cruise_speed`、`cruise_stay`、`cruise_start`
+// @Description 7. 扫描：`scan_start`、`scan_left`、`scan_right`、`scan_speed`
+// @Description 8. 辅助开关：`aux_on`、`aux_off`
+// @Description 调用前置条件：1. 通道存在；2. 通道在线；3. 对应协议适配器支持该动作。
+// @Description 失败场景：1. 动作不存在；2. ONVIF/GB28181 子能力不一致导致不支持；3. 设备离线；4. 命令下发失败或等待应答超时。
+// @Description 请求示例：`{ "action": "left", "speed": 30, "timeout": 5 }`
+// @Description 预置位示例：`{ "action": "preset_call", "preset": 1, "speed": 30 }`
+// @Description 成功响应示例：`{ "msg": "ok" }`
+// @Tags PTZ
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body SwaggerPTZControlInput true "PTZ 控制参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/ptz [post]
 func (a IPCAPI) ptzControl(c *gin.Context, in *ptzControlInput) (any, error) {
 	channelID := c.Param("id")
 	err := a.ipc.PTZControl(c.Request.Context(), channelID, &ipc.PTZControlInput{
@@ -931,6 +1288,17 @@ func (a IPCAPI) ptzControl(c *gin.Context, in *ptzControlInput) (any, error) {
 	return gin.H{"msg": "ok"}, nil
 }
 
+// refreshSnapshot godoc
+// @Summary 刷新通道快照
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body refreshSnapshotInput true "快照参数"
+// @Success 200 {object} SwaggerSnapshotLinkOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/snapshot [post]
 func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, error) {
 	channelID := c.Param("id")
 
@@ -1001,6 +1369,17 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 	return gin.H{"link": fmt.Sprintf("%s/channels/%s/snapshot?token=%s", prefix, channelID, token)}, nil
 }
 
+// addZone godoc
+// @Summary 添加检测区域
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body ipc.AddZoneInput true "区域参数"
+// @Success 200 {object} SwaggerZonesResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/zones [post]
 func (a IPCAPI) addZone(c *gin.Context, in *ipc.AddZoneInput) (gin.H, error) {
 	channelID := c.Param("id")
 	if len(in.Labels) == 0 {
@@ -1010,11 +1389,28 @@ func (a IPCAPI) addZone(c *gin.Context, in *ipc.AddZoneInput) (gin.H, error) {
 	return gin.H{"items": zones}, err
 }
 
+// getZones godoc
+// @Summary 获取检测区域
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "通道ID"
+// @Success 200 {array} ipc.Zone
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/zones [get]
 func (a IPCAPI) getZones(c *gin.Context, _ *struct{}) (any, error) {
 	channelID := c.Param("id")
 	return a.ipc.GetZones(c.Request.Context(), channelID)
 }
 
+// getSnapshot godoc
+// @Summary 获取通道快照图片
+// @Tags Channel
+// @Produce jpeg
+// @Param id path string true "通道ID"
+// @Success 200 {file} file "JPEG 图片"
+// @Failure 404 {object} SwaggerErrorResponse
+// @Router /channels/{id}/snapshot [get]
 func (a IPCAPI) getSnapshot(c *gin.Context) {
 	channelID := c.Param("id")
 	body, err := readCover(a.uc.Conf.ConfigDir, channelID)
@@ -1025,6 +1421,14 @@ func (a IPCAPI) getSnapshot(c *gin.Context) {
 	c.Data(200, "image/jpeg", body)
 }
 
+// discover godoc
+// @Summary 发现 ONVIF 设备
+// @Description 使用 SSE 持续输出发现到的 ONVIF 设备事件
+// @Tags ONVIF
+// @Produce text/event-stream
+// @Success 200 {string} string "SSE 事件流"
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /onvif/discover [get]
 func (a IPCAPI) discover(c *gin.Context) {
 	p := a.ipc.GetProtocol(ipc.TypeOnvif)
 	onvifAdapter, ok := p.(*onvifadapter.Adapter)
@@ -1072,6 +1476,15 @@ var (
 )
 
 // enableAI 启用指定通道的 AI 检测功能，需要先确保全局 AI 服务已启用且连接正常
+// enableAI godoc
+// @Summary 启用 AI 检测
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "通道ID"
+// @Success 200 {object} SwaggerAIEnableOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/ai/enable [post]
 func (a IPCAPI) enableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
 	channelID := c.Param("id")
 	ctx := c.Request.Context()
@@ -1113,6 +1526,15 @@ func (a IPCAPI) enableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
 }
 
 // disableAI 禁用指定通道的 AI 检测功能，会同时停止正在运行的检测任务
+// disableAI godoc
+// @Summary 禁用 AI 检测
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "通道ID"
+// @Success 200 {object} SwaggerAIDisableOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/ai/disable [post]
 func (a IPCAPI) disableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
 	channelID := c.Param("id")
 	ctx := c.Request.Context()
@@ -1177,11 +1599,22 @@ func (a IPCAPI) buildRTSPURL(ctx context.Context, channelID string) (string, err
 // setRecordModeInput 设置录像模式请求参数
 type setRecordModeInput struct {
 	// 录像模式：always-一直录制，ai-按AI触发录制，none-不录制
-	Mode string `json:"mode" binding:"required,oneof=always ai none"`
+	Mode string `json:"mode" binding:"required,oneof=always ai none" example:"always"`
 }
 
 // setRecordMode 设置通道的录像模式，支持三种模式：always(一直录制)、ai(AI触发录制)、none(不录制)
 // always 和 ai 都会启用录制
+// setRecordMode godoc
+// @Summary 设置录像模式
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body setRecordModeInput true "录像模式"
+// @Success 200 {object} SwaggerRecordModeOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/record_mode [post]
 func (a IPCAPI) setRecordMode(c *gin.Context, in *setRecordModeInput) (gin.H, error) {
 	channelID := c.Param("id")
 	ctx := c.Request.Context()

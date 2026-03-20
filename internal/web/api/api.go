@@ -18,6 +18,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
+	docs "github.com/gowvp/owl/docs"
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/pkg/ota"
 	"github.com/gowvp/owl/plugin/stat"
@@ -25,6 +26,8 @@ import (
 	"github.com/ixugo/goddd/domain/version/versionapi"
 	"github.com/ixugo/goddd/pkg/system"
 	"github.com/ixugo/goddd/pkg/web"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 var startRuntime = time.Now()
@@ -98,6 +101,11 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 		ctx.Redirect(http.StatusPermanentRedirect, staticPrefix+"/"+"index.html")
 	})
 
+	// Swagger 文档入口。
+	docs.SwaggerInfo.BasePath = "/"
+	docs.SwaggerInfo.Version = uc.Conf.BuildVersion
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
 	auth := web.AuthMiddleware(uc.Conf.Server.HTTP.JwtSecret)
 	r.GET("/health", web.WrapH(uc.getHealth))
 	r.GET("/app/metrics/api", web.WrapH(uc.getMetricsAPI))
@@ -139,6 +147,13 @@ type getHealthOutput struct {
 	GitHash   string    `json:"git_hash"`
 }
 
+// getHealth godoc
+// @Summary 健康检查
+// @Description 返回服务版本、启动时间与构建信息
+// @Tags System
+// @Produce json
+// @Success 200 {object} getHealthOutput
+// @Router /health [get]
 func (uc *Usecase) getHealth(_ *gin.Context, _ *struct{}) (getHealthOutput, error) {
 	return getHealthOutput{
 		Version:   uc.Conf.BuildVersion,
@@ -160,6 +175,13 @@ type getMetricsAPIOutput struct {
 	StartAt          string `json:"start_at"`           // 运行时间
 }
 
+// getMetricsAPI godoc
+// @Summary 获取服务指标
+// @Tags System
+// @Produce json
+// @Success 200 {object} getMetricsAPIOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /app/metrics/api [get]
 func (uc *Usecase) getMetricsAPI(_ *gin.Context, _ *struct{}) (*getMetricsAPIOutput, error) {
 	req := expvar.Get("request").(*expvar.Int).Value()
 	reqs := expvar.Get("requests").(*expvar.Int).Value()
@@ -222,6 +244,13 @@ type checkVersionOutput struct {
 
 // checkVersion 检查是否有新版本
 // 通过 GitHub API 获取最新 release 信息，与当前版本比较
+// checkVersion godoc
+// @Summary 检查新版本
+// @Tags System
+// @Produce json
+// @Success 200 {object} checkVersionOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /app/version/check [get]
 func (uc *Usecase) checkVersion(_ *gin.Context, _ *struct{}) (checkVersionOutput, error) {
 	currentVersion := uc.Conf.BuildVersion
 	newVersion, body, err := ota.GetLastVersion(repoName)
@@ -273,6 +302,15 @@ func compareVersion(v1, v2 string) int {
 
 // upgradeApp 执行应用升级
 // 通过 SSE 返回下载进度，下载完成后由回调决定如何升级
+// upgradeApp godoc
+// @Summary 执行应用升级
+// @Description 以 SSE 方式输出下载进度事件，事件类型包含 start、progress、error、complete
+// @Tags System
+// @Security BearerAuth
+// @Produce text/event-stream
+// @Success 200 {string} string "SSE 事件流"
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /app/upgrade [post]
 func (uc *Usecase) upgradeApp(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -314,6 +352,15 @@ func (uc *Usecase) upgradeApp(c *gin.Context) {
 	sendEvent("complete", `{"msg":"下载完成，请手动重启服务"}`)
 }
 
+// proxySMS godoc
+// @Summary 反向代理流媒体 HTTP 请求
+// @Description 将请求透明转发到配置中的流媒体服务器 HTTP 端口
+// @Tags MediaServer
+// @Produce json
+// @Param path path string true "代理路径"
+// @Success 200 {string} string "代理响应"
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /proxy/sms/{path} [get]
 func (uc *Usecase) proxySMS(c *gin.Context) {
 	defer func() {
 		_ = recover()

@@ -325,7 +325,12 @@ type headers struct {
 func CopyHeaders(name string, from, to Message) {
 	name = strings.ToLower(name)
 	for _, h := range from.GetHeaders(name) {
-		to.AppendHeader(h.Clone())
+		if h == nil {
+			continue
+		}
+		if cloned := h.Clone(); cloned != nil {
+			to.AppendHeader(cloned)
+		}
 	}
 }
 
@@ -394,6 +399,9 @@ func (hs *headers) CSeq() (*CSeq, bool) {
 
 // AppendHeader Add the given header.
 func (hs *headers) AppendHeader(header Header) {
+	if header == nil {
+		return
+	}
 	name := strings.ToLower(header.Name())
 	if _, ok := hs.headers[name]; ok {
 		hs.headers[name] = append(hs.headers[name], header)
@@ -995,7 +1003,9 @@ func (to *ToHeader) Clone() Header {
 	newTo = &ToHeader{
 		DisplayName: to.DisplayName,
 	}
-	newTo.Address = to.Address.Clone()
+	if to.Address != nil {
+		newTo.Address = to.Address.Clone()
+	}
 	if to.Params != nil {
 		newTo.Params = to.Params.Clone()
 	}
@@ -1218,7 +1228,9 @@ func (contact *ContactHeader) Clone() Header {
 	newCnt = &ContactHeader{
 		DisplayName: contact.DisplayName,
 	}
-	newCnt.Address = contact.Address.Clone()
+	if contact.Address != nil {
+		newCnt.Address = contact.Address.Clone()
+	}
 	if contact.Params != nil {
 		newCnt.Params = contact.Params.Clone()
 	}
@@ -1506,11 +1518,7 @@ func (route *RouteHeader) Clone() Header {
 	}
 
 	newRoute = &RouteHeader{
-		Addresses: []*URI{},
-	}
-
-	for i, uri := range route.Addresses {
-		newRoute.Addresses[i] = uri.Clone()
+		Addresses: cloneURISlice(route.Addresses),
 	}
 
 	return newRoute
@@ -1525,8 +1533,17 @@ func (route *RouteHeader) Equals(other any) bool {
 		if route == nil && h != nil || route != nil && h == nil {
 			return false
 		}
+		if len(route.Addresses) != len(h.Addresses) {
+			return false
+		}
 
 		for i, uri := range route.Addresses {
+			if uri == nil {
+				if h.Addresses[i] != nil {
+					return false
+				}
+				continue
+			}
 			if !uri.Equals(h.Addresses[i]) {
 				return false
 			}
@@ -1566,11 +1583,7 @@ func (route *RecordRouteHeader) Clone() Header {
 	}
 
 	newRoute = &RecordRouteHeader{
-		Addresses: make([]*URI, 0, len(route.Addresses)),
-	}
-
-	for i, uri := range route.Addresses {
-		newRoute.Addresses[i] = uri.Clone()
+		Addresses: cloneURISlice(route.Addresses),
 	}
 
 	return newRoute
@@ -1585,8 +1598,17 @@ func (route *RecordRouteHeader) Equals(other any) bool {
 		if route == nil && h != nil || route != nil && h == nil {
 			return false
 		}
+		if len(route.Addresses) != len(h.Addresses) {
+			return false
+		}
 
 		for i, uri := range route.Addresses {
+			if uri == nil {
+				if h.Addresses[i] != nil {
+					return false
+				}
+				continue
+			}
 			if !uri.Equals(h.Addresses[i]) {
 				return false
 			}
@@ -1596,6 +1618,21 @@ func (route *RecordRouteHeader) Equals(other any) bool {
 	}
 
 	return false
+}
+
+func cloneURISlice(uris []*URI) []*URI {
+	if len(uris) == 0 {
+		return nil
+	}
+
+	cloned := make([]*URI, len(uris))
+	for i, uri := range uris {
+		if uri != nil {
+			cloned[i] = uri.Clone()
+		}
+	}
+
+	return cloned
 }
 
 // ==================   SupportedHeader   ================

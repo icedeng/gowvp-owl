@@ -58,6 +58,17 @@ func registerAIWebhookAPI(r gin.IRouter, api AIWebhookAPI, handler ...gin.Handle
 }
 
 // onKeepalive 接收 AI 服务心跳，用于监控 AI 服务存活状态
+// onKeepalive godoc
+// @Summary AI 服务心跳回调
+// @Description AI 服务定时上报自身存活状态、运行时长、活跃流数量等统计信息。
+// @Description 成功响应示例：`{ "code": 0, "msg": "success" }`
+// @Tags AIWebhook
+// @Accept json
+// @Produce json
+// @Param body body AIKeepaliveInput true "AI 心跳数据"
+// @Success 200 {object} AIWebhookOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /ai/keepalive [post]
 func (a AIWebhookAPI) onKeepalive(c *gin.Context, in *AIKeepaliveInput) (AIWebhookOutput, error) {
 	var activeStreams int
 	var uptimeSeconds int64
@@ -75,6 +86,17 @@ func (a AIWebhookAPI) onKeepalive(c *gin.Context, in *AIKeepaliveInput) (AIWebho
 }
 
 // onStarted 接收 AI 服务启动通知，确认 AI 服务已就绪
+// onStarted godoc
+// @Summary AI 服务启动回调
+// @Description AI 服务启动完成后回调平台，用于记录 AI 服务已就绪。
+// @Description 成功响应示例：`{ "code": 0, "msg": "success" }`
+// @Tags AIWebhook
+// @Accept json
+// @Produce json
+// @Param body body AIStartedInput true "AI 启动数据"
+// @Success 200 {object} AIWebhookOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /ai/started [post]
 func (a AIWebhookAPI) onStarted(c *gin.Context, in *AIStartedInput) (AIWebhookOutput, error) {
 	a.log.InfoContext(c.Request.Context(), "ai started",
 		"timestamp", in.Timestamp,
@@ -84,6 +106,18 @@ func (a AIWebhookAPI) onStarted(c *gin.Context, in *AIStartedInput) (AIWebhookOu
 }
 
 // onEvents 接收 AI 检测事件，按 label 分别存储到数据库，图片保存到 configs/events 目录
+// onEvents godoc
+// @Summary AI 检测事件回调
+// @Description AI 服务上报检测结果。平台会按 `detections` 中每个对象分别落事件记录，并保存快照图片。
+// @Description 请求示例：`{ "camera_id":"GB_34020000001320000001", "timestamp":1710931200000, "detections":[{"label":"person","confidence":0.92,"box":{"x_min":120,"y_min":80,"x_max":360,"y_max":500},"area":35800}], "snapshot_width":1920, "snapshot_height":1080 }`
+// @Description 成功响应示例：`{ "code": 0, "msg": "success" }`
+// @Tags AIWebhook
+// @Accept json
+// @Produce json
+// @Param body body AIDetectionInput true "AI 检测结果"
+// @Success 200 {object} AIWebhookOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /ai/events [post]
 func (a AIWebhookAPI) onEvents(c *gin.Context, in *AIDetectionInput) (AIWebhookOutput, error) {
 	if !a.limiter(in.CameraID) {
 		return newAIWebhookOutputOK(), nil
@@ -152,6 +186,17 @@ func (a AIWebhookAPI) onEvents(c *gin.Context, in *AIDetectionInput) (AIWebhookO
 }
 
 // onStopped 接收 AI 任务停止通知，记录停止原因
+// onStopped godoc
+// @Summary AI 任务停止回调
+// @Description AI 服务停止某个摄像头分析任务时回调平台，平台据此清理内存状态。
+// @Description 成功响应示例：`{ "code": 0, "msg": "success" }`
+// @Tags AIWebhook
+// @Accept json
+// @Produce json
+// @Param body body AIStoppedInput true "AI 停止数据"
+// @Success 200 {object} AIWebhookOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /ai/stopped [post]
 func (a AIWebhookAPI) onStopped(c *gin.Context, in *AIStoppedInput) (AIWebhookOutput, error) {
 	a.log.InfoContext(c.Request.Context(), "ai task stopped",
 		"camera_id", in.CameraID,

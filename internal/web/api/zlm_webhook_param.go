@@ -54,45 +54,45 @@ package api
 //	    "vhost": "__defaultVhost__"
 //	}
 type onStreamChangedInput struct {
-	Regist           bool       `json:"regist"`
-	AliveSecond      int        `json:"aliveSecond"`
-	App              string     `json:"app"`
-	BytesSpeed       int        `json:"bytesSpeed"`
-	CreateStamp      int        `json:"createStamp"`
-	MediaServerID    string     `json:"mediaServerId"`
+	Regist           bool       `json:"regist" example:"true"`            // true 表示注册，false 表示注销
+	AliveSecond      int        `json:"aliveSecond" example:"0"`          // 存活时长，秒
+	App              string     `json:"app" example:"live"`               // 应用名
+	BytesSpeed       int        `json:"bytesSpeed" example:"0"`           // 当前字节速度
+	CreateStamp      int        `json:"createStamp" example:"1710931200"` // 创建时间戳
+	MediaServerID    string     `json:"mediaServerId" example:"local"`    // 流媒体服务器 ID
 	OriginSock       OriginSock `json:"originSock"`
-	OriginType       int        `json:"originType"`
-	OriginTypeStr    string     `json:"originTypeStr"`
-	OriginURL        string     `json:"originUrl"`
-	ReaderCount      int        `json:"readerCount"`
-	Schema           string     `json:"schema"`
-	Stream           string     `json:"stream"`
-	TotalReaderCount int        `json:"totalReaderCount"`
+	OriginType       int        `json:"originType" example:"2"`            // 源类型
+	OriginTypeStr    string     `json:"originTypeStr" example:"rtsp_push"` // 源类型文本
+	OriginURL        string     `json:"originUrl" example:""`              // 源地址
+	ReaderCount      int        `json:"readerCount" example:"0"`           // 当前协议观看人数
+	Schema           string     `json:"schema" example:"rtsp"`             // 协议
+	Stream           string     `json:"stream" example:"test"`             // 流 ID
+	TotalReaderCount int        `json:"totalReaderCount" example:"0"`      // 总观看人数
 	Tracks           []Tracks   `json:"tracks"`
-	Vhost            string     `json:"vhost"`
+	Vhost            string     `json:"vhost" example:"__defaultVhost__"` // 虚拟主机
 
 	// 以下字段为 lalmax 新增
-	AppName    string `json:"app_name"`    // 流应用名
-	StreamName string `json:"stream_name"` // 流名称
+	AppName    string `json:"app_name" example:"live"`    // 流应用名
+	StreamName string `json:"stream_name" example:"test"` // 流名称
 }
 type OriginSock struct {
-	Identifier string `json:"identifier"`
-	LocalIP    string `json:"local_ip"`
-	LocalPort  int    `json:"local_port"`
-	PeerIP     string `json:"peer_ip"`
-	PeerPort   int    `json:"peer_port"`
+	Identifier string `json:"identifier" example:"000001C257D35E40"` // 连接标识
+	LocalIP    string `json:"local_ip" example:"172.26.20.112"`      // 本地 IP
+	LocalPort  int    `json:"local_port" example:"50166"`            // 本地端口
+	PeerIP     string `json:"peer_ip" example:"172.26.20.112"`       // 对端 IP
+	PeerPort   int    `json:"peer_port" example:"50155"`             // 对端端口
 }
 type Tracks struct {
-	Channels    int     `json:"channels,omitempty"`
-	CodecID     int     `json:"codec_id"`
-	CodecIDName string  `json:"codec_id_name"`
-	CodecType   int     `json:"codec_type"`
-	Ready       bool    `json:"ready"`
-	SampleBit   int     `json:"sample_bit,omitempty"`
-	SampleRate  int     `json:"sample_rate,omitempty"`
-	Fps         float32 `json:"fps,omitempty"`
-	Height      int     `json:"height,omitempty"`
-	Width       int     `json:"width,omitempty"`
+	Channels    int     `json:"channels,omitempty" example:"1"`       // 音频通道数
+	CodecID     int     `json:"codec_id" example:"0"`                 // 编码 ID
+	CodecIDName string  `json:"codec_id_name" example:"CodecH264"`    // 编码名称
+	CodecType   int     `json:"codec_type" example:"0"`               // 0 视频，1 音频
+	Ready       bool    `json:"ready" example:"true"`                 // 轨道是否就绪
+	SampleBit   int     `json:"sample_bit,omitempty" example:"16"`    // 采样位数
+	SampleRate  int     `json:"sample_rate,omitempty" example:"8000"` // 采样率
+	Fps         float32 `json:"fps,omitempty" example:"25"`           // 帧率
+	Height      int     `json:"height,omitempty" example:"1080"`      // 视频高度
+	Width       int     `json:"width,omitempty" example:"1920"`       // 视频宽度
 }
 
 // 心跳
@@ -120,8 +120,8 @@ type Tracks struct {
 
 type onServerKeepaliveInput struct {
 	Data          Data   `json:"data"`
-	HookIndex     int    `json:"hook_index"`
-	MediaServerID string `json:"mediaServerId"`
+	HookIndex     int    `json:"hook_index" example:"0"`        // Webhook 索引
+	MediaServerID string `json:"mediaServerId" example:"local"` // 流媒体服务器 ID
 }
 type Data struct {
 	Buffer                int `json:"Buffer"`
@@ -143,15 +143,15 @@ type Data struct {
 }
 
 type onPublishInput struct {
-	MediaServerID string `json:"mediaServerId"`
-	App           string `json:"app"`
-	ID            string `json:"id"`     // TCP 链接唯一 ID
-	IP            string `json:"ip"`     // 推流器 ip
-	Params        string `json:"params"` // 推流 url 参数
-	Port          int    `json:"port"`   // 推流器端口号
-	Schema        string `json:"schema"` // 推流的协议，可能是 rtsp、rtmp
-	Stream        string `json:"stream"`
-	Vhost         string `json:"vhost"` // 流虚拟主机
+	MediaServerID string `json:"mediaServerId" example:"local"`    // 流媒体服务器 ID
+	App           string `json:"app" example:"live"`               // 应用名
+	ID            string `json:"id" example:"1"`                   // TCP 链接唯一 ID
+	IP            string `json:"ip" example:"192.168.1.10"`        // 推流或播放端 IP
+	Params        string `json:"params" example:"token=abc"`       // URL 参数
+	Port          int    `json:"port" example:"50000"`             // 端口号
+	Schema        string `json:"schema" example:"rtsp"`            // 协议，rtsp/rtmp/http 等
+	Stream        string `json:"stream" example:"camera001"`       // 流 ID
+	Vhost         string `json:"vhost" example:"__defaultVhost__"` // 虚拟主机
 }
 
 type onPublishOutput struct {
@@ -176,8 +176,8 @@ type onPublishOutput struct {
 }
 
 type DefaultOutput struct {
-	Code int    `json:"code"` // 错误代码，0 代表允许推流
-	Msg  string `json:"msg"`  // 不允许推流时的错误提示
+	Code int    `json:"code" example:"0"`      // 错误代码，0 代表允许
+	Msg  string `json:"msg" example:"success"` // 结果说明
 }
 
 func newDefaultOutputOK() DefaultOutput {
@@ -185,55 +185,55 @@ func newDefaultOutputOK() DefaultOutput {
 }
 
 type onStreamNoneReaderOutput struct {
-	Code  int  `json:"code"`
-	Close bool `json:"close"`
+	Code  int  `json:"code" example:"0"`      // 返回码
+	Close bool `json:"close" example:"false"` // 是否关闭流
 }
 
 type onStreamNoneReaderInput struct {
-	App           string `json:"app"`           // 流应用名
-	Schema        string `json:"schema"`        // rtsp 或 rtmp
-	Stream        string `json:"stream"`        // 流 ID
-	Vhost         string `json:"vhost"`         // 流虚拟主机
-	MediaServerID string `json:"mediaServerId"` // 服务器 id,通过配置文件设置
+	App           string `json:"app" example:"live"`               // 流应用名
+	Schema        string `json:"schema" example:"rtsp"`            // 协议
+	Stream        string `json:"stream" example:"camera001"`       // 流 ID
+	Vhost         string `json:"vhost" example:"__defaultVhost__"` // 流虚拟主机
+	MediaServerID string `json:"mediaServerId" example:"local"`    // 流媒体服务器 ID
 }
 
 type onRTPServerTimeoutInput struct {
-	LocalPort     int    `json:"local_port"`    // openRtpServer 输入的参数
-	ReUsePort     bool   `json:"re_use_port"`   // openRtpServer 输入的参数
-	SSRC          uint32 `json:"ssrc"`          // openRtpServer 输入的参数
-	StreamID      string `json:"stream_id"`     // openRtpServer 输入的参数
-	TCPMode       int    `json:"tcp_mode"`      // openRtpServer 输入的参数
-	MediaServerID string `json:"mediaServerId"` // 服务器 id,通过配置文件设置
+	LocalPort     int    `json:"local_port" example:"30000"`    // RTP 本地端口
+	ReUsePort     bool   `json:"re_use_port" example:"false"`   // 是否复用端口
+	SSRC          uint32 `json:"ssrc" example:"12345678"`       // SSRC
+	StreamID      string `json:"stream_id" example:"camera001"` // 流 ID
+	TCPMode       int    `json:"tcp_mode" example:"0"`          // TCP 模式
+	MediaServerID string `json:"mediaServerId" example:"local"` // 流媒体服务器 ID
 }
 
 type onStreamNotFoundInput struct {
-	MediaServerID string `json:"mediaServerId"` // 服务器 id,通过配置文件设置
-	App           string `json:"app"`           // 流应用名
-	ID            string `json:"id"`            // TCP链接唯一ID
-	IP            string `json:"ip"`            // 播放器ip
-	Params        string `json:"params"`        // 播放url参数
-	Port          int    `json:"port"`          // 播放器端口号
-	Schema        string `json:"schema"`        // 播放的协议，可能是rtsp、rtmp、http
-	Stream        string `json:"stream"`        // 流 ID
-	Vhost         string `json:"vhost"`         // 流虚拟主机
+	MediaServerID string `json:"mediaServerId" example:"local"`    // 流媒体服务器 ID
+	App           string `json:"app" example:"live"`               // 应用名
+	ID            string `json:"id" example:"1"`                   // TCP 连接 ID
+	IP            string `json:"ip" example:"192.168.1.20"`        // 播放端 IP
+	Params        string `json:"params" example:"token=abc"`       // URL 参数
+	Port          int    `json:"port" example:"52000"`             // 播放端端口
+	Schema        string `json:"schema" example:"rtsp"`            // 协议
+	Stream        string `json:"stream" example:"camera001"`       // 流 ID
+	Vhost         string `json:"vhost" example:"__defaultVhost__"` // 虚拟主机
 
 	// 以下字段为 lalmax 新增
-	AppName    string `json:"app_name"`    // 流应用名
-	StreamName string `json:"stream_name"` // 流名称
+	AppName    string `json:"app_name" example:"live"`         // 流应用名
+	StreamName string `json:"stream_name" example:"camera001"` // 流名称
 }
 
 // onRecordMP4Input 录制 mp4 完成后通知事件参数
 // https://docs.zlmediakit.com/zh/guide/media_server/web_hook_api.html#_8%E3%80%81on-record-mp4
 type onRecordMP4Input struct {
-	MediaServerID string  `json:"mediaServerId"` // 服务器 id
-	App           string  `json:"app"`           // 录制的流应用名
-	FileName      string  `json:"file_name"`     // 文件名
-	FilePath      string  `json:"file_path"`     // 文件绝对路径
-	FileSize      int64   `json:"file_size"`     // 文件大小，单位字节
-	Folder        string  `json:"folder"`        // 文件所在目录路径
-	StartTime     int64   `json:"start_time"`    // 开始录制时间戳（秒）
-	Stream        string  `json:"stream"`        // 录制的流 ID
-	TimeLen       float64 `json:"time_len"`      // 录制时长，单位秒
-	URL           string  `json:"url"`           // http/rtsp/rtmp 点播相对 url 路径
-	Vhost         string  `json:"vhost"`         // 流虚拟主机
+	MediaServerID string  `json:"mediaServerId" example:"local"`                  // 流媒体服务器 ID
+	App           string  `json:"app" example:"live"`                             // 录制流应用名
+	FileName      string  `json:"file_name" example:"camera001_20260320.mp4"`     // 文件名
+	FilePath      string  `json:"file_path" example:"/data/record/camera001.mp4"` // 文件绝对路径
+	FileSize      int64   `json:"file_size" example:"1024000"`                    // 文件大小，字节
+	Folder        string  `json:"folder" example:"/data/record"`                  // 文件目录
+	StartTime     int64   `json:"start_time" example:"1710931200"`                // 开始录制时间戳（秒）
+	Stream        string  `json:"stream" example:"camera001"`                     // 录制流 ID
+	TimeLen       float64 `json:"time_len" example:"60"`                          // 录制时长，秒
+	URL           string  `json:"url" example:"/record/live/camera001.mp4"`       // 点播相对 URL
+	Vhost         string  `json:"vhost" example:"__defaultVhost__"`               // 流虚拟主机
 }

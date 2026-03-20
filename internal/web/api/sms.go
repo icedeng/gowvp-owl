@@ -43,6 +43,18 @@ func registerSms(g gin.IRouter, api SmsAPI, handler ...gin.HandlerFunc) {
 
 // >>> mediaServer >>>>>>>>>>>>>>>>>>>>
 
+// findMediaServer godoc
+// @Summary 查询流媒体服务器列表
+// @Tags MediaServer
+// @Security BearerAuth
+// @Produce json
+// @Param page query int false "页码"
+// @Param size query int false "每页数量"
+// @Param ip query string false "IP"
+// @Param type query string false "类型"
+// @Success 200 {object} SwaggerMediaServersResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /media_servers [get]
 func (a SmsAPI) findMediaServer(c *gin.Context, in *sms.FindMediaServerInput) (any, error) {
 	items, total, err := a.smsCore.FindMediaServer(c.Request.Context(), in)
 	return gin.H{"items": items, "total": total}, err
@@ -53,6 +65,17 @@ func (a SmsAPI) getMediaServer(c *gin.Context, _ *struct{}) (any, error) {
 	return a.smsCore.GetMediaServer(c.Request.Context(), mediaServerID)
 }
 
+// editMediaServer godoc
+// @Summary 修改流媒体服务器
+// @Tags MediaServer
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "流媒体服务器ID"
+// @Param body body sms.EditMediaServerInput true "流媒体服务器参数"
+// @Success 200 {object} sms.MediaServer
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /media_servers/{id} [put]
 func (a SmsAPI) editMediaServer(c *gin.Context, in *sms.EditMediaServerInput) (any, error) {
 	mediaServerID := c.Param("id")
 	out, err := a.smsCore.EditMediaServer(c.Request.Context(), in, mediaServerID, a.uc.Conf.Server.HTTP.Port)

@@ -55,30 +55,82 @@ func RegisterEvent(g gin.IRouter, api EventAPI, handler ...gin.HandlerFunc) {
 }
 
 // findEvents 分页查询事件列表
+// findEvents godoc
+// @Summary 查询事件列表
+// @Tags Event
+// @Security BearerAuth
+// @Produce json
+// @Param page query int false "页码"
+// @Param size query int false "每页数量"
+// @Param did query string false "设备ID"
+// @Param cid query string false "通道ID"
+// @Param label query string false "标签"
+// @Param start_ms query int false "开始毫秒时间戳"
+// @Param end_ms query int false "结束毫秒时间戳"
+// @Success 200 {object} SwaggerEventsResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /events [get]
 func (a EventAPI) findEvents(c *gin.Context, in *event.FindEventInput) (any, error) {
 	items, total, err := a.eventCore.FindEvents(c.Request.Context(), in)
 	return gin.H{"items": items, "total": total}, err
 }
 
 // getEvent 获取单个事件详情
+// getEvent godoc
+// @Summary 获取事件详情
+// @Tags Event
+// @Security BearerAuth
+// @Produce json
+// @Param id path int true "事件ID"
+// @Success 200 {object} event.Event
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /events/{id} [get]
 func (a EventAPI) getEvent(c *gin.Context, _ *struct{}) (*event.Event, error) {
 	eventID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	return a.eventCore.GetEvent(c.Request.Context(), eventID)
 }
 
 // editEvent 更新事件信息
+// editEvent godoc
+// @Summary 修改事件
+// @Tags Event
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "事件ID"
+// @Param body body event.EditEventInput true "事件更新参数"
+// @Success 200 {object} event.Event
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /events/{id} [put]
 func (a EventAPI) editEvent(c *gin.Context, in *event.EditEventInput) (*event.Event, error) {
 	eventID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	return a.eventCore.EditEvent(c.Request.Context(), in, eventID)
 }
 
 // delEvent 删除事件
+// delEvent godoc
+// @Summary 删除事件
+// @Tags Event
+// @Security BearerAuth
+// @Produce json
+// @Param id path int true "事件ID"
+// @Success 200 {object} event.Event
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /events/{id} [delete]
 func (a EventAPI) delEvent(c *gin.Context, _ *struct{}) (*event.Event, error) {
 	eventID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	return a.eventCore.DelEvent(c.Request.Context(), eventID)
 }
 
 // getEventImage 获取事件快照图片
+// getEventImage godoc
+// @Summary 获取事件快照图片
+// @Tags Event
+// @Produce jpeg
+// @Param path path string true "图片相对路径"
+// @Success 200 {file} file "JPEG 图片"
+// @Failure 404 {object} SwaggerErrorResponse
+// @Router /events/image/{path} [get]
 func (a EventAPI) getEventImage(c *gin.Context) {
 	imagePath := c.Param("path")
 	if imagePath == "" {

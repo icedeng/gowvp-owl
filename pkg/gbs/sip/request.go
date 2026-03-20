@@ -64,9 +64,15 @@ func NewRequestFromResponse(method string, resp *Response) *Request {
 		CopyHeaders("Route", resp, ackRequest)
 	} else {
 		for _, h := range resp.GetHeaders("Record-Route") {
+			recordRoute, ok := h.(*RecordRouteHeader)
+			if !ok || recordRoute == nil {
+				continue
+			}
 			uris := make([]*URI, 0)
-			for _, u := range h.(*RecordRouteHeader).Addresses {
-				uris = append(uris, u.Clone())
+			for _, u := range recordRoute.Addresses {
+				if u != nil {
+					uris = append(uris, u.Clone())
+				}
 			}
 			ackRequest.AppendHeader(&RouteHeader{
 				Addresses: uris,

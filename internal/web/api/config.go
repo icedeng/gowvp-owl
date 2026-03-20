@@ -70,12 +70,30 @@ type getConfigInfoOutput struct {
 	SIP conf.SIP `json:"sip"`
 }
 
+// getConfigInfo godoc
+// @Summary 获取系统配置摘要
+// @Tags Config
+// @Security BearerAuth
+// @Produce json
+// @Success 200 {object} SwaggerConfigInfoOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /configs/info [get]
 func (a ConfigAPI) getConfigInfo(c *gin.Context, _ *struct{}) (*getConfigInfoOutput, error) {
 	return &getConfigInfoOutput{
 		SIP: a.conf.Sip,
 	}, nil
 }
 
+// editSIP godoc
+// @Summary 修改 SIP 配置
+// @Tags Config
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param body body SwaggerSIPConfig true "SIP 配置"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /configs/info/sip [put]
 func (a ConfigAPI) editSIP(_ *gin.Context, in *conf.SIP) (gin.H, error) {
 	if err := copier.Copy(&a.conf.Sip, in); err != nil {
 		return nil, reason.ErrServer.SetMsg(err.Error())

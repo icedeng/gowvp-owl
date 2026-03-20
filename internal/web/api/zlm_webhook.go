@@ -69,6 +69,14 @@ func (w WebHookAPI) getChannelType(ctx context.Context, app, stream string) stri
 	return ipc.GetType(stream)
 }
 
+// onServerStarted godoc
+// @Summary ZLM 服务启动回调
+// @Tags ZLMWebhook
+// @Accept json
+// @Produce json
+// @Success 200 {object} DefaultOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /webhook/on_server_started [post]
 func (w WebHookAPI) onServerStarted(c *gin.Context, _ *struct{}) (DefaultOutput, error) {
 	w.log.InfoContext(c.Request.Context(), "webhook onServerStarted")
 	// 所有 rtmp 通道离线
@@ -81,6 +89,15 @@ func (w WebHookAPI) onServerStarted(c *gin.Context, _ *struct{}) (DefaultOutput,
 
 // onServerKeepalive 服务器定时上报时间，上报间隔可配置，默认 10s 上报一次
 // https://docs.zlmediakit.com/zh/guide/media_server/web_hook_api.html#_16%E3%80%81on-server-keepalive
+// onServerKeepalive godoc
+// @Summary ZLM 服务心跳回调
+// @Tags ZLMWebhook
+// @Accept json
+// @Produce json
+// @Param body body onServerKeepaliveInput true "ZLM 心跳数据"
+// @Success 200 {object} DefaultOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /webhook/on_server_keepalive [post]
 func (w WebHookAPI) onServerKeepalive(_ *gin.Context, in *onServerKeepaliveInput) (DefaultOutput, error) {
 	// TODO: 仅支持默认
 	w.smsCore.Keepalive(sms.DefaultMediaServerID)
@@ -89,6 +106,15 @@ func (w WebHookAPI) onServerKeepalive(_ *gin.Context, in *onServerKeepaliveInput
 
 // onPublish rtsp/rtmp/rtp 推流鉴权事件。
 // https://docs.zlmediakit.com/zh/guide/media_server/web_hook_api.html#_7%E3%80%81on-publish
+// onPublish godoc
+// @Summary ZLM 推流鉴权回调
+// @Tags ZLMWebhook
+// @Accept json
+// @Produce json
+// @Param body body onPublishInput true "推流信息"
+// @Success 200 {object} onPublishOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /webhook/on_publish [post]
 func (w WebHookAPI) onPublish(c *gin.Context, in *onPublishInput) (*onPublishOutput, error) {
 	ctx := c.Request.Context()
 	w.log.Info("webhook onPublish", "app", in.App, "stream", in.Stream, "schema", in.Schema, "mediaServerID", in.MediaServerID)
@@ -138,6 +164,15 @@ func (w WebHookAPI) onPublish(c *gin.Context, in *onPublishInput) (*onPublishOut
 // onStreamChanged rtsp/rtmp 流注册或注销时触发此事件；此事件对回复不敏感。
 // 流注册时自动启动录制，流注销时停止录制并更新通道状态
 // https://docs.zlmediakit.com/zh/guide/media_server/web_hook_api.html#_12%E3%80%81on-stream-changed
+// onStreamChanged godoc
+// @Summary ZLM 流注册变更回调
+// @Tags ZLMWebhook
+// @Accept json
+// @Produce json
+// @Param body body onStreamChangedInput true "流变更信息"
+// @Success 200 {object} DefaultOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /webhook/on_stream_changed [post]
 func (w WebHookAPI) onStreamChanged(c *gin.Context, in *onStreamChangedInput) (DefaultOutput, error) {
 	ctx := c.Request.Context()
 	w.log.InfoContext(ctx, "webhook onStreamChanged", "app", in.App, "stream", in.Stream, "schema", in.Schema, "mediaServerID", in.MediaServerID, "regist", in.Regist)
@@ -195,6 +230,15 @@ func (w WebHookAPI) onStreamChanged(c *gin.Context, in *onStreamChangedInput) (D
 // 播放流时会触发此事件。如果流不存在，则首先触发 on_play 事件，然后触发 on_stream_not_found 事件。
 // 播放rtsp流时，如果该流开启了rtsp专用认证（on_rtsp_realm），则不会触发on_play事件。
 // https://docs.zlmediakit.com/guide/media_server/web_hook_api.html#_6-on-play
+// onPlay godoc
+// @Summary ZLM 播放鉴权回调
+// @Tags ZLMWebhook
+// @Accept json
+// @Produce json
+// @Param body body onPublishInput true "播放信息"
+// @Success 200 {object} DefaultOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /webhook/on_play [post]
 func (w WebHookAPI) onPlay(c *gin.Context, in *onPublishInput) (DefaultOutput, error) {
 	ctx := c.Request.Context()
 	w.log.InfoContext(ctx, "webhook onPlay", "app", in.App, "stream", in.Stream, "schema", in.Schema)
@@ -214,6 +258,15 @@ func (w WebHookAPI) onPlay(c *gin.Context, in *onPublishInput) (DefaultOutput, e
 // 目前 mp4/hls 录制不当做观看人数(mp4 录制可以通过配置文件 mp4_as_player 控制，
 // 但是 rtsp/rtmp/rtp 转推算观看人数，也会触发该事件。
 // https://docs.zlmediakit.com/zh/guide/media_server/web_hook_api.html#_12%E3%80%81on-stream-changed
+// onStreamNoneReader godoc
+// @Summary ZLM 无人观看回调
+// @Tags ZLMWebhook
+// @Accept json
+// @Produce json
+// @Param body body onStreamNoneReaderInput true "流信息"
+// @Success 200 {object} onStreamNoneReaderOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /webhook/on_stream_none_reader [post]
 func (w WebHookAPI) onStreamNoneReader(c *gin.Context, in *onStreamNoneReaderInput) (onStreamNoneReaderOutput, error) {
 	ctx := c.Request.Context()
 	w.log.InfoContext(ctx, "webhook onStreamNoneReader", "app", in.App, "stream", in.Stream, "mediaServerID", in.MediaServerID)
@@ -254,6 +307,15 @@ func (w WebHookAPI) onStreamNoneReader(c *gin.Context, in *onStreamNoneReaderInp
 // onRTPServerTimeout RTP 服务器超时事件
 // 调用 openRtpServer 接口，rtp server 长时间未收到数据,执行此 web hook,对回复不敏感
 // https://docs.zlmediakit.com/zh/guide/media_server/web_hook_api.html#_17%E3%80%81on-rtp-server-timeout
+// onRTPServerTimeout godoc
+// @Summary ZLM RTP 服务器超时回调
+// @Tags ZLMWebhook
+// @Accept json
+// @Produce json
+// @Param body body onRTPServerTimeoutInput true "RTP 超时信息"
+// @Success 200 {object} DefaultOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /webhook/on_rtp_server_timeout [post]
 func (w WebHookAPI) onRTPServerTimeout(c *gin.Context, in *onRTPServerTimeoutInput) (DefaultOutput, error) {
 	w.log.InfoContext(c.Request.Context(), "webhook onRTPServerTimeout", "local_port", in.LocalPort, "ssrc", in.SSRC, "stream_id", in.StreamID, "mediaServerID", in.MediaServerID)
 	return newDefaultOutputOK(), nil
@@ -261,6 +323,15 @@ func (w WebHookAPI) onRTPServerTimeout(c *gin.Context, in *onRTPServerTimeoutInp
 
 // onStreamNotFound 流不存在事件
 // TODO: 重启后立即播放，会出发 "channel not exist" 待处理
+// onStreamNotFound godoc
+// @Summary ZLM 流不存在回调
+// @Tags ZLMWebhook
+// @Accept json
+// @Produce json
+// @Param body body onStreamNotFoundInput true "流不存在信息"
+// @Success 200 {object} DefaultOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /webhook/on_stream_not_found [post]
 func (w WebHookAPI) onStreamNotFound(c *gin.Context, in *onStreamNotFoundInput) (DefaultOutput, error) {
 	ctx := c.Request.Context()
 	w.log.InfoContext(ctx, "webhook onStreamNotFound", "app", in.App, "stream", in.Stream, "schema", in.Schema, "mediaServerID", in.MediaServerID)
@@ -291,6 +362,15 @@ func (w WebHookAPI) onStreamNotFound(c *gin.Context, in *onStreamNotFoundInput) 
 // onRecordMP4 录制 mp4 完成后通知事件
 // ZLM 在 MP4 切片完成时会触发此回调，将录像信息入库
 // https://docs.zlmediakit.com/zh/guide/media_server/web_hook_api.html#_8%E3%80%81on-record-mp4
+// onRecordMP4 godoc
+// @Summary ZLM MP4 录像完成回调
+// @Tags ZLMWebhook
+// @Accept json
+// @Produce json
+// @Param body body onRecordMP4Input true "录像完成信息"
+// @Success 200 {object} DefaultOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /webhook/on_record_mp4 [post]
 func (w WebHookAPI) onRecordMP4(c *gin.Context, in *onRecordMP4Input) (DefaultOutput, error) {
 	ctx := c.Request.Context()
 	w.log.InfoContext(ctx, "webhook onRecordMP4",
