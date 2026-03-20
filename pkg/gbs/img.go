@@ -3,7 +3,6 @@ package gbs
 import (
 	"fmt"
 	"log/slog"
-	"net/url"
 	"strings"
 	"time"
 
@@ -11,7 +10,7 @@ import (
 	"github.com/ixugo/netpulse/ip"
 )
 
-func (g *GB28181API) QuerySnapshot(deviceID, channelID string) error {
+func (g *GB28181API) QuerySnapshot(deviceID, targetID, coverKey string) error {
 	slog.Debug("QuerySnapshot", "deviceID", deviceID)
 	if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "图像抓拍(9.14)"); err != nil {
 		return err
@@ -23,10 +22,10 @@ func (g *GB28181API) QuerySnapshot(deviceID, channelID string) error {
 
 	sn := int32(g.nextControlSN())
 	sessionID := sip.RandString(32)
-	body := NewDeviceConfig(channelID).SetSN(sn).SetSnapShotConfig(&SnapShot{
+	body := NewDeviceConfig(targetID).SetSN(sn).SetSnapShotConfig(&SnapShot{
 		SnapNum:   1,
 		Interval:  1,
-		UploadURL: g.buildSnapshotUploadURL(deviceID, channelID, sessionID),
+		UploadURL: g.buildSnapshotUploadURL(deviceID, coverKey, sessionID),
 		SessionID: sessionID,
 	}).Marshal()
 
@@ -57,13 +56,14 @@ func (g *GB28181API) QuerySnapshot(deviceID, channelID string) error {
 }
 
 // buildSnapshotUploadURL 生成抓拍回传地址，避免硬编码固定地址。
-// 通过 query 参数携带 device/channel/session，便于回调路由落盘定位。
-func (g *GB28181API) buildSnapshotUploadURL(deviceID, channelID, sessionID string) string {
-	q := url.Values{}
-	q.Set("device_id", deviceID)
-	q.Set("channel_id", channelID)
-	q.Set("session_id", sessionID)
+// 通过路径参数携带 device/coverKey/session，兼容部分设备不接受 query 参数的场景。
+func (g *GB28181API) buildSnapshotUploadURL(deviceID, coverKey, sessionID string) string {
+	path := fmt.Sprintf("/gb28181/snapshot/%s/%s/%s", deviceID, coverKey, sessionID)
 	if g.boot != nil {
+		baseURL := strings.TrimSpace(g.boot.Media.GBSnapshotBaseURL)
+		if baseURL != "" {
+			return strings.TrimRight(baseURL, "/") + path
+		}
 		host := strings.TrimSpace(g.boot.Media.WebHookIP)
 		if host == "" {
 			host = ip.InternalIP()
@@ -73,9 +73,9 @@ func (g *GB28181API) buildSnapshotUploadURL(deviceID, channelID, sessionID strin
 			port = 15123
 		}
 		if strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://") {
-			return strings.TrimRight(host, "/") + "/gb28181/snapshot?" + q.Encode()
+			return strings.TrimRight(host, "/") + path
 		}
-		return fmt.Sprintf("http://%s:%d/gb28181/snapshot?%s", host, port, q.Encode())
+		return fmt.Sprintf("http://%s:%d%s", host, port, path)
 	}
-	return "http://127.0.0.1:15123/gb28181/snapshot?" + q.Encode()
+	return "http://127.0.0.1:15123" + path
 }

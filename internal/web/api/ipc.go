@@ -64,26 +64,36 @@ func NewIPCAPI(bundle IPCBundle, recordingCore recording.Core) IPCAPI {
 
 func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 	// GB28181 协议特有的回调接口
-	g.Any("/gb28181/snapshot", func(c *gin.Context) {
+	snapshotHandler := func(c *gin.Context) {
 		b, err := io.ReadAll(c.Request.Body)
 		if err != nil {
 			panic(err)
 		}
-		channelID := strings.TrimSpace(c.Query("channel_id"))
-		if channelID == "" {
-			// 兼容设备不回传 channel_id 的场景，退化到 device_id 作为快照主键。
-			channelID = strings.TrimSpace(c.Query("device_id"))
+		payload, payloadType, err := decodeGBSnapshotBody(c.Request, b)
+		if err != nil {
+			slog.ErrorContext(c.Request.Context(), "decode gb snapshot body", "err", err, "content_type", c.GetHeader("Content-Type"))
+			c.JSON(400, gin.H{"msg": "invalid snapshot body"})
+			return
 		}
-		if channelID == "" {
-			channelID = orm.GenerateRandomString(10)
+		deviceID, coverKey, sessionID := resolveGBSnapshotUploadTarget(c)
+		if coverKey == "" {
+			// 兼容设备不回传 cover_key 的场景，退化到 device_id 作为快照主键。
+			coverKey = deviceID
 		}
-		if len(b) > 0 {
-			if err := writeCover(api.uc.Conf.ConfigDir, channelID, b); err != nil {
-				slog.ErrorContext(c.Request.Context(), "write cover", "err", err, "channel_id", channelID)
+		if coverKey == "" {
+			coverKey = orm.GenerateRandomString(10)
+		}
+		if len(payload) > 0 {
+			if err := writeCover(api.uc.Conf.ConfigDir, coverKey, payload); err != nil {
+				slog.ErrorContext(c.Request.Context(), "write cover", "err", err, "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID)
+			} else {
+				slog.InfoContext(c.Request.Context(), "GBSNAPSHOT_UPLOAD_OK", "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID, "size", len(payload), "payload_type", payloadType)
 			}
 		}
 		c.JSON(200, gin.H{"msg": "ok"})
-	})
+	}
+	g.Any("/gb28181/snapshot", snapshotHandler)
+	g.Any("/gb28181/snapshot/:device_id/:cover_key/:session_id", snapshotHandler)
 
 	// 统一的设备管理 API（支持所有协议）
 	{
@@ -135,6 +145,30 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/subscribe", web.WrapH(api.subscribe)) // 订阅（GB28181）
 		group.POST("/:id/options_probe", web.WrapH(api.optionsProbe))
 	}
+}
+
+func resolveGBSnapshotUploadTarget(c *gin.Context) (deviceID, coverKey, sessionID string) {
+	deviceID = strings.TrimSpace(c.Param("device_id"))
+	coverKey = strings.TrimSpace(c.Param("cover_key"))
+	if coverKey == "" {
+		coverKey = strings.TrimSpace(c.Param("channel_id"))
+	}
+	sessionID = strings.TrimSpace(c.Param("session_id"))
+	if deviceID != "" || coverKey != "" || sessionID != "" {
+		return deviceID, coverKey, sessionID
+	}
+	return strings.TrimSpace(c.Query("device_id")),
+		firstNonEmpty(strings.TrimSpace(c.Query("cover_key")), strings.TrimSpace(c.Query("channel_id"))),
+		strings.TrimSpace(c.Query("session_id"))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // >>> device >>>>>>>>>>>>>>>>>>>>
@@ -901,6 +935,7 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 	channelID := c.Param("id")
 
 	path := readCoverPath(a.uc.Conf.ConfigDir, channelID)
+	requestAt := time.Now()
 
 	token := c.GetString("token")
 
@@ -926,8 +961,11 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 		if _, err = a.ipc.GetDevice(c.Request.Context(), ch.DID); err != nil {
 			return nil, err
 		}
-		if err := a.uc.SipServer.QuerySnapshot(ch.DeviceID, ch.ChannelID); err != nil {
+		if err := a.uc.SipServer.QuerySnapshot(ch.DeviceID, ch.ChannelID, ch.ID); err != nil {
 			return nil, ErrDevice.SetMsg(err.Error())
+		}
+		if !waitForFreshCover(c.Request.Context(), path, requestAt, 10*time.Second) {
+			slog.WarnContext(c.Request.Context(), "gb28181 snapshot not uploaded in time", "channel_id", channelID)
 		}
 	}
 
@@ -954,6 +992,9 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 					slog.ErrorContext(c.Request.Context(), "write cover", "err", err)
 				}
 			}
+		}
+		if !waitForFreshCover(c.Request.Context(), path, requestAt, 3*time.Second) {
+			slog.WarnContext(c.Request.Context(), "snapshot file not refreshed in time", "channel_id", channelID)
 		}
 	}
 

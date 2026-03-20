@@ -95,16 +95,26 @@ type SIP struct {
 
 	StrictSourceCheck  bool `comment:"是否校验设备上报源IP与注册源IP一致" json:"strict_source_check"`
 	RequireMessageAuth bool `comment:"是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权" json:"require_message_auth"`
+	Log                SIPLog
+}
+
+type SIPLog struct {
+	Enabled      bool     `comment:"是否启用 SIP 报文落盘"`
+	Dir          string   `comment:"SIP 日志目录，建议独立目录"`
+	MaxAge       Duration `comment:"SIP 日志保留时长"`
+	RotationTime Duration `comment:"SIP 日志按时间分割间隔"`
+	RotationSize int64    `comment:"SIP 日志按文件大小分割(MB)"`
 }
 
 type Media struct {
-	IP           string `comment:"媒体服务器 IP"`
-	HTTPPort     int    `comment:"媒体服务器 HTTP 端口"`
-	Secret       string `comment:"媒体服务器密钥"`
-	Type         string `comment:"媒体服务器类型 zlm/lalmax"`
-	WebHookIP    string `comment:"用于流媒体 webhook 回调"`
-	RTPPortRange string `comment:"媒体服务器 RTP 端口范围"`
-	SDPIP        string `comment:"媒体服务器 SDP IP"`
+	IP                string `comment:"媒体服务器 IP"`
+	HTTPPort          int    `comment:"媒体服务器 HTTP 端口"`
+	Secret            string `comment:"媒体服务器密钥"`
+	Type              string `comment:"媒体服务器类型 zlm/lalmax"`
+	GBSnapshotBaseURL string `comment:"GB28181 抓拍图片回传基础地址，优先于 WebHookIP"`
+	WebHookIP         string `comment:"用于流媒体 webhook 回调"`
+	RTPPortRange      string `comment:"媒体服务器 RTP 端口范围"`
+	SDPIP             string `comment:"媒体服务器 SDP IP"`
 }
 
 type Duration time.Duration

@@ -20,6 +20,7 @@ type Packet struct {
 
 func newPacket(data []byte, raddr net.Addr, conn Connection) Packet {
 	slog.Debug("receive new packet,from:", "raddr", raddr.String(), "data", string(data))
+	logTraffic("in", conn.Network(), raddr, conn.LocalAddr(), data)
 	return Packet{
 		reader:     bufio.NewReader(bytes.NewReader(data)),
 		raddr:      raddr,

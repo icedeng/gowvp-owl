@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -55,6 +56,21 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	}
 
 	svr = sip.NewServer(&from)
+	sipTrafficLogger, err := sip.NewTrafficLogger(sip.TrafficLogConfig{
+		Enabled:      cfg.Sip.Log.Enabled,
+		Dir:          filepath.Join(cfg.ConfigDir, cfg.Sip.Log.Dir),
+		MaxAge:       cfg.Sip.Log.MaxAge.Duration(),
+		RotationTime: cfg.Sip.Log.RotationTime.Duration(),
+		RotationSize: cfg.Sip.Log.RotationSize * 1024 * 1024,
+	})
+	if err != nil {
+		slog.Error("init sip traffic logger failed", "err", err)
+	} else {
+		previous := sip.SetTrafficLogger(sipTrafficLogger)
+		if previous != nil {
+			_ = previous.Close()
+		}
+	}
 	svr.Register(api.handlerRegister)
 	msg := svr.Message(api.sipAccessControlMiddleware)
 	msg.Handle("Keepalive", api.sipMessageKeepalive)
@@ -127,7 +143,12 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 			break
 		}
 	}
-	return &c, c.Close
+	return &c, func() {
+		c.Close()
+		if previous := sip.SetTrafficLogger(nil); previous != nil {
+			_ = previous.Close()
+		}
+	}
 }
 
 // SetConfig 热更新 SIP 配置，用于配置变更时更新 from 地址而无需重启服务
@@ -381,6 +402,6 @@ func (s *Server) StopVoice(ctx context.Context, in *StopVoiceInput) error {
 }
 
 // QuerySnapshot 厂商实现抓图的少，sip 层已实现，先搁置
-func (s *Server) QuerySnapshot(deviceID, channelID string) error {
-	return s.gb.QuerySnapshot(deviceID, channelID)
+func (s *Server) QuerySnapshot(deviceID, targetID, coverKey string) error {
+	return s.gb.QuerySnapshot(deviceID, targetID, coverKey)
 }

@@ -87,6 +87,18 @@
   # 是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权
   RequireMessageAuth = false
 
+  [Sip.Log]
+    # 是否启用 SIP 报文日志落盘
+    Enabled = false
+    # SIP 日志目录
+    Dir = './logs/sip'
+    # SIP 日志保留时长
+    MaxAge = '72h0m0s'
+    # SIP 日志分割时间
+    RotationTime = '8h0m0s'
+    # SIP 日志分割大小(MB)
+    RotationSize = 50
+
 [Media]
   # 媒体服务器 IP
   IP = '127.0.0.1'
@@ -96,6 +108,8 @@
   Secret = 'jvRqCAzEg7AszBi4gm1cfhwXpmnVmJMG'
   # 媒体服务器类型 zlm/lalmax
   Type = 'zlm'
+  # GB28181 抓拍图片回传基础地址，优先于 WebHookIP
+  GBSnapshotBaseURL = ''
   # 用于流媒体 webhook 回调
   WebHookIP = '192.168.1.5'
   # 媒体服务器 RTP 端口范围

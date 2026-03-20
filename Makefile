@@ -237,6 +237,8 @@ release/push:
 
 # 不包含 ai 功能的融合镜像（本地导出 tar，支持 amd64/arm64）
 docker/build/zlm_tar/linux: build/clean build/linux docker/build/zlm_tar/amd64 docker/build/zlm_tar/arm64
+docker/build/zlm_tar/linux_amd64: build/clean build/linux docker/build/zlm_tar/amd64
+docker/build/zlm_tar/linux_arm64: build/clean build/linux docker/build/zlm_tar/arm64
 
 docker/build/zlm_tar/amd64:
 	@docker buildx build --platform linux/amd64 --output type=docker,dest=./build/gowvp-amd64.tar -t gowvp:amd64 -f Dockerfile_zlm .
