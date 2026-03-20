@@ -54,6 +54,7 @@ func DefaultConfig() Bootstrap {
 			TLSKey:             "",
 			StrictSourceCheck:  false,
 			RequireMessageAuth: false,
+			PTZWeakConfirm:     false,
 			Log: SIPLog{
 				Enabled:      false,
 				Dir:          "./logs/sip",

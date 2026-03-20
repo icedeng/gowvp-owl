@@ -709,6 +709,10 @@ definitions:
         description: SIP TCP/UDP 监听端口
         example: 5060
         type: integer
+      ptz_weak_confirm:
+        description: 是否启用 PTZ 弱确认模式
+        example: false
+        type: boolean
       require_message_auth:
         description: 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
         example: false
@@ -2831,6 +2835,629 @@ paths:
       summary: 添加检测区域
       tags:
       - Channel
+  /channels/gb28181/{device_id}/{channel_id}:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 通道更新参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/ipc.EditChannelInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ipc.Channel'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 修改通道
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/ai/disable:
+    post:
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerAIDisableOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 禁用 AI 检测
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/ai/enable:
+    post:
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerAIEnableOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 启用 AI 检测
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/history/control:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 历史控制参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.historyControlInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerMessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 控制历史会话
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/history/start:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 历史会话参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.historyControlInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerMessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 启动历史会话
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/history/stop:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 历史会话参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.historyControlInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerMessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 停止历史会话
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/play:
+    post:
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.playOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 开始播放
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/ptz:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: PTZ 控制参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.SwaggerPTZControlInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerMessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: PTZ 控制
+      tags:
+      - PTZ
+  /channels/gb28181/{device_id}/{channel_id}/ptz_probe:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: PTZ 探测参数
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/api.SwaggerPTZProbeInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerPTZProbeOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: PTZ 能力探测
+      tags:
+      - PTZ
+  /channels/gb28181/{device_id}/{channel_id}/record_mode:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 录像模式
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.setRecordModeInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerRecordModeOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 设置录像模式
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/records/query:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 录像目录查询参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.queryRecordsInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerRecordQueryOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 录像目录查询
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/snapshot:
+    get:
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      produces:
+      - image/jpeg
+      responses:
+        "200":
+          description: JPEG 图片
+          schema:
+            type: file
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      summary: 获取通道快照图片
+      tags:
+      - Channel
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 快照参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.refreshSnapshotInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerSnapshotLinkOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 刷新通道快照
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/upgrade:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 升级参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.upgradeDeviceInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerMessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 设备升级
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/voice/start:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 语音参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.voiceControlInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerMessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 启动语音会话
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/voice/stop:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 语音参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.voiceControlInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerMessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 停止语音会话
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/zones:
+    get:
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/ipc.Zone'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 获取检测区域
+      tags:
+      - Channel
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 区域参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/ipc.AddZoneInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerZonesResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 添加检测区域
+      tags:
+      - Channel
   /configs/info:
     get:
       produces:
@@ -2936,7 +3563,7 @@ paths:
   /devices/{id}:
     delete:
       parameters:
-      - description: 设备ID
+      - description: 设备内部ID或设备编号(device_id)
         in: path
         name: id
         required: true
@@ -2959,7 +3586,7 @@ paths:
       - Device
     get:
       parameters:
-      - description: 设备ID
+      - description: 设备内部ID或设备编号(device_id)
         in: path
         name: id
         required: true
@@ -2984,7 +3611,7 @@ paths:
       consumes:
       - application/json
       parameters:
-      - description: 设备ID
+      - description: 设备内部ID或设备编号(device_id)
         in: path
         name: id
         required: true
@@ -3014,7 +3641,7 @@ paths:
   /devices/{id}/catalog:
     post:
       parameters:
-      - description: 设备ID
+      - description: 设备内部ID或设备编号(device_id)
         in: path
         name: id
         required: true
@@ -3039,7 +3666,7 @@ paths:
     get:
       description: 只读查询已落库的 GB/T 28181-2022 附录 A.4 扩展对象快照，支持按 cmd_type 过滤
       parameters:
-      - description: 设备ID
+      - description: 设备内部ID或设备编号(device_id)
         in: path
         name: id
         required: true
@@ -3082,7 +3709,7 @@ paths:
         精确 PTZ 示例：`{ "action": "ptz_precise", "ptz_precise": { "pan": 10.5, "tilt": 5.2, "zoom": 2.0 }, "timeout": 5 }`
         成功响应示例：`{ "sn": 12, "device_id": "34020000002000000001", "target_id": "34020000001320000001", "result": "OK" }`
       parameters:
-      - description: 设备ID
+      - description: 设备内部ID或设备编号(device_id)
         in: path
         name: id
         required: true
@@ -3122,7 +3749,7 @@ paths:
         录像查询示例：`{ "action": "record_info", "target_id": "34020000001320000001", "start": 1710864000, "end": 1710950400, "timeout": 10 }`
         响应中 `xml` 为原始 XML，`data` 为解析后的主体数据，`appendix_a4` 为 2022 版附录 A.4 扩展对象。
       parameters:
-      - description: 设备ID
+      - description: 设备内部ID或设备编号(device_id)
         in: path
         name: id
         required: true
@@ -3158,7 +3785,7 @@ paths:
         调用前置条件：设备必须已注册。
         失败场景：1. 设备未注册；2. 设备离线；3. 超时未应答。
       parameters:
-      - description: 设备ID
+      - description: 设备内部ID或设备编号(device_id)
         in: path
         name: id
         required: true
@@ -3195,7 +3822,7 @@ paths:
         失败场景：1. 设备不存在；2. 设备下没有通道；3. 单个通道离线或协议不支持时会体现在对应 item.message 中。
         请求示例：`{ "action": "stop", "timeout": 5 }`
       parameters:
-      - description: 设备ID
+      - description: 设备内部ID或设备编号(device_id)
         in: path
         name: id
         required: true
@@ -3231,7 +3858,7 @@ paths:
         调用前置条件：设备在线，且协议/厂商实现支持订阅。
         失败场景：1. 设备离线；2. 订阅事件类型不支持；3. 设备未返回 200/OK。
       parameters:
-      - description: 设备ID
+      - description: 设备内部ID或设备编号(device_id)
         in: path
         name: id
         required: true
@@ -3261,7 +3888,7 @@ paths:
   /devices/{id}/time_sync:
     post:
       parameters:
-      - description: 设备ID
+      - description: 设备内部ID或设备编号(device_id)
         in: path
         name: id
         required: true

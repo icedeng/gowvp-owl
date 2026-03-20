@@ -234,7 +234,8 @@ func (g *GB28181API) DeviceControl(_ context.Context, in *DeviceControlInput) (*
 			Result:   result,
 		}, nil
 	case <-timer.C:
-		return nil, fmt.Errorf("wait device control response timeout")
+		// 统一返回更明确的中文错误，避免调用方误以为命令未发送。
+		return nil, fmt.Errorf("%s", ptzTimeoutErrorMessage)
 	}
 }
 

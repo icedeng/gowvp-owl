@@ -14,7 +14,10 @@ import (
 const (
 	ptzCmdTypeDeviceControl = "DeviceControl"
 	ptzResultOK             = "OK"
+	ptzResultWeakConfirmed  = "SENT_NO_RESPONSE"
 )
+
+const ptzTimeoutErrorMessage = "命令已发送，但设备未返回控制应答"
 
 type PTZAction string
 
@@ -162,7 +165,17 @@ func (g *GB28181API) PTZ(in *PTZInput) (*PTZOutput, error) {
 			Result:   result,
 		}, nil
 	case <-timer.C:
-		return nil, fmt.Errorf("wait device control response timeout")
+		if g.cfg != nil && g.cfg.PTZWeakConfirm {
+			// 弱确认模式：SIP MESSAGE 已经收到 200 OK，只是设备未回业务 Response。
+			// 对部分“执行命令但不回 DeviceControl 应答”的厂商设备，按已发送成功处理。
+			return &PTZOutput{
+				SN:       sn,
+				DeviceID: in.DeviceID,
+				Channel:  in.ChannelID,
+				Result:   ptzResultWeakConfirmed,
+			}, nil
+		}
+		return nil, fmt.Errorf("%s", ptzTimeoutErrorMessage)
 	}
 }
 

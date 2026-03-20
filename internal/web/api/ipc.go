@@ -135,6 +135,27 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/record_mode", web.WrapH(api.setRecordMode))
 	}
 	{
+		group := g.Group("/channels/gb28181/:device_id/:channel_id", handler...)
+		group.PUT("", web.WrapH(api.editChannelByGB))
+		group.POST("/play", web.WrapH(api.playByGB))
+		group.POST("/records/query", web.WrapH(api.queryRecordsByGB))
+		group.POST("/ptz", web.WrapH(api.ptzControlByGB))
+		group.POST("/ptz_probe", web.WrapH(api.ptzProbeByGB))
+		group.POST("/upgrade", web.WrapH(api.upgradeDeviceByGB))
+		group.POST("/history/start", web.WrapH(api.startHistoryByGB))
+		group.POST("/history/stop", web.WrapH(api.stopHistoryByGB))
+		group.POST("/history/control", web.WrapH(api.controlHistoryByGB))
+		group.POST("/voice/start", web.WrapH(api.startVoiceByGB))
+		group.POST("/voice/stop", web.WrapH(api.stopVoiceByGB))
+		group.POST("/snapshot", web.WrapH(api.refreshSnapshotByGB))
+		group.GET("/snapshot", api.getSnapshotByGB)
+		group.POST("/zones", web.WrapH(api.addZoneByGB))
+		group.GET("/zones", web.WrapH(api.getZonesByGB))
+		group.POST("/ai/enable", web.WrapH(api.enableAIByGB))
+		group.POST("/ai/disable", web.WrapH(api.disableAIByGB))
+		group.POST("/record_mode", web.WrapH(api.setRecordModeByGB))
+	}
+	{
 		group := g.Group("/devices", handler...)
 		group.POST("/:id/time_sync", web.WrapH(api.syncTime))  // 校时（GB28181）
 		group.POST("/:id/subscribe", web.WrapH(api.subscribe)) // 订阅（GB28181）
@@ -200,10 +221,283 @@ func (a IPCAPI) resolveChannelParamID(c *gin.Context) (string, error) {
 func channelSnapshotPath(c *gin.Context, channelID string) string {
 	deviceID := strings.TrimSpace(c.Param("device_id"))
 	gbChannelID := strings.TrimSpace(c.Param("channel_id"))
+	if strings.HasPrefix(c.FullPath(), "/channels/gb28181/") {
+		return fmt.Sprintf("/channels/gb28181/%s/%s/snapshot", deviceID, gbChannelID)
+	}
 	if deviceID != "" && gbChannelID != "" {
 		return fmt.Sprintf("/gb28181/devices/%s/channels/%s/snapshot", deviceID, gbChannelID)
 	}
 	return fmt.Sprintf("/channels/%s/snapshot", channelID)
+}
+
+// 下面这组 wrapper 仅用于 `/channels/gb28181/{device_id}/{channel_id}` 路由的独立文档，
+// 业务逻辑仍然复用原有 handler，避免 Swagger 将 `id` 与 `device_id/channel_id` 混在同一条接口说明里。
+
+// editChannelByGB godoc
+// @Summary 修改通道
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body ipc.EditChannelInput true "通道更新参数"
+// @Success 200 {object} ipc.Channel
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id} [put]
+func (a IPCAPI) editChannelByGB(c *gin.Context, in *ipc.EditChannelInput) (any, error) {
+	return a.editChannel(c, in)
+}
+
+// playByGB godoc
+// @Summary 开始播放
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Success 200 {object} playOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/play [post]
+func (a IPCAPI) playByGB(c *gin.Context, _ *struct{}) (*playOutput, error) { return a.play(c, nil) }
+
+// queryRecordsByGB godoc
+// @Summary 录像目录查询
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body queryRecordsInput true "录像目录查询参数"
+// @Success 200 {object} SwaggerRecordQueryOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/records/query [post]
+func (a IPCAPI) queryRecordsByGB(c *gin.Context, in *queryRecordsInput) (any, error) {
+	return a.queryRecords(c, in)
+}
+
+// ptzControlByGB godoc
+// @Summary PTZ 控制
+// @Tags PTZ
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body SwaggerPTZControlInput true "PTZ 控制参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/ptz [post]
+func (a IPCAPI) ptzControlByGB(c *gin.Context, in *ptzControlInput) (any, error) {
+	return a.ptzControl(c, in)
+}
+
+// ptzProbeByGB godoc
+// @Summary PTZ 能力探测
+// @Tags PTZ
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body SwaggerPTZProbeInput false "PTZ 探测参数"
+// @Success 200 {object} SwaggerPTZProbeOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/ptz_probe [post]
+func (a IPCAPI) ptzProbeByGB(c *gin.Context, in *ptzProbeInput) (any, error) {
+	return a.ptzProbe(c, in)
+}
+
+// upgradeDeviceByGB godoc
+// @Summary 设备升级
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body upgradeDeviceInput true "升级参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/upgrade [post]
+func (a IPCAPI) upgradeDeviceByGB(c *gin.Context, in *upgradeDeviceInput) (any, error) {
+	return a.upgradeDevice(c, in)
+}
+
+// startHistoryByGB godoc
+// @Summary 启动历史会话
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body historyControlInput true "历史会话参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/history/start [post]
+func (a IPCAPI) startHistoryByGB(c *gin.Context, in *historyControlInput) (any, error) {
+	return a.startHistory(c, in)
+}
+
+// stopHistoryByGB godoc
+// @Summary 停止历史会话
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body historyControlInput true "历史会话参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/history/stop [post]
+func (a IPCAPI) stopHistoryByGB(c *gin.Context, in *historyControlInput) (any, error) {
+	return a.stopHistory(c, in)
+}
+
+// controlHistoryByGB godoc
+// @Summary 控制历史会话
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body historyControlInput true "历史控制参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/history/control [post]
+func (a IPCAPI) controlHistoryByGB(c *gin.Context, in *historyControlInput) (any, error) {
+	return a.controlHistory(c, in)
+}
+
+// startVoiceByGB godoc
+// @Summary 启动语音会话
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body voiceControlInput true "语音参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/voice/start [post]
+func (a IPCAPI) startVoiceByGB(c *gin.Context, in *voiceControlInput) (any, error) {
+	return a.startVoice(c, in)
+}
+
+// stopVoiceByGB godoc
+// @Summary 停止语音会话
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body voiceControlInput true "语音参数"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/voice/stop [post]
+func (a IPCAPI) stopVoiceByGB(c *gin.Context, in *voiceControlInput) (any, error) {
+	return a.stopVoice(c, in)
+}
+
+// refreshSnapshotByGB godoc
+// @Summary 刷新通道快照
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body refreshSnapshotInput true "快照参数"
+// @Success 200 {object} SwaggerSnapshotLinkOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/snapshot [post]
+func (a IPCAPI) refreshSnapshotByGB(c *gin.Context, in *refreshSnapshotInput) (any, error) {
+	return a.refreshSnapshot(c, in)
+}
+
+// getSnapshotByGB godoc
+// @Summary 获取通道快照图片
+// @Tags Channel
+// @Produce jpeg
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Success 200 {file} file "JPEG 图片"
+// @Failure 404 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/snapshot [get]
+func (a IPCAPI) getSnapshotByGB(c *gin.Context) { a.getSnapshot(c) }
+
+// addZoneByGB godoc
+// @Summary 添加检测区域
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body ipc.AddZoneInput true "区域参数"
+// @Success 200 {object} SwaggerZonesResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/zones [post]
+func (a IPCAPI) addZoneByGB(c *gin.Context, in *ipc.AddZoneInput) (gin.H, error) {
+	return a.addZone(c, in)
+}
+
+// getZonesByGB godoc
+// @Summary 获取检测区域
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Success 200 {array} ipc.Zone
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/zones [get]
+func (a IPCAPI) getZonesByGB(c *gin.Context, _ *struct{}) (any, error) { return a.getZones(c, nil) }
+
+// enableAIByGB godoc
+// @Summary 启用 AI 检测
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Success 200 {object} SwaggerAIEnableOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/ai/enable [post]
+func (a IPCAPI) enableAIByGB(c *gin.Context, _ *struct{}) (gin.H, error) { return a.enableAI(c, nil) }
+
+// disableAIByGB godoc
+// @Summary 禁用 AI 检测
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Success 200 {object} SwaggerAIDisableOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/ai/disable [post]
+func (a IPCAPI) disableAIByGB(c *gin.Context, _ *struct{}) (gin.H, error) { return a.disableAI(c, nil) }
+
+// setRecordModeByGB godoc
+// @Summary 设置录像模式
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param body body setRecordModeInput true "录像模式"
+// @Success 200 {object} SwaggerRecordModeOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/record_mode [post]
+func (a IPCAPI) setRecordModeByGB(c *gin.Context, in *setRecordModeInput) (gin.H, error) {
+	return a.setRecordMode(c, in)
 }
 
 // gbSnapshotUpload godoc
@@ -274,7 +568,7 @@ func (a IPCAPI) findDevice(c *gin.Context, in *ipc.FindDeviceInput) (any, error)
 // @Tags Device
 // @Security BearerAuth
 // @Produce json
-// @Param id path string true "设备ID"
+// @Param id path string true "设备内部ID或设备编号(device_id)"
 // @Success 200 {object} ipc.Device
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id} [get]
@@ -297,7 +591,7 @@ func (a IPCAPI) getDevice(c *gin.Context, _ *struct{}) (any, error) {
 // @Security BearerAuth
 // @Accept json
 // @Produce json
-// @Param id path string true "设备ID"
+// @Param id path string true "设备内部ID或设备编号(device_id)"
 // @Param body body ipc.EditDeviceInput true "设备更新参数"
 // @Success 200 {object} ipc.Device
 // @Failure 400 {object} SwaggerErrorResponse
@@ -346,7 +640,7 @@ func (a IPCAPI) addDevice(c *gin.Context, in *ipc.AddDeviceInput) (any, error) {
 // @Tags Device
 // @Security BearerAuth
 // @Produce json
-// @Param id path string true "设备ID"
+// @Param id path string true "设备内部ID或设备编号(device_id)"
 // @Success 200 {object} ipc.Device
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id} [delete]
@@ -363,7 +657,7 @@ func (a IPCAPI) delDevice(c *gin.Context, _ *struct{}) (any, error) {
 // @Tags Device
 // @Security BearerAuth
 // @Produce json
-// @Param id path string true "设备ID"
+// @Param id path string true "设备内部ID或设备编号(device_id)"
 // @Success 200 {object} SwaggerMessageResponse
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id}/catalog [post]
@@ -1147,7 +1441,7 @@ func (a IPCAPI) stopVoice(c *gin.Context, in *voiceControlInput) (any, error) {
 // @Tags Device
 // @Security BearerAuth
 // @Produce json
-// @Param id path string true "设备ID"
+// @Param id path string true "设备内部ID或设备编号(device_id)"
 // @Success 200 {object} SwaggerMessageResponse
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id}/time_sync [post]
@@ -1173,7 +1467,7 @@ func (a IPCAPI) syncTime(c *gin.Context, _ *struct{}) (any, error) {
 // @Security BearerAuth
 // @Accept json
 // @Produce json
-// @Param id path string true "设备ID"
+// @Param id path string true "设备内部ID或设备编号(device_id)"
 // @Param body body subscribeInput true "订阅参数"
 // @Success 200 {object} SwaggerMessageResponse
 // @Failure 400 {object} SwaggerErrorResponse
@@ -1202,7 +1496,7 @@ func (a IPCAPI) subscribe(c *gin.Context, in *subscribeInput) (any, error) {
 // @Security BearerAuth
 // @Accept json
 // @Produce json
-// @Param id path string true "设备ID"
+// @Param id path string true "设备内部ID或设备编号(device_id)"
 // @Param body body optionsProbeInput true "探测参数"
 // @Success 200 {object} SwaggerMessageResponse
 // @Failure 400 {object} SwaggerErrorResponse
@@ -1234,7 +1528,7 @@ func (a IPCAPI) optionsProbe(c *gin.Context, in *optionsProbeInput) (any, error)
 // @Security BearerAuth
 // @Accept json
 // @Produce json
-// @Param id path string true "设备ID"
+// @Param id path string true "设备内部ID或设备编号(device_id)"
 // @Param body body SwaggerGBDeviceControlInput true "GB 控制参数"
 // @Success 200 {object} ipc.GBDeviceControlOutput
 // @Failure 400 {object} SwaggerErrorResponse
@@ -1277,7 +1571,7 @@ func (a IPCAPI) gbDeviceControl(c *gin.Context, in *gbDeviceControlInput) (any, 
 // @Security BearerAuth
 // @Accept json
 // @Produce json
-// @Param id path string true "设备ID"
+// @Param id path string true "设备内部ID或设备编号(device_id)"
 // @Param body body SwaggerGBDeviceQueryInput true "GB 查询参数"
 // @Success 200 {object} SwaggerGBDeviceQueryOutput
 // @Failure 400 {object} SwaggerErrorResponse
@@ -1327,7 +1621,7 @@ func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, erro
 // @Tags GB28181
 // @Security BearerAuth
 // @Produce json
-// @Param id path string true "设备ID"
+// @Param id path string true "设备内部ID或设备编号(device_id)"
 // @Param cmd_type query string false "命令类型过滤，支持逗号分隔"
 // @Param limit query int false "返回数量上限"
 // @Success 200 {object} SwaggerGBAppendixA4SnapshotOutput
@@ -1536,7 +1830,7 @@ func (a IPCAPI) probeChannelPTZ(ctx context.Context, channelID string, in *ptzPr
 // @Security BearerAuth
 // @Accept json
 // @Produce json
-// @Param id path string true "设备ID"
+// @Param id path string true "设备内部ID或设备编号(device_id)"
 // @Param body body SwaggerPTZProbeInput false "批量探测参数"
 // @Success 200 {object} SwaggerPTZBatchProbeOutput
 // @Failure 400 {object} SwaggerErrorResponse

@@ -95,6 +95,7 @@ type SIP struct {
 
 	StrictSourceCheck  bool `comment:"是否校验设备上报源IP与注册源IP一致" json:"strict_source_check"`
 	RequireMessageAuth bool `comment:"是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权" json:"require_message_auth"`
+	PTZWeakConfirm     bool `comment:"是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理" json:"ptz_weak_confirm"`
 	Log                SIPLog
 }
 

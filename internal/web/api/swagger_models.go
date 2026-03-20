@@ -76,6 +76,7 @@ type SwaggerSIPConfig struct {
 	TLSKey             string `json:"tls_key" example:"configs/certs/sip.key"`  // TLS 私钥路径
 	StrictSourceCheck  bool   `json:"strict_source_check" example:"true"`       // 是否严格校验源 IP
 	RequireMessageAuth bool   `json:"require_message_auth" example:"false"`     // 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
+	PTZWeakConfirm     bool   `json:"ptz_weak_confirm" example:"false"`         // 是否启用 PTZ 弱确认模式
 }
 
 // SwaggerLoginKeyOutput 是登录公钥响应。

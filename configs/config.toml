@@ -86,6 +86,8 @@
   StrictSourceCheck = false
   # 是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权
   RequireMessageAuth = false
+  # 是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理
+  PTZWeakConfirm = false
 
   [Sip.Log]
     # 是否启用 SIP 报文日志落盘
