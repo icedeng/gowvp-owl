@@ -48,6 +48,7 @@ type ServerHTTP struct {
 	Timeout   Duration    `comment:"请求超时时间"`                 // 请求超时时间
 	JwtSecret string      `comment:"jwt 秘钥，空串时，每次启动程序将随机赋值"` // JWT密钥
 	PProf     ServerPPROF // Pprof配置
+	AuthURL   string      `comment:"第三方认证服务地址，空串则不启用，post 请求返回 200 表示认证通过，填写本服务 /health 表示免鉴权但不安全!"`
 }
 
 // ServerPPROF 结构体，包含 Enabled 和 AccessIps 两个字段
@@ -83,6 +84,7 @@ type Log struct {
 }
 
 type SIP struct {
+	Host     string `comment:"对设备宣告的本机地址(可选), 为空时按连接来源自动探测, 探测不可达时回退到 Media.SDPIP" json:"host"`
 	Port     int    `comment:"服务监听的 tcp/udp 端口号" json:"port"`
 	ID       string `comment:"gb/t28181 20 位国标 ID" json:"id"`
 	Domain   string `comment:"域" json:"domain"`
@@ -97,6 +99,19 @@ type SIP struct {
 	RequireMessageAuth bool `comment:"是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权" json:"require_message_auth"`
 	PTZWeakConfirm     bool `comment:"是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理" json:"ptz_weak_confirm"`
 	Log                SIPLog
+}
+
+// GetDomain 返回 SIP 域。
+// 优先使用 uxl-v2 既有的显式 Domain 配置；为空时再按 GB/T28181 ID 前 10 位派生，
+// 用于兼容 main 中新增的域派生调用，同时不改变已有配置语义。
+func (s *SIP) GetDomain() string {
+	if s.Domain != "" {
+		return s.Domain
+	}
+	if len(s.ID) >= 10 {
+		return s.ID[:10]
+	}
+	return s.ID
 }
 
 type SIPLog struct {

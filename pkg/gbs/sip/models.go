@@ -71,7 +71,7 @@ func (str String) Equals(other any) bool {
 }
 
 // ContentTypeSDP SDP contenttype
-var ContentTypeSDP = ContentType("application/sdp")
+var ContentTypeSDP = ContentType("APPLICATION/SDP")
 
 // ContentTypeXML XML contenttype
 var ContentTypeXML = ContentType("Application/MANSCDP+xml")

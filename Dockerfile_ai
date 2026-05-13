@@ -1,9 +1,12 @@
 # ============================================
 # 阶段 1: 构建 Python 依赖
 # ============================================
-FROM debian:trixie-slim AS python-builder
+# ZLMediaKit 基于 Ubuntu 24.04 编译，内嵌 Python 3.12 解释器，
+# pip 包必须与 Python 3.12 ABI 一致，否则 C 扩展模块无法加载
+FROM ubuntu:24.04 AS python-builder
 
-RUN sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
+RUN sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g; s|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || \
+    sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g; s|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -30,7 +33,9 @@ RUN pip3 install --no-cache-dir --break-system-packages --target=/python-package
 # ============================================
 # 阶段 2: 最终运行镜像
 # ============================================
-FROM debian:trixie-slim
+# 与 ZLMediaKit 使用相同基础镜像，自带 Python 3.12，
+# 避免 libpython3.12 版本不匹配和额外复制
+FROM ubuntu:24.04
 
 ENV TZ=Asia/Shanghai
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -40,33 +45,20 @@ ENV PYTHONPATH=/opt/media/bin/analysis:/python-packages
 WORKDIR /opt/media/bin/
 
 # 配置 apt 源使用阿里云镜像加速
-RUN sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
-    sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g; \
-            s|http://security.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
+RUN sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g; s|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || \
+    sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g; s|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
 
 # 安装运行时依赖（极简版）
-# 注意：opencv-python-headless 不需要 libgl1，移除可节省 ~160MB
+# Ubuntu 24.04 已预装 libstdc++6, libgcc-s1, libssl3t64
+# python3: analysis 脚本需要解释器
+# libpython3.12: MediaServer 内嵌 Python 3.12 需要共享库（python3 包不含 .so）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     tzdata \
-    libstdc++6 \
-    libgcc-s1 \
-    libssl3 \
     python3 \
-    libglib2.0-0 \
-    wget \
+    libpython3.12 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
-
-# 从 Debian Bullseye 下载并安装 libssl1.1（ZLMediaKit 需要）
-RUN ARCH=$(dpkg --print-architecture) && \
-    wget -q http://mirrors.aliyun.com/debian/pool/main/o/openssl/libssl1.1_1.1.1w-0+deb11u1_${ARCH}.deb -O /tmp/libssl1.1.deb && \
-    dpkg -i /tmp/libssl1.1.deb || true && \
-    rm -f /tmp/libssl1.1.deb && \
-    # 移除 wget（不再需要）
-    apt-get purge -y wget && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
 
 # 从构建阶段复制 Python 包
 COPY --from=python-builder /python-packages /python-packages
@@ -78,9 +70,6 @@ COPY --from=mwader/static-ffmpeg:6.1 /ffprobe /usr/local/bin/ffprobe
 
 # 复制应用文件
 ARG TARGETARCH
-ADD ./build/linux_${TARGETARCH}/bin ./gowvp
-ADD ./www ./www
-ADD ./analysis ./analysis
 
 RUN mkdir -p configs && \
     ln -sf /usr/local/bin/ffmpeg /usr/bin/ffmpeg && \
@@ -91,6 +80,10 @@ LABEL Name=gowvp \
       Version=0.1.0 \
       Maintainer="xx@golang.space" \
       Description="gowvp & zlmediakit & ai (ONNX Runtime)"
+
+ADD ./build/linux_${TARGETARCH}/bin ./gowvp
+ADD ./www ./www
+ADD ./analysis ./analysis
 
 EXPOSE 15123 1935 8080 554 50051 20000-20100/udp 20000-20100
 

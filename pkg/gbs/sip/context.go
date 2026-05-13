@@ -104,8 +104,16 @@ func (c *Context) Next() {
 		if fn := c.handlers[c.index]; fn != nil {
 			fn(c)
 		}
+		if c.index >= abortIndex {
+			break
+		}
 		c.index++
 	}
+}
+
+// IsAborted 返回当前链路是否已被中止
+func (c *Context) IsAborted() bool {
+	return c.index >= abortIndex
 }
 
 func (c *Context) GetHeader(key string) string {

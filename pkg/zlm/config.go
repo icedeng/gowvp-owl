@@ -5,6 +5,7 @@ import "encoding/json"
 const (
 	getServerConfig = "/index/api/getServerConfig" // 获取配置
 	setServerConfig = "/index/api/setServerConfig" // 设置配置
+	restartServer   = "/index/api/restartServer"   // 重启 MediaServer 进程
 )
 
 type FixedHeader struct {
@@ -374,6 +375,19 @@ func (e *Engine) SetServerConfig(in *SetServerConfigRequest) (*SetServerConfigRe
 	}
 
 	return &resp, nil
+}
+
+// RestartServer 重启 ZLM MediaServer 进程。
+//
+// 为什么: rtc.port / rtc.tcpPort 等网络监听端口在 SetServerConfig 后仅更新内存配置, 不会重绑套接字,
+// 必须重启进程才能让新端口生效; 典型场景是 gowvp 启动时把 rtc.port 合并到 RTP 段首位与 ZLM 默认不一致。
+// ZLM 重启后会持久化的配置, 等价于启动期一次性生效, 运行期不应频繁调用。
+func (e *Engine) RestartServer() error {
+	var resp FixedHeader
+	if err := e.post(restartServer, nil, &resp); err != nil {
+		return err
+	}
+	return e.ErrHandle(resp.Code, resp.Msg)
 }
 
 func struct2map(in any) (map[string]any, error) {

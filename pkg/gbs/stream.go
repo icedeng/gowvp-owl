@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
@@ -57,25 +58,16 @@ type streamsList struct {
 	Response *sync.Map
 	// key=channelid value={Play}  当前设备直播信息，防止重复直播
 	Succ *sync.Map
-	ssrc int
+	ssrc uint32
 }
 
 var StreamList streamsList
 
 func (g *GB28181API) getSSRC(t int) string {
-	r := false
-	// for {
-	StreamList.ssrc++
-	// ssrc最大为四位数，超过时从1开始重新计算
-	if StreamList.ssrc > 9000 && !r {
-		StreamList.ssrc = 0
-		r = true
-	}
-	key := fmt.Sprintf("%d%s%04d", t, g.cfg.Domain[3:8], StreamList.ssrc)
-	// stream := Streams{StreamID: ssrc2stream(key), Stop: false}
-	// if err := db.Get(db.DBClient, &stream); db.RecordNotFound(err) || stream.CreatedAt == 0 {
+	v := atomic.AddUint32(&StreamList.ssrc, 1)
+	ssrc := v % 9000
+	key := fmt.Sprintf("%d%s%04d", t, g.cfg.GetDomain()[3:8], ssrc)
 	return key
-	// }
 }
 
 // 定时检查未关闭的流

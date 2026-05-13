@@ -19,6 +19,7 @@ import (
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	docs "github.com/gowvp/owl/docs"
+	"github.com/gowvp/owl/internal/core/metadata/metadataapi"
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/pkg/ota"
 	"github.com/gowvp/owl/plugin/stat"
@@ -106,8 +107,8 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 	docs.SwaggerInfo.Version = uc.Conf.BuildVersion
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	auth := web.AuthMiddleware(uc.Conf.Server.HTTP.JwtSecret)
-	r.GET("/health", web.WrapH(uc.getHealth))
+	auth := AuthMiddleware(uc.Conf.Server.HTTP.JwtSecret, uc.Conf.Server.HTTP.AuthURL)
+	r.Any("/health", web.WrapH(uc.getHealth))
 	r.GET("/app/metrics/api", web.WrapH(uc.getMetricsAPI))
 	r.GET("/app/version/check", web.WrapH(uc.checkVersion))
 	r.POST("/app/upgrade", auth, uc.upgradeApp)
@@ -128,10 +129,9 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 	registerAIWebhookAPI(r, uc.AIWebhookAPI)
 	// 启动 AI 任务同步协程，每 5 分钟检测一次数据库与内存状态差异
 	uc.AIWebhookAPI.StartAISyncLoop(context.Background(), uc.SMSAPI.smsCore)
-	// TODO: 待补充中间件
-	RegisterEvent(r, uc.EventAPI)
-	// TODO: 待补充中间件
-	RegisterRecording(r, uc.RecordingAPI)
+	RegisterEvent(r, uc.EventAPI, auth)
+	RegisterRecording(r, uc.RecordingAPI, auth)
+	metadataapi.RegisterMetadata(r, uc.MetadataAPI, auth)
 }
 
 type playOutput struct {

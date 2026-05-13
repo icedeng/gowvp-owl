@@ -41,16 +41,16 @@
 
 感谢 @panjjo 大佬的开源库 [panjjo/gosip](https://github.com/panjjo/gosip)，GoWVP 的 sip 信令基于此库，出于底层封装需要，并非直接依赖该项目，而是源代码放到了 pkg 包中。
 
-流媒体服务支持两种
+流媒体服务支持三种
 
 + @夏楚 [ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit)
+
++ lalmax 已支持 zlm 接口，[lalmax](https://github.com/q191201771/lalmax)
 
 + **lalmax-pro 有 golang 流媒体的需求请联系微信 [joezhang202512](https://github.com/joestarzxh)(备注留言gowvp)**
   - 对环境没有要求，不需要安装任何静态库，支持跨平台编译
   - 支持特色功能定制
   - 支持 G711(G711A/G711U) 转 AAC
-
-播放器使用@dexter [jessibuca](https://github.com/langhuihui/jessibuca/tree/v3)
 
 项目框架基于 @ixugo [goddd](https://github.com/ixugo/goddd)
 
@@ -175,6 +175,34 @@ ai 分析会拉取一道流，程序会以为有人观看
 2. 登录摄像机后台，检查 "server id" 是否与 「接入信息」页面的一致，不一致则修改为一致，重新注册即可
 
 
+## 第三方鉴权
+
+支持将鉴权请求转发到第三方服务，适用于已有统一认证体系的场景（如 SSO、OAuth2、企业内部账号系统等）。
+
+**时序图**
+
+![](./docs/auth.webp)
+
+**使用场景**
+
++ 已有统一登录系统，希望 owl 复用现有会话，无需再次登录
++ 企业内网环境，需要对接 LDAP、CAS、OAuth2 等认证源
++ API 网关层已做鉴权，希望将校验结果透传到 owl
+
+**配置方式**
+
+在 `configs/config.toml` 中设置 `AuthURL` 为你的第三方鉴权服务地址：
+
+```toml
+[Server.HTTP]
+  AuthURL = "https://your-auth-server.com/api/verify"
+```
+
+**工作原理**
+
+配置 `AuthURL` 后，所有请求将通过第三方鉴权服务验证权限。GoWVP 会以 POST 方式将原始请求的 Header 和 Body 透传到该地址，第三方服务返回 `200` 表示鉴权通过，其它状态码则鉴权失败，响应内容直接返回给客户端。
+
+> 注意：第三方鉴权服务需要在 10 秒内响应，否则视为超时失败。
 
 ## 文档
 
@@ -223,11 +251,9 @@ services:
       # zlm
       - 1935:1935 # rtmp
       - 554:554 # rtsp
-      - 8080:80 # http
-      - 8443:443 # https
-      - 10000:10000
-      - 8000:8000/udp # webrtc
-      - 9000:9000/udp
+      # - 8080:80 # http
+      # - 8443:443 # https
+      # - 10000:10000 # rtp 单端口收流
       - 20000-20100:20000-20100 # gb28181 收流端口
       - 20000-20100:20000-20100/udp # gb28181 收流端口udp
     volumes:
@@ -278,6 +304,7 @@ services:
   - [x] 设备注册，支持 7 种接入方式
   - [x] 支持 UDP 和 TCP 两种国标信令传输模式
   - [x] 设备校时
+  - [x] 支持 PTZ 云台控制
   - [x] 支持信息查询
     - [x] 设备目录查询
     - [x] 设备信息查询
@@ -289,12 +316,15 @@ services:
   - [x] 音频支持 g711a/g711u/aac
   - [x] 快照
   - [x] 支持跨域
-  - [x] 支持中文和 English
-  - [x] 支持 onvif
-  - [x] 支持 rtmp 推流
-  - [x] 支持 rtsp 拉流
-  - [x] 支持 ai 算法分析与告警
-  - [ ] 录像回放(开发中...)
+  - [ ] 卡存录像回放(由 摄像头 录制在SD卡，暂无开发计划)
+- [x] 支持 onvif 接入与播放
+- [x] 支持 rtmp 推流
+- [x] 支持 rtsp 拉流
+- [x] 支持 ai 算法分析与告警
+- [x] 云端录像回放(由 owl 录制)
+- [ ] 支持 ONVIF PTZ 云台控制
+- [x] 支持中文和 English
+- [x] SIP IP 限流，国外攻击特征系统防护，防止云服务被境外 sip 攻击
 
 
 ## 感谢

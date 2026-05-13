@@ -17,6 +17,5 @@ type SIPConfig struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	ID       string `json:"id"`
-	Domain   string `json:"domain"`
 	Password string `json:"password"`
 }

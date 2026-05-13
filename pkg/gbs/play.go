@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/sms"
@@ -101,7 +101,33 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	})
 	if err != nil {
 		log.Debug("1.1. 开启RTP服务器失败", "err", err)
-		return err
+		// 如果是因为流已存在，先关闭再重新打开
+		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "-300") {
+			log.Info("RTP服务器已存在，尝试关闭后重新打开", "stream_id", in.Channel.ID)
+			// 关闭旧的 RTP 服务器
+			_, closeErr := g.sms.CloseRTPServer(in.SMS, zlm.CloseRTPServerRequest{
+				StreamID: in.Channel.ID,
+			})
+			if closeErr != nil {
+				log.Warn("关闭旧的RTP服务器失败", "err", closeErr)
+			} else {
+				log.Info("已关闭旧的RTP服务器，等待清理")
+				// 等待一小段时间让 ZLM 清理资源
+				time.Sleep(500 * time.Millisecond)
+			}
+			// 重新打开 RTP 服务器
+			resp, err = g.sms.OpenRTPServer(in.SMS, zlm.OpenRTPServerRequest{
+				TCPMode:  in.StreamMode,
+				StreamID: in.Channel.ID,
+			})
+			if err != nil {
+				log.Debug("1.2. 重新开启RTP服务器失败", "err", err)
+				return err
+			}
+			log.Info("成功重新打开RTP服务器", "port", resp.Port)
+		} else {
+			return err
+		}
 	}
 
 	log.Debug("2. 发送SDP请求", "port", resp.Port)
@@ -163,29 +189,25 @@ func GetIP(input string) (string, error) {
 	return input, fmt.Errorf("域名没有解析到IP地址")
 }
 
-func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *Streams) error {
-	name := "Play"
-	protocal := "TCP/RTP/AVP"
-	if in.StreamMode == 0 {
-		protocal = "RTP/AVP"
+// buildPlaySDP 构造实时播放的 SDP 报文体。
+// streamMode: 0=UDP, 1=TCP被动, 2=TCP主动
+func buildPlaySDP(channelID, ip string, port int, streamMode int8, ssrc string) []byte {
+	protocol := "TCP/RTP/AVP"
+	if streamMode == 0 {
+		protocol = "RTP/AVP"
 	}
-
-	// if  {
-	// name = "Playback"
-	// protocal = "RTP/RTCP"
-	// }
 
 	video := sdp.Media{
 		Description: sdp.MediaDescription{
 			Type:     "video",
 			Port:     port,
 			Formats:  []string{"96", "97", "98"},
-			Protocol: protocal,
+			Protocol: protocol,
 		},
 	}
 	video.AddAttribute("recvonly")
 
-	switch in.StreamMode {
+	switch streamMode {
 	case 1:
 		video.AddAttribute("setup", "passive")
 		video.AddAttribute("connection", "new")
@@ -197,9 +219,43 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 	video.AddAttribute("rtpmap", "97", "MPEG4/90000")
 	video.AddAttribute("rtpmap", "98", "H264/90000")
 
-	// 获取配置值
+	msg := &sdp.Message{
+		Version: 0,
+		Origin: sdp.Origin{
+			Username:    channelID,
+			NetworkType: "IN",
+			AddressType: "IP4",
+			Address:     ip,
+		},
+		Name: "Play",
+		URI:  fmt.Sprintf("%s:0", channelID),
+		Connection: sdp.ConnectionData{
+			NetworkType: "IN",
+			AddressType: "IP4",
+			IP:          net.ParseIP(ip),
+		},
+		Timing: []sdp.Timing{{}},
+		Medias: []sdp.Media{video},
+		SSRC:   ssrc,
+	}
+
+	return msg.Append(nil).AppendTo(nil)
+}
+
+// sipPlayPush2 向摄像机发送 INVITE 请求拉取实时流。
+//
+// 为何不复用 wrapRequest 而独立构造：
+//   - INVITE 的 To/From/Contact/Subject/Via 组合有严格的 GB28181 约束，
+//     TP-Link 等厂商对报文字段校验苛刻，独立构造可精确控制每个头部，
+//     避免通用函数的默认值干扰设备解析。
+//
+// GB28181 关键约束：
+//  1. SDP `y=`（SSRC）必须与 SIP Subject 头中的发送方 SSRC 一致，
+//     否则设备无法将信令与 RTP 流绑定，导致不推流。
+//  2. SDP 须有 `v=0` 与 `u=` 字段，老设备会校验。
+//  3. Subject 格式：`<channel_id>:<sender_ssrc>,<sip_server_id>:0`。
+func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *Streams) error {
 	ipstr := in.SMS.GetSDPIP()
-	// 进行IP解析
 	ip4str, err := GetIP(ipstr)
 	if err != nil {
 		slog.Error("域名解析失败", "域名", ipstr, "错误", err)
@@ -207,54 +263,80 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 	}
 	slog.Info("域名解析成功", "原始域名", ipstr, "解析IP", ip4str)
 
-	// defining message
-	msg := &sdp.Message{
-		Origin: sdp.Origin{
-			Username:    ch.ChannelID, // 媒体服务器id
-			NetworkType: "IN",
-			AddressType: "IP4",
-			Address:     ip4str,
-		},
-		Name: name,
-		Connection: sdp.ConnectionData{
-			NetworkType: "IN",
-			AddressType: "IP4",
-			IP:          net.ParseIP(ip4str),
-		},
-		Timing: []sdp.Timing{
-			{
-				// 	Start: data.S,
-				// End:   data.E,
-			},
-		},
-		Medias: []sdp.Media{video},
-		SSRC:   g.getSSRC(0),
-		// URI:    fmt.Sprintf("%s:0", channel.ChannelID),
+	ssrc := g.getSSRC(0)
+	stream.ssrc = ssrc
+
+	body := buildPlaySDP(ch.ChannelID, ip4str, port, in.StreamMode, ssrc)
+	slog.Debug("INVITE SDP", "ssrc", ssrc, "channelID", ch.ChannelID, "body", string(body))
+
+	dev := ch.device
+	conn := dev.conn
+	source := dev.source
+
+	transport := "UDP"
+	if source != nil && source.Network() == "tcp" {
+		transport = "TCP"
 	}
 
-	// appending message to session
-	body := msg.Append(nil).AppendTo(nil)
+	// Via Host 优先级: 配置 sip.host → conn.LocalAddr → fromAddress LAN IP
+	viaHost := resolveHost(g.cfg.Host)
+	if viaHost == "" && conn != nil {
+		if host, _, err := net.SplitHostPort(conn.LocalAddr().String()); err == nil {
+			viaHost = host
+		}
+	}
+	if viaHost == "" {
+		viaHost = g.svr.fromAddress.URI.FHost
+	}
 
-	slog.Info(">>>", "body", string(body))
-	// appending session to byte buffer
-	// uri, _ := sip.ParseURI(channel.URIStr)
-	// channel.addr = &sip.Address{URI: uri}
-	// _serverDevices.addr.Params.Add("tag", sip.String{Str: sip.RandString(20)})
-	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
-		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: fmt.Sprintf("%s:%s,%s:%s", ch.ChannelID, in.Channel.ID, in.Channel.DeviceID, in.Channel.ID)})
+	// To: 使用服务端 SIP 域名（与参考代码和成功抓包一致）
+	toURI, _ := sip.ParseURI(fmt.Sprintf("sip:%s@%s", ch.ChannelID, g.cfg.GetDomain()))
+	toAddr := &sip.Address{URI: toURI, Params: sip.NewParams()}
+
+	// Contact: 纯地址不带 DisplayName，与参考代码一致
+	contact := &sip.Address{URI: g.svr.fromAddress.URI, Params: sip.NewParams()}
+
+	hb := sip.NewHeaderBuilder().
+		SetMethod(sip.MethodInvite).
+		SetTo(toAddr).
+		SetContact(contact).
+		AddVia(&sip.ViaHop{
+			ProtocolName:    "SIP",
+			ProtocolVersion: "2.0",
+			Transport:       transport,
+			Host:            viaHost,
+			Params:          sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
+		}).
+		SetFrom(&sip.Address{URI: g.svr.fromAddress.URI, Params: sip.NewParams().Add("tag", sip.String{Str: sip.RandString(5)})}).
+		SetContentType(&sip.ContentTypeSDP)
+
+	headers := hb.Build()
+	headers = append(headers, &sip.GenericHeader{
+		HeaderName: "Subject",
+		Contents:   fmt.Sprintf("%s:%s,%s:%s", ch.ChannelID, ssrc, g.cfg.ID, "0"),
 	})
+
+	req := sip.NewRequest("", sip.MethodInvite, toAddr.URI, sip.DefaultSipVersion, headers, body)
+	req.SetDestination(source)
+	req.SetConnection(conn)
+
+	slog.Debug("INVITE 完整报文", "request", req.String())
+
+	tx, err := g.svr.Request(req)
 	if err != nil {
+		slog.Error("INVITE 发送失败", "channelID", ch.ChannelID, "ssrc", ssrc, "err", err)
 		return err
 	}
 	resp, err := sipResponse(tx)
 	if err != nil {
+		slog.Error("INVITE 等待响应失败", "channelID", ch.ChannelID, "ssrc", ssrc, "err", err)
 		return err
 	}
 
 	if contact, _ := resp.Contact(); contact == nil {
 		resp.AppendHeader(&sip.ContactHeader{
 			DisplayName: g.svr.fromAddress.DisplayName,
-			Address:     &sip.URI{FUser: sip.String{Str: g.cfg.ID}, FHost: g.cfg.Domain},
+			Address:     &sip.URI{FUser: sip.String{Str: g.cfg.ID}, FHost: g.cfg.GetDomain()},
 			Params:      sip.NewParams(),
 		})
 	}
@@ -263,31 +345,6 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 
 	ackReq := sip.NewRequestFromResponse(sip.MethodACK, resp)
 	return tx.Request(ackReq)
-
-	// data.Resp = response
-	// // ACK
-	// tx.Request(sip.NewRequestFromResponse(sip.MethodACK, response))
-
-	// callid, _ := response.CallID()
-	// data.CallID = string(*callid)
-
-	// cseq, _ := response.CSeq()
-	// if cseq != nil {
-	// 	data.CseqNo = cseq.SeqNo
-	// }
-
-	// // from, _ := response.From()
-	// // to, _ := response.To()
-	// // for k, v := range to.Params.Items() {
-	// // 	data.Ttag[k] = v.String()
-	// // }
-	// // for k, v := range from.Params.Items() {
-	// // 	data.Ftag[k] = v.String()
-	// // }
-	// data.Status = 0
-
-	// return data, err
-	// return nil
 }
 
 // sip 请求播放
@@ -347,8 +404,6 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 // 	// db.Save(db.DBClient, data)
 // 	return data, nil
 // }
-
-var ssrcLock *sync.Mutex
 
 // func sipPlayPush(data *Streams, channel Channels, device Devices) (*Streams, error) {
 // 	var (

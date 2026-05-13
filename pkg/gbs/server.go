@@ -44,6 +44,23 @@ type Server struct {
 	memoryStorer MemoryStorer
 }
 
+// resolveHost 将配置的 Host 解析成可用于 SIP 头的地址。
+// 保留域名解析失败时的原始值，避免因 DNS 临时异常阻断 INVITE 构造。
+func resolveHost(host string) string {
+	if host == "" {
+		return ""
+	}
+	if net.ParseIP(host) != nil {
+		return host
+	}
+	addrs, err := net.LookupHost(host)
+	if err != nil || len(addrs) == 0 {
+		slog.Warn("resolveHost failed, fallback to raw host", "host", host, "err", err)
+		return host
+	}
+	return addrs[0]
+}
+
 func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, func()) {
 	api := NewGB28181API(cfg, store, sc.NodeManager)
 
@@ -262,7 +279,6 @@ func LoadSYSInfo() {
 	_activeDevices = ActiveDevices{sync.Map{}}
 
 	StreamList = streamsList{&sync.Map{}, &sync.Map{}, 0}
-	ssrcLock = &sync.Mutex{}
 	_recordList = &sync.Map{}
 	RecordList = apiRecordList{items: map[string]*apiRecordItem{}, l: sync.RWMutex{}}
 

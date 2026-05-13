@@ -22,6 +22,8 @@
     Timeout = '1m0s'
     # jwt 秘钥，空串时，每次启动程序将随机赋值
     JwtSecret = '6caOiETMs8SPWNHgEKA1Jhmn9wxpjAj9'
+    # 第三方认证服务地址
+    AuthURL = ""
 
     [Server.HTTP.PProf]
       # 是否启用 pprof, 建议设置为 true
@@ -42,7 +44,7 @@
     # 磁盘使用率阈值（百分比），超过则触发循环覆盖
     DiskUsageThreshold = 95.0
     # MP4 切片时长（秒）
-    SegmentSeconds = 300
+    SegmentSeconds = 10
 
 [Data]
   # 数据库支持 sqlite/postgres/mysql, 使用 sqlite 时 dsn 应当填写文件存储路径
@@ -66,13 +68,13 @@
   RotationSize = 50
 
 [Sip]
-  # 服务监听的 tcp/udp 端口号
+  # 对设备宣告的本机地址(可选), 为空时按连接来源自动探测, 探测不可达时回退到 Media.SDPIP
+  Host = '192.168.1.241'
+  # 服务监听的 TCP/UDP 端口号
   Port = 15060
-  # gb/t28181 20 位国标 ID
-  ID = '34030000002000000003'
-  # 域
-  Domain = '3403000000'
-  # 注册密码
+  # GB/T 28181 20 位国标 ID
+  ID = '34010000002000000001'
+  # 全局注册密码，每个设备可单独设置，空串则无限制接入
   Password = ''
   # 是否启用 SIP-TLS 监听
   EnableTLS = false
@@ -113,8 +115,8 @@
   # GB28181 抓拍图片回传基础地址，优先于 WebHookIP
   GBSnapshotBaseURL = ''
   # 用于流媒体 webhook 回调
-  WebHookIP = '192.168.1.5'
+  WebHookIP = '192.168.1.241'
   # 媒体服务器 RTP 端口范围
   RTPPortRange = '20000-20100'
   # 媒体服务器 SDP IP
-  SDPIP = '192.168.1.5'
+  SDPIP = '192.168.1.241'

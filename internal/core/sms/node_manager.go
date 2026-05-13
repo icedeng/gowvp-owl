@@ -271,6 +271,15 @@ func (n *NodeManager) CloseRTPServer(server *MediaServer, in zlm.CloseRTPServerR
 	return driver.CloseRTPServer(context.Background(), server, &in)
 }
 
+// CloseStreams 关闭指定流
+func (n *NodeManager) CloseStreams(server *MediaServer, in zlm.CloseStreamsRequest) (*zlm.CloseStreamsResponse, error) {
+	driver, err := n.getDriver(server.Type)
+	if err != nil {
+		return nil, err
+	}
+	return driver.CloseStreams(context.Background(), server, &in)
+}
+
 // AddStreamProxy 添加流代理
 func (n *NodeManager) AddStreamProxy(server *MediaServer, in AddStreamProxyRequest) (*zlm.AddStreamProxyResponse, error) {
 	driver, err := n.getDriver(server.Type)
