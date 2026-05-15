@@ -415,7 +415,7 @@ func encodePTZCommand(in *PTZInput) (string, error) {
 		return "", fmt.Errorf("unsupported ptz action: %s", action)
 	}
 
-	cmd[3] = ((zoomOut & 0x01) << 6) |
+	cmd[3] = ((zoomOut & 0x01) << 4) |
 		((zoomIn & 0x01) << 5) |
 		((down & 0x01) << 3) |
 		((up & 0x01) << 2) |
@@ -423,9 +423,20 @@ func encodePTZCommand(in *PTZInput) (string, error) {
 		(right & 0x01)
 	cmd[4] = speed
 	cmd[5] = speed
-	cmd[6] = speed << 4
+	// GB28181 PTZCmd 的变倍速度只占第 7 字节高 4 bit，避免普通速度值左移后溢出归零。
+	cmd[6] = normalizeZoomSpeed(speed) << 4
 
 	return finalizePTZCmd(cmd), nil
+}
+
+func normalizeZoomSpeed(speed uint8) uint8 {
+	if speed == 0 {
+		return 0
+	}
+	if speed > 0x0F {
+		return 0x0F
+	}
+	return speed
 }
 
 func finalizePTZCmd(cmd []byte) string {
