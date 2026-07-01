@@ -2,12 +2,17 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -1915,12 +1920,15 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 	if v := c.Request.Header.Get("X-Forwarded-Prefix"); v != "" {
 		prefix = v
 	}
+	snapshotLink := func() string {
+		return fmt.Sprintf("%s%s?token=%s&_t=%d", prefix, channelSnapshotPath(c, channelID), token, requestAt.UnixMilli())
+	}
 
 	// 获取文件的修改时间
 	fileInfo, err := os.Stat(path)
-	if err == nil {
+	if err == nil && in.WithinSeconds > 0 {
 		if fileInfo.ModTime().Unix() > time.Now().Unix()-in.WithinSeconds {
-			return gin.H{"link": fmt.Sprintf("%s%s?token=%s", prefix, channelSnapshotPath(c, channelID), token)}, nil
+			return gin.H{"link": snapshotLink()}, nil
 		}
 	}
 
@@ -1933,44 +1941,426 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 		if _, err = a.ipc.GetDevice(c.Request.Context(), ch.DID); err != nil {
 			return nil, err
 		}
+		needLiveSnapshotFallback := false
+		var gbSnapshotErr error
 		if err := a.uc.SipServer.QuerySnapshot(ch.DeviceID, ch.ChannelID, ch.ID); err != nil {
-			return nil, ErrDevice.SetMsg(err.Error())
-		}
-		if !waitForFreshCover(c.Request.Context(), path, requestAt, 10*time.Second) {
+			gbSnapshotErr = err
+			needLiveSnapshotFallback = true
+			slog.WarnContext(c.Request.Context(), "gb28181 device snapshot failed, fallback to live stream snapshot", "channel_id", channelID, "err", err)
+		} else if !waitForFreshCover(c.Request.Context(), path, requestAt, 10*time.Second) {
+			needLiveSnapshotFallback = true
 			slog.WarnContext(c.Request.Context(), "gb28181 snapshot not uploaded in time", "channel_id", channelID)
+		}
+		if needLiveSnapshotFallback && in.URL == "" {
+			if err := a.refreshGBSnapshotByLiveStream(c.Request.Context(), channelID, requestAt); err != nil {
+				if gbSnapshotErr != nil {
+					return nil, ErrDevice.SetMsg(fmt.Sprintf("%s; live stream snapshot fallback failed: %s", gbSnapshotErr.Error(), err.Error()))
+				}
+				return nil, ErrDevice.SetMsg(err.Error())
+			}
 		}
 	}
 
 	if in.URL != "" {
-		svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(c.Request.Context(), sms.DefaultMediaServerID)
-		if err != nil {
-			return nil, err
-		}
-
-		img, err := a.uc.SMSAPI.smsCore.GetSnapshot(svr, sms.GetSnapRequest{
-			GetSnapRequest: zlm.GetSnapRequest{
-				URL:        in.URL,
-				TimeoutSec: 10,
-				ExpireSec:  28800,
-			},
-			Stream: channelID,
-		})
-		if err != nil {
+		if err := a.refreshSnapshotFromURL(c.Request.Context(), channelID, in.URL, requestAt, 1, 0); err != nil {
 			slog.ErrorContext(c.Request.Context(), "get snapshot", "err", err)
 			// return nil, reason.ErrBadRequest.Msg(err.Error())
-		} else {
-			if hook.MD5FromBytes(img) != "" {
-				if err := writeCover(a.uc.Conf.ConfigDir, channelID, img); err != nil {
-					slog.ErrorContext(c.Request.Context(), "write cover", "err", err)
-				}
-			}
 		}
 		if !waitForFreshCover(c.Request.Context(), path, requestAt, 3*time.Second) {
 			slog.WarnContext(c.Request.Context(), "snapshot file not refreshed in time", "channel_id", channelID)
 		}
 	}
 
-	return gin.H{"link": fmt.Sprintf("%s%s?token=%s", prefix, channelSnapshotPath(c, channelID), token)}, nil
+	return gin.H{"link": snapshotLink()}, nil
+}
+
+func (a IPCAPI) refreshGBSnapshotByLiveStream(ctx context.Context, channelID string, requestAt time.Time) error {
+	ch, err := a.ipc.GetChannel(ctx, channelID)
+	if err != nil {
+		return err
+	}
+	dev, err := a.ipc.GetDevice(ctx, ch.DID)
+	if err != nil {
+		return err
+	}
+	protocol := a.ipc.GetProtocol(dev.GetType())
+	if protocol == nil {
+		return reason.ErrBadRequest.SetMsg("unsupported protocol")
+	}
+	playDev := gbSnapshotPlayDevice(dev)
+	temporaryPlay := !ch.IsPlaying
+	if temporaryPlay {
+		if _, err := protocol.StartPlay(ctx, playDev, ch); err != nil {
+			return err
+		}
+		defer func() {
+			if err := protocol.StopPlay(context.Background(), playDev, ch); err != nil {
+				slog.WarnContext(ctx, "stop gb28181 snapshot fallback stream failed", "channel_id", channelID, "err", err)
+			}
+		}()
+	}
+	rtspURL, err := a.buildRTSPURL(ctx, channelID)
+	if err != nil {
+		return err
+	}
+	if temporaryPlay {
+		if err := sleepWithContext(ctx, 3*time.Second); err != nil {
+			return err
+		}
+	}
+	a.requestGBIFrame(ctx, dev.ID, ch.ChannelID)
+	if err := sleepWithContext(ctx, 2*time.Second); err != nil {
+		return err
+	}
+	if err := a.refreshGBSnapshotByFFmpeg(ctx, channelID, rtspURL, requestAt, 5); err == nil {
+		return nil
+	} else {
+		slog.WarnContext(ctx, "gb28181 ffmpeg snapshot fallback failed, try zlm snapshot", "channel_id", channelID, "err", err)
+	}
+	if err := a.refreshSnapshotFromURL(ctx, channelID, rtspURL, requestAt, 6, 3*time.Second); err == nil {
+		return nil
+	} else if !ch.IsPlaying {
+		return err
+	} else {
+		slog.WarnContext(ctx, "gb28181 snapshot fallback stream has no fresh image, restart live stream", "channel_id", channelID, "err", err)
+		if _, startErr := protocol.StartPlay(ctx, playDev, ch); startErr != nil {
+			return fmt.Errorf("%s; restart live stream failed: %w", err.Error(), startErr)
+		}
+	}
+	if err := sleepWithContext(ctx, 3*time.Second); err != nil {
+		return err
+	}
+	a.requestGBIFrame(ctx, dev.ID, ch.ChannelID)
+	if err := sleepWithContext(ctx, 2*time.Second); err != nil {
+		return err
+	}
+	if err := a.refreshGBSnapshotByFFmpeg(ctx, channelID, rtspURL, requestAt, 5); err == nil {
+		return nil
+	} else {
+		slog.WarnContext(ctx, "gb28181 ffmpeg snapshot fallback after restart failed, try zlm snapshot", "channel_id", channelID, "err", err)
+	}
+	return a.refreshSnapshotFromURL(ctx, channelID, rtspURL, requestAt, 6, 3*time.Second)
+}
+
+func gbSnapshotPlayDevice(dev *ipc.Device) *ipc.Device {
+	playDev := *dev
+	if playDev.StreamMode == 0 {
+		playDev.StreamMode = 1
+	}
+	return &playDev
+}
+
+func (a IPCAPI) requestGBIFrame(ctx context.Context, deviceID, channelID string) {
+	if _, err := a.ipc.GBDeviceControl(ctx, deviceID, &ipc.GBDeviceControlInput{
+		TargetID: channelID,
+		Action:   "iframe_send",
+		Timeout:  3,
+	}); err != nil {
+		slog.WarnContext(ctx, "request gb28181 iframe failed", "device_id", deviceID, "channel_id", channelID, "err", err)
+	}
+}
+
+func (a IPCAPI) refreshSnapshotFromURL(ctx context.Context, channelID, snapshotURL string, requestAt time.Time, attempts int, delay time.Duration) error {
+	svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
+	if err != nil {
+		return err
+	}
+	if attempts <= 0 {
+		attempts = 1
+	}
+	var lastErr error
+	for i := range attempts {
+		if delay > 0 && i > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		img, err := a.uc.SMSAPI.smsCore.GetSnapshot(svr, sms.GetSnapRequest{
+			GetSnapRequest: zlm.GetSnapRequest{
+				URL:        snapshotURL,
+				TimeoutSec: 10,
+				ExpireSec:  0,
+			},
+			Stream: channelID,
+		})
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if hook.MD5FromBytes(img) == "" {
+			lastErr = fmt.Errorf("empty snapshot")
+			continue
+		}
+		if err := validateSnapshotImage(img); err != nil {
+			lastErr = err
+			slog.WarnContext(ctx, "discard invalid snapshot", "channel_id", channelID, "err", err)
+			continue
+		}
+		if err := writeCover(a.uc.Conf.ConfigDir, channelID, img); err != nil {
+			return err
+		}
+		if waitForFreshCover(ctx, readCoverPath(a.uc.Conf.ConfigDir, channelID), requestAt, time.Second) {
+			return nil
+		}
+		lastErr = fmt.Errorf("snapshot file not refreshed")
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("snapshot failed")
+}
+
+func (a IPCAPI) refreshGBSnapshotByFFmpeg(ctx context.Context, channelID, rtspURL string, requestAt time.Time, frameCount int) error {
+	if frameCount <= 0 {
+		frameCount = 1
+	}
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return fmt.Errorf("ffmpeg not found: %w", err)
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		return fmt.Errorf("ffprobe not found: %w", err)
+	}
+	if err := probeRTSPVideoStream(ctx, rtspURL); err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp("", "owl-gb-snapshot-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+
+	outputPattern := filepath.Join(dir, "frame-%03d.jpg")
+	ffmpegCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	defer cancel()
+	args := []string{
+		"-nostdin",
+		"-hide_banner",
+		"-loglevel", "warning",
+		"-rtsp_transport", "tcp",
+		"-timeout", "10000000",
+		"-fflags", "+genpts+discardcorrupt",
+		"-err_detect", "ignore_err",
+		"-skip_frame", "nokey",
+		"-i", rtspURL,
+		"-an",
+		"-frames:v", strconv.Itoa(frameCount),
+		"-q:v", "2",
+		outputPattern,
+	}
+	output, cmdErr := runCommandCombinedOutput(ffmpegCtx, "ffmpeg", args...)
+
+	files, err := filepath.Glob(filepath.Join(dir, "frame-*.jpg"))
+	if err != nil {
+		return err
+	}
+	sort.Strings(files)
+	var lastErr error
+	for _, file := range files {
+		img, err := os.ReadFile(file)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if err := validateSnapshotImage(img); err != nil {
+			lastErr = err
+			slog.WarnContext(ctx, "discard invalid ffmpeg snapshot", "channel_id", channelID, "file", filepath.Base(file), "err", err)
+			continue
+		}
+		if err := writeCover(a.uc.Conf.ConfigDir, channelID, img); err != nil {
+			return err
+		}
+		if waitForFreshCover(ctx, readCoverPath(a.uc.Conf.ConfigDir, channelID), requestAt, time.Second) {
+			return nil
+		}
+		lastErr = fmt.Errorf("snapshot file not refreshed")
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	if cmdErr != nil {
+		return fmt.Errorf("ffmpeg snapshot failed: %w, output: %s", cmdErr, trimCommandOutput(output))
+	}
+	if ffmpegCtx.Err() != nil {
+		return ffmpegCtx.Err()
+	}
+	return fmt.Errorf("ffmpeg snapshot produced no frames, output: %s", trimCommandOutput(output))
+}
+
+func probeRTSPVideoStream(ctx context.Context, rtspURL string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	args := []string{
+		"-v", "error",
+		"-rtsp_transport", "tcp",
+		"-timeout", "10000000",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=codec_name,width,height",
+		"-of", "csv=p=0",
+		rtspURL,
+	}
+	output, err := runCommandCombinedOutput(probeCtx, "ffprobe", args...)
+	if err != nil {
+		return fmt.Errorf("ffprobe video stream failed: %w, output: %s", err, trimCommandOutput(output))
+	}
+	if strings.TrimSpace(string(output)) == "" {
+		return fmt.Errorf("ffprobe video stream failed: no video stream")
+	}
+	return nil
+}
+
+func runCommandCombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	output, err := cmd.CombinedOutput()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		if cmd.ProcessState == nil {
+			_ = cmd.Wait()
+		}
+		return output, ctxErr
+	}
+	return output, err
+}
+
+func trimCommandOutput(output []byte) string {
+	output = bytes.TrimSpace(output)
+	if len(output) > 1200 {
+		output = output[:1200]
+	}
+	return string(output)
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func validateSnapshotImage(body []byte) error {
+	if len(body) < 4*1024 {
+		return fmt.Errorf("snapshot image too small")
+	}
+	img, _, err := image.Decode(bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("decode snapshot image: %w", err)
+	}
+	if isLikelyIncompleteBottom(img) {
+		return fmt.Errorf("snapshot image bottom area looks incomplete")
+	}
+	return nil
+}
+
+func isLikelyIncompleteBottom(img image.Image) bool {
+	bounds := img.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+	if width < 32 || height < 32 {
+		return false
+	}
+
+	bottom := sampleImageBand(img, bounds.Min.Y+height*70/100, bounds.Min.Y+height*95/100)
+	upper := sampleImageBand(img, bounds.Min.Y+height*40/100, bounds.Min.Y+height*56/100)
+	whiteBottom := bottom.count > 0 &&
+		bottom.nearWhiteRatio() > 0.55 &&
+		bottom.avgLuma() > 220 &&
+		(upper.nearWhiteRatio() < 0.75 || bottom.avgLuma()-upper.avgLuma() > 20)
+	flatDiscontinuousBottom := upper.edgeRatio() > 0.08 &&
+		bottom.edgeRatio() < 0.01 &&
+		bottom.avgLuma()-upper.avgLuma() > 25
+	return whiteBottom || flatDiscontinuousBottom
+}
+
+type imageBandStats struct {
+	count           int
+	nearWhite       int
+	lumaSum         int
+	edgeCount       int
+	edgeComparisons int
+}
+
+func (s imageBandStats) nearWhiteRatio() float64 {
+	if s.count == 0 {
+		return 0
+	}
+	return float64(s.nearWhite) / float64(s.count)
+}
+
+func (s imageBandStats) avgLuma() float64 {
+	if s.count == 0 {
+		return 0
+	}
+	return float64(s.lumaSum) / float64(s.count)
+}
+
+func (s imageBandStats) edgeRatio() float64 {
+	if s.edgeComparisons == 0 {
+		return 0
+	}
+	return float64(s.edgeCount) / float64(s.edgeComparisons)
+}
+
+func sampleImageBand(img image.Image, startY, endY int) imageBandStats {
+	bounds := img.Bounds()
+	if startY < bounds.Min.Y {
+		startY = bounds.Min.Y
+	}
+	if endY > bounds.Max.Y {
+		endY = bounds.Max.Y
+	}
+	if endY <= startY {
+		return imageBandStats{}
+	}
+	stepX := max(bounds.Dx()/120, 1)
+	stepY := max((endY-startY)/80, 1)
+	var stats imageBandStats
+	var prevRow []int
+	for y := startY; y < endY; y += stepY {
+		row := make([]int, 0, bounds.Dx()/stepX+1)
+		prevLuma := -1
+		for x := bounds.Min.X; x < bounds.Max.X; x += stepX {
+			r, g, b, _ := img.At(x, y).RGBA()
+			r8 := int(r >> 8)
+			g8 := int(g >> 8)
+			b8 := int(b >> 8)
+			luma := (77*r8 + 150*g8 + 29*b8) >> 8
+			if prevLuma >= 0 {
+				stats.edgeComparisons++
+				if absInt(luma-prevLuma) > 16 {
+					stats.edgeCount++
+				}
+			}
+			if len(prevRow) > len(row) {
+				stats.edgeComparisons++
+				if absInt(luma-prevRow[len(row)]) > 16 {
+					stats.edgeCount++
+				}
+			}
+			row = append(row, luma)
+			prevLuma = luma
+			stats.count++
+			stats.lumaSum += luma
+			if r8 > 245 && g8 > 245 && b8 > 245 {
+				stats.nearWhite++
+			}
+		}
+		prevRow = row
+	}
+	return stats
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // addZone godoc
