@@ -41,6 +41,7 @@ var ErrDevice = reason.NewError("ErrDevice", "设备错误")
 const (
 	coverDir                         = "cover"
 	defaultSnapshotFFmpegConcurrency = 2
+	snapshotTaskTimeout              = 60 * time.Second
 )
 
 // TODO: 快照不会删除，只会覆盖，设备删除时也不会删除快照，待实现
@@ -61,10 +62,6 @@ func writeCover(dataDir, channelID string, body []byte) error {
 		}
 	}()
 	if _, err := tmp.Write(body); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -2079,19 +2076,27 @@ type snapshotResult struct {
 }
 
 func (a IPCAPI) refreshGBSnapshotByLiveStreamSingleflight(ctx context.Context, channelID string, requestAt time.Time) (snapshotResult, error) {
-	v, err, shared := a.snapshotCoordinator().group.Do(channelID, func() (any, error) {
-		return a.refreshGBSnapshotByLiveStream(ctx, channelID, requestAt)
+	ch := a.snapshotCoordinator().group.DoChan(channelID, func() (any, error) {
+		taskCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotTaskTimeout)
+		defer cancel()
+		return a.refreshGBSnapshotByLiveStream(taskCtx, channelID, requestAt)
 	})
-	var result snapshotResult
-	if v != nil {
-		if r, ok := v.(snapshotResult); ok {
-			result = r
+
+	select {
+	case <-ctx.Done():
+		return snapshotResult{}, ctx.Err()
+	case out := <-ch:
+		var result snapshotResult
+		if out.Val != nil {
+			if r, ok := out.Val.(snapshotResult); ok {
+				result = r
+			}
 		}
+		if out.Shared {
+			result.Attempts = append([]string{"singleflight: shared"}, result.Attempts...)
+		}
+		return result, out.Err
 	}
-	if shared {
-		result.Attempts = append([]string{"singleflight: shared"}, result.Attempts...)
-	}
-	return result, err
 }
 
 func (a IPCAPI) refreshGBSnapshotByLiveStream(ctx context.Context, channelID string, requestAt time.Time) (snapshotResult, error) {
