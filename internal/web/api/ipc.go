@@ -2300,7 +2300,6 @@ func (a IPCAPI) refreshGBSnapshotByFFmpeg(ctx context.Context, channelID, rtspUR
 		"-loglevel", "warning",
 		"-rtsp_transport", "tcp",
 		"-timeout", "10000000",
-		"-rw_timeout", "10000000",
 		"-analyzeduration", "5000000",
 		"-probesize", "5000000",
 		"-fflags", "+genpts+discardcorrupt",
