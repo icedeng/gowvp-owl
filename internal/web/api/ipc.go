@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -32,12 +33,14 @@ import (
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/reason"
 	"github.com/ixugo/goddd/pkg/web"
+	"golang.org/x/sync/singleflight"
 )
 
 var ErrDevice = reason.NewError("ErrDevice", "设备错误")
 
 const (
-	coverDir = "cover"
+	coverDir                         = "cover"
+	defaultSnapshotFFmpegConcurrency = 2
 )
 
 // TODO: 快照不会删除，只会覆盖，设备删除时也不会删除快照，待实现
@@ -46,7 +49,36 @@ func writeCover(dataDir, channelID string, body []byte) error {
 	if err := os.MkdirAll(coverPath, 0o777); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(coverPath, channelID+".jpg"), body, 0o644)
+	tmp, err := os.CreateTemp(coverPath, channelID+"-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(body); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, filepath.Join(coverPath, channelID+".jpg")); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
 
 func readCoverPath(dataDir, channelID string) string {
@@ -62,10 +94,63 @@ type IPCAPI struct {
 	ipc           ipc.Core
 	uc            *Usecase
 	recordingCore recording.Core
+	snapshot      *snapshotCoordinator
 }
 
 func NewIPCAPI(bundle IPCBundle, recordingCore recording.Core) IPCAPI {
-	return IPCAPI{ipc: bundle.Core, recordingCore: recordingCore}
+	return IPCAPI{ipc: bundle.Core, recordingCore: recordingCore, snapshot: newSnapshotCoordinator(defaultSnapshotFFmpegConcurrency)}
+}
+
+type snapshotCoordinator struct {
+	mu    sync.Mutex
+	limit int
+	sem   chan struct{}
+	group singleflight.Group
+}
+
+func newSnapshotCoordinator(limit int) *snapshotCoordinator {
+	if limit <= 0 {
+		limit = defaultSnapshotFFmpegConcurrency
+	}
+	return &snapshotCoordinator{
+		limit: limit,
+		sem:   make(chan struct{}, limit),
+	}
+}
+
+func (c *snapshotCoordinator) acquire(ctx context.Context, limit int) (func(), int, error) {
+	if limit <= 0 {
+		limit = defaultSnapshotFFmpegConcurrency
+	}
+	c.mu.Lock()
+	if c.sem == nil || c.limit != limit {
+		c.limit = limit
+		c.sem = make(chan struct{}, limit)
+	}
+	sem := c.sem
+	activeLimit := c.limit
+	c.mu.Unlock()
+
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, activeLimit, nil
+	case <-ctx.Done():
+		return nil, activeLimit, ctx.Err()
+	}
+}
+
+func (a IPCAPI) snapshotCoordinator() *snapshotCoordinator {
+	if a.snapshot != nil {
+		return a.snapshot
+	}
+	return newSnapshotCoordinator(defaultSnapshotFFmpegConcurrency)
+}
+
+func (a IPCAPI) snapshotFFmpegConcurrency() int {
+	if a.uc == nil || a.uc.Conf == nil || a.uc.Conf.Media.GBSnapshotFFmpegConcurrency <= 0 {
+		return defaultSnapshotFFmpegConcurrency
+	}
+	return a.uc.Conf.Media.GBSnapshotFFmpegConcurrency
 }
 
 func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
@@ -540,6 +625,11 @@ func (a IPCAPI) gbSnapshotUpload(c *gin.Context) {
 	}
 	if len(payload) > 0 {
 		detectedContentType := http.DetectContentType(payload)
+		if err := validateSnapshotImage(payload); err != nil {
+			slog.WarnContext(c.Request.Context(), "discard invalid gb snapshot upload", "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID, "size", len(payload), "payload_type", payloadType, "content_type", detectedContentType, "err", err)
+			c.JSON(400, gin.H{"msg": "invalid snapshot image"})
+			return
+		}
 		if err := writeCover(a.uc.Conf.ConfigDir, coverKey, payload); err != nil {
 			slog.ErrorContext(c.Request.Context(), "write cover", "err", err, "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID)
 		} else {
@@ -1923,12 +2013,14 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 	snapshotLink := func() string {
 		return fmt.Sprintf("%s%s?token=%s&_t=%d", prefix, channelSnapshotPath(c, channelID), token, requestAt.UnixMilli())
 	}
+	snapshotMethod := "none"
+	snapshotAttempts := make([]string, 0, 4)
 
 	// 获取文件的修改时间
 	fileInfo, err := os.Stat(path)
 	if err == nil && in.WithinSeconds > 0 {
 		if fileInfo.ModTime().Unix() > time.Now().Unix()-in.WithinSeconds {
-			return gin.H{"link": snapshotLink()}, nil
+			return gin.H{"link": snapshotLink(), "method": "cache"}, nil
 		}
 	}
 
@@ -1950,14 +2042,19 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 		} else if !waitForFreshCover(c.Request.Context(), path, requestAt, 10*time.Second) {
 			needLiveSnapshotFallback = true
 			slog.WarnContext(c.Request.Context(), "gb28181 snapshot not uploaded in time", "channel_id", channelID)
+		} else {
+			snapshotMethod = "gb28181_device_upload"
 		}
 		if needLiveSnapshotFallback && in.URL == "" {
-			if err := a.refreshGBSnapshotByLiveStream(c.Request.Context(), channelID, requestAt); err != nil {
+			result, err := a.refreshGBSnapshotByLiveStreamSingleflight(c.Request.Context(), channelID, requestAt)
+			if err != nil {
 				if gbSnapshotErr != nil {
 					return nil, ErrDevice.SetMsg(fmt.Sprintf("%s; live stream snapshot fallback failed: %s", gbSnapshotErr.Error(), err.Error()))
 				}
 				return nil, ErrDevice.SetMsg(err.Error())
 			}
+			snapshotMethod = result.Method
+			snapshotAttempts = append(snapshotAttempts, result.Attempts...)
 		}
 	}
 
@@ -1965,33 +2062,56 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 		if err := a.refreshSnapshotFromURL(c.Request.Context(), channelID, in.URL, requestAt, 1, 0); err != nil {
 			slog.ErrorContext(c.Request.Context(), "get snapshot", "err", err)
 			// return nil, reason.ErrBadRequest.Msg(err.Error())
+		} else {
+			snapshotMethod = "url"
 		}
 		if !waitForFreshCover(c.Request.Context(), path, requestAt, 3*time.Second) {
 			slog.WarnContext(c.Request.Context(), "snapshot file not refreshed in time", "channel_id", channelID)
 		}
 	}
 
-	return gin.H{"link": snapshotLink()}, nil
+	return gin.H{"link": snapshotLink(), "method": snapshotMethod, "attempts": snapshotAttempts}, nil
 }
 
-func (a IPCAPI) refreshGBSnapshotByLiveStream(ctx context.Context, channelID string, requestAt time.Time) error {
+type snapshotResult struct {
+	Method   string
+	Attempts []string
+}
+
+func (a IPCAPI) refreshGBSnapshotByLiveStreamSingleflight(ctx context.Context, channelID string, requestAt time.Time) (snapshotResult, error) {
+	v, err, shared := a.snapshotCoordinator().group.Do(channelID, func() (any, error) {
+		return a.refreshGBSnapshotByLiveStream(ctx, channelID, requestAt)
+	})
+	var result snapshotResult
+	if v != nil {
+		if r, ok := v.(snapshotResult); ok {
+			result = r
+		}
+	}
+	if shared {
+		result.Attempts = append([]string{"singleflight: shared"}, result.Attempts...)
+	}
+	return result, err
+}
+
+func (a IPCAPI) refreshGBSnapshotByLiveStream(ctx context.Context, channelID string, requestAt time.Time) (snapshotResult, error) {
 	ch, err := a.ipc.GetChannel(ctx, channelID)
 	if err != nil {
-		return err
+		return snapshotResult{}, err
 	}
 	dev, err := a.ipc.GetDevice(ctx, ch.DID)
 	if err != nil {
-		return err
+		return snapshotResult{}, err
 	}
 	protocol := a.ipc.GetProtocol(dev.GetType())
 	if protocol == nil {
-		return reason.ErrBadRequest.SetMsg("unsupported protocol")
+		return snapshotResult{}, reason.ErrBadRequest.SetMsg("unsupported protocol")
 	}
 	playDev := gbSnapshotPlayDevice(dev)
 	temporaryPlay := !ch.IsPlaying
 	if temporaryPlay {
 		if _, err := protocol.StartPlay(ctx, playDev, ch); err != nil {
-			return err
+			return snapshotResult{}, err
 		}
 		defer func() {
 			if err := protocol.StopPlay(context.Background(), playDev, ch); err != nil {
@@ -2001,45 +2121,65 @@ func (a IPCAPI) refreshGBSnapshotByLiveStream(ctx context.Context, channelID str
 	}
 	rtspURL, err := a.buildRTSPURL(ctx, channelID)
 	if err != nil {
-		return err
+		return snapshotResult{}, err
 	}
 	if temporaryPlay {
 		if err := sleepWithContext(ctx, 3*time.Second); err != nil {
-			return err
+			return snapshotResult{}, err
 		}
 	}
 	a.requestGBIFrame(ctx, dev.ID, ch.ChannelID)
 	if err := sleepWithContext(ctx, 2*time.Second); err != nil {
-		return err
+		return snapshotResult{}, err
 	}
-	if err := a.refreshGBSnapshotByFFmpeg(ctx, channelID, rtspURL, requestAt, 5); err == nil {
-		return nil
+	if result, err := a.refreshGBSnapshotFromCurrentStream(ctx, channelID, rtspURL, requestAt, ""); err == nil {
+		return result, nil
 	} else {
-		slog.WarnContext(ctx, "gb28181 ffmpeg snapshot fallback failed, try zlm snapshot", "channel_id", channelID, "err", err)
-	}
-	if err := a.refreshSnapshotFromURL(ctx, channelID, rtspURL, requestAt, 6, 3*time.Second); err == nil {
-		return nil
-	} else if !ch.IsPlaying {
-		return err
-	} else {
+		firstErr := err
+		if temporaryPlay {
+			slog.WarnContext(ctx, "gb28181 temporary snapshot fallback failed, wait and retry", "channel_id", channelID, "err", err)
+			if err := sleepWithContext(ctx, 5*time.Second); err != nil {
+				return snapshotResult{}, err
+			}
+			a.requestGBIFrame(ctx, dev.ID, ch.ChannelID)
+			if err := sleepWithContext(ctx, 2*time.Second); err != nil {
+				return snapshotResult{}, err
+			}
+			result, err := a.refreshGBSnapshotFromCurrentStream(ctx, channelID, rtspURL, requestAt, " after wait")
+			if err != nil {
+				return snapshotResult{}, fmt.Errorf("%s; retry failed: %w", firstErr.Error(), err)
+			}
+			result.Attempts = append([]string{fmt.Sprintf("first_round_failed: %s", firstErr.Error())}, result.Attempts...)
+			return result, nil
+		}
 		slog.WarnContext(ctx, "gb28181 snapshot fallback stream has no fresh image, restart live stream", "channel_id", channelID, "err", err)
 		if _, startErr := protocol.StartPlay(ctx, playDev, ch); startErr != nil {
-			return fmt.Errorf("%s; restart live stream failed: %w", err.Error(), startErr)
+			return snapshotResult{}, fmt.Errorf("%s; restart live stream failed: %w", err.Error(), startErr)
 		}
 	}
 	if err := sleepWithContext(ctx, 3*time.Second); err != nil {
-		return err
+		return snapshotResult{}, err
 	}
 	a.requestGBIFrame(ctx, dev.ID, ch.ChannelID)
 	if err := sleepWithContext(ctx, 2*time.Second); err != nil {
-		return err
+		return snapshotResult{}, err
 	}
-	if err := a.refreshGBSnapshotByFFmpeg(ctx, channelID, rtspURL, requestAt, 5); err == nil {
-		return nil
+	return a.refreshGBSnapshotFromCurrentStream(ctx, channelID, rtspURL, requestAt, " after restart")
+}
+
+func (a IPCAPI) refreshGBSnapshotFromCurrentStream(ctx context.Context, channelID, rtspURL string, requestAt time.Time, logSuffix string) (snapshotResult, error) {
+	if result, err := a.refreshGBSnapshotByFFmpeg(ctx, channelID, rtspURL, requestAt, 5); err == nil {
+		return result, nil
 	} else {
-		slog.WarnContext(ctx, "gb28181 ffmpeg snapshot fallback after restart failed, try zlm snapshot", "channel_id", channelID, "err", err)
+		slog.WarnContext(ctx, "gb28181 ffmpeg snapshot fallback failed, try zlm snapshot"+logSuffix, "channel_id", channelID, "err", err)
+		attempts := append([]string{}, result.Attempts...)
+		attempts = append(attempts, fmt.Sprintf("ffmpeg: %s", err.Error()))
+		if zlmErr := a.refreshSnapshotFromURL(ctx, channelID, rtspURL, requestAt, 6, 3*time.Second); zlmErr != nil {
+			return snapshotResult{}, fmt.Errorf("ffmpeg failed: %s; zlm_get_snap failed: %w", err.Error(), zlmErr)
+		}
+		attempts = append(attempts, "zlm_get_snap: ok")
+		return snapshotResult{Method: "zlm_get_snap", Attempts: attempts}, nil
 	}
-	return a.refreshSnapshotFromURL(ctx, channelID, rtspURL, requestAt, 6, 3*time.Second)
 }
 
 func gbSnapshotPlayDevice(dev *ipc.Device) *ipc.Device {
@@ -2112,22 +2252,37 @@ func (a IPCAPI) refreshSnapshotFromURL(ctx context.Context, channelID, snapshotU
 	return fmt.Errorf("snapshot failed")
 }
 
-func (a IPCAPI) refreshGBSnapshotByFFmpeg(ctx context.Context, channelID, rtspURL string, requestAt time.Time, frameCount int) error {
+func (a IPCAPI) refreshGBSnapshotByFFmpeg(ctx context.Context, channelID, rtspURL string, requestAt time.Time, frameCount int) (snapshotResult, error) {
+	startedAt := time.Now()
+	result := snapshotResult{Method: "ffmpeg", Attempts: make([]string, 0, 8)}
 	if frameCount <= 0 {
 		frameCount = 1
 	}
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return fmt.Errorf("ffmpeg not found: %w", err)
+		return result, fmt.Errorf("ffmpeg not found: %w", err)
 	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		return fmt.Errorf("ffprobe not found: %w", err)
+	waitStartedAt := time.Now()
+	release, limit, err := a.snapshotCoordinator().acquire(ctx, a.snapshotFFmpegConcurrency())
+	if err != nil {
+		result.Attempts = append(result.Attempts, fmt.Sprintf("ffmpeg_wait: concurrency_limit=%d,wait_ms=%d", limit, time.Since(waitStartedAt).Milliseconds()))
+		return result, err
 	}
-	if err := probeRTSPVideoStream(ctx, rtspURL); err != nil {
-		return err
+	defer release()
+	result.Attempts = append(result.Attempts, fmt.Sprintf("ffmpeg_wait: concurrency_limit=%d,wait_ms=%d", limit, time.Since(waitStartedAt).Milliseconds()))
+
+	if _, err := exec.LookPath("ffprobe"); err == nil {
+		probeInfo, err := probeRTSPVideoStream(ctx, rtspURL)
+		if err != nil {
+			return result, err
+		}
+		result.Attempts = append(result.Attempts, "ffprobe: "+probeInfo)
+	} else {
+		slog.WarnContext(ctx, "ffprobe not found, skip video stream probe", "channel_id", channelID, "err", err)
+		result.Attempts = append(result.Attempts, fmt.Sprintf("ffprobe: skipped err=%s", err.Error()))
 	}
 	dir, err := os.MkdirTemp("", "owl-gb-snapshot-*")
 	if err != nil {
-		return err
+		return result, err
 	}
 	defer os.RemoveAll(dir)
 
@@ -2140,11 +2295,14 @@ func (a IPCAPI) refreshGBSnapshotByFFmpeg(ctx context.Context, channelID, rtspUR
 		"-loglevel", "warning",
 		"-rtsp_transport", "tcp",
 		"-timeout", "10000000",
+		"-rw_timeout", "10000000",
+		"-analyzeduration", "5000000",
+		"-probesize", "5000000",
 		"-fflags", "+genpts+discardcorrupt",
 		"-err_detect", "ignore_err",
-		"-skip_frame", "nokey",
 		"-i", rtspURL,
 		"-an",
+		"-vf", "select=gte(n\\,75),fps=1",
 		"-frames:v", strconv.Itoa(frameCount),
 		"-q:v", "2",
 		outputPattern,
@@ -2153,11 +2311,12 @@ func (a IPCAPI) refreshGBSnapshotByFFmpeg(ctx context.Context, channelID, rtspUR
 
 	files, err := filepath.Glob(filepath.Join(dir, "frame-*.jpg"))
 	if err != nil {
-		return err
+		return result, err
 	}
 	sort.Strings(files)
+	result.Attempts = append(result.Attempts, fmt.Sprintf("ffmpeg_run: duration_ms=%d,generated_frames=%d,requested_frames=%d", time.Since(startedAt).Milliseconds(), len(files), frameCount))
 	var lastErr error
-	for _, file := range files {
+	for i, file := range files {
 		img, err := os.ReadFile(file)
 		if err != nil {
 			lastErr = err
@@ -2166,29 +2325,31 @@ func (a IPCAPI) refreshGBSnapshotByFFmpeg(ctx context.Context, channelID, rtspUR
 		if err := validateSnapshotImage(img); err != nil {
 			lastErr = err
 			slog.WarnContext(ctx, "discard invalid ffmpeg snapshot", "channel_id", channelID, "file", filepath.Base(file), "err", err)
+			result.Attempts = append(result.Attempts, fmt.Sprintf("ffmpeg_frame_%d: invalid err=%s,size=%d", i+1, err.Error(), len(img)))
 			continue
 		}
 		if err := writeCover(a.uc.Conf.ConfigDir, channelID, img); err != nil {
-			return err
+			return result, err
 		}
 		if waitForFreshCover(ctx, readCoverPath(a.uc.Conf.ConfigDir, channelID), requestAt, time.Second) {
-			return nil
+			result.Attempts = append(result.Attempts, fmt.Sprintf("ffmpeg: ok valid_frame=%d,size=%d,total_ms=%d", i+1, len(img), time.Since(startedAt).Milliseconds()))
+			return result, nil
 		}
 		lastErr = fmt.Errorf("snapshot file not refreshed")
 	}
 	if lastErr != nil {
-		return lastErr
+		return result, lastErr
 	}
 	if cmdErr != nil {
-		return fmt.Errorf("ffmpeg snapshot failed: %w, output: %s", cmdErr, trimCommandOutput(output))
+		return result, fmt.Errorf("ffmpeg snapshot failed: %w, output: %s", cmdErr, trimCommandOutput(output))
 	}
 	if ffmpegCtx.Err() != nil {
-		return ffmpegCtx.Err()
+		return result, ffmpegCtx.Err()
 	}
-	return fmt.Errorf("ffmpeg snapshot produced no frames, output: %s", trimCommandOutput(output))
+	return result, fmt.Errorf("ffmpeg snapshot produced no frames, output: %s", trimCommandOutput(output))
 }
 
-func probeRTSPVideoStream(ctx context.Context, rtspURL string) error {
+func probeRTSPVideoStream(ctx context.Context, rtspURL string) (string, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	args := []string{
@@ -2202,12 +2363,17 @@ func probeRTSPVideoStream(ctx context.Context, rtspURL string) error {
 	}
 	output, err := runCommandCombinedOutput(probeCtx, "ffprobe", args...)
 	if err != nil {
-		return fmt.Errorf("ffprobe video stream failed: %w, output: %s", err, trimCommandOutput(output))
+		return "", fmt.Errorf("ffprobe video stream failed: %w, output: %s", err, trimCommandOutput(output))
 	}
-	if strings.TrimSpace(string(output)) == "" {
-		return fmt.Errorf("ffprobe video stream failed: no video stream")
+	line := strings.TrimSpace(string(output))
+	if line == "" {
+		return "", fmt.Errorf("ffprobe video stream failed: no video stream")
 	}
-	return nil
+	fields := strings.Split(strings.Split(line, "\n")[0], ",")
+	if len(fields) >= 3 {
+		return fmt.Sprintf("codec=%s,width=%s,height=%s", strings.TrimSpace(fields[0]), strings.TrimSpace(fields[1]), strings.TrimSpace(fields[2])), nil
+	}
+	return "stream=" + strings.ReplaceAll(line, "\n", " "), nil
 }
 
 func runCommandCombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -2275,15 +2441,25 @@ func isLikelyIncompleteBottom(img image.Image) bool {
 	flatDiscontinuousBottom := upper.edgeRatio() > 0.08 &&
 		bottom.edgeRatio() < 0.01 &&
 		bottom.avgLuma()-upper.avgLuma() > 25
-	return whiteBottom || flatDiscontinuousBottom
+	solidColorBottom := upper.edgeRatio() > 0.08 &&
+		bottom.edgeRatio() < 0.01 &&
+		bottom.greenFillRatio() > 0.55 &&
+		upper.greenFillRatio() < 0.25
+	brightBlockBottom := bottom.avgLuma() > 225 &&
+		bottom.dominantColorRatio() > 0.35 &&
+		bottom.avgLuma()-upper.avgLuma() > 60
+	return whiteBottom || flatDiscontinuousBottom || solidColorBottom || brightBlockBottom
 }
 
 type imageBandStats struct {
 	count           int
 	nearWhite       int
+	greenFill       int
 	lumaSum         int
 	edgeCount       int
 	edgeComparisons int
+	colorBuckets    map[uint32]int
+	maxColorBucket  int
 }
 
 func (s imageBandStats) nearWhiteRatio() float64 {
@@ -2307,6 +2483,20 @@ func (s imageBandStats) edgeRatio() float64 {
 	return float64(s.edgeCount) / float64(s.edgeComparisons)
 }
 
+func (s imageBandStats) greenFillRatio() float64 {
+	if s.count == 0 {
+		return 0
+	}
+	return float64(s.greenFill) / float64(s.count)
+}
+
+func (s imageBandStats) dominantColorRatio() float64 {
+	if s.count == 0 {
+		return 0
+	}
+	return float64(s.maxColorBucket) / float64(s.count)
+}
+
 func sampleImageBand(img image.Image, startY, endY int) imageBandStats {
 	bounds := img.Bounds()
 	if startY < bounds.Min.Y {
@@ -2320,7 +2510,7 @@ func sampleImageBand(img image.Image, startY, endY int) imageBandStats {
 	}
 	stepX := max(bounds.Dx()/120, 1)
 	stepY := max((endY-startY)/80, 1)
-	var stats imageBandStats
+	stats := imageBandStats{colorBuckets: make(map[uint32]int)}
 	var prevRow []int
 	for y := startY; y < endY; y += stepY {
 		row := make([]int, 0, bounds.Dx()/stepX+1)
@@ -2349,6 +2539,14 @@ func sampleImageBand(img image.Image, startY, endY int) imageBandStats {
 			stats.lumaSum += luma
 			if r8 > 245 && g8 > 245 && b8 > 245 {
 				stats.nearWhite++
+			}
+			if g8 > 80 && r8 < 40 && b8 < 40 && g8 > r8*2 && g8 > b8*2 {
+				stats.greenFill++
+			}
+			bucket := uint32(r8/8)<<16 | uint32(g8/8)<<8 | uint32(b8/8)
+			stats.colorBuckets[bucket]++
+			if stats.colorBuckets[bucket] > stats.maxColorBucket {
+				stats.maxColorBucket = stats.colorBuckets[bucket]
 			}
 		}
 		prevRow = row

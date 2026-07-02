@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=zlm /opt/media/bin /opt/media/bin
 COPY --from=mwader/static-ffmpeg:6.1 /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=mwader/static-ffmpeg:6.1 /ffprobe /usr/local/bin/ffprobe
 
 ARG TARGETARCH
 ADD ./build/linux_${TARGETARCH}/bin ./gowvp
@@ -37,9 +38,12 @@ ADD ./www ./www
 RUN mkdir -p configs python
 
 RUN ln -sf /usr/local/bin/ffmpeg /usr/bin/ffmpeg && \
+    ln -sf /usr/local/bin/ffprobe /usr/bin/ffprobe && \
     chmod +x /usr/local/bin/ffmpeg
+RUN chmod +x /usr/local/bin/ffprobe
 
-RUN ln -sf /usr/local/bin/ffmpeg /opt/media/bin/ffmpeg
+RUN ln -sf /usr/local/bin/ffmpeg /opt/media/bin/ffmpeg && \
+    ln -sf /usr/local/bin/ffprobe /opt/media/bin/ffprobe
 
 
 LABEL Name=gowvp \

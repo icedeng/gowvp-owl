@@ -112,6 +112,8 @@
   Type = 'zlm'
   # GB28181 抓拍图片回传基础地址，优先于 WebHookIP
   GBSnapshotBaseURL = ''
+  # GB28181 FFmpeg 抓拍最大并发数，0 表示使用默认值 2
+  GBSnapshotFFmpegConcurrency = 2
   # 用于流媒体 webhook 回调
   WebHookIP = '192.168.1.5'
   # 媒体服务器 RTP 端口范围

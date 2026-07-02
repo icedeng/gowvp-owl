@@ -86,7 +86,9 @@ type SwaggerLoginKeyOutput struct {
 
 // SwaggerSnapshotLinkOutput 是快照刷新响应。
 type SwaggerSnapshotLinkOutput struct {
-	Link string `json:"link" example:"http://127.0.0.1:9900/channels/xxx/snapshot?token=xxx"` // 可直接访问的快照地址
+	Link     string   `json:"link" example:"http://127.0.0.1:9900/channels/xxx/snapshot?token=xxx"` // 可直接访问的快照地址
+	Method   string   `json:"method" example:"ffmpeg"`                                              // 本次快照来源：cache/gb28181_device_upload/ffmpeg/zlm_get_snap/url/none
+	Attempts []string `json:"attempts"`                                                             // 抓拍尝试过程，成功走 fallback 时会包含前序失败原因
 }
 
 // SwaggerZonesResponse 是区域列表响应。
