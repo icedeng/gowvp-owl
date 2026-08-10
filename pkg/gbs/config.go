@@ -1,12 +1,15 @@
 package gbs
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/xml"
+	"fmt"
 	"log/slog"
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
@@ -122,6 +125,15 @@ type DeviceConfigResponse struct {
 	DeviceID       string    `xml:"DeviceID"`
 	Result         string    `xml:"Result"`
 	SnapShotConfig *SnapShot `xml:"SnapShotConfig"`
+	RawXML         string    `xml:"-" json:"-"`
+}
+
+// BasicParamConfigInput 是 2014 修改补充文件定义的基础参数写入请求。
+type BasicParamConfigInput struct {
+	DeviceID string
+	TargetID string
+	Timeout  time.Duration
+	Param    BasicParam
 }
 
 type pendingDeviceConfig struct {
@@ -164,6 +176,7 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
+	msg.RawXML = string(ctx.Request.Body())
 
 	state := &DeviceConfigState{
 		CmdType:  strings.TrimSpace(msg.CmdType),
@@ -171,6 +184,7 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 		DeviceID: strings.TrimSpace(msg.DeviceID),
 		Result:   strings.TrimSpace(msg.Result),
 		SnapShot: msg.SnapShotConfig,
+		RawXML:   msg.RawXML,
 	}
 	g.storeDeviceConfigState(ctx.DeviceID, state)
 	if ext := g.decodeAppendixA4Objects(msg.CmdType, ctx.Request.Body()); len(ext) > 0 {
@@ -187,6 +201,79 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 	}
 
 	ctx.String(200, "OK")
+}
+
+// SetBasicParam 下发 BasicParam 配置并等待设备的业务应答。
+func (g *GB28181API) SetBasicParam(ctx context.Context, in *BasicParamConfigInput) (*DeviceConfigState, error) {
+	if in == nil || strings.TrimSpace(in.DeviceID) == "" {
+		return nil, fmt.Errorf("invalid BasicParam config input")
+	}
+	deviceID := strings.TrimSpace(in.DeviceID)
+	if err := g.requireGBFeature(deviceID, "基础参数配置(BasicParam)", func(c GBCapabilities) bool {
+		return c.ConfigWrite
+	}); err != nil {
+		return nil, err
+	}
+	if in.Param.Expiration <= 0 || in.Param.HeartBeatInterval <= 0 || in.Param.HeartBeatCount <= 0 {
+		return nil, fmt.Errorf("BasicParam expiration, heartbeat interval and count must be positive")
+	}
+	device, ok := g.svr.memoryStorer.Load(deviceID)
+	if !ok || !device.IsOnline {
+		return nil, ErrDeviceOffline
+	}
+	targetID := strings.TrimSpace(in.TargetID)
+	if targetID == "" {
+		targetID = deviceID
+	}
+	var target Targeter = device
+	if targetID != deviceID {
+		channel, ok := g.svr.memoryStorer.GetChannel(deviceID, targetID)
+		if !ok {
+			return nil, ErrChannelNotExist
+		}
+		target = channel
+	}
+	timeout := in.Timeout
+	if timeout <= 0 {
+		timeout = 8 * time.Second
+	}
+
+	sn := int32(g.nextControlSN())
+	body := NewDeviceConfig(targetID).SetSN(sn).SetBasicParam(&in.Param).Marshal()
+	waitKey := buildPendingDeviceConfigKey(deviceID, int(sn))
+	pending := &pendingDeviceConfig{wait: make(chan *DeviceConfigResponse, 1)}
+	g.pendingDeviceConfig.Store(waitKey, pending)
+	defer g.pendingDeviceConfig.Delete(waitKey)
+
+	tx, err := g.svr.wrapRequest(target, sip.MethodMessage, &sip.ContentTypeXML, body)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = sipResponse(tx); err != nil {
+		return nil, err
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case response := <-pending.wait:
+		state := &DeviceConfigState{
+			CmdType:  strings.TrimSpace(response.CmdType),
+			SN:       response.SN,
+			DeviceID: strings.TrimSpace(response.DeviceID),
+			Result:   strings.TrimSpace(response.Result),
+			SnapShot: response.SnapShotConfig,
+			RawXML:   response.RawXML,
+		}
+		if state.Result != "" && !strings.EqualFold(state.Result, "OK") {
+			return state, fmt.Errorf("BasicParam config failed: %s", state.Result)
+		}
+		return state, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+		return nil, fmt.Errorf("wait BasicParam config response timeout")
+	}
 }
 
 func buildPendingDeviceConfigKey(deviceID string, sn int) string {

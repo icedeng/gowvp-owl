@@ -43,6 +43,12 @@ type Streams struct {
 	WSFLV string `json:"wsflv" gorm:"column:wsflv"`
 	// zlm是否收到流
 	Stream bool `json:"stream" gorm:"column:stream"`
+	// LastMediaAt 是最近一次媒体服务器确认流存在的时间。
+	LastMediaAt time.Time `json:"last_media_at" gorm:"-"`
+	EndReason   string    `json:"end_reason" gorm:"-"`
+	// DirectTCP 标识 2014 附录 O 裸 TCP 下载会话，不能按 RTP 流处理。
+	DirectTCP       bool   `json:"direct_tcp" gorm:"-"`
+	DirectSessionID string `json:"direct_session_id,omitempty" gorm:"-"`
 
 	// ---
 	S, E time.Time     `json:"-" gorm:"-"`
@@ -141,7 +147,7 @@ func CheckStreams() {
 
 			hb := sip.NewHeaderBuilder().SetToWithParam(channel.addr).SetFrom(_serverDevices.addr).AddVia(&sip.ViaHop{
 				Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
-			}).SetContentType(&sip.ContentTypeSDP).SetMethod(sip.MethodBYE).SetContact(_serverDevices.addr).SetCallID(&callid).SetSeqNo(uint(stream.CseqNo))
+			}).SetContentType(&sip.ContentTypeSDP).SetMethod(sip.MethodBYE).SetContact(_serverDevices.addr).SetCallID(&callid).SetSeqNo(uint(stream.CseqNo)).SetXGBVerValue("1.0")
 			req := sip.NewRequest("", sip.MethodBYE, channel.addr.URI, sip.DefaultSipVersion, hb.Build(), nil)
 			req.SetDestination(device.source)
 			req.SetRecipient(channel.addr.URI)

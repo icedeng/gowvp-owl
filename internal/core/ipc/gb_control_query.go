@@ -78,6 +78,32 @@ func (c Core) GBDeviceQuery(ctx context.Context, deviceID string, in *GBDeviceQu
 	return query.DeviceQuery(ctx, dev, in)
 }
 
+// GBDeviceConfig 下发 GB 设备配置；当前安全开放 2014 BasicParam 写入。
+func (c Core) GBDeviceConfig(ctx context.Context, deviceID string, in *GBDeviceConfigInput) (*GBDeviceConfigOutput, error) {
+	if in == nil || in.BasicParam == nil {
+		return nil, reason.ErrBadRequest.SetMsg("basic_param is required")
+	}
+	dev, err := c.GetDevice(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	protocol, ok := c.protocols[dev.GetType()]
+	if !ok {
+		return nil, reason.ErrBadRequest.SetMsg("unsupported protocol")
+	}
+	configurer, ok := protocol.(GBDeviceConfigCapable)
+	if !ok {
+		return nil, reason.ErrBadRequest.SetMsg("protocol does not support gb device config")
+	}
+	if strings.TrimSpace(in.TargetID) == "" {
+		in.TargetID = dev.DeviceID
+	}
+	if in.Timeout <= 0 {
+		in.Timeout = 8
+	}
+	return configurer.DeviceConfig(ctx, dev, in)
+}
+
 // GBAppendixA4Snapshot 查询已落库的附录 A.4 扩展对象快照（只读）。
 // 过滤规则：
 // 1. 设备通过路径参数指定；

@@ -44,6 +44,22 @@ type Server struct {
 	memoryStorer MemoryStorer
 }
 
+// RefreshDeviceVersion 将持久化的协议档案同步到在线设备会话。
+// 设备编辑接口会调用该方法，使手动版本覆盖无需等待重启或重新注册。
+func (s *Server) RefreshDeviceVersion(device *ipc.Device) {
+	if s == nil || device == nil {
+		return
+	}
+	version := deviceProtocolVersion(device.Ext)
+	device.Ext.GBVersionCapabilities = version.CapabilityNames()
+	if s.memoryStorer == nil {
+		return
+	}
+	if current, ok := s.memoryStorer.Load(device.GetGB28181DeviceID()); ok {
+		current.setGBVersion(version)
+	}
+}
+
 func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, func()) {
 	api := NewGB28181API(cfg, store, sc.NodeManager)
 
@@ -80,6 +96,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	msg.Handle("DeviceConfig", api.handleDeviceConfig)
 	msg.Handle("DeviceControl", api.sipMessageDeviceControl)
 	msg.Handle("RecordInfo", api.sipMessageRecordInfo)
+	msg.Handle("MediaStatus", api.sipMessageMediaStatus)
 
 	// 报警既可能由 MESSAGE 上报，也可能由 NOTIFY 上报，二者均接入。
 	notify := svr.Notify(api.sipAccessControlMiddleware)
@@ -110,7 +127,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	msg.Handle("PTZPosition", api.sipMessageQueryGeneric)
 	msg.Handle("SDCardStatus", api.sipMessageQueryGeneric)
 	msg.Handle("MobilePosition", api.sipMessageQueryGeneric)
-	msg.Handle("Broadcast", api.sipMessageQueryGeneric)
+	msg.Handle("Broadcast", api.sipMessageBroadcastResponse)
 
 	c := Server{
 		Server:       svr,
@@ -163,6 +180,9 @@ func (s *Server) SetConfig() {
 	}
 	s.fromAddress = from
 	s.Server.SetFrom(&from)
+	if s.gb.boot != nil {
+		s.gb.applyDirectTCPConfig(s.gb.boot.Sip.DirectTCPDownload)
+	}
 }
 
 // startTickerCheck 定时检查离线，通过心跳超时判断设备是否离线
@@ -263,7 +283,6 @@ func LoadSYSInfo() {
 
 	StreamList = streamsList{&sync.Map{}, &sync.Map{}, 0}
 	ssrcLock = &sync.Mutex{}
-	_recordList = &sync.Map{}
 	RecordList = apiRecordList{items: map[string]*apiRecordItem{}, l: sync.RWMutex{}}
 
 	// init sysinfo
@@ -332,7 +351,14 @@ func (s *Server) QueryCatalog(deviceID string) error {
 }
 
 func (s *Server) Play(in *PlayInput) error {
-	return s.gb.Play(in)
+	s.gb.metrics.mediaRequests.Add(1)
+	err := s.gb.Play(in)
+	if err != nil {
+		s.gb.metrics.mediaFailures.Add(1)
+	} else {
+		s.gb.metrics.mediaSuccess.Add(1)
+	}
+	return err
 }
 
 func (s *Server) StopPlay(ctx context.Context, in *StopPlayInput) error {
@@ -353,6 +379,10 @@ func (s *Server) DeviceQuery(ctx context.Context, in *DeviceQueryInput) (*Device
 	return s.gb.DeviceQuery(ctx, in)
 }
 
+func (s *Server) SetBasicParam(ctx context.Context, in *BasicParamConfigInput) (*DeviceConfigState, error) {
+	return s.gb.SetBasicParam(ctx, in)
+}
+
 // QueryRecordList 查询设备录像目录（RecordInfo）。
 func (s *Server) QueryRecordList(ctx context.Context, in *RecordQueryInput) (*Records, error) {
 	return s.gb.QueryRecordList(ctx, in)
@@ -369,7 +399,14 @@ func (s *Server) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOutput,
 }
 
 func (s *Server) StartHistory(ctx context.Context, in *HistoryInput) error {
-	return s.gb.StartHistory(ctx, in)
+	s.gb.metrics.mediaRequests.Add(1)
+	err := s.gb.StartHistory(ctx, in)
+	if err != nil {
+		s.gb.metrics.mediaFailures.Add(1)
+	} else {
+		s.gb.metrics.mediaSuccess.Add(1)
+	}
+	return err
 }
 
 func (s *Server) StopHistory(ctx context.Context, in *StopHistoryInput) error {
@@ -378,6 +415,31 @@ func (s *Server) StopHistory(ctx context.Context, in *StopHistoryInput) error {
 
 func (s *Server) ControlHistory(ctx context.Context, in *ControlHistoryInput) error {
 	return s.gb.ControlHistory(ctx, in)
+}
+
+func (s *Server) DirectTCPDownloadState(sessionID string) (DirectTCPDownloadState, bool) {
+	if s == nil || s.gb == nil || s.gb.directDownloads == nil {
+		return DirectTCPDownloadState{}, false
+	}
+	return s.gb.directDownloads.State(sessionID)
+}
+
+func (s *Server) DirectTCPDownloadByChannel(deviceID, channelID string) (DirectTCPDownloadState, bool) {
+	if s == nil || s.gb == nil || s.gb.directDownloads == nil {
+		return DirectTCPDownloadState{}, false
+	}
+	return s.gb.directDownloads.FindByChannel(deviceID, channelID)
+}
+
+func (s *Server) CancelDirectTCPDownload(sessionID string) bool {
+	return s != nil && s.gb != nil && s.gb.directDownloads != nil && s.gb.directDownloads.Cancel(sessionID)
+}
+
+func (s *Server) Metrics() GBMetricsSnapshot {
+	if s == nil || s.gb == nil {
+		return GBMetricsSnapshot{}
+	}
+	return s.gb.metrics.Snapshot()
 }
 
 func (s *Server) SyncTime(ctx context.Context, in *TimeSyncInput) error {

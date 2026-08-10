@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // The whitespace characters recognised by the Augmented Backus-Naur Form syntax
@@ -564,29 +565,34 @@ func parseRecordRouteHeader(headerName string, headerText string) (headers []Hea
 }
 
 type parser struct {
-	out    chan Message
-	in     chan Packet
-	isStop bool
+	out      chan Message
+	in       chan Packet
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 func newParser() *parser {
-	p := &parser{out: make(chan Message), in: make(chan Packet)}
+	p := &parser{out: make(chan Message), in: make(chan Packet), done: make(chan struct{})}
 	go p.start()
 	return p
 }
 
 func (p *parser) stop() {
-	p.isStop = true
+	p.stopOnce.Do(func() { close(p.done) })
 }
 
 func (p *parser) start() {
 	var termErr error
 	var msg Message
-	var packet Packet
 
-	for !p.isStop {
+	for {
 		termErr = nil
-		packet = <-p.in
+		var packet Packet
+		select {
+		case <-p.done:
+			return
+		case packet = <-p.in:
+		}
 		startLine, err := packet.nextLine()
 		if err != nil {
 			if err != io.EOF {
@@ -676,7 +682,11 @@ func (p *parser) start() {
 		}
 		msg.SetSource(packet.raddr)
 		msg.SetConnection(packet.conn)
-		p.out <- msg
+		select {
+		case <-p.done:
+			return
+		case p.out <- msg:
+		}
 	}
 }
 

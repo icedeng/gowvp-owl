@@ -1,11 +1,28 @@
 package gbs
 
 import (
+	"context"
 	"encoding/xml"
+	"fmt"
 	"log/slog"
 	"net"
+	"strings"
+	"time"
+	"unicode"
 
+	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs/sip"
+)
+
+type GBCatalogItemKind = string
+
+const (
+	GBCatalogItemUnknown             GBCatalogItemKind = "unknown"
+	GBCatalogItemAdministrative      GBCatalogItemKind = "administrative"
+	GBCatalogItemSystem              GBCatalogItemKind = "system"
+	GBCatalogItemBusinessGroup       GBCatalogItemKind = "business_group"
+	GBCatalogItemVirtualOrganization GBCatalogItemKind = "virtual_organization"
+	GBCatalogItemDevice              GBCatalogItemKind = "device"
 )
 
 // MessageDeviceListResponse 设备明细列表返回结构
@@ -16,6 +33,82 @@ type MessageDeviceListResponse struct {
 	DeviceID string     `xml:"DeviceID"`
 	SumNum   int        `xml:"SumNum"`
 	Item     []Channels `xml:"DeviceList>Item"`
+}
+
+func classifyGBCatalogItem(deviceID string) GBCatalogItemKind {
+	deviceID = strings.TrimSpace(deviceID)
+	if !allDecimalDigits(deviceID) {
+		return GBCatalogItemUnknown
+	}
+	switch len(deviceID) {
+	case 2, 4, 6, 8:
+		return GBCatalogItemAdministrative
+	case 20:
+		typeCode := deviceID[10:13]
+		switch typeCode {
+		case "200":
+			return GBCatalogItemSystem
+		case "215":
+			return GBCatalogItemBusinessGroup
+		case "216":
+			return GBCatalogItemVirtualOrganization
+		default:
+			return GBCatalogItemDevice
+		}
+	default:
+		return GBCatalogItemUnknown
+	}
+}
+
+func allDecimalDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func catalogChannelExt(item Channels) ipc.DeviceExt {
+	return ipc.DeviceExt{
+		Manufacturer: item.Manufacturer,
+		Model:        item.Model,
+		GBCatalog: &ipc.GBCatalogExt{
+			Kind:            classifyGBCatalogItem(item.ChannelID),
+			Owner:           item.Owner,
+			CivilCode:       item.CivilCode,
+			Block:           item.Block,
+			Address:         item.Address,
+			Parental:        item.Parental,
+			ParentID:        item.ParentID,
+			SafetyWay:       item.SafetyWay,
+			RegisterWay:     item.RegisterWay,
+			CertNum:         item.CertNum,
+			Certifiable:     item.Certifiable,
+			ErrCode:         item.ErrCode,
+			EndTime:         item.EndTime,
+			Secrecy:         item.Secrecy,
+			IPAddress:       item.IPAddress,
+			Port:            item.Port,
+			Password:        item.Password,
+			Status:          item.Status,
+			Longitude:       item.Longitude,
+			Latitude:        item.Latitude,
+			PTZType:         item.Info.PTZType,
+			PositionType:    item.Info.PositionType,
+			RoomType:        item.Info.RoomType,
+			UseType:         item.Info.UseType,
+			SupplyLightType: item.Info.SupplyLightType,
+			DirectionType:   item.Info.DirectionType,
+			Resolution:      item.Info.Resolution,
+			BusinessGroupID: item.Info.BusinessGroupID,
+			RawXML:          "<Item>" + item.RawXML + "</Item>",
+			InfoRawXML:      item.Info.RawXML,
+		},
+	}
 }
 
 // sipMessageCatalog 设备目录信息查询应答
@@ -32,35 +125,12 @@ func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 		return
 	}
 
-	for _, d := range msg.Item {
-		d.DeviceID = msg.DeviceID
-		g.catalog.Write(&sip.CollectorMsg[Channels]{
-			Key:   d.DeviceID,
-			Data:  &d,
-			Total: msg.SumNum,
-		})
-
-		// channel := Channels{ChannelID: d.ChannelID, DeviceID: message.DeviceID}
-		// if err := db.Get(db.DBClient, &channel); err == nil {
-		// 	channel.Active = time.Now().Unix()
-		// 	channel.URIStr = fmt.Sprintf("sip:%s@%s", d.ChannelID, _sysinfo.Region)
-		// 	channel.Status = transDeviceStatus(d.Status)
-		// 	channel.Name = d.Name
-		// 	channel.Manufacturer = d.Manufacturer
-		// 	channel.Model = d.Model
-		// 	channel.Owner = d.Owner
-		// 	channel.CivilCode = d.CivilCode
-		// 	// Address ip地址
-		// 	channel.Address = d.Address
-		// 	channel.Parental = d.Parental
-		// 	channel.SafetyWay = d.SafetyWay
-		// 	channel.RegisterWay = d.RegisterWay
-		// 	channel.Secrecy = d.Secrecy
-		// 	db.Save(db.DBClient, &channel)
-		// 	go notify(notifyChannelsActive(channel))
-		// } else {
-		// 	// logrus.Infoln("deviceid not found,deviceid:", d.DeviceID, "pdid:", message.DeviceID, "err", err)
-		// }
+	for index := range msg.Item {
+		msg.Item[index].DeviceID = msg.DeviceID
+	}
+	if g.catalogResponses != nil {
+		key := buildMultiResponseKey(ctx.DeviceID, "Catalog", msg.SN)
+		g.catalogResponses.Add(key, msg.SumNum, msg.Item)
 	}
 
 	// 命中通用查询等待队列（A.2.4 Catalog 查询等待）。
@@ -73,21 +143,83 @@ func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 
 // QueryCatalog 设备目录查询或订阅请求
 // GB/T28181 81 页 A.2.4.3
-func (g *GB28181API) QueryCatalog(deviceID string) error {
+func (g *GB28181API) QueryCatalog(deviceID string) (err error) {
+	g.metrics.catalogRequests.Add(1)
+	defer func() {
+		if err == nil {
+			g.metrics.catalogSuccess.Add(1)
+		} else if strings.Contains(err.Error(), "Catalog response timeout") {
+			g.metrics.catalogTimeouts.Add(1)
+		}
+	}()
 	slog.Debug("QueryCatalog", "deviceID", deviceID)
 	ipc, ok := g.svr.memoryStorer.Load(deviceID)
 	if !ok || !ipc.IsOnline {
 		return ErrDeviceOffline
 	}
 
-	_, err := g.svr.wrapRequest(ipc, sip.MethodMessage, &sip.ContentTypeXML, sip.GetCatalogXML(deviceID))
+	sn := g.nextQuerySN()
+	key := buildMultiResponseKey(deviceID, "Catalog", sn)
+	g.catalogResponses.Start(key)
+	body, err := sip.XMLEncode(genericDeviceQueryRequest{
+		CmdType:  "Catalog",
+		SN:       sn,
+		DeviceID: deviceID,
+	})
 	if err != nil {
+		g.catalogResponses.Cancel(key)
 		return err
 	}
-
-	g.catalog.Run(deviceID)
-	g.catalog.Wait(deviceID)
+	tx, err := g.svr.wrapRequest(ipc, sip.MethodMessage, &sip.ContentTypeXML, body)
+	if err != nil {
+		g.catalogResponses.Cancel(key)
+		return err
+	}
+	if _, err = sipResponse(tx); err != nil {
+		g.catalogResponses.Cancel(key)
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result := g.catalogResponses.Wait(ctx, key)
+	if len(result.Items) == 0 && !result.Complete {
+		return fmt.Errorf("wait Catalog response timeout")
+	}
+	if !result.Complete {
+		g.metrics.catalogPartial.Add(1)
+		slog.Warn("Catalog response incomplete", "device_id", deviceID, "received", len(result.Items), "expected", result.Expected)
+	}
+	g.saveCatalogChannels(deviceID, result.Items)
 	return nil
+}
+
+func (g *GB28181API) saveCatalogChannels(deviceID string, items []Channels) {
+	if len(items) == 0 {
+		return
+	}
+	if device, ok := g.svr.memoryStorer.Load(deviceID); ok {
+		for _, item := range items {
+			channel := &Channel{ChannelID: item.ChannelID, device: device}
+			channel.init(g.cfg.Domain)
+			device.Channels.Store(channel.ChannelID, channel)
+		}
+	}
+	out := make([]*ipc.Channel, 0, len(items))
+	for _, item := range items {
+		out = append(out, &ipc.Channel{
+			DeviceID:  deviceID,
+			ChannelID: item.ChannelID,
+			Name:      item.Name,
+			IsOnline:  item.Status == "OK" || item.Status == "ON",
+			Ext:       catalogChannelExt(item),
+			Type:      ipc.TypeGB28181,
+		})
+	}
+	if g.core.Store() != nil {
+		if err := g.core.SaveChannels(out); err != nil {
+			slog.Error("SaveChannels", "err", err)
+		}
+	}
 }
 
 type Targeter interface {
@@ -118,17 +250,12 @@ func (s *Server) wrapRequest(t Targeter, method string, contentType *sip.Content
 		})
 
 	if v, ok := t.(gbVersioner); ok {
-		switch v.GBVersion() {
-		case "2011":
-			hb.SetXGBVerValue("1.0")
-		case "2016":
-			hb.SetXGBVerValue("2.0")
-		case "2022":
-			hb.SetXGBVerValue("3.0")
-		default:
-			// 未知版本保持默认 3.0，兼容 2022 设备。
-			hb.SetXGBVerValue("3.0")
+		version, valid := ParseGBProtocolVersion(v.GBVersion())
+		if !valid {
+			// 未知设备使用保守的 1.0 档案，避免发送设备无法识别的扩展。
+			version = GBVersion10
 		}
+		hb.SetXGBVerValue(string(version))
 	}
 
 	req := sip.NewRequest("", method, to.URI, sip.DefaultSipVersion, hb.Build(), body)

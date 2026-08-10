@@ -2,8 +2,11 @@ package gbs
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"net"
+	"strings"
+	"time"
 
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/sms"
@@ -22,6 +25,26 @@ type VoiceInput struct {
 	SMS        *sms.MediaServer
 	StreamMode int8
 	Mode       string // Talk/Broadcast
+	Timeout    time.Duration
+}
+
+type broadcastNotify struct {
+	XMLName  xml.Name `xml:"Notify"`
+	CmdType  string   `xml:"CmdType"`
+	SN       int      `xml:"SN"`
+	SourceID string   `xml:"SourceID"`
+	TargetID string   `xml:"TargetID"`
+}
+
+type broadcastResponse struct {
+	CmdType  string `xml:"CmdType"`
+	SN       int    `xml:"SN"`
+	DeviceID string `xml:"DeviceID"`
+	Result   string `xml:"Result"`
+}
+
+type pendingBroadcastResponse struct {
+	wait chan *broadcastResponse
 }
 
 type StopVoiceInput struct {
@@ -48,6 +71,28 @@ func (g *GB28181API) StartVoice(ctx context.Context, in *VoiceInput) error {
 	if !ch.device.IsOnline {
 		return ErrDeviceOffline
 	}
+	switch in.Mode {
+	case voiceModeBroadcast:
+		if err := g.requireGBFeature(in.Channel.DeviceID, "语音广播", func(c GBCapabilities) bool {
+			return c.VoiceBroadcast
+		}); err != nil {
+			return err
+		}
+	case voiceModeTalk:
+		if err := g.requireGBFeature(in.Channel.DeviceID, "语音对讲", func(c GBCapabilities) bool {
+			return c.VoiceIntercom
+		}); err != nil {
+			return err
+		}
+	}
+	if err := g.requireMediaTransport(in.Channel.DeviceID, in.StreamMode, "语音会话"); err != nil {
+		return err
+	}
+	if in.Mode == voiceModeBroadcast {
+		if err := g.startBroadcastNotification(ctx, ch, in); err != nil {
+			return err
+		}
+	}
 
 	ch.device.playMutex.Lock()
 	defer ch.device.playMutex.Unlock()
@@ -56,7 +101,12 @@ func (g *GB28181API) StartVoice(ctx context.Context, in *VoiceInput) error {
 	stream, existed := g.streams.LoadOrStore(key, &Streams{})
 	if existed {
 		_ = g.stopVoiceNoLock(ch, &StopVoiceInput{Channel: in.Channel, Mode: in.Mode})
+		stream = &Streams{}
+		g.streams.Store(key, stream)
 	}
+	stream.DeviceID = in.Channel.DeviceID
+	stream.ChannelID = in.Channel.ChannelID
+	stream.StreamID = in.Channel.ID
 
 	resp, err := g.sms.OpenRTPServer(in.SMS, zlm.OpenRTPServerRequest{
 		TCPMode:  in.StreamMode,
@@ -70,6 +120,65 @@ func (g *GB28181API) StartVoice(ctx context.Context, in *VoiceInput) error {
 	}
 	_ = g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, true)
 	return nil
+}
+
+func (g *GB28181API) startBroadcastNotification(_ context.Context, ch *Channel, in *VoiceInput) error {
+	sn := g.nextControlSN()
+	body, err := sip.XMLEncode(broadcastNotify{
+		CmdType:  "Broadcast",
+		SN:       sn,
+		SourceID: g.cfg.ID,
+		TargetID: ch.ChannelID,
+	})
+	if err != nil {
+		return err
+	}
+	key := buildPendingBroadcastKey(ch.ChannelID, sn)
+	pending := &pendingBroadcastResponse{wait: make(chan *broadcastResponse, 1)}
+	g.pendingBroadcast.Store(key, pending)
+	defer g.pendingBroadcast.Delete(key)
+	tx, err := g.svr.wrapRequest(ch, sip.MethodMessage, &sip.ContentTypeXML, body)
+	if err != nil {
+		return err
+	}
+	if _, err = sipResponse(tx); err != nil {
+		return err
+	}
+	timeout := in.Timeout
+	if timeout <= 0 {
+		timeout = 6 * time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case response := <-pending.wait:
+		if response.Result != "" && !strings.EqualFold(strings.TrimSpace(response.Result), "OK") {
+			return fmt.Errorf("broadcast rejected: %s", response.Result)
+		}
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("wait Broadcast response timeout")
+	}
+}
+
+func (g *GB28181API) sipMessageBroadcastResponse(ctx *sip.Context) {
+	var response broadcastResponse
+	if err := sip.XMLDecode(ctx.Request.Body(), &response); err != nil {
+		ctx.String(400, ErrXMLDecode.Error())
+		return
+	}
+	key := buildPendingBroadcastKey(response.DeviceID, response.SN)
+	if value, ok := g.pendingBroadcast.Load(key); ok {
+		select {
+		case value.(*pendingBroadcastResponse).wait <- &response:
+		default:
+		}
+	}
+	ctx.String(200, "OK")
+}
+
+func buildPendingBroadcastKey(targetID string, sn int) string {
+	return strings.TrimSpace(targetID) + ":" + fmt.Sprintf("%d", sn)
 }
 
 // StopVoice 停止语音会话。
@@ -137,6 +246,7 @@ func (g *GB28181API) sipInviteVoice(ch *Channel, in *VoiceInput, port int, strea
 	if err != nil {
 		return err
 	}
+	ssrc := g.getSSRC(0)
 	msg := &sdp.Message{
 		Origin: sdp.Origin{
 			Username:    ch.ChannelID,
@@ -144,7 +254,7 @@ func (g *GB28181API) sipInviteVoice(ch *Channel, in *VoiceInput, port int, strea
 			AddressType: "IP4",
 			Address:     ip4str,
 		},
-		Name: in.Mode,
+		Name: historyModePlay,
 		Connection: sdp.ConnectionData{
 			NetworkType: "IN",
 			AddressType: "IP4",
@@ -152,11 +262,14 @@ func (g *GB28181API) sipInviteVoice(ch *Channel, in *VoiceInput, port int, strea
 		},
 		Timing: []sdp.Timing{{}},
 		Medias: []sdp.Media{audio},
-		SSRC:   g.getSSRC(0),
+		SSRC:   ssrc,
 	}
 	body := msg.Append(nil).AppendTo(nil)
+	if in.Mode == voiceModeBroadcast {
+		body = append(body, "f=v/////a/1/8/1\r\n"...)
+	}
 	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
-		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: fmt.Sprintf("%s:%s,%s:%s", ch.ChannelID, in.Channel.ID, in.Channel.DeviceID, in.Channel.ID)})
+		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, g.cfg.ID)})
 	})
 	if err != nil {
 		return err
@@ -166,5 +279,14 @@ func (g *GB28181API) sipInviteVoice(ch *Channel, in *VoiceInput, port int, strea
 		return err
 	}
 	stream.Resp = resp
+	stream.T = 0
+	stream.DeviceID = in.Channel.DeviceID
+	stream.ChannelID = in.Channel.ChannelID
+	stream.StreamID = in.Channel.ID
+	stream.Status = 0
+	stream.ssrc = ssrc
+	if callID, ok := resp.CallID(); ok {
+		stream.CallID = normalizeCallID(callID)
+	}
 	return tx.Request(sip.NewRequestFromResponse(sip.MethodACK, resp))
 }

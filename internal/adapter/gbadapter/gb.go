@@ -28,6 +28,7 @@ func NewAdapter(adapter ipc.Adapter, gbs *gbs.Server, smsCore sms.Core) *Adapter
 
 // InitDevice implements ipc.Protocoler.
 func (a *Adapter) InitDevice(ctx context.Context, device *ipc.Device) error {
+	a.gbs.RefreshDeviceVersion(device)
 	return nil
 }
 
@@ -39,11 +40,7 @@ func (a *Adapter) OnStreamChanged(ctx context.Context, app, stream string) error
 	if err != nil {
 		return err
 	}
-	// 更新播放状态为 false
-	if err := a.adapter.EditPlayingByID(ctx, ch.ID, false); err != nil {
-		return err
-	}
-	return a.gbs.StopPlay(ctx, &gbs.StopPlayInput{Channel: ch})
+	return a.gbs.OnMediaStreamChanged(ctx, ch.ID, false, "stream_unregistered")
 }
 
 // OnStreamNotFound implements ipc.Protocoler.
@@ -101,6 +98,7 @@ func (a *Adapter) StopPlay(ctx context.Context, device *ipc.Device, channel *ipc
 
 // ValidateDevice implements ipc.Protocoler.
 func (a *Adapter) ValidateDevice(ctx context.Context, device *ipc.Device) error {
+	a.gbs.RefreshDeviceVersion(device)
 	return nil
 }
 
@@ -168,9 +166,13 @@ func (a *Adapter) Upgrade(ctx context.Context, device *ipc.Device, channel *ipc.
 }
 
 func (a *Adapter) StartHistory(ctx context.Context, device *ipc.Device, channel *ipc.Channel, in *ipc.HistoryControlInput) error {
-	svr, err := a.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
-	if err != nil {
-		return err
+	var svr *sms.MediaServer
+	if in.Transport != ipc.HistoryTransportDirectTCP {
+		var err error
+		svr, err = a.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
+		if err != nil {
+			return err
+		}
 	}
 	mode := "Playback"
 	if in.Mode == "download" {
@@ -183,6 +185,7 @@ func (a *Adapter) StartHistory(ctx context.Context, device *ipc.Device, channel 
 		StartAt:    time.Unix(in.StartAt, 0),
 		EndAt:      time.Unix(in.EndAt, 0),
 		Mode:       mode,
+		Transport:  in.Transport,
 	})
 }
 
@@ -221,6 +224,7 @@ func (a *Adapter) Subscribe(ctx context.Context, device *ipc.Device, in *ipc.Sub
 		DeviceID: device.DeviceID,
 		Event:    in.Event,
 		Expires:  in.Expires,
+		Cancel:   in.Cancel,
 	})
 }
 
@@ -308,6 +312,30 @@ func (a *Adapter) DeviceQuery(ctx context.Context, device *ipc.Device, in *ipc.G
 		XML:        out.XML,
 		Data:       out.Data,
 		AppendixA4: toIPCAppendixA4(out.AppendixA4),
+	}, nil
+}
+
+func (a *Adapter) DeviceConfig(ctx context.Context, device *ipc.Device, in *ipc.GBDeviceConfigInput) (*ipc.GBDeviceConfigOutput, error) {
+	state, err := a.gbs.SetBasicParam(ctx, &gbs.BasicParamConfigInput{
+		DeviceID: device.DeviceID,
+		TargetID: in.TargetID,
+		Timeout:  time.Duration(in.Timeout) * time.Second,
+		Param: gbs.BasicParam{
+			Name:              in.BasicParam.Name,
+			Expiration:        in.BasicParam.Expiration,
+			HeartBeatInterval: in.BasicParam.HeartBeatInterval,
+			HeartBeatCount:    in.BasicParam.HeartBeatCount,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ipc.GBDeviceConfigOutput{
+		SN:       state.SN,
+		CmdType:  state.CmdType,
+		DeviceID: state.DeviceID,
+		Result:   state.Result,
+		RawXML:   state.RawXML,
 	}, nil
 }
 

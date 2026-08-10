@@ -66,17 +66,75 @@ type SwaggerConfigInfoOutput struct {
 
 // SwaggerSIPConfig 是 Swagger 友好的 SIP 配置模型。
 type SwaggerSIPConfig struct {
-	Port               int    `json:"port" example:"5060"`                      // SIP TCP/UDP 监听端口
-	ID                 string `json:"id" example:"34020000002000000001"`        // 平台 20 位国标编码
-	Domain             string `json:"domain" example:"3402000000"`              // SIP 域
-	Password           string `json:"password" example:"123456"`                // 注册鉴权密码
-	EnableTLS          bool   `json:"enable_tls" example:"false"`               // 是否启用 SIP-TLS
-	TLSPort            int    `json:"tls_port" example:"5061"`                  // SIP-TLS 监听端口
-	TLSCert            string `json:"tls_cert" example:"configs/certs/sip.crt"` // TLS 证书路径
-	TLSKey             string `json:"tls_key" example:"configs/certs/sip.key"`  // TLS 私钥路径
-	StrictSourceCheck  bool   `json:"strict_source_check" example:"true"`       // 是否严格校验源 IP
-	RequireMessageAuth bool   `json:"require_message_auth" example:"false"`     // 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
-	PTZWeakConfirm     bool   `json:"ptz_weak_confirm" example:"false"`         // 是否启用 PTZ 弱确认模式
+	Port               int                            `json:"port" example:"5060"`                      // SIP TCP/UDP 监听端口
+	ID                 string                         `json:"id" example:"34020000002000000001"`        // 平台 20 位国标编码
+	Domain             string                         `json:"domain" example:"3402000000"`              // SIP 域
+	Password           string                         `json:"password" example:"123456"`                // 注册鉴权密码
+	EnableTLS          bool                           `json:"enable_tls" example:"false"`               // 是否启用 SIP-TLS
+	TLSPort            int                            `json:"tls_port" example:"5061"`                  // SIP-TLS 监听端口
+	TLSCert            string                         `json:"tls_cert" example:"configs/certs/sip.crt"` // TLS 证书路径
+	TLSKey             string                         `json:"tls_key" example:"configs/certs/sip.key"`  // TLS 私钥路径
+	StrictSourceCheck  bool                           `json:"strict_source_check" example:"true"`       // 是否严格校验源 IP
+	RequireMessageAuth bool                           `json:"require_message_auth" example:"false"`     // 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
+	PTZWeakConfirm     bool                           `json:"ptz_weak_confirm" example:"false"`         // 是否启用 PTZ 弱确认模式
+	DirectTCPDownload  SwaggerDirectTCPDownloadConfig `json:"direct_tcp_download"`                      // 2014 附录 O 裸 TCP 下载配置
+}
+
+// SwaggerDirectTCPDownloadConfig 是 2014 裸 TCP 下载配置。
+type SwaggerDirectTCPDownloadConfig struct {
+	Enabled              bool     `json:"enabled" example:"false"`
+	DeviceAllowlist      []string `json:"device_allowlist"`
+	StorageDir           string   `json:"storage_dir" example:"./configs/downloads/gb28181"`
+	RetainDays           int      `json:"retain_days" example:"7"`
+	OfferPort            int      `json:"offer_port" example:"9"`
+	MaxFileSize          int64    `json:"max_file_size" example:"10737418240"`
+	GlobalConcurrency    int      `json:"global_concurrency" example:"4"`
+	DeviceConcurrency    int      `json:"device_concurrency" example:"1"`
+	DialTimeout          string   `json:"dial_timeout" example:"5s"`
+	FirstByteTimeout     string   `json:"first_byte_timeout" example:"15s"`
+	IdleTimeout          string   `json:"idle_timeout" example:"30s"`
+	TotalTimeout         string   `json:"total_timeout" example:"2h"`
+	AllowAddressMismatch bool     `json:"allow_address_mismatch" example:"false"`
+	AllowedAddressCIDRs  []string `json:"allowed_address_cidrs"`
+}
+
+// SwaggerDirectTCPDownloadState 是附录 O 下载进度和终态快照。
+type SwaggerDirectTCPDownloadState struct {
+	SessionID     string `json:"session_id" example:"call-id@example"`
+	DeviceID      string `json:"device_id" example:"34020000001320000001"`
+	ChannelID     string `json:"channel_id" example:"34020000001320000002"`
+	Status        string `json:"status" example:"receiving"`
+	Received      int64  `json:"received" example:"1048576"`
+	FileSize      int64  `json:"file_size" example:"2097152"`
+	FileSizeKnown bool   `json:"file_size_known" example:"true"`
+	SizeVerified  bool   `json:"size_verified" example:"false"`
+	Output        string `json:"output,omitempty"`
+	SHA256        string `json:"sha256,omitempty"`
+	StartedAt     string `json:"started_at" example:"2026-08-10T19:30:00+08:00"`
+	UpdatedAt     string `json:"updated_at" example:"2026-08-10T19:30:05+08:00"`
+	CompletedAt   string `json:"completed_at,omitempty"`
+	EndReason     string `json:"end_reason,omitempty" example:"size_reached"`
+	Error         string `json:"error,omitempty"`
+}
+
+// SwaggerGBMetricsSnapshot 是 GB28181 灰度发布单调计数器。
+type SwaggerGBMetricsSnapshot struct {
+	RegisterRequests uint64 `json:"register_requests"`
+	RegisterSuccess  uint64 `json:"register_success"`
+	RegisterFailures uint64 `json:"register_failures"`
+	CatalogRequests  uint64 `json:"catalog_requests"`
+	CatalogSuccess   uint64 `json:"catalog_success"`
+	CatalogTimeouts  uint64 `json:"catalog_timeouts"`
+	CatalogPartial   uint64 `json:"catalog_partial"`
+	MediaRequests    uint64 `json:"media_requests"`
+	MediaSuccess     uint64 `json:"media_success"`
+	MediaFailures    uint64 `json:"media_failures"`
+	MediaDisconnects uint64 `json:"media_disconnects"`
+	DirectStarted    uint64 `json:"direct_tcp_started"`
+	DirectCompleted  uint64 `json:"direct_tcp_completed"`
+	DirectFailed     uint64 `json:"direct_tcp_failed"`
+	DirectCancelled  uint64 `json:"direct_tcp_cancelled"`
+	DirectBytes      uint64 `json:"direct_tcp_bytes"`
 }
 
 // SwaggerLoginKeyOutput 是登录公钥响应。

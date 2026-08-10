@@ -12,6 +12,7 @@ type SubscribeInput struct {
 	DeviceID string
 	Event    string // Alarm/Catalog/MobilePosition
 	Expires  int
+	Cancel   bool // true 时发送 Expires: 0 取消订阅
 }
 
 // Subscribe 事件订阅（9.11），通过 SUBSCRIBE 发送订阅请求。
@@ -23,7 +24,12 @@ func (g *GB28181API) Subscribe(_ context.Context, in *SubscribeInput) error {
 	if !ok || !ipc.IsOnline {
 		return ErrDeviceOffline
 	}
-	if in.Expires <= 0 {
+	if in.Expires < 0 {
+		return fmt.Errorf("expires must not be negative")
+	}
+	if in.Cancel {
+		in.Expires = 0
+	} else if in.Expires == 0 {
 		in.Expires = 3600
 	}
 	cmdType := in.Event
@@ -39,7 +45,7 @@ func (g *GB28181API) Subscribe(_ context.Context, in *SubscribeInput) error {
 `, cmdType, sip.RandInt(100000, 999999), in.DeviceID)
 
 	tx, err := g.svr.wrapRequest(ipc, sip.MethodSubscribe, &sip.ContentTypeXML, body, func(r *sip.Request) {
-		r.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "presence"})
+		r.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: buildSubscriptionEventValue(cmdType, in.DeviceID)})
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: fmt.Sprintf("%d", in.Expires)})
 	})
 	if err != nil {

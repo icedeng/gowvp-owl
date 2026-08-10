@@ -36,6 +36,13 @@ func (c Core) StartHistory(ctx context.Context, channelID string, in *HistoryCon
 		return reason.ErrBadRequest.SetMsg("invalid history range")
 	}
 	in.Mode = mode
+	in.Transport = strings.ToLower(strings.TrimSpace(in.Transport))
+	if in.Transport != "" && in.Transport != HistoryTransportRTP && in.Transport != HistoryTransportDirectTCP {
+		return reason.ErrBadRequest.SetMsg("transport must be rtp/direct_tcp")
+	}
+	if in.Transport == HistoryTransportDirectTCP && mode != "download" {
+		return reason.ErrBadRequest.SetMsg("direct_tcp transport only supports download")
+	}
 	return h.StartHistory(ctx, dev, ch, in)
 }
 

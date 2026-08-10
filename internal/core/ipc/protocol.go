@@ -164,6 +164,7 @@ func (g Adapter) SaveChannels(channels []*Channel) error {
 				c.Ext.Firmware = channel.Ext.Firmware
 				c.Ext.GBVersion = channel.Ext.GBVersion
 				c.Ext.Model = channel.Ext.Model
+				c.Ext.GBCatalog = channel.Ext.GBCatalog
 				return nil
 			}, orm.Where("id=?", existing.ID))
 		} else {

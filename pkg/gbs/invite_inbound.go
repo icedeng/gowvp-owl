@@ -107,7 +107,15 @@ func callIDFromRequest(req *sip.Request) string {
 	if !ok || callID == nil {
 		return ""
 	}
-	return strings.TrimSpace(callID.String())
+	return normalizeCallID(callID)
+}
+
+func normalizeCallID(callID *sip.CallID) string {
+	if callID == nil {
+		return ""
+	}
+	value := strings.TrimSpace(callID.String())
+	return strings.TrimSpace(strings.TrimPrefix(value, "Call-ID:"))
 }
 
 // startInviteDialogCleaner 定时回收长期未更新会话，避免异常场景导致内存堆积。

@@ -204,6 +204,11 @@ func (g *GB28181API) resolveDeviceQueryCmdType(deviceID, action, configType stri
 	case deviceQueryActionCatalog:
 		return "Catalog", nil
 	case deviceQueryActionBroadcast:
+		if err := g.requireGBFeature(deviceID, "语音广播查询", func(c GBCapabilities) bool {
+			return c.VoiceBroadcast
+		}); err != nil {
+			return "", err
+		}
 		return "Broadcast", nil
 	case deviceQueryActionDeviceInfo:
 		return "DeviceInfo", nil
@@ -212,9 +217,14 @@ func (g *GB28181API) resolveDeviceQueryCmdType(deviceID, action, configType stri
 	case deviceQueryActionRecordInfo:
 		return "RecordInfo", nil
 	case deviceQueryActionPresetQuery:
+		if err := g.requireGBFeature(deviceID, "预置位查询", func(c GBCapabilities) bool {
+			return c.PresetQuery
+		}); err != nil {
+			return "", err
+		}
 		return "PresetQuery", nil
 	case deviceQueryActionHomePositionQuery:
-		if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "看守位查询(HomePositionQuery)"); err != nil {
+		if err := g.requireGBVersionAtLeast(deviceID, gbVersion2016, "看守位查询(HomePositionQuery)"); err != nil {
 			return "", err
 		}
 		return "HomePositionQuery", nil
@@ -241,6 +251,11 @@ func (g *GB28181API) resolveDeviceQueryCmdType(deviceID, action, configType stri
 		}
 		return "ConfigDownload", nil
 	case deviceQueryActionMobilePosition:
+		if err := g.requireGBFeature(deviceID, "移动位置查询", func(c GBCapabilities) bool {
+			return c.MobilePosition
+		}); err != nil {
+			return "", err
+		}
 		return "MobilePosition", nil
 	default:
 		return "", fmt.Errorf("unsupported device query action: %s", action)
@@ -251,7 +266,9 @@ func (g *GB28181API) requireConfigTypeVersion(deviceID, configType string) error
 	name := strings.TrimSpace(configType)
 	switch name {
 	case "BasicParam":
-		return nil
+		return g.requireGBFeature(deviceID, "配置查询(BasicParam)", func(c GBCapabilities) bool {
+			return c.ConfigQuery
+		})
 	case "VideoParamOpt", "SVACEncodeConfig", "SVACDecodeConfig", "VideoParamAttribute", "VideoRecordPlan",
 		"VideoAlarmRecord", "PictureMask", "FrameMirror", "AlarmReport", "OSDConfig", "SnapShot":
 		return g.requireGBVersionAtLeast(deviceID, gbVersion2022, "配置查询("+name+")")

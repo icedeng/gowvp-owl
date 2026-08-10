@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="GB2312"?>
+<Response>
+  <CmdType>Catalog</CmdType>
+  <SN>2</SN>
+  <DeviceID>34020000001320000001</DeviceID>
+  <SumNum>1</SumNum>
+  <DeviceList Num="1">
+    <Item>
+      <DeviceID>34020000001320000002</DeviceID>
+      <Name>Fixture Camera</Name>
+      <Manufacturer>Fixture</Manufacturer>
+      <Model>Model-1</Model>
+      <Owner>Fixture</Owner>
+      <CivilCode>340200</CivilCode>
+      <Address>Fixture Address</Address>
+      <Parental>0</Parental>
+      <SafetyWay>0</SafetyWay>
+      <RegisterWay>1</RegisterWay>
+      <Secrecy>0</Secrecy>
+      <Status>ON</Status>
+      <ParentID>34020000001320000001</ParentID>
+      <IPAddress>192.0.2.11</IPAddress>
+      <Port>5060</Port>
+      <Longitude>116.397</Longitude>
+      <Latitude>39.908</Latitude>
+      <Info>
+        <PTZType>1</PTZType>
+        <PositionType>2</PositionType>
+        <RoomType>1</RoomType>
+        <UseType>1</UseType>
+        <SupplyLightType>2</SupplyLightType>
+        <DirectionType>1</DirectionType>
+        <Resolution>5/6</Resolution>
+        <BusinessGroupID>34020000002150000001</BusinessGroupID>
+        <VendorCapability>enabled</VendorCapability>
+      </Info>
+      <VendorExtension>fixture-value</VendorExtension>
+    </Item>
+  </DeviceList>
+</Response>

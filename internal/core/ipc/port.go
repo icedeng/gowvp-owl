@@ -159,6 +159,31 @@ type GBDeviceQueryCapable interface {
 	DeviceQuery(ctx context.Context, device *Device, in *GBDeviceQueryInput) (*GBDeviceQueryOutput, error)
 }
 
+type GBBasicParamInput struct {
+	Name              string `json:"name"`
+	Expiration        int    `json:"expiration"`
+	HeartBeatInterval int    `json:"heartbeat_interval"`
+	HeartBeatCount    int    `json:"heartbeat_count"`
+}
+
+type GBDeviceConfigInput struct {
+	TargetID   string             `json:"target_id"`
+	Timeout    int                `json:"timeout"`
+	BasicParam *GBBasicParamInput `json:"basic_param"`
+}
+
+type GBDeviceConfigOutput struct {
+	SN       int    `json:"sn"`
+	CmdType  string `json:"cmd_type"`
+	DeviceID string `json:"device_id"`
+	Result   string `json:"result,omitempty"`
+	RawXML   string `json:"raw_xml,omitempty"`
+}
+
+type GBDeviceConfigCapable interface {
+	DeviceConfig(ctx context.Context, device *Device, in *GBDeviceConfigInput) (*GBDeviceConfigOutput, error)
+}
+
 // GBAppendixA4SnapshotInput 是附录 A.4 快照查询参数。
 type GBAppendixA4SnapshotInput struct {
 	// CmdType 可选，支持逗号分隔多值（如 "Alarm,DeviceStatus"）。
@@ -227,7 +252,14 @@ type HistoryControlInput struct {
 	Action  string // 结构化动作：play/pause/speed/seek
 	Scale   float64
 	SeekAt  int64 // unix seconds
+	// Transport 为空或 rtp 时保持现有媒体服务器链路；direct_tcp 仅用于 1.1 文件下载。
+	Transport string
 }
+
+const (
+	HistoryTransportRTP       = "rtp"
+	HistoryTransportDirectTCP = "direct_tcp"
+)
 
 type HistoryCapable interface {
 	StartHistory(ctx context.Context, device *Device, channel *Channel, in *HistoryControlInput) error
@@ -242,6 +274,7 @@ type TimeSyncCapable interface {
 type SubscribeInput struct {
 	Event   string
 	Expires int
+	Cancel  bool
 }
 
 type SubscribeCapable interface {

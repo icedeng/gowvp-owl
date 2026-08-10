@@ -33,6 +33,9 @@ type EditDeviceInput struct {
 	Username string `json:"username"` // 用户名
 	IP       string `json:"ip"`       // ip
 	Port     int    `json:"port"`     // port
+	// GBVersion 手动指定 GB/T 28181 协议版本；支持 1.0/1.1/2.0/3.0 和历史年份值。
+	// nil 表示不修改，空字符串表示清除手动覆盖并恢复自动协商。
+	GBVersion *string `json:"gb_version,omitempty"`
 
 	// IP           string    `json:"ip"`
 	// Port         int       `json:"port"`

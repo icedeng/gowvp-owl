@@ -289,14 +289,24 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		if streamNo < 0 || streamNo > 2 {
 			return fmt.Errorf("stream_number must be in [0,2]")
 		}
-		req.StreamNumber = &streamNo
+		if streamNo != 0 || g.getDeviceGBProtocolVersion(deviceID).AtLeast(GBVersion20) {
+			if err := g.requireGBVersionAtLeast(deviceID, gbVersion2016, "指定录像码流"); err != nil {
+				return err
+			}
+			req.StreamNumber = &streamNo
+		}
 	case deviceControlActionRecordStop:
 		req.RecordCmd = "StopRecord"
 		streamNo := in.StreamNumber
 		if streamNo < 0 || streamNo > 2 {
 			return fmt.Errorf("stream_number must be in [0,2]")
 		}
-		req.StreamNumber = &streamNo
+		if streamNo != 0 || g.getDeviceGBProtocolVersion(deviceID).AtLeast(GBVersion20) {
+			if err := g.requireGBVersionAtLeast(deviceID, gbVersion2016, "指定录像码流"); err != nil {
+				return err
+			}
+			req.StreamNumber = &streamNo
+		}
 	case deviceControlActionGuardSet:
 		req.GuardCmd = "SetGuard"
 	case deviceControlActionGuardReset:
@@ -304,14 +314,27 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 	case deviceControlActionAlarmReset:
 		req.AlarmCmd = "ResetAlarm"
 		if strings.TrimSpace(in.AlarmMethod) != "" || strings.TrimSpace(in.AlarmType) != "" {
+			if err := g.requireGBVersionAtLeast(deviceID, gbVersion2016, "报警复位扩展参数"); err != nil {
+				return err
+			}
 			req.Info = &deviceControlA23Info{
 				AlarmMethod: strings.TrimSpace(in.AlarmMethod),
 				AlarmType:   strings.TrimSpace(in.AlarmType),
 			}
 		}
 	case deviceControlActionIFrameSend:
+		if err := g.requireGBFeature(deviceID, "强制关键帧", func(c GBCapabilities) bool {
+			return c.IFrameControl
+		}); err != nil {
+			return err
+		}
 		req.IFrameCmd = "Send"
 	case deviceControlActionDragZoomIn:
+		if err := g.requireGBFeature(deviceID, "拉框放大", func(c GBCapabilities) bool {
+			return c.DragZoomControl
+		}); err != nil {
+			return err
+		}
 		if in.DragZoom == nil {
 			return fmt.Errorf("drag_zoom_in requires drag_zoom params")
 		}
@@ -324,6 +347,11 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 			LengthY:   in.DragZoom.LengthY,
 		}
 	case deviceControlActionDragZoomOut:
+		if err := g.requireGBFeature(deviceID, "拉框缩小", func(c GBCapabilities) bool {
+			return c.DragZoomControl
+		}); err != nil {
+			return err
+		}
 		if in.DragZoom == nil {
 			return fmt.Errorf("drag_zoom_out requires drag_zoom params")
 		}
@@ -336,7 +364,7 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 			LengthY:   in.DragZoom.LengthY,
 		}
 	case deviceControlActionHomePosition:
-		if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "看守位控制(HomePosition)"); err != nil {
+		if err := g.requireGBVersionAtLeast(deviceID, gbVersion2016, "看守位控制(HomePosition)"); err != nil {
 			return err
 		}
 		home := &deviceControlA23HomePosition{}

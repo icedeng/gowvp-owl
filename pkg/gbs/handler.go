@@ -4,7 +4,7 @@ import (
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
-func (g GB28181API) handlerMessage(ctx *sip.Context) {
+func (g *GB28181API) handlerMessage(ctx *sip.Context) {
 	// req := ctx.Request
 	// tx := ctx.Tx
 

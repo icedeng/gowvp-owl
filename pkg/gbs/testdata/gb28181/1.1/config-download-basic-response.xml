@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <CmdType>ConfigDownload</CmdType>
+  <SN>30</SN>
+  <DeviceID>34020000001320000001</DeviceID>
+  <Result>OK</Result>
+  <BasicParam>
+    <Name>Fixture Device</Name>
+    <Expiration>3600</Expiration>
+    <HeartBeatInterval>60</HeartBeatInterval>
+    <HeartBeatCount>3</HeartBeatCount>
+    <VendorParam>retained</VendorParam>
+  </BasicParam>
+</Response>

@@ -154,6 +154,12 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 	// GB28181 协议特有的回调接口
 	g.Any("/gb28181/snapshot", api.gbSnapshotUpload)
 	g.Any("/gb28181/snapshot/:device_id/:cover_key/:session_id", api.gbSnapshotUpload)
+	{
+		group := g.Group("/gb28181/downloads", handler...)
+		group.GET("/:session_id", web.WrapH(api.directTCPDownloadState))
+		group.DELETE("/:session_id", web.WrapH(api.cancelDirectTCPDownload))
+	}
+	g.GET("/gb28181/metrics", append(handler, web.WrapH(api.gbMetrics))...)
 
 	// 统一的设备管理 API（支持所有协议）
 	{
@@ -167,6 +173,8 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/catalog", web.WrapH(api.queryCatalog))
 		group.POST("/:id/gb/control", web.WrapH(api.gbDeviceControl)) // GB 附录A.2.3 设备控制
 		group.POST("/:id/gb/query", web.WrapH(api.gbDeviceQuery))     // GB 附录A.2.4 设备查询
+		group.POST("/:id/gb/config", web.WrapH(api.gbDeviceConfig))   // GB 设备配置（2014 BasicParam）
+		group.GET("/:id/gb/diagnostics", web.WrapH(api.gbDiagnostics))
 		group.GET("/:id/gb/a4_snapshot", web.WrapH(api.gbAppendixA4Snapshot))
 	}
 	{
@@ -1193,13 +1201,14 @@ type upgradeDeviceInput struct {
 }
 
 type historyControlInput struct {
-	Mode    string  `json:"mode" example:"playback"`       // 会话模式：playback 回放，download 下载
-	StartAt int64   `json:"start_at" example:"1710864000"` // 开始时间，Unix 秒；start 时必填
-	EndAt   int64   `json:"end_at" example:"1710950400"`   // 结束时间，Unix 秒；start 时必填
-	Cmd     string  `json:"cmd" example:"PLAY"`            // 原始控制命令透传值
-	Action  string  `json:"action" example:"pause"`        // 结构化动作，如 play/pause/seek/speed
-	Scale   float64 `json:"scale" example:"2"`             // 倍速值，Action=speed 时使用
-	SeekAt  int64   `json:"seek_at" example:"1710867600"`  // 跳转目标时间，Action=seek 时使用
+	Mode      string  `json:"mode" example:"playback"`       // 会话模式：playback 回放，download 下载
+	StartAt   int64   `json:"start_at" example:"1710864000"` // 开始时间，Unix 秒；start 时必填
+	EndAt     int64   `json:"end_at" example:"1710950400"`   // 结束时间，Unix 秒；start 时必填
+	Cmd       string  `json:"cmd" example:"PLAY"`            // 原始控制命令透传值
+	Action    string  `json:"action" example:"pause"`        // 结构化动作，如 play/pause/seek/speed
+	Scale     float64 `json:"scale" example:"2"`             // 倍速值，Action=speed 时使用
+	SeekAt    int64   `json:"seek_at" example:"1710867600"`  // 跳转目标时间，Action=seek 时使用
+	Transport string  `json:"transport" example:"rtp"`       // rtp 或 direct_tcp；direct_tcp 仅支持 1.1 下载
 }
 
 type voiceControlInput struct {
@@ -1209,6 +1218,20 @@ type voiceControlInput struct {
 type subscribeInput struct {
 	Event   string `json:"event" example:"alarm"`  // 订阅事件类型，如 alarm/mobile_position/catalog/device_position
 	Expires int    `json:"expires" example:"3600"` // 订阅有效期，单位秒
+	Cancel  bool   `json:"cancel" example:"false"` // 是否取消已有订阅
+}
+
+type gbBasicParamInput struct {
+	Name              string `json:"name" example:"IPC"`
+	Expiration        int    `json:"expiration" example:"3600"`
+	HeartBeatInterval int    `json:"heartbeat_interval" example:"60"`
+	HeartBeatCount    int    `json:"heartbeat_count" example:"3"`
+}
+
+type gbDeviceConfigInput struct {
+	TargetID   string             `json:"target_id" example:"34020000001320000001"`
+	Timeout    int                `json:"timeout" example:"8"`
+	BasicParam *gbBasicParamInput `json:"basic_param"`
 }
 
 type optionsProbeInput struct {
@@ -1372,6 +1395,7 @@ func (a IPCAPI) upgradeDevice(c *gin.Context, in *upgradeDeviceInput) (any, erro
 // @Summary 启动历史会话
 // @Description 启动历史回放或历史下载会话。
 // @Description `mode` 可选：`playback` 表示回放，`download` 表示下载。
+// @Description `transport=direct_tcp` 仅用于有效版本 1.1 且已加入白名单的附录 O 下载；空值或 `rtp` 保持原链路。
 // @Description 调用前置条件：1. 通道必须存在；2. 设备在线；3. 目标时间段内存在可用录像；4. 设备支持历史回放或下载。
 // @Description 失败场景：1. 通道不存在；2. 设备离线；3. 无录像可回放；4. 设备返回协议不支持；5. 会话建立超时。
 // @Description 请求示例：`{ "mode": "playback", "start_at": 1710864000, "end_at": 1710950400 }`
@@ -1391,14 +1415,81 @@ func (a IPCAPI) startHistory(c *gin.Context, in *historyControlInput) (any, erro
 		return nil, err
 	}
 	err = a.ipc.StartHistory(c.Request.Context(), channelID, &ipc.HistoryControlInput{
-		Mode:    in.Mode,
-		StartAt: in.StartAt,
-		EndAt:   in.EndAt,
+		Mode:      in.Mode,
+		StartAt:   in.StartAt,
+		EndAt:     in.EndAt,
+		Transport: strings.ToLower(strings.TrimSpace(in.Transport)),
 	})
 	if err != nil {
 		return nil, ErrDevice.SetMsg(err.Error())
 	}
+	out := gin.H{"msg": "ok"}
+	if strings.EqualFold(strings.TrimSpace(in.Transport), "direct_tcp") && a.uc != nil && a.uc.SipServer != nil {
+		channel, getErr := a.ipc.GetChannel(c.Request.Context(), channelID)
+		if getErr == nil {
+			device, deviceErr := a.ipc.GetDevice(c.Request.Context(), channel.DID)
+			if deviceErr == nil {
+				if state, ok := a.uc.SipServer.DirectTCPDownloadByChannel(device.DeviceID, channel.ChannelID); ok {
+					out["download"] = state
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+// directTCPDownloadState godoc
+// @Summary 查询 2014 裸 TCP 下载状态
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param session_id path string true "SIP Call-ID 下载会话 ID"
+// @Success 200 {object} SwaggerDirectTCPDownloadState
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /gb28181/downloads/{session_id} [get]
+func (a IPCAPI) directTCPDownloadState(c *gin.Context, _ *struct{}) (any, error) {
+	if a.uc == nil || a.uc.SipServer == nil {
+		return nil, ErrDevice.SetMsg("GB28181 server is unavailable")
+	}
+	state, ok := a.uc.SipServer.DirectTCPDownloadState(strings.TrimSpace(c.Param("session_id")))
+	if !ok {
+		return nil, reason.ErrBadRequest.SetMsg("direct TCP download session not found")
+	}
+	return state, nil
+}
+
+// cancelDirectTCPDownload godoc
+// @Summary 取消 2014 裸 TCP 下载
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param session_id path string true "SIP Call-ID 下载会话 ID"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /gb28181/downloads/{session_id} [delete]
+func (a IPCAPI) cancelDirectTCPDownload(c *gin.Context, _ *struct{}) (any, error) {
+	if a.uc == nil || a.uc.SipServer == nil {
+		return nil, ErrDevice.SetMsg("GB28181 server is unavailable")
+	}
+	if !a.uc.SipServer.CancelDirectTCPDownload(strings.TrimSpace(c.Param("session_id"))) {
+		return nil, reason.ErrBadRequest.SetMsg("direct TCP download session is not active")
+	}
 	return gin.H{"msg": "ok"}, nil
+}
+
+// gbMetrics godoc
+// @Summary 查询 GB28181 灰度指标
+// @Tags Device
+// @Security BearerAuth
+// @Produce json
+// @Success 200 {object} SwaggerGBMetricsSnapshot
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /gb28181/metrics [get]
+func (a IPCAPI) gbMetrics(_ *gin.Context, _ *struct{}) (any, error) {
+	if a.uc == nil || a.uc.SipServer == nil {
+		return nil, ErrDevice.SetMsg("GB28181 server is unavailable")
+	}
+	return a.uc.SipServer.Metrics(), nil
 }
 
 // stopHistory 停止历史回放/下载会话。
@@ -1572,6 +1663,7 @@ func (a IPCAPI) subscribe(c *gin.Context, in *subscribeInput) (any, error) {
 	if err := a.ipc.Subscribe(c.Request.Context(), deviceID, &ipc.SubscribeInput{
 		Event:   in.Event,
 		Expires: in.Expires,
+		Cancel:  in.Cancel,
 	}); err != nil {
 		return nil, ErrDevice.SetMsg(err.Error())
 	}
@@ -1705,6 +1797,43 @@ func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, erro
 		})
 	}
 	return resp, nil
+}
+
+// gbDeviceConfig 下发 GB/T 28181-2014 BasicParam 配置。
+func (a IPCAPI) gbDeviceConfig(c *gin.Context, in *gbDeviceConfigInput) (any, error) {
+	if in == nil || in.BasicParam == nil {
+		return nil, ErrDevice.SetMsg("basic_param is required")
+	}
+	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
+	out, err := a.ipc.GBDeviceConfig(c.Request.Context(), deviceID, &ipc.GBDeviceConfigInput{
+		TargetID: in.TargetID,
+		Timeout:  in.Timeout,
+		BasicParam: &ipc.GBBasicParamInput{
+			Name:              in.BasicParam.Name,
+			Expiration:        in.BasicParam.Expiration,
+			HeartBeatInterval: in.BasicParam.HeartBeatInterval,
+			HeartBeatCount:    in.BasicParam.HeartBeatCount,
+		},
+	})
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return out, nil
+}
+
+func (a IPCAPI) gbDiagnostics(c *gin.Context, _ *struct{}) (any, error) {
+	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
+	out, err := a.uc.SipServer.GetDiagnostics(c.Request.Context(), deviceID)
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	return out, nil
 }
 
 // gbAppendixA4Snapshot godoc

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/gowvp/owl/internal/conf"
@@ -20,9 +21,31 @@ import (
 const KeepaliveInterval = 2 * 15 * time.Second
 
 type WarpMediaServer struct {
+	mu            sync.RWMutex
 	IsOnline      bool
 	LastUpdatedAt time.Time
 	Config        *MediaServer
+}
+
+func (m *WarpMediaServer) status() (bool, time.Time, *MediaServer) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.IsOnline, m.LastUpdatedAt, m.Config
+}
+
+func (m *WarpMediaServer) update(isOnline bool, lastUpdatedAt time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.IsOnline = isOnline
+	if !lastUpdatedAt.IsZero() {
+		m.LastUpdatedAt = lastUpdatedAt
+	}
+}
+
+func (m *WarpMediaServer) touch(lastUpdatedAt time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.LastUpdatedAt = lastUpdatedAt
 }
 
 type NodeManager struct {
@@ -74,19 +97,19 @@ func (n *NodeManager) tickCheck() {
 			return
 		case <-ticker.C:
 			n.cacheServers.Range(func(_ string, ms *WarpMediaServer) bool {
-				if time.Since(ms.LastUpdatedAt) < KeepaliveInterval {
-					ms.IsOnline = true
+				_, lastUpdatedAt, config := ms.status()
+				if time.Since(lastUpdatedAt) < KeepaliveInterval {
+					ms.update(true, time.Time{})
 					return true
 				}
 
 				// 尝试主动探测
-				if ms.Config != nil {
-					driver, err := n.getDriver(ms.Config.Type)
+				if config != nil {
+					driver, err := n.getDriver(config.Type)
 					if err == nil {
 						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-						if err := driver.Ping(ctx, ms.Config); err == nil {
-							ms.LastUpdatedAt = time.Now()
-							ms.IsOnline = true
+						if err := driver.Ping(ctx, config); err == nil {
+							ms.update(true, time.Now())
 							cancel()
 							return true
 						}
@@ -94,7 +117,7 @@ func (n *NodeManager) tickCheck() {
 					}
 				}
 
-				ms.IsOnline = false
+				ms.update(false, time.Time{})
 				return true
 			})
 		}
@@ -232,7 +255,7 @@ func (n *NodeManager) Keepalive(serverID string) {
 	if !ok {
 		return
 	}
-	value.LastUpdatedAt = time.Now()
+	value.touch(time.Now())
 }
 
 func (n *NodeManager) IsOnline(serverID string) bool {
@@ -240,7 +263,8 @@ func (n *NodeManager) IsOnline(serverID string) bool {
 	if !ok {
 		return false
 	}
-	return value.IsOnline
+	isOnline, _, _ := value.status()
+	return isOnline
 }
 
 // findMediaServer Paginated search

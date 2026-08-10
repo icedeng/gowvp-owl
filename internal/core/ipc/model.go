@@ -53,15 +53,66 @@ type DeviceExt struct {
 	Model        string `json:"model"`        // 型号
 	Firmware     string `json:"firmware"`     // 固件版本
 	Name         string `json:"name"`         // 设备名
-	GBVersion    string `json:"gb_version"`   // GB版本
-	Zones        []Zone `json:"zones"`        // 区域
-	EnabledAI    bool   `json:"enabled_ai"`   // 是否启用 AI
-	PTZVerified  bool   `json:"ptz_verified"` // 是否已通过实际命令验证支持 PTZ
+	GBVersion    string `json:"gb_version"`   // GB版本（兼容历史年份值）
+	// GBDeclaredVersion 是设备通过 X-GB-Ver 声明的版本号。
+	GBDeclaredVersion string `json:"gb_declared_version,omitempty"`
+	// GBEffectiveVersion 是平台下行实际使用的版本号。
+	GBEffectiveVersion string `json:"gb_effective_version,omitempty"`
+	// GBManualVersion 非空时覆盖自动协商；值为空表示恢复自动协商。
+	GBManualVersion string `json:"gb_manual_version,omitempty"`
+	// GBVersionSource 记录 effective version 的来源：manual/header/legacy/default。
+	GBVersionSource string `json:"gb_version_source,omitempty"`
+	// GBVersionUpdatedAt 是最近一次版本协商时间（Unix 秒）。
+	GBVersionUpdatedAt         int64    `json:"gb_version_updated_at,omitempty"`
+	GBVersionCapabilities      []string `json:"gb_version_capabilities,omitempty"`
+	GBLastUnsupportedCommand   string   `json:"gb_last_unsupported_command,omitempty"`
+	GBLastUnsupportedVersion   string   `json:"gb_last_unsupported_version,omitempty"`
+	GBLastUnsupportedUpdatedAt int64    `json:"gb_last_unsupported_updated_at,omitempty"`
+	Zones                      []Zone   `json:"zones"`        // 区域
+	EnabledAI                  bool     `json:"enabled_ai"`   // 是否启用 AI
+	PTZVerified                bool     `json:"ptz_verified"` // 是否已通过实际命令验证支持 PTZ
 	// GBAppendixA4 保存 GB/T 28181-2022 附录 A.4 扩展对象最新快照（结构化落库）。
 	GBAppendixA4 []GBAppendixA4Object `json:"gb_appendix_a4"`
+	// GBCatalog 保存 GB/T 28181 目录项扩展和原始 XML，兼容 2014 及厂商私有字段。
+	GBCatalog *GBCatalogExt `json:"gb_catalog,omitempty"`
 
 	// 空串表示 always
 	RecordMode string `json:"record_mode"` // 录像模式, 一直录制:always, 按AI触发:ai, 不录制:none
+}
+
+// GBCatalogExt 是通道或目录节点的 GB/T 28181 目录扩展快照。
+// 使用 ext JSON 持久化，避免为可选协议字段增加大量数据库列。
+type GBCatalogExt struct {
+	Kind            string  `json:"kind,omitempty"`
+	Owner           string  `json:"owner,omitempty"`
+	CivilCode       string  `json:"civil_code,omitempty"`
+	Block           string  `json:"block,omitempty"`
+	Address         string  `json:"address,omitempty"`
+	Parental        int     `json:"parental,omitempty"`
+	ParentID        string  `json:"parent_id,omitempty"`
+	SafetyWay       int     `json:"safety_way,omitempty"`
+	RegisterWay     int     `json:"register_way,omitempty"`
+	CertNum         string  `json:"cert_num,omitempty"`
+	Certifiable     int     `json:"certifiable,omitempty"`
+	ErrCode         int     `json:"err_code,omitempty"`
+	EndTime         string  `json:"end_time,omitempty"`
+	Secrecy         int     `json:"secrecy,omitempty"`
+	IPAddress       string  `json:"ip_address,omitempty"`
+	Port            int     `json:"port,omitempty"`
+	Password        string  `json:"password,omitempty"`
+	Status          string  `json:"status,omitempty"`
+	Longitude       float64 `json:"longitude,omitempty"`
+	Latitude        float64 `json:"latitude,omitempty"`
+	PTZType         int     `json:"ptz_type,omitempty"`
+	PositionType    int     `json:"position_type,omitempty"`
+	RoomType        int     `json:"room_type,omitempty"`
+	UseType         int     `json:"use_type,omitempty"`
+	SupplyLightType int     `json:"supply_light_type,omitempty"`
+	DirectionType   int     `json:"direction_type,omitempty"`
+	Resolution      string  `json:"resolution,omitempty"`
+	BusinessGroupID string  `json:"business_group_id,omitempty"`
+	RawXML          string  `json:"raw_xml,omitempty"`
+	InfoRawXML      string  `json:"info_raw_xml,omitempty"`
 }
 
 // GBAppendixA4Object 是附录 A.4 扩展对象的统一结构化模型。

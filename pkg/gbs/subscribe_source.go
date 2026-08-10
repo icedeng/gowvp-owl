@@ -33,6 +33,7 @@ type eventSubscription struct {
 	Conn   sip.Connection
 
 	GBVersion string
+	Event     string
 }
 
 // subscriptionTarget 适配 wrapRequest 的 Targeter。
@@ -86,6 +87,18 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 	if deviceID == "" {
 		deviceID = "*"
 	}
+	eventValue, eventID, err := parseSubscriptionEvent(ctx.GetHeader("Event"))
+	if err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
+	if eventValue == "" {
+		eventValue = buildSubscriptionEventValue(cmdType, deviceID)
+	}
+	if eventID != "" && deviceID != "*" && eventID != deviceID {
+		ctx.String(400, "event id does not match DeviceID")
+		return
+	}
 
 	targetAddr := ctx.To
 	if contact, ok := ctx.Request.Contact(); ok && contact != nil && contact.Address != nil {
@@ -118,9 +131,41 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 		Source:    ctx.Source,
 		Conn:      ctx.Request.GetConnection(),
 		GBVersion: ctx.XGBVer,
+		Event:     eventValue,
 	}
 	g.eventSubscribers.Store(key, sub)
 	ctx.String(200, "OK")
+}
+
+func buildSubscriptionEventValue(cmdType, deviceID string) string {
+	cmdType = strings.TrimSpace(cmdType)
+	deviceID = strings.TrimSpace(deviceID)
+	if strings.EqualFold(cmdType, "Catalog") && deviceID != "" && deviceID != "*" {
+		return "Catalog;id=" + deviceID
+	}
+	return cmdType
+}
+
+func parseSubscriptionEvent(value string) (eventValue, eventID string, err error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", "", nil
+	}
+	parts := strings.Split(value, ";")
+	eventName := strings.TrimSpace(parts[0])
+	if eventName == "" {
+		return "", "", fmt.Errorf("invalid event header")
+	}
+	for _, part := range parts[1:] {
+		keyValue := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(keyValue) != 2 {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(keyValue[0]), "id") {
+			eventID = strings.Trim(strings.TrimSpace(keyValue[1]), `"`)
+		}
+	}
+	return buildSubscriptionEventValue(eventName, eventID), eventID, nil
 }
 
 func parseSubscribeExpires(value string) (int, error) {
@@ -211,7 +256,7 @@ func (g *GB28181API) publishEventNotify(cmdType, deviceID string, body []byte) {
 	})
 }
 
-func (g *GB28181API) sendEventNotify(sub *eventSubscription, _ string, body []byte) error {
+func (g *GB28181API) sendEventNotify(sub *eventSubscription, cmdType string, body []byte) error {
 	target := &subscriptionTarget{
 		to:        sub.To,
 		source:    sub.Source,
@@ -226,7 +271,11 @@ func (g *GB28181API) sendEventNotify(sub *eventSubscription, _ string, body []by
 		state = fmt.Sprintf("active;expires=%d", expires)
 	}
 	tx, err := g.svr.wrapRequest(target, sip.MethodNotify, &sip.ContentTypeXML, body, func(r *sip.Request) {
-		r.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "presence"})
+		eventValue := strings.TrimSpace(sub.Event)
+		if eventValue == "" {
+			eventValue = buildSubscriptionEventValue(cmdType, sub.DeviceID)
+		}
+		r.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: eventValue})
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: state})
 	})
 	if err != nil {

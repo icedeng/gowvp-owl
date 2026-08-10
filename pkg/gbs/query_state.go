@@ -105,6 +105,7 @@ type ConfigDownloadState struct {
 	AlarmReport         *AlarmReport         `json:"alarm_report,omitempty"`
 	OSDConfig           *OSDConfig           `json:"osd_config,omitempty"`
 	SnapShot            *SnapShot            `json:"snapshot,omitempty"`
+	RawXML              string               `json:"raw_xml,omitempty"`
 }
 
 // DeviceConfigState 是设备配置应答快照。
@@ -114,6 +115,7 @@ type DeviceConfigState struct {
 	DeviceID string    `json:"device_id"`
 	Result   string    `json:"result,omitempty"`
 	SnapShot *SnapShot `json:"snapshot,omitempty"`
+	RawXML   string    `json:"raw_xml,omitempty"`
 }
 
 // GetQueryState 获取设备最新结构化状态。
@@ -524,5 +526,6 @@ func decodeConfigDownloadState(body []byte) *ConfigDownloadState {
 		AlarmReport:         msg.AlarmReport,
 		OSDConfig:           msg.OSDConfig,
 		SnapShot:            msg.SnapShot,
+		RawXML:              string(body),
 	}
 }

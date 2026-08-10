@@ -93,10 +93,30 @@ type SIP struct {
 	TLSCert   string `comment:"SIP-TLS 证书文件路径" json:"tls_cert"`
 	TLSKey    string `comment:"SIP-TLS 私钥文件路径" json:"tls_key"`
 
-	StrictSourceCheck  bool `comment:"是否校验设备上报源IP与注册源IP一致" json:"strict_source_check"`
-	RequireMessageAuth bool `comment:"是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权" json:"require_message_auth"`
-	PTZWeakConfirm     bool `comment:"是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理" json:"ptz_weak_confirm"`
+	StrictSourceCheck  bool                 `comment:"是否校验设备上报源IP与注册源IP一致" json:"strict_source_check"`
+	RequireMessageAuth bool                 `comment:"是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权" json:"require_message_auth"`
+	PTZWeakConfirm     bool                 `comment:"是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理" json:"ptz_weak_confirm"`
+	DirectTCPDownload  SIPDirectTCPDownload `comment:"GB/T 28181-2014 附录 O 裸 TCP 文件下载" json:"direct_tcp_download"`
 	Log                SIPLog
+}
+
+// SIPDirectTCPDownload 控制 2014 附录 O 无 RTP 封装的 TCP 文件下载。
+// 该能力默认关闭，并通过设备白名单显式启用，避免影响现有 RTP 下载链路。
+type SIPDirectTCPDownload struct {
+	Enabled              bool     `comment:"是否启用 2014 裸 TCP 文件下载" json:"enabled"`
+	DeviceAllowlist      []string `comment:"允许使用裸 TCP 下载的设备国标 ID 白名单" json:"device_allowlist"`
+	StorageDir           string   `comment:"下载文件存储根目录" json:"storage_dir"`
+	RetainDays           int      `comment:"完成文件保留天数" json:"retain_days"`
+	OfferPort            int      `comment:"INVITE SDP 中声明的接收端占位端口" json:"offer_port"`
+	MaxFileSize          int64    `comment:"单文件最大字节数" json:"max_file_size"`
+	GlobalConcurrency    int      `comment:"全局最大并发下载数" json:"global_concurrency"`
+	DeviceConcurrency    int      `comment:"单设备最大并发下载数" json:"device_concurrency"`
+	DialTimeout          Duration `comment:"TCP 连接超时" json:"dial_timeout"`
+	FirstByteTimeout     Duration `comment:"首字节超时" json:"first_byte_timeout"`
+	IdleTimeout          Duration `comment:"下载空闲超时" json:"idle_timeout"`
+	TotalTimeout         Duration `comment:"单次下载总超时" json:"total_timeout"`
+	AllowAddressMismatch bool     `comment:"是否允许 SDP 地址与设备注册地址不一致" json:"allow_address_mismatch"`
+	AllowedAddressCIDRs  []string `comment:"地址不一致时允许连接的 CIDR 白名单" json:"allowed_address_cidrs"`
 }
 
 type SIPLog struct {

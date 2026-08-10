@@ -89,6 +89,32 @@
   # 是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理
   PTZWeakConfirm = false
 
+  [Sip.DirectTCPDownload]
+    # 是否启用 GB/T 28181-2014 附录 O 裸 TCP 文件下载；默认关闭
+    Enabled = false
+    # 启用后仍仅允许以下设备国标 ID
+    DeviceAllowlist = []
+    # 下载文件存储根目录
+    StorageDir = './configs/downloads/gb28181'
+    # 完成文件保留天数
+    RetainDays = 7
+    # INVITE SDP 中的接收端占位端口
+    OfferPort = 9
+    # 单文件最大字节数（10 GiB）
+    MaxFileSize = 10737418240
+    # 全局/单设备最大并发数
+    GlobalConcurrency = 4
+    DeviceConcurrency = 1
+    # 连接、首字节、空闲和总超时
+    DialTimeout = '5s'
+    FirstByteTimeout = '15s'
+    IdleTimeout = '30s'
+    TotalTimeout = '2h0m0s'
+    # 是否允许 SDP IP 与 REGISTER 地址不一致
+    AllowAddressMismatch = false
+    # 地址不一致时必须同时匹配以下 CIDR；空列表保持拒绝
+    AllowedAddressCIDRs = []
+
   [Sip.Log]
     # 是否启用 SIP 报文日志落盘
     Enabled = false

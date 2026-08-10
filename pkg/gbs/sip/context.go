@@ -30,8 +30,11 @@ type Context struct {
 
 	Log *slog.Logger
 
-	svr    *Server
+	svr *Server
+	// XGBVer 保存附录 I 定义的有效版本号（1.0/1.1/2.0/3.0）。
 	XGBVer string
+	// XGBVerRaw 保留设备发送的原始版本值，便于诊断未知扩展版本。
+	XGBVerRaw string
 }
 
 func newContext(req *Request, tx *Transaction) *Context {
@@ -77,21 +80,10 @@ func (c *Context) parserRequest() error {
 		slog.Error(">>>>>>>> to is nil", "header", header)
 	}
 
-	xgbVer := req.GetHeaders("X-GB-Ver")
-	if len(xgbVer) > 0 {
-		h := xgbVer[0]
-		parts := strings.Split(h.String(), ":")
-		if len(parts) == 2 {
-			switch strings.TrimSpace(parts[1]) {
-			case "3.0":
-				c.XGBVer = "2022"
-			case "2.0":
-				c.XGBVer = "2016"
-			case "1.0":
-				c.XGBVer = "2011"
-			}
-		}
-
+	c.XGBVerRaw = c.GetHeader("X-GB-Ver")
+	switch c.XGBVerRaw {
+	case "1.0", "1.1", "2.0", "3.0":
+		c.XGBVer = c.XGBVerRaw
 	}
 
 	c.Log = slog.Default().With("deviceID", c.DeviceID, "host", c.Host)
@@ -160,6 +152,9 @@ func (c *Context) SendRequest(method string, body []byte) (*Transaction, error) 
 	hb := NewHeaderBuilder().SetTo(c.To).SetFrom(c.From).AddVia(&ViaHop{
 		Params: NewParams().Add("branch", String{Str: GenerateBranch()}),
 	}).SetContentType(&ContentTypeXML).SetMethod(method)
+	if c.XGBVer != "" {
+		hb.SetXGBVerValue(c.XGBVer)
+	}
 
 	req := NewRequest("", method, c.To.URI, DefaultSipVersion, hb.Build(), body)
 	req.SetDestination(c.Source)

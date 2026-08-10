@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <CmdType>Catalog</CmdType>
+  <SN>20</SN>
+  <DeviceID>34020000002000000001</DeviceID>
+  <SumNum>5</SumNum>
+  <DeviceList Num="5">
+    <Item>
+      <DeviceID>340200</DeviceID>
+      <Name>行政区划</Name>
+      <ParentID>3402</ParentID>
+    </Item>
+    <Item>
+      <DeviceID>34020000002000000001</DeviceID>
+      <Name>视频系统</Name>
+      <ParentID>340200</ParentID>
+    </Item>
+    <Item>
+      <DeviceID>34020000002150000001</DeviceID>
+      <Name>业务分组</Name>
+    </Item>
+    <Item>
+      <DeviceID>34020000002160000001</DeviceID>
+      <Name>虚拟组织</Name>
+      <ParentID>34020000002000000001</ParentID>
+      <Info><BusinessGroupID>34020000002150000001</BusinessGroupID></Info>
+    </Item>
+    <Item>
+      <DeviceID>34020000001320000002</DeviceID>
+      <Name>摄像机</Name>
+      <Manufacturer>Fixture</Manufacturer>
+      <Model>Model-1</Model>
+      <Owner>Fixture</Owner>
+      <CivilCode>340200</CivilCode>
+      <Block>340200000000</Block>
+      <Address>Fixture Address</Address>
+      <Parental>0</Parental>
+      <ParentID>34020000002160000001</ParentID>
+      <RegisterWay>1</RegisterWay>
+      <Secrecy>0</Secrecy>
+      <Status>ON</Status>
+      <IPAddress>192.0.2.11</IPAddress>
+      <Port>5060</Port>
+      <Longitude>116.397</Longitude>
+      <Latitude>39.908</Latitude>
+      <Info><PTZType>1</PTZType><BusinessGroupID>34020000002150000001</BusinessGroupID></Info>
+    </Item>
+  </DeviceList>
+</Response>

@@ -13,7 +13,6 @@ import (
 	"github.com/gowvp/owl/pkg/gbs/m"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 	"github.com/gowvp/owl/pkg/zlm"
-	sdp "github.com/panjjo/gosdp"
 )
 
 type PlayInput struct {
@@ -64,6 +63,9 @@ func (g *GB28181API) StopPlay(ctx context.Context, in *StopPlayInput) error {
 }
 
 func (g *GB28181API) Play(in *PlayInput) error {
+	if in == nil || in.Channel == nil {
+		return fmt.Errorf("invalid play input")
+	}
 	log := slog.With("deviceID", in.Channel.DeviceID, "channelID", in.Channel.ChannelID)
 	log.Info("开始播放流程")
 	ch, ok := g.svr.memoryStorer.GetChannel(in.Channel.DeviceID, in.Channel.ChannelID)
@@ -78,6 +80,9 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	if !ch.device.IsOnline {
 		return ErrDeviceOffline
 	}
+	if err := g.requireMediaTransport(in.Channel.DeviceID, in.StreamMode, "实时点播"); err != nil {
+		return err
+	}
 
 	// 播放中
 	key := "play:" + in.Channel.DeviceID + ":" + in.Channel.ChannelID
@@ -91,7 +96,12 @@ func (g *GB28181API) Play(in *PlayInput) error {
 		}); err != nil {
 			slog.Error("stop play failed", "err", err)
 		}
+		stream = &Streams{}
+		g.streams.Store(key, stream)
 	}
+	stream.DeviceID = in.Channel.DeviceID
+	stream.ChannelID = in.Channel.ChannelID
+	stream.StreamID = in.Channel.ID
 
 	log.Debug("1. 开启RTP服务器等待接收视频流")
 	// 开启RTP服务器等待接收视频流
@@ -164,39 +174,6 @@ func GetIP(input string) (string, error) {
 }
 
 func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *Streams) error {
-	name := "Play"
-	protocal := "TCP/RTP/AVP"
-	if in.StreamMode == 0 {
-		protocal = "RTP/AVP"
-	}
-
-	// if  {
-	// name = "Playback"
-	// protocal = "RTP/RTCP"
-	// }
-
-	video := sdp.Media{
-		Description: sdp.MediaDescription{
-			Type:     "video",
-			Port:     port,
-			Formats:  []string{"96", "97", "98"},
-			Protocol: protocal,
-		},
-	}
-	video.AddAttribute("recvonly")
-
-	switch in.StreamMode {
-	case 1:
-		video.AddAttribute("setup", "passive")
-		video.AddAttribute("connection", "new")
-	case 2:
-		video.AddAttribute("setup", "active")
-		video.AddAttribute("connection", "new")
-	}
-	video.AddAttribute("rtpmap", "96", "PS/90000")
-	video.AddAttribute("rtpmap", "97", "MPEG4/90000")
-	video.AddAttribute("rtpmap", "98", "H264/90000")
-
 	// 获取配置值
 	ipstr := in.SMS.GetSDPIP()
 	// 进行IP解析
@@ -207,33 +184,19 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 	}
 	slog.Info("域名解析成功", "原始域名", ipstr, "解析IP", ip4str)
 
-	// defining message
-	msg := &sdp.Message{
-		Origin: sdp.Origin{
-			Username:    ch.ChannelID, // 媒体服务器id
-			NetworkType: "IN",
-			AddressType: "IP4",
-			Address:     ip4str,
-		},
-		Name: name,
-		Connection: sdp.ConnectionData{
-			NetworkType: "IN",
-			AddressType: "IP4",
-			IP:          net.ParseIP(ip4str),
-		},
-		Timing: []sdp.Timing{
-			{
-				// 	Start: data.S,
-				// End:   data.E,
-			},
-		},
-		Medias: []sdp.Media{video},
-		SSRC:   g.getSSRC(0),
-		// URI:    fmt.Sprintf("%s:0", channel.ChannelID),
+	ssrc := g.getSSRC(0)
+	body, err := buildGBSDP(gbSDPInput{
+		Version:     g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
+		SessionName: historyModePlay,
+		ChannelID:   ch.ChannelID,
+		IP:          ip4str,
+		Port:        port,
+		StreamMode:  in.StreamMode,
+		SSRC:        ssrc,
+	})
+	if err != nil {
+		return err
 	}
-
-	// appending message to session
-	body := msg.Append(nil).AppendTo(nil)
 
 	slog.Info(">>>", "body", string(body))
 	// appending session to byte buffer
@@ -241,7 +204,7 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 	// channel.addr = &sip.Address{URI: uri}
 	// _serverDevices.addr.Params.Add("tag", sip.String{Str: sip.RandString(20)})
 	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
-		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: fmt.Sprintf("%s:%s,%s:%s", ch.ChannelID, in.Channel.ID, in.Channel.DeviceID, in.Channel.ID)})
+		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, g.cfg.ID)})
 	})
 	if err != nil {
 		return err
@@ -260,6 +223,13 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 	}
 
 	stream.Resp = resp
+	stream.T = 0
+	stream.Status = 0
+	stream.Stop = false
+	stream.ssrc = ssrc
+	if callID, ok := resp.CallID(); ok {
+		stream.CallID = normalizeCallID(callID)
+	}
 
 	ackReq := sip.NewRequestFromResponse(sip.MethodACK, resp)
 	return tx.Request(ackReq)

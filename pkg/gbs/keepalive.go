@@ -34,22 +34,19 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		to:     ctx.To,
 	})
 
+	effectiveVersion := GBVersion10
 	if err := g.svr.memoryStorer.Change(ctx.DeviceID, func(d *ipc.Device) error {
 		d.KeepaliveAt = orm.Now()
 		d.IsOnline = msg.Status == "OK" || msg.Status == "ON"
 		d.Address = ctx.Source.String()
 		d.Transport = ctx.Source.Network()
-		if ctx.XGBVer != "" {
-			d.Ext.GBVersion = ctx.XGBVer
-		}
+		effectiveVersion = applyGBProtocolVersion(&d.Ext, ctx.XGBVer)
 		return nil
 	}, func(d *Device) {
 		d.conn = ctx.Request.GetConnection()
 		d.source = ctx.Source
 		d.to = ctx.To
-		if ctx.XGBVer != "" {
-			d.gbVersion = ctx.XGBVer
-		}
+		d.setGBVersion(effectiveVersion)
 	}); err != nil {
 		ctx.Log.Error("keepalive", "err", err)
 	}

@@ -2,98 +2,75 @@ package lalmax
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 )
 
-// TestGetServerConfig 测试获取服务器配置
-// 用法示例：go test -v -run TestGetServerConfig ./pkg/lalmax/
-// 前提条件：需要 lalmax 服务运行在 http://localhost:8080
-func TestGetServerConfig(t *testing.T) {
-	ctx := context.Background()
+type roundTripFunc func(*http.Request) (*http.Response, error)
 
-	// 创建 Engine 实例
-	engine := NewEngine()
-	engine = engine.SetConfig(Config{
-		URL:    "http://localhost:8080",
-		Secret: "", // 如果需要密钥，请填写
-	})
-
-	// 调用 GetServerConfig 方法
-	resp, err := engine.GetServerConfig(ctx)
-	if err != nil {
-		t.Fatalf("GetServerConfig 调用失败: %v", err)
-	}
-
-	// 验证返回结果不为空
-	if resp == nil {
-		t.Fatal("GetServerConfig 返回 nil")
-	}
-
-	// 验证基本字段
-	t.Logf("配置版本: %s", resp.ConfVersion)
-	t.Logf("服务器 ID: %s", resp.ServerId)
-	t.Logf("关键帧路径: %s", resp.KeyFramePath)
-	t.Logf("最大打开文件数: %d", resp.MaxOpenFiles)
-
-	// 验证 GOP 缓存配置
-	t.Logf("GOP 缓存数量: %d", resp.GopCacheConfig.GopNum)
-	t.Logf("单个 GOP 最大帧数: %d", resp.GopCacheConfig.SingleGopMaxFrameNum)
-
-	// 验证 RTMP 配置
-	t.Logf("RTMP 启用: %v", resp.RtmpConfig.Enable)
-	t.Logf("RTMP 地址: %s", resp.RtmpConfig.Addr)
-	t.Logf("RTMP 发布超时: %d 秒", resp.RtmpConfig.PubTimeoutSec)
-
-	// 验证 RTSP 配置
-	t.Logf("RTSP 启用: %v", resp.RtspConfig.Enable)
-	t.Logf("RTSP 地址: %s", resp.RtspConfig.Addr)
-
-	// 验证 GB28181 配置
-	t.Logf("GB28181 启用: %v", resp.Gb28181Config.Enable)
-	t.Logf("GB28181 SIP IP: %s", resp.Gb28181Config.SipIP)
-	t.Logf("GB28181 SIP 端口: %d", resp.Gb28181Config.SipPort)
-	t.Logf("GB28181 设备序列号: %s", resp.Gb28181Config.Serial)
-	t.Logf("GB28181 域: %s", resp.Gb28181Config.Realm)
-
-	// 验证 HTTP API 配置
-	t.Logf("HTTP API 启用: %v", resp.HttpApiConfig.Enable)
-
-	// 验证 RTC 配置
-	t.Logf("RTC 启用: %v", resp.RtcConfig.Enable)
-
-	// 验证 HTTP Notify 配置
-	t.Logf("HTTP Notify 启用: %v", resp.HttpNotifyConfig.Enable)
-	t.Logf("HTTP Notify OnPubStart: %s", resp.HttpNotifyConfig.OnPubStart)
-	t.Logf("HTTP Notify OnPubStop: %s", resp.HttpNotifyConfig.OnPubStop)
-
-	// 验证字段是否正确解析（非零值检查）
-	if resp.ConfVersion == "" {
-		t.Error("ConfVersion 为空，可能解析失败")
-	}
-	if resp.ServerId == "" {
-		t.Error("ServerId 为空，可能解析失败")
-	}
-	if resp.KeyFramePath == "" {
-		t.Error("KeyFramePath 为空，可能解析失败")
-	}
-
-	t.Log("GetServerConfig 测试通过，所有字段正确解析")
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
 }
 
-// TestSetHttpNotifyConfig 测试设置 HTTP 通知配置
-// 用法示例：go test -v -run TestSetHttpNotifyConfig ./pkg/lalmax/
-// 前提条件：需要 lalmax 服务运行在 http://localhost:8080
+func jsonHTTPResponse(t *testing.T, payload any) *http.Response {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(string(body))),
+	}
+}
+
+func TestGetServerConfig(t *testing.T) {
+	engine := NewEngine().SetConfig(Config{URL: "http://lalmax.test"})
+	engine.cli = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodGet || req.URL.Path != "/api/config/svr_config" {
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
+		}
+		return jsonHTTPResponse(t, map[string]any{
+			"code": 0,
+			"data": map[string]any{
+				"conf_version":   "test-v1",
+				"server_id":      "lalmax-test",
+				"key_frame_path": "/tmp/keyframes",
+				"max_open_files": 1024,
+				"gop_cache_config": map[string]any{
+					"gop_cache_num":            2,
+					"single_gop_max_frame_num": 300,
+				},
+				"rtmp": map[string]any{"enable": true, "addr": ":1935"},
+				"rtsp": map[string]any{"enable": true, "addr": ":5544"},
+				"gb28181": map[string]any{
+					"enable": true,
+					"sip_ip": "192.0.2.10",
+				},
+			},
+		}), nil
+	})}
+
+	resp, err := engine.GetServerConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ConfVersion != "test-v1" || resp.ServerId != "lalmax-test" || resp.KeyFramePath != "/tmp/keyframes" {
+		t.Fatalf("unexpected basic config: %+v", resp)
+	}
+	if resp.GopCacheConfig.GopNum != 2 || !resp.RtmpConfig.Enable || !resp.RtspConfig.Enable {
+		t.Fatalf("unexpected nested config: %+v", resp)
+	}
+	if !resp.Gb28181Config.Enable || resp.Gb28181Config.SipIP != "192.0.2.10" {
+		t.Fatalf("unexpected GB28181 config: %+v", resp.Gb28181Config)
+	}
+}
+
 func TestSetHttpNotifyConfig(t *testing.T) {
-	ctx := context.Background()
-
-	// 创建 Engine 实例
-	engine := NewEngine()
-	engine = engine.SetConfig(Config{
-		URL:    "http://localhost:8080",
-		Secret: "",
-	})
-
-	// 定义要设置的 HTTP 通知配置
 	notifyConfig := HttpNotifyConfig{
 		Enable:            true,
 		UpdateIntervalSec: 5,
@@ -103,41 +80,58 @@ func TestSetHttpNotifyConfig(t *testing.T) {
 		OnSubStop:         "http://127.0.0.1:18080/webhook/on_sub_stop",
 		OnStreamChanged:   "http://127.0.0.1:18080/webhook/on_stream_changed",
 	}
+	mediaConfig := MediaConfig{ListenPort: 8080, MultiPortMaxIncrement: 10}
+	var stored HttpNotifyConfig
 
-	// 设置配置
-	err := engine.SetHttpNotifyConfig(ctx, notifyConfig, MediaConfig{
-		ListenPort:            8080,
-		MultiPortMaxIncrement: 10,
-	})
-	if err != nil {
-		t.Fatalf("SetHttpNotifyConfig 调用失败: %v", err)
+	engine := NewEngine().SetConfig(Config{URL: "http://lalmax.test"})
+	engine.cli = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.Method == http.MethodPost && req.URL.Path == "/api/config/set_server_config":
+			if req.URL.Query().Get("merge") != "true" {
+				t.Fatal("set_server_config must use merge mode")
+			}
+			var payload struct {
+				HTTPNotify HttpNotifyConfig `json:"http_notify"`
+				RTSP       struct {
+					PubNotSubAutoCloseSec int `json:"pub_not_sub_auto_close_sec"`
+				} `json:"rtsp"`
+				GB28181 struct {
+					Enable                bool        `json:"enable"`
+					PubNotSubAutoCloseSec int         `json:"pub_not_sub_auto_close_sec"`
+					MediaConfig           MediaConfig `json:"media_config"`
+				} `json:"gb28181"`
+			}
+			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.RTSP.PubNotSubAutoCloseSec != 30 || payload.GB28181.PubNotSubAutoCloseSec != 30 {
+				t.Fatalf("unexpected auto-close config: %+v", payload)
+			}
+			if payload.GB28181.Enable || payload.GB28181.MediaConfig != mediaConfig {
+				t.Fatalf("unexpected GB28181 media config: %+v", payload.GB28181)
+			}
+			stored = payload.HTTPNotify
+			return jsonHTTPResponse(t, map[string]any{"code": 0}), nil
+		case req.Method == http.MethodGet && req.URL.Path == "/api/config/svr_config":
+			return jsonHTTPResponse(t, map[string]any{
+				"code": 0,
+				"data": map[string]any{"http_notify": stored},
+			}), nil
+		default:
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
+			return nil, nil
+		}
+	})}
+
+	ctx := context.Background()
+	if err := engine.SetHttpNotifyConfig(ctx, notifyConfig, mediaConfig); err != nil {
+		t.Fatal(err)
 	}
-	t.Log("SetHttpNotifyConfig 设置成功")
-
-	// 验证配置是否已生效
 	resp, err := engine.GetServerConfig(ctx)
 	if err != nil {
-		t.Fatalf("GetServerConfig 调用失败: %v", err)
+		t.Fatal(err)
 	}
-
-	// 验证设置的字段
-	if resp.HttpNotifyConfig.Enable != notifyConfig.Enable {
-		t.Errorf("HttpNotifyConfig.Enable = %v, 期望 %v", resp.HttpNotifyConfig.Enable, notifyConfig.Enable)
+	if resp.HttpNotifyConfig != notifyConfig {
+		t.Fatalf("unexpected HTTP notify config: %+v", resp.HttpNotifyConfig)
 	}
-	if resp.HttpNotifyConfig.OnPubStart != notifyConfig.OnPubStart {
-		t.Errorf("HttpNotifyConfig.OnPubStart = %s, 期望 %s", resp.HttpNotifyConfig.OnPubStart, notifyConfig.OnPubStart)
-	}
-	if resp.HttpNotifyConfig.OnPubStop != notifyConfig.OnPubStop {
-		t.Errorf("HttpNotifyConfig.OnPubStop = %s, 期望 %s", resp.HttpNotifyConfig.OnPubStop, notifyConfig.OnPubStop)
-	}
-	if resp.HttpNotifyConfig.OnStreamChanged != notifyConfig.OnStreamChanged {
-		t.Errorf("HttpNotifyConfig.OnStreamChanged = %s, 期望 %s", resp.HttpNotifyConfig.OnStreamChanged, notifyConfig.OnStreamChanged)
-	}
-
-	t.Logf("验证成功！当前 HTTP Notify 配置:")
-	t.Logf("  Enable: %v", resp.HttpNotifyConfig.Enable)
-	t.Logf("  UpdateIntervalSec: %d", resp.HttpNotifyConfig.UpdateIntervalSec)
-	t.Logf("  OnPubStart: %s", resp.HttpNotifyConfig.OnPubStart)
-	t.Logf("  OnPubStop: %s", resp.HttpNotifyConfig.OnPubStop)
-	t.Logf("  OnStreamChanged: %s", resp.HttpNotifyConfig.OnStreamChanged)
 }

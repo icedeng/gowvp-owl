@@ -11,12 +11,14 @@ import (
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 	"github.com/gowvp/owl/pkg/zlm"
-	sdp "github.com/panjjo/gosdp"
 )
 
 const (
 	historyModePlayback = "Playback"
 	historyModeDownload = "Download"
+
+	historyTransportRTP       = "rtp"
+	historyTransportDirectTCP = "direct_tcp"
 )
 
 // HistoryInput 历史回放/下载参数。
@@ -27,6 +29,7 @@ type HistoryInput struct {
 	StartAt    time.Time
 	EndAt      time.Time
 	Mode       string // Playback 或 Download
+	Transport  string // rtp 或 direct_tcp；空值保持原 RTP 行为
 }
 
 type StopHistoryInput struct {
@@ -66,6 +69,19 @@ func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
 	if !ch.device.IsOnline {
 		return ErrDeviceOffline
 	}
+	transport := strings.ToLower(strings.TrimSpace(in.Transport))
+	if transport == "" {
+		transport = historyTransportRTP
+	}
+	if transport == historyTransportDirectTCP {
+		return g.startDirectTCPHistory(ctx, ch, in)
+	}
+	if transport != historyTransportRTP {
+		return fmt.Errorf("invalid history transport: %s", in.Transport)
+	}
+	if err := g.requireMediaTransport(in.Channel.DeviceID, in.StreamMode, "历史视音频"+in.Mode); err != nil {
+		return err
+	}
 
 	ch.device.playMutex.Lock()
 	defer ch.device.playMutex.Unlock()
@@ -74,7 +90,12 @@ func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
 	stream, existed := g.streams.LoadOrStore(key, &Streams{})
 	if existed {
 		_ = g.stopHistoryNoLock(ch, &StopHistoryInput{Channel: in.Channel, Mode: in.Mode})
+		stream = &Streams{}
+		g.streams.Store(key, stream)
 	}
+	stream.DeviceID = in.Channel.DeviceID
+	stream.ChannelID = in.Channel.ChannelID
+	stream.StreamID = in.Channel.ID
 
 	resp, err := g.sms.OpenRTPServer(in.SMS, zlm.OpenRTPServerRequest{
 		TCPMode:  in.StreamMode,
@@ -177,74 +198,231 @@ func (g *GB28181API) buildHistoryControlCmd(stream *Streams, in *ControlHistoryI
 
 func (g *GB28181API) stopHistoryNoLock(ch *Channel, in *StopHistoryInput) error {
 	key := historyKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID)
-	stream, ok := g.streams.LoadAndDelete(key)
+	stream, ok := g.streams.Load(key)
 	if !ok || stream.Resp == nil {
+		return nil
+	}
+	if stream.DirectTCP && g.directDownloads != nil && g.directDownloads.Cancel(stream.DirectSessionID) {
+		return nil
+	}
+	if !g.streams.CompareAndDelete(key, stream) {
+		return nil
+	}
+	return g.sendHistoryBYE(ch, stream)
+}
+
+func (g *GB28181API) sendHistoryBYE(ch *Channel, stream *Streams) error {
+	if ch == nil || stream == nil || stream.Resp == nil {
 		return nil
 	}
 	req := sip.NewRequestFromResponse(sip.MethodBYE, stream.Resp)
 	req.SetDestination(ch.Source())
 	req.SetConnection(ch.Conn())
-	_, err := g.svr.Request(req)
+	tx, err := g.svr.Request(req)
+	if err != nil {
+		return err
+	}
+	_, err = sipResponse(tx)
 	return err
 }
 
-func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, stream *Streams) error {
-	protocol := "TCP/RTP/AVP"
-	if in.StreamMode == 0 {
-		protocol = "RTP/AVP"
+func (g *GB28181API) startDirectTCPHistory(ctx context.Context, ch *Channel, in *HistoryInput) error {
+	if in.Mode != historyModeDownload {
+		return fmt.Errorf("direct TCP transport is only valid for Download")
 	}
-	video := sdp.Media{
-		Description: sdp.MediaDescription{
-			Type:     "video",
-			Port:     port,
-			Formats:  []string{"96", "97", "98"},
-			Protocol: protocol,
-		},
+	if err := g.requireGBFeature(in.Channel.DeviceID, "2014 直接 TCP 文件下载", func(c GBCapabilities) bool {
+		return c.DirectTCPDownload
+	}); err != nil {
+		return err
 	}
-	video.AddAttribute("recvonly")
-	if in.StreamMode == 1 {
-		video.AddAttribute("setup", "passive")
-		video.AddAttribute("connection", "new")
+	policy := g.directTCPPolicySnapshot()
+	if !policy.Enabled {
+		return fmt.Errorf("2014 直接 TCP 文件下载未启用")
 	}
-	if in.StreamMode == 2 {
-		video.AddAttribute("setup", "active")
-		video.AddAttribute("connection", "new")
+	if _, allowed := policy.Allowlist[in.Channel.DeviceID]; !allowed {
+		return fmt.Errorf("设备 %s 未加入直接 TCP 下载白名单", in.Channel.DeviceID)
 	}
-	video.AddAttribute("rtpmap", "96", "PS/90000")
-	video.AddAttribute("rtpmap", "97", "MPEG4/90000")
-	video.AddAttribute("rtpmap", "98", "H264/90000")
+	if g.directDownloads == nil {
+		return fmt.Errorf("direct TCP download manager is unavailable")
+	}
 
+	ch.device.playMutex.Lock()
+	defer ch.device.playMutex.Unlock()
+	key := historyKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID)
+	if existing, existed := g.streams.Load(key); existed {
+		_ = g.stopHistoryNoLock(ch, &StopHistoryInput{Channel: in.Channel, Mode: in.Mode})
+		if existing.DirectTCP && existing.DirectSessionID != "" {
+			waitCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			_, waitErr := g.directDownloads.Wait(waitCtx, existing.DirectSessionID)
+			cancel()
+			if waitErr != nil {
+				return fmt.Errorf("wait previous direct TCP download to stop: %w", waitErr)
+			}
+		}
+	}
+	stream := &Streams{
+		T:         1,
+		DeviceID:  in.Channel.DeviceID,
+		ChannelID: in.Channel.ChannelID,
+		StreamID:  in.Channel.ID,
+		DirectTCP: true,
+	}
+	g.streams.Store(key, stream)
+
+	offer, err := g.sipInviteDirectTCPHistory(ch, in, stream, policy.OfferPort)
+	if err != nil {
+		g.streams.Delete(key)
+		return err
+	}
+	registeredIP := addressIP(ch.Source())
+	managerCtx := context.WithoutCancel(ctx)
+	err = g.directDownloads.Start(managerCtx, DirectTCPDownloadRequest{
+		SessionID:     stream.DirectSessionID,
+		DeviceID:      in.Channel.DeviceID,
+		ChannelID:     in.Channel.ChannelID,
+		Address:       offer.Address,
+		RegisteredIP:  registeredIP,
+		FileSize:      offer.FileSize,
+		FileSizeKnown: offer.FileSizeKnown,
+		OnFinish: func(state DirectTCPDownloadState) {
+			g.finishDirectTCPHistory(key, ch, stream, state)
+		},
+	})
+	if err != nil {
+		g.streams.Delete(key)
+		_ = g.sendHistoryBYE(ch, stream)
+		return err
+	}
+	g.metrics.directStarted.Add(1)
+	if g.core.Store() != nil {
+		_ = g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, true)
+	}
+	return nil
+}
+
+func (g *GB28181API) sipInviteDirectTCPHistory(ch *Channel, in *HistoryInput, stream *Streams, port int) (directTCPDownloadOffer, error) {
+	ip4str, err := GetIP(g.boot.Media.SDPIP)
+	if err != nil {
+		return directTCPDownloadOffer{}, err
+	}
+	ssrc := g.getSSRC(1)
+	body, err := buildGBSDP(gbSDPInput{
+		Version:     g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
+		SessionName: historyModeDownload,
+		ChannelID:   ch.ChannelID,
+		URI:         fmt.Sprintf("%s:3", ch.ChannelID),
+		IP:          ip4str,
+		Port:        port,
+		StartAt:     in.StartAt,
+		EndAt:       in.EndAt,
+		SSRC:        ssrc,
+		DirectTCP:   true,
+	})
+	if err != nil {
+		return directTCPDownloadOffer{}, err
+	}
+	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
+		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, g.cfg.ID)})
+	})
+	if err != nil {
+		return directTCPDownloadOffer{}, err
+	}
+	resp, err := sipResponse(tx)
+	if err != nil {
+		return directTCPDownloadOffer{}, err
+	}
+	offer, err := parseDirectTCPDownloadSDP(resp.Body())
+	if err != nil {
+		return directTCPDownloadOffer{}, err
+	}
+	if contact, _ := resp.Contact(); contact == nil {
+		resp.AppendHeader(&sip.ContactHeader{
+			DisplayName: g.svr.fromAddress.DisplayName,
+			Address:     &sip.URI{FUser: sip.String{Str: g.cfg.ID}, FHost: g.cfg.Domain},
+			Params:      sip.NewParams(),
+		})
+	}
+	stream.Resp = resp
+	stream.ssrc = ssrc
+	stream.Status = 0
+	stream.Stop = false
+	if callID, ok := resp.CallID(); ok {
+		stream.CallID = normalizeCallID(callID)
+		stream.DirectSessionID = stream.CallID
+	}
+	if stream.DirectSessionID == "" {
+		return directTCPDownloadOffer{}, fmt.Errorf("direct TCP download response missing Call-ID")
+	}
+	if err := tx.Request(sip.NewRequestFromResponse(sip.MethodACK, resp)); err != nil {
+		return directTCPDownloadOffer{}, err
+	}
+	return offer, nil
+}
+
+func (g *GB28181API) finishDirectTCPHistory(key string, ch *Channel, stream *Streams, state DirectTCPDownloadState) {
+	switch state.Status {
+	case directTCPStatusCompleted:
+		g.metrics.directCompleted.Add(1)
+		if state.Received > 0 {
+			g.metrics.directBytes.Add(uint64(state.Received))
+		}
+	case directTCPStatusCancelled:
+		g.metrics.directCancelled.Add(1)
+	default:
+		g.metrics.directFailed.Add(1)
+	}
+	if !g.streams.CompareAndDelete(key, stream) {
+		return
+	}
+	stream.Status = 1
+	stream.Stop = true
+	stream.EndReason = state.EndReason
+	_ = g.sendHistoryBYE(ch, stream)
+	if g.core.Store() != nil {
+		_ = g.core.EditPlaying(context.Background(), stream.DeviceID, stream.ChannelID, false)
+	}
+}
+
+func addressIP(address net.Addr) net.IP {
+	switch value := address.(type) {
+	case *net.UDPAddr:
+		return value.IP
+	case *net.TCPAddr:
+		return value.IP
+	}
+	if address == nil {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(address.String())
+	if err != nil {
+		return nil
+	}
+	return net.ParseIP(strings.Trim(host, "[]"))
+}
+
+func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, stream *Streams) error {
 	ip4str, err := GetIP(in.SMS.GetSDPIP())
 	if err != nil {
 		return err
 	}
-	msg := &sdp.Message{
-		Origin: sdp.Origin{
-			Username:    ch.ChannelID,
-			NetworkType: "IN",
-			AddressType: "IP4",
-			Address:     ip4str,
-		},
-		Name: in.Mode,
-		URI:  fmt.Sprintf("%s:0", ch.ChannelID),
-		Connection: sdp.ConnectionData{
-			NetworkType: "IN",
-			AddressType: "IP4",
-			IP:          net.ParseIP(ip4str),
-		},
-		Timing: []sdp.Timing{
-			{
-				Start: in.StartAt,
-				End:   in.EndAt,
-			},
-		},
-		Medias: []sdp.Media{video},
-		SSRC:   g.getSSRC(1),
+	ssrc := g.getSSRC(1)
+	body, err := buildGBSDP(gbSDPInput{
+		Version:     g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
+		SessionName: in.Mode,
+		ChannelID:   ch.ChannelID,
+		URI:         fmt.Sprintf("%s:0", ch.ChannelID),
+		IP:          ip4str,
+		Port:        port,
+		StreamMode:  in.StreamMode,
+		StartAt:     in.StartAt,
+		EndAt:       in.EndAt,
+		SSRC:        ssrc,
+	})
+	if err != nil {
+		return err
 	}
-
-	body := msg.Append(nil).AppendTo(nil)
 	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
-		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: fmt.Sprintf("%s:%s,%s:%s", ch.ChannelID, in.Channel.ID, in.Channel.DeviceID, in.Channel.ID)})
+		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, g.cfg.ID)})
 	})
 	if err != nil {
 		return err
@@ -261,5 +439,15 @@ func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, s
 		})
 	}
 	stream.Resp = resp
+	stream.T = 1
+	stream.DeviceID = in.Channel.DeviceID
+	stream.ChannelID = in.Channel.ChannelID
+	stream.StreamID = in.Channel.ID
+	stream.Status = 0
+	stream.Stop = false
+	stream.ssrc = ssrc
+	if callID, ok := resp.CallID(); ok {
+		stream.CallID = normalizeCallID(callID)
+	}
 	return tx.Request(sip.NewRequestFromResponse(sip.MethodACK, resp))
 }

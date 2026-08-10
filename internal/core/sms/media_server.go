@@ -30,7 +30,7 @@ func (c *Core) FindMediaServer(ctx context.Context, in *FindMediaServerInput) ([
 	for _, item := range items {
 		value, ok := c.cacheServers.Load(item.ID)
 		if ok {
-			item.Status = value.IsOnline
+			item.Status, _, _ = value.status()
 		}
 	}
 	return items, total, nil

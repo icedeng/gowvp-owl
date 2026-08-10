@@ -35,7 +35,6 @@ func NewHeaderBuilder() *HeadersBuilder {
 	callID := CallID(RandString(32))
 	maxForwards := MaxForwards(70)
 	userAgent := UserAgentHeader("GoWVP")
-	xgbVer := XGBVer("3.0")
 	return &HeadersBuilder{
 		protocol:        "SIP",
 		protocolVersion: "2.0",
@@ -49,7 +48,6 @@ func NewHeaderBuilder() *HeadersBuilder {
 		generic:         make(map[string]Header),
 		allow:           defaultAllowMethods,
 		supported:       &SupportedHeader{Options: []string{}},
-		XGBVer:          &xgbVer,
 	}
 }
 
@@ -108,7 +106,7 @@ func (hb *HeadersBuilder) SetXGBVer() *HeadersBuilder {
 	return hb
 }
 
-// SetXGBVerValue 设置 X-GB-Ver，支持 1.0/2.0/3.0。
+// SetXGBVerValue 设置 X-GB-Ver，支持附录 I 定义的 1.0/1.1/2.0/3.0。
 func (hb *HeadersBuilder) SetXGBVerValue(ver string) *HeadersBuilder {
 	v := strings.TrimSpace(ver)
 	if v == "" {

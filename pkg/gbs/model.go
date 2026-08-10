@@ -6,11 +6,17 @@ const snapShotConfig = "SnapShotConfig" // 图像抓拍配置
 
 // 设备配置 A.2.3.2.1
 type DeviceConfigRequest struct {
-	XMLName        xml.Name  `xml:"Control"`
-	CmdType        string    `xml:"CmdType"`  // 命令类型：设备配置查询(必选)
-	SN             int32     `xml:"SN"`       // 命令序列号(必选)
-	DeviceID       string    `xml:"DeviceID"` // 目标设备编码(必选)
-	SnapShotConfig *SnapShot `xml:"SnapShotConfig"`
+	XMLName        xml.Name    `xml:"Control"`
+	CmdType        string      `xml:"CmdType"`  // 命令类型：设备配置查询(必选)
+	SN             int32       `xml:"SN"`       // 命令序列号(必选)
+	DeviceID       string      `xml:"DeviceID"` // 目标设备编码(必选)
+	BasicParam     *BasicParam `xml:"BasicParam,omitempty"`
+	SnapShotConfig *SnapShot   `xml:"SnapShotConfig"`
+}
+
+func (d *DeviceConfigRequest) SetBasicParam(param *BasicParam) *DeviceConfigRequest {
+	d.BasicParam = param
+	return d
 }
 
 func NewDeviceConfig(deviceID string) *DeviceConfigRequest {

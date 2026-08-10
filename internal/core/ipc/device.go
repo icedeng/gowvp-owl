@@ -4,6 +4,8 @@ package ipc
 import (
 	"context"
 	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/reason"
@@ -133,6 +135,15 @@ func (c Core) AddDevice(ctx context.Context, in *AddDeviceInput) (*Device, error
 
 // EditDevice Update object information
 func (c Core) EditDevice(ctx context.Context, in *EditDeviceInput, id string) (*Device, error) {
+	manualVersion := ""
+	if in.GBVersion != nil {
+		var ok bool
+		manualVersion, ok = normalizeManualGBVersion(*in.GBVersion)
+		if !ok {
+			return nil, reason.ErrBadRequest.SetMsg("gb_version 仅支持 1.0/1.1/2.0/3.0")
+		}
+	}
+
 	dev, err := c.resolveDevice(ctx, id)
 	if err != nil {
 		return nil, err
@@ -143,11 +154,14 @@ func (c Core) EditDevice(ctx context.Context, in *EditDeviceInput, id string) (*
 		if err := copier.Copy(b, in); err != nil {
 			slog.ErrorContext(ctx, "Copy", "err", err)
 		}
+		if in.GBVersion != nil {
+			applyManualGBVersion(&b.Ext, manualVersion)
+		}
 
-		protocol, ok := c.protocols[out.GetType()]
+		protocol, ok := c.protocols[b.GetType()]
 		if ok {
-			if err := protocol.ValidateDevice(ctx, &out); err != nil {
-				slog.WarnContext(ctx, "验证协议失败", "err", err, "device_id", out.ID)
+			if err := protocol.ValidateDevice(ctx, b); err != nil {
+				slog.WarnContext(ctx, "验证协议失败", "err", err, "device_id", b.ID)
 				return err
 			}
 		}
@@ -164,6 +178,60 @@ func (c Core) EditDevice(ctx context.Context, in *EditDeviceInput, id string) (*
 		}
 	}
 	return &out, nil
+}
+
+func normalizeManualGBVersion(value string) (string, bool) {
+	switch strings.TrimSpace(value) {
+	case "":
+		return "", true
+	case "1.0", "2011":
+		return "1.0", true
+	case "1.1", "2014", "2011-supplement-2014":
+		return "1.1", true
+	case "2.0", "2016":
+		return "2.0", true
+	case "3.0", "2022":
+		return "3.0", true
+	default:
+		return "", false
+	}
+}
+
+func applyManualGBVersion(ext *DeviceExt, version string) {
+	ext.GBManualVersion = version
+	ext.GBVersionUpdatedAt = time.Now().Unix()
+	if version != "" {
+		ext.GBEffectiveVersion = version
+		ext.GBVersionSource = "manual"
+		ext.GBVersion = gbVersionYear(version)
+		return
+	}
+
+	if declared, ok := normalizeManualGBVersion(ext.GBDeclaredVersion); ok && declared != "" {
+		ext.GBEffectiveVersion = declared
+		ext.GBVersionSource = "header"
+		ext.GBVersion = gbVersionYear(declared)
+		return
+	}
+
+	ext.GBEffectiveVersion = ""
+	ext.GBVersionSource = ""
+	ext.GBVersion = ""
+}
+
+func gbVersionYear(version string) string {
+	switch version {
+	case "1.0":
+		return "2011"
+	case "1.1":
+		return "2014"
+	case "2.0":
+		return "2016"
+	case "3.0":
+		return "2022"
+	default:
+		return ""
+	}
 }
 
 // DelDevice Delete object

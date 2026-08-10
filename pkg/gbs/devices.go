@@ -69,15 +69,26 @@ func NewDevice(conn sip.Connection, d *ipc.Device) *Device {
 		LastRegisterAt:  d.RegisteredAt.Time,
 		IsOnline:        d.IsOnline,
 		Password:        d.Password,
-		gbVersion:       d.Ext.GBVersion,
+		gbVersion:       string(deviceProtocolVersion(d.Ext)),
 	}
 
 	return &c
 }
 
-// GBVersion 返回设备声明的国标版本（2011/2016/2022）。
+// GBVersion 返回设备实际使用的附录 I 协议版本号（1.0/1.1/2.0/3.0）。
 func (d *Device) GBVersion() string {
 	return d.gbVersion
+}
+
+func (d *Device) setGBVersion(version GBProtocolVersion) {
+	if version.Valid() {
+		d.gbVersion = string(version)
+	}
+}
+
+func deviceProtocolVersion(ext ipc.DeviceExt) GBProtocolVersion {
+	version, _ := resolveGBProtocolVersion(ext, "")
+	return version
 }
 
 // CheckConnection 检查 udp 设备能否通信
@@ -275,14 +286,27 @@ type Channels struct {
 	Model        string `xml:"Model" json:"model"  gorm:"column:model"`
 	Owner        string `xml:"Owner"  json:"owner"  gorm:"column:owner"`
 	CivilCode    string `xml:"CivilCode" json:"civilcode"  gorm:"column:civilcode"`
+	Block        string `xml:"Block" json:"block"`
 	// Address ip地址
 	Address     string `xml:"Address"  json:"address"  gorm:"column:address"`
 	Parental    int    `xml:"Parental"  json:"parental"  gorm:"column:parental"`
+	ParentID    string `xml:"ParentID" json:"parent_id"`
 	SafetyWay   int    `xml:"SafetyWay"  json:"safetyway"  gorm:"column:safetyway"`
 	RegisterWay int    `xml:"RegisterWay"  json:"registerway"  gorm:"column:registerway"`
+	CertNum     string `xml:"CertNum" json:"cert_num"`
+	Certifiable int    `xml:"Certifiable" json:"certifiable"`
+	ErrCode     int    `xml:"ErrCode" json:"err_code"`
+	EndTime     string `xml:"EndTime" json:"end_time"`
 	Secrecy     int    `xml:"Secrecy" json:"secrecy"  gorm:"column:secrecy"`
+	IPAddress   string `xml:"IPAddress" json:"ip_address"`
+	Port        int    `xml:"Port" json:"port"`
+	Password    string `xml:"Password" json:"-"`
 	// Status 状态  on 在线
-	Status string `xml:"Status"  json:"status"  gorm:"column:status"`
+	Status    string          `xml:"Status"  json:"status"  gorm:"column:status"`
+	Longitude float64         `xml:"Longitude" json:"longitude"`
+	Latitude  float64         `xml:"Latitude" json:"latitude"`
+	Info      CatalogItemInfo `xml:"Info" json:"info"`
+	RawXML    string          `xml:",innerxml" json:"-"`
 	// Active 最后活跃时间
 	Active int64  `json:"active"  gorm:"column:active"`
 	URIStr string ` json:"uri"  gorm:"column:uri"`
@@ -301,6 +325,19 @@ type Channels struct {
 	URL string `json:"url"  gorm:"column:url"`
 
 	addr *sip.Address `gorm:"-"`
+}
+
+// CatalogItemInfo 是 2014 修改补充文件新增的目录项摄像机属性。
+type CatalogItemInfo struct {
+	PTZType         int    `xml:"PTZType" json:"ptz_type"`
+	PositionType    int    `xml:"PositionType" json:"position_type"`
+	RoomType        int    `xml:"RoomType" json:"room_type"`
+	UseType         int    `xml:"UseType" json:"use_type"`
+	SupplyLightType int    `xml:"SupplyLightType" json:"supply_light_type"`
+	DirectionType   int    `xml:"DirectionType" json:"direction_type"`
+	Resolution      string `xml:"Resolution" json:"resolution"`
+	BusinessGroupID string `xml:"BusinessGroupID" json:"business_group_id"`
+	RawXML          string `xml:",innerxml" json:"-"`
 }
 
 // 同步摄像头编码格式

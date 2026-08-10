@@ -189,6 +189,9 @@ func (w WebHookAPI) onStreamChanged(c *gin.Context, in *onStreamChangedInput) (D
 	channelType := w.getChannelType(ctx, app, stream)
 
 	if in.Regist {
+		if channelType == ipc.TypeGB28181 && w.gbs != nil {
+			_ = w.gbs.OnMediaStreamChanged(ctx, stream, true, "stream_registered")
+		}
 		// 流注册时根据录像模式决定是否启动录制
 		ch, err := w.ipcCore.GetChannelByAppStreamOrID(ctx, app, stream)
 		if err != nil {
@@ -318,6 +321,9 @@ func (w WebHookAPI) onStreamNoneReader(c *gin.Context, in *onStreamNoneReaderInp
 // @Router /webhook/on_rtp_server_timeout [post]
 func (w WebHookAPI) onRTPServerTimeout(c *gin.Context, in *onRTPServerTimeoutInput) (DefaultOutput, error) {
 	w.log.InfoContext(c.Request.Context(), "webhook onRTPServerTimeout", "local_port", in.LocalPort, "ssrc", in.SSRC, "stream_id", in.StreamID, "mediaServerID", in.MediaServerID)
+	if w.gbs != nil {
+		_ = w.gbs.OnMediaStreamChanged(c.Request.Context(), in.StreamID, false, "rtp_server_timeout")
+	}
 	return newDefaultOutputOK(), nil
 }
 

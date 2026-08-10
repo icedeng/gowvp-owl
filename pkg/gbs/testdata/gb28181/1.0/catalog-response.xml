@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="GB2312"?>
+<Response>
+  <CmdType>Catalog</CmdType>
+  <SN>2</SN>
+  <DeviceID>34020000001320000001</DeviceID>
+  <SumNum>1</SumNum>
+  <DeviceList Num="1">
+    <Item>
+      <DeviceID>34020000001320000002</DeviceID>
+      <Name>Fixture Camera</Name>
+      <Manufacturer>Fixture</Manufacturer>
+      <Model>Model-1</Model>
+      <Owner>Fixture</Owner>
+      <CivilCode>340200</CivilCode>
+      <Address>Fixture Address</Address>
+      <Parental>0</Parental>
+      <SafetyWay>0</SafetyWay>
+      <RegisterWay>1</RegisterWay>
+      <Secrecy>0</Secrecy>
+      <Status>ON</Status>
+    </Item>
+  </DeviceList>
+</Response>
