@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-11T00:00:00+08:00",
+  "title": "Design System: 国标视频管理平台 Admin UI",
+  "extensions": {
+    "colorMeta": {
+      "ink": { "role": "neutral", "displayName": "正文墨", "canonical": "#172033", "tonalRamp": ["#172033", "#27324a", "#3c4b68", "#526483", "#687b9d", "#8392ab", "#a7b1c2", "#dce1e9"] },
+      "ink-strong": { "role": "neutral", "displayName": "强调墨", "canonical": "#0d1526", "tonalRamp": ["#0d1526", "#1d2940", "#33425f", "#485b7e", "#627594", "#7f8fa8", "#a4afc1", "#d9dfe8"] },
+      "muted": { "role": "neutral", "displayName": "说明冷灰", "canonical": "#647188", "tonalRamp": ["#1b2432", "#2d3a50", "#45546c", "#647188", "#7f8ca1", "#a0aaba", "#c4cbd6", "#e5e8ed"] },
+      "muted-2": { "role": "neutral", "displayName": "分组冷灰", "canonical": "#647188", "tonalRamp": ["#283140", "#3f4a5d", "#566278", "#647188", "#7b8799", "#9aa3b2", "#c8ced7", "#edf0f3"] },
+      "bg": { "role": "neutral", "displayName": "工作面雾灰", "canonical": "#f4f6f9", "tonalRamp": ["#202b3b", "#344258", "#50627d", "#71829c", "#97a5b8", "#bac4d1", "#dce1e8", "#f4f6f9"] },
+      "panel": { "role": "neutral", "displayName": "面板白", "canonical": "#ffffff", "tonalRamp": ["#263247", "#3f4f69", "#5e708d", "#8090a8", "#a6b1c0", "#c8cfd9", "#e6e9ee", "#ffffff"] },
+      "panel-2": { "role": "neutral", "displayName": "近白分区", "canonical": "#f8fafc", "tonalRamp": ["#243044", "#3d4d67", "#5b6d89", "#7d8da5", "#a4afbf", "#c7ced8", "#e5e8ed", "#f8fafc"] },
+      "panel-3": { "role": "neutral", "displayName": "雾灰分区", "canonical": "#eef2f7", "tonalRamp": ["#1f2b3c", "#36465e", "#526580", "#7386a0", "#9aa9bb", "#bdc8d4", "#dee4eb", "#eef2f7"] },
+      "line": { "role": "neutral", "displayName": "结构线", "canonical": "#dfe5ed", "tonalRamp": ["#202b3d", "#384962", "#566b87", "#788ca5", "#9eafc0", "#c0cad5", "#dfe5ed", "#f4f6f9"] },
+      "line-strong": { "role": "neutral", "displayName": "强调结构线", "canonical": "#c8d1de", "tonalRamp": ["#1c2839", "#34455e", "#526783", "#7489a6", "#9aacc0", "#b3c0cf", "#c8d1de", "#eef2f7"] },
+      "blue": { "role": "primary", "displayName": "工程蓝", "canonical": "#1768d4", "tonalRamp": ["#08244d", "#0d3b7e", "#1057b6", "#1768d4", "#4a8ee1", "#79abe9", "#b7d2f4", "#eaf2ff"] },
+      "blue-hover": { "role": "primary", "displayName": "工程蓝悬停", "canonical": "#1057b6", "tonalRamp": ["#071d3f", "#0b3268", "#1057b6", "#2b73c8", "#5b96dc", "#8bb5e8", "#c1d8f5", "#eaf2ff"] },
+      "blue-soft": { "role": "primary", "displayName": "蓝色柔和底", "canonical": "#eaf2ff", "tonalRamp": ["#0d315f", "#1b4e8c", "#3973b7", "#6b99ce", "#9dbbe0", "#bfd5ee", "#d9e7f9", "#eaf2ff"] },
+      "green": { "role": "secondary", "displayName": "运行绿", "canonical": "#17875d", "tonalRamp": ["#073923", "#096342", "#0c7650", "#17875d", "#41a77d", "#75c19e", "#b2dfc8", "#e7f6ef"] },
+      "green-soft": { "role": "secondary", "displayName": "绿色柔和底", "canonical": "#e7f6ef", "tonalRamp": ["#0c3d2a", "#176b4b", "#3b956f", "#6ab08e", "#9dccb2", "#bfe3ce", "#d7efe1", "#e7f6ef"] },
+      "amber": { "role": "tertiary", "displayName": "注意琥珀", "canonical": "#b66a08", "tonalRamp": ["#492700", "#774300", "#9b5904", "#b66a08", "#d18c31", "#e4ae65", "#f1ce9b", "#fff4df"] },
+      "amber-soft": { "role": "tertiary", "displayName": "琥珀柔和底", "canonical": "#fff4df", "tonalRamp": ["#4a2d08", "#81531a", "#ae7837", "#cfa05e", "#e5bd87", "#efd5ac", "#f8e8c8", "#fff4df"] },
+      "red": { "role": "tertiary", "displayName": "危险红", "canonical": "#c43c43", "tonalRamp": ["#4b1115", "#7d1f27", "#a72d35", "#c43c43", "#d96369", "#e59196", "#f3c2c5", "#fcebed"] },
+      "red-soft": { "role": "tertiary", "displayName": "红色柔和底", "canonical": "#fcebed", "tonalRamp": ["#4e1b20", "#813039", "#ac5058", "#cf777d", "#e3a2a6", "#efc4c7", "#f7dcde", "#fcebed"] },
+      "violet": { "role": "tertiary", "displayName": "辅助紫", "canonical": "#6a56bd", "tonalRamp": ["#211449", "#3c287d", "#54429c", "#6a56bd", "#907fd0", "#b4a8e2", "#d6d0f0", "#eeeafd"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "页面标题", "purpose": "页面标题和首要工作结论。" },
+      "headline": { "displayName": "态势结论", "purpose": "运行态势条与视频工作区的核心结论。" },
+      "title": { "displayName": "模块标题", "purpose": "卡片、导航当前项和局部模块标题。" },
+      "body": { "displayName": "操作正文", "purpose": "页面描述、表单和一般界面文本。" },
+      "label": { "displayName": "短标签", "purpose": "分组、字段、状态和短按钮。" },
+      "numeric": { "displayName": "监控数字", "purpose": "态势条、资源摘要、日期和优先级。" },
+      "mono": { "displayName": "技术标识", "purpose": "设备编码、流 ID、地址和时间。" }
+    },
+    "shadows": [
+      { "name": "card-low", "value": "0 5px 18px rgba(34, 50, 78, .04)", "purpose": "普通白色卡片的轻微层级。" },
+      { "name": "signal-strip", "value": "0 8px 20px rgba(16, 33, 59, .12)", "purpose": "运行态势条与浅色工作面的区分。" },
+      { "name": "default", "value": "0 10px 28px rgba(25, 42, 70, .08)", "purpose": "Toast 等轻浮层。" },
+      { "name": "modal", "value": "0 24px 70px rgba(18, 28, 45, .25)", "purpose": "模态框和命令面板。" }
+    ],
+    "motion": [
+      { "name": "control", "value": "0.16s ease", "purpose": "按钮、导航、输入和图标状态。" },
+      { "name": "overlay", "value": "0.18s ease", "purpose": "Toast、命令面板淡入淡出。" },
+      { "name": "drawer", "value": "0.22s ease", "purpose": "窄屏导航抽屉滑入滑出。" },
+      { "name": "reduced-motion", "value": "0.01ms", "purpose": "prefers-reduced-motion 下的近零时长。" }
+    ],
+    "breakpoints": [
+      { "name": "wide-collapse", "value": "1180px" },
+      { "name": "drawer", "value": "900px" },
+      { "name": "compact", "value": "640px" },
+      { "name": "minimum", "value": "320px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "动作组中唯一的工程蓝主动作。",
+      "html": "<button class=\"ds-btn-primary\">进入实时监控</button>",
+      "css": ".ds-btn-primary { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; color: #fff; background: var(--blue); border: 1px solid var(--blue); border-radius: 8px; font: 700 11px 'Noto Sans SC', sans-serif; cursor: pointer; transition: .16s ease; } .ds-btn-primary:hover { background: var(--blue-hover); border-color: var(--blue-hover); } .ds-btn-primary:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; } .ds-btn-primary:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "刷新、筛选和次级入口使用的白底按钮。",
+      "html": "<button class=\"ds-btn-secondary\">刷新态势</button>",
+      "css": ".ds-btn-secondary { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; font: 700 11px 'Noto Sans SC', sans-serif; cursor: pointer; transition: .16s ease; } .ds-btn-secondary:hover { color: var(--blue); background: #f8fbff; border-color: #a8c7ef; } .ds-btn-secondary:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "检索设备、通道或功能的带图标字段。",
+      "html": "<label class=\"ds-input-field\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"11\" cy=\"11\" r=\"7\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"/><path d=\"m20 20-3.5-3.5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"/></svg><input placeholder=\"搜索设备或通道\" /></label>",
+      "css": ".ds-input-field { position: relative; display: inline-flex; align-items: center; color: var(--muted); } .ds-input-field svg { position: absolute; left: 11px; width: 14px; height: 14px; pointer-events: none; } .ds-input-field input { width: 235px; min-height: 36px; padding: 0 11px 0 34px; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; outline: none; font: 400 14px 'Noto Sans SC', sans-serif; transition: .16s ease; } .ds-input-field input:focus { border-color: #6fa5e9; box-shadow: 0 0 0 3px rgba(23,104,212,.1); } .ds-input-field input:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
+    },
+    {
+      "name": "Active Navigation Item",
+      "kind": "nav",
+      "refersTo": "nav-item-active",
+      "description": "分组导航中的当前工作区入口。",
+      "html": "<a class=\"ds-nav-active\" href=\"#\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"8\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"/><path d=\"M12 8v4l3 2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"/></svg><span>运行总览</span></a>",
+      "css": ".ds-nav-active { position: relative; min-height: 37px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--blue); background: var(--blue-soft); border-radius: 8px; font: 700 12px 'Noto Sans SC', sans-serif; text-decoration: none; transition: .16s ease; } .ds-nav-active::before { content: ''; position: absolute; left: -12px; width: 3px; height: 20px; background: var(--blue); border-radius: 0 3px 3px 0; } .ds-nav-active:hover { background: #f3f7fc; } .ds-nav-active:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
+    },
+    {
+      "name": "Online Status",
+      "kind": "chip",
+      "refersTo": "status-online",
+      "description": "用文字和状态灯共同表达在线或完成。",
+      "html": "<span class=\"ds-status-online\">在线</span>",
+      "css": ".ds-status-online { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; color: var(--green); background: var(--green-soft); border-radius: 999px; font: 700 10px 'Noto Sans SC', sans-serif; white-space: nowrap; } .ds-status-online::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; } .ds-status-online:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
+    },
+    {
+      "name": "Protocol Tag",
+      "kind": "chip",
+      "refersTo": "protocol-tag",
+      "description": "设备和通道协议的机器标识铭牌。",
+      "html": "<span class=\"ds-protocol-tag\">GB28181</span>",
+      "css": ".ds-protocol-tag { display: inline-flex; padding: 3px 7px; color: #3c526e; background: var(--panel-3); border: 1px solid #d9e1eb; border-radius: 5px; font: 700 9px 'Barlow Condensed', sans-serif; letter-spacing: .04em; }"
+    },
+    {
+      "name": "White Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "承载状态、趋势、表格和配置的默认浅色容器。",
+      "html": "<article class=\"ds-card\"><h3>媒体节点 local</h3><p>ZLMediaKit · 在线</p></article>",
+      "css": ".ds-card { min-width: 240px; padding: 17px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 5px 18px rgba(34,50,78,.04); font-family: 'Noto Sans SC', sans-serif; } .ds-card h3 { margin: 0; color: var(--ink-strong); font-size: 13px; } .ds-card p { margin: 3px 0 0; color: var(--muted); font-size: 10px; } .ds-card:focus-within { border-color: var(--line-strong); }"
+    },
+    {
+      "name": "Signal Matrix Slot",
+      "kind": "custom",
+      "refersTo": "matrix-slot",
+      "description": "显示协议、在线灯、计数和短注释的固定信号槽位。",
+      "html": "<a class=\"ds-matrix-slot\" href=\"#\"><span class=\"ds-protocol-tag\">ONVIF</span><i></i><strong>28 / 31</strong><small>3 路异常</small></a>",
+      "css": ".ds-matrix-slot { position: relative; min-height: 104px; display: block; padding: 12px; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; text-decoration: none; transition: .16s ease; } .ds-matrix-slot:hover { border-color: var(--line-strong); background: var(--panel); } .ds-matrix-slot .ds-protocol-tag { display: inline-flex; padding: 3px 7px; color: #3c526e; background: var(--panel-3); border: 1px solid #d9e1eb; border-radius: 5px; font: 700 9px 'Barlow Condensed', sans-serif; letter-spacing: .04em; } .ds-matrix-slot i { position: absolute; top: 16px; right: 12px; width: 7px; height: 7px; background: var(--green); border-radius: 50%; box-shadow: 0 0 0 3px var(--green-soft); } .ds-matrix-slot strong { display: block; margin-top: 12px; font: 700 18px 'Barlow Condensed', sans-serif; } .ds-matrix-slot small { color: var(--muted); font-size: 9px; } .ds-matrix-slot:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
+    },
+    {
+      "name": "Video Tile",
+      "kind": "custom",
+      "description": "实时监控分屏中的可选视频画面，局部使用深海军蓝对比。",
+      "html": "<button class=\"ds-video-tile\"><span class=\"ds-video-scene\"></span><strong>东门 · 车道一</strong><small>ch-gate-01</small></button>",
+      "css": ".ds-video-tile { position: relative; aspect-ratio: 16/9; overflow: hidden; display: block; width: 100%; padding: 0; color: #fff; background: #0b1422; border: 1px solid #293b56; cursor: pointer; text-align: left; } .ds-video-scene { position: absolute; inset: 0; background: linear-gradient(180deg, transparent 55%, rgba(5,12,22,.85)), linear-gradient(140deg, #536478 0 26%, #34475c 26% 48%, #67798c 48% 65%, #28394c 65%); } .ds-video-tile strong, .ds-video-tile small { position: absolute; left: 9px; z-index: 1; display: block; } .ds-video-tile strong { bottom: 22px; font: 700 10px 'Noto Sans SC', sans-serif; } .ds-video-tile small { bottom: 8px; color: #b3c1d2; font: 10px 'SFMono-Regular', monospace; } .ds-video-tile:hover, .ds-video-tile:focus-visible { border-color: #4da0ff; box-shadow: inset 0 0 0 1px #4da0ff; } .ds-video-tile:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
+    },
+    {
+      "name": "Modal Dialog",
+      "kind": "custom",
+      "description": "带可访问名称、焦点循环、Escape 关闭与焦点恢复的通用管理表单浮层。",
+      "html": "<section class=\"ds-modal\" role=\"dialog\" aria-modal=\"true\" aria-label=\"添加接入设备\"><h2>添加接入设备</h2><button aria-label=\"关闭对话框\">关闭</button></section>",
+      "css": ".ds-modal { width: min(650px, 100%); padding: 20px; background: #fff; border-radius: 13px; box-shadow: 0 24px 70px rgba(18,28,45,.25); } .ds-modal:focus-within { outline: 3px solid rgba(23,104,212,.12); outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "白天值守的信号矩阵",
+    "overview": "国标视频管理平台是一张白天值守的信号矩阵：冷白工作面承载持续操作，雾灰分区拉开层级，工程蓝把“可以继续”变成清楚、可执行的动作。布局和内容都服务于快速扫描，拒绝深色大屏与指标卡片堆叠；深色只被限制在实时视频画面、运行态势条和登录页信号场中，作为媒体与链路信息的对比框，而不是全局主题。本系统采用 Operate 模式，方向种子为 20e0e63b。\n\n广播设备控制台的语法来自状态灯、协议铭牌、矩阵槽位和细密表格。值守人员先辨认平台风险，再沿设备 → 通道 → 直播 → 事件 → 录像链路核验，最后进入协议和系统运维定位故障。数字使用窄体节奏，设备 ID、流 ID、地址和时间使用等宽字，中文任务说明保持稳定的无衬线阅读感。",
+    "keyCharacteristics": [
+      "冷白工作面（#f4f6f9）与白色面板（#ffffff）组成低反射、长时间可读的 admin 控制台。",
+      "工程蓝负责主动作、导航选中和信息态；绿、琥珀、红分别表达健康、注意/异常、危险/离线。",
+      "运行态势条先于协议矩阵、待关注对象和趋势内容出现，主动作直达实时监控。",
+      "固定分组导航与粘性顶栏保持位置感；窄屏导航收为遮罩抽屉，态势保留 2 × 2 槽位且协议矩阵先于资源指标。",
+      "细边、轻阴影、8–12px 圆角和高密度短标签形成设备控制台的工程质感。"
+    ],
+    "rules": [
+      { "name": "The State Color Rule", "body": "蓝色不表示异常；绿色只表示健康/完成，琥珀只表示注意/等待/异常，红色只表示危险/离线。每个状态同时提供文字或图形提示。", "section": "colors" },
+      { "name": "The Blue Action Rule", "body": "每个局部动作组只保留一个工程蓝主动作，其余使用白底、透明或危险变体，避免页面变成蓝色噪声。", "section": "colors" },
+      { "name": "The Role Separation Rule", "body": "不用窄体或等宽字体承载长段中文；它们只服务于数字节奏和机器可核对的短标识。", "section": "typography" },
+      { "name": "The Scan Order Rule", "body": "运行态势、协议矩阵和待关注列表是首屏扫描线；新增模块应排在这些信号之后，并保留“对象 → 状态 → 下一步”的阅读顺序。", "section": "layout" },
+      { "name": "The Tonal Layer Rule", "body": "先用 panel / panel-2 / panel-3 和结构线表达层级，再使用轻阴影；不要用大面积黑底或高扩散阴影制造“大屏”效果。", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 让冷白工作面、雾灰分区和工程蓝操作色成为所有新页面的默认语法。",
+      "Do 首屏先给运行态势条，再给协议信号矩阵、待关注对象和资源趋势；主动作直达实时监控。",
+      "Do 用状态灯、文字、图标或形状共同表达在线、异常、危险和信息，不把颜色当作唯一线索。",
+      "Do 保留协议名、设备 ID、流 ID、时间和地址的技术标识感，并用窄体数字/等宽字体提高核验速度。",
+      "Do 沿用 14px 网格间隙、12px 主卡片圆角、36px 控件高度和 1px 冷灰结构线，保持密度一致。",
+      "Do 在 900px 和 640px 断点重排内容，保留焦点可见、抽屉遮罩关闭和 prefers-reduced-motion 支持。"
+    ],
+    "donts": [
+      "Don't 把整个 admin UI 做成深色大屏、黑色石墨主题或指标卡片堆叠；深色只可作为实时视频/态势条的局部对比。",
+      "Don't 引入纸张、登机牌、票据缺口、纤维纹理或虚线作为当前视觉世界的签名。",
+      "Don't 让工程蓝承担警告/危险语义，或在同一动作组放置多个同权重蓝色主按钮。",
+      "Don't 用窄体或等宽字体排版长段中文，也不要把协议铭牌做成装饰性徽章墙。",
+      "Don't 在窄屏简单压缩桌面表格；应按断点转单列、折行、横向滚动或收起次级信息。",
+      "Don't 用厚重渐变、玻璃拟态和高扩散阴影替代清晰的槽位、边线与状态文本。"
+    ]
+  }
+}
