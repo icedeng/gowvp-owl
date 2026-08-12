@@ -25,6 +25,10 @@ type Cache struct {
 	devices *conc.Map[string, *gbs.Device]
 }
 
+func (c *Cache) DeviceHistory() *ipc.DeviceHistoryStore {
+	return c.Storer.DeviceHistory()
+}
+
 // LoadOrStore implements gbs.MemoryStorer.
 func (c *Cache) LoadOrStore(deviceID string, value *gbs.Device) {
 	c.devices.LoadOrStore(deviceID, value)

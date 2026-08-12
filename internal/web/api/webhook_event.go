@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/core/event"
@@ -16,6 +18,19 @@ import (
 	"github.com/ixugo/goddd/pkg/system"
 	"github.com/ixugo/goddd/pkg/web"
 )
+
+const (
+	maxDetectionsPerEvent = 1000
+	maxEventTextBytes     = 4096
+)
+
+func validEventText(value string) bool {
+	return len(value) <= maxEventTextBytes
+}
+
+func validScore(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= 1
+}
 
 // onWebhookEvents 统一事件接收入口，兼容两种来源：
 //
@@ -26,6 +41,7 @@ import (
 // 来源区分：InternalSecret 对应 AI，RecvSecret 对应 gowvp 转发
 func (w WebHookAPI) onWebhookEvents(c *gin.Context) {
 	ctx := c.Request.Context()
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxWebhookBodyBytes)
 
 	secret := w.resolveSecret(c)
 	if !w.validateSecret(secret) {
@@ -43,6 +59,11 @@ func (w WebHookAPI) onWebhookEvents(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
+	if strings.TrimSpace(in.CID) == "" || !validEventText(in.CID) || !validEventText(in.DID) || !validEventText(in.Label) ||
+		!validEventText(in.Zones) || !validEventText(in.Model) || !validEventText(in.ImagePath) || !validScore(float64(in.Score)) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "invalid event payload"})
+		return
+	}
 
 	w.log.InfoContext(ctx, "webhook forward event received", "cid", in.CID, "did", in.DID, "label", in.Label)
 
@@ -55,6 +76,13 @@ func (w WebHookAPI) onWebhookEvents(c *gin.Context) {
 		} else {
 			imagePath = saved
 		}
+	} else if imagePath != "" {
+		validated, err := resolveEventImagePath(imagePath)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "invalid image path"})
+			return
+		}
+		imagePath = validated
 	}
 
 	_, err := w.eventCore.CreateEvent(ctx, &event.AddEventInput{
@@ -87,7 +115,7 @@ func (w WebHookAPI) resolveSecret(c *gin.Context) string {
 
 // validateSecret 校验 secret 是否匹配 InternalSecret 或 RecvSecret
 func (w WebHookAPI) validateSecret(secret string) bool {
-	return secret != "" && (secret == w.conf.AISecret || secret == w.conf.Server.Webhook.RecvSecret)
+	return secret != "" && (constantTimeEqual(secret, w.conf.AISecret) || constantTimeEqual(secret, w.conf.Server.Webhook.RecvSecret))
 }
 
 // handleAIEvents 处理 Python AI 推送的检测事件
@@ -100,16 +128,30 @@ func (w WebHookAPI) handleAIEvents(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
+	if strings.TrimSpace(in.CameraID) == "" || !validEventText(in.CameraID) || len(in.Detections) > maxDetectionsPerEvent ||
+		in.SnapshotWidth < 0 || in.SnapshotHeight < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "invalid AI event payload"})
+		return
+	}
+	for _, det := range in.Detections {
+		if !validEventText(det.Label) || !validScore(det.Confidence) || det.Area < 0 ||
+			det.Box.XMin < 0 || det.Box.YMin < 0 || det.Box.XMax < det.Box.XMin || det.Box.YMax < det.Box.YMin {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "invalid AI detection"})
+			return
+		}
+	}
 
 	w.log.InfoContext(ctx, "ai detection event",
 		"camera_id", in.CameraID,
 		"detection_count", len(in.Detections),
 	)
 
-	var did string
-	if channel, err := w.ipcCore.GetChannel(ctx, in.CameraID); err == nil && channel != nil {
-		did = channel.DID
+	channel, err := w.ipcCore.GetChannel(ctx, in.CameraID)
+	if err != nil || channel == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "unknown camera_id"})
+		return
 	}
+	did := channel.DID
 
 	var imagePath string
 	if in.Snapshot != "" {
@@ -160,14 +202,34 @@ type webhookForwardInput struct {
 // 返回相对路径: cid/年月日时分秒_随机6位.jpg
 func saveEventSnapshot(cid string, t orm.Time, snapshotB64 string) (string, error) {
 	eventsDir := filepath.Join(system.Getwd(), "configs", "events")
+	cid = strings.TrimSpace(cid)
+	if cid == "" || cid == "." || filepath.Base(cid) != cid || strings.ContainsAny(cid, `/\\`) {
+		return "", fmt.Errorf("invalid channel id")
+	}
+	if len(snapshotB64) > base64.StdEncoding.EncodedLen(maxSnapshotBytes) {
+		return "", fmt.Errorf("snapshot exceeds %d bytes", maxSnapshotBytes)
+	}
 
 	data, err := base64.StdEncoding.DecodeString(snapshotB64)
 	if err != nil {
 		return "", fmt.Errorf("decode base64: %w", err)
 	}
 
+	if len(data) > maxSnapshotBytes {
+		return "", fmt.Errorf("snapshot exceeds %d bytes", maxSnapshotBytes)
+	}
+	ext := ""
+	switch http.DetectContentType(data) {
+	case "image/jpeg":
+		ext = ".jpg"
+	case "image/png":
+		ext = ".png"
+	default:
+		return "", fmt.Errorf("unsupported snapshot content type")
+	}
+
 	randomSuffix := fmt.Sprintf("%06d", rand.IntN(1000000))
-	filename := fmt.Sprintf("%s_%s.jpg", t.Format("20060102150405"), randomSuffix)
+	filename := fmt.Sprintf("%s_%s%s", t.Format("20060102150405"), randomSuffix, ext)
 
 	relativePath := filepath.Join(cid, filename)
 	fullPath := filepath.Join(eventsDir, relativePath)
@@ -182,6 +244,44 @@ func saveEventSnapshot(cid string, t orm.Time, snapshotB64 string) (string, erro
 
 	slog.Info("event snapshot saved", "path", fullPath, "size", len(data))
 	return relativePath, nil
+}
+
+func resolveEventImagePath(path string) (string, error) {
+	eventsDir := filepath.Join(system.Getwd(), "configs", "events")
+	root, err := filepath.Abs(eventsDir)
+	if err != nil {
+		return "", err
+	}
+	candidate := filepath.Clean(strings.TrimSpace(path))
+	if candidate == "" || candidate == "." {
+		return "", fmt.Errorf("empty event image path")
+	}
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(root, candidate)
+	}
+	candidate, err = filepath.Abs(candidate)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("event image path escapes storage directory")
+	}
+	if info, statErr := os.Lstat(candidate); statErr == nil {
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("event image is not a regular file")
+		}
+		evaluatedRoot, rootErr := filepath.EvalSymlinks(root)
+		evaluatedPath, pathErr := filepath.EvalSymlinks(candidate)
+		if rootErr != nil || pathErr != nil {
+			return "", fmt.Errorf("resolve event image symlink")
+		}
+		evaluatedRel, relErr := filepath.Rel(evaluatedRoot, evaluatedPath)
+		if relErr != nil || evaluatedRel == "." || evaluatedRel == ".." || strings.HasPrefix(evaluatedRel, ".."+string(filepath.Separator)) {
+			return "", fmt.Errorf("event image symlink escapes storage directory")
+		}
+	}
+	return filepath.ToSlash(rel), nil
 }
 
 // 确保 web 包被引用（web.WrapH 在其他文件中已使用）

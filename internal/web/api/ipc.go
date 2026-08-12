@@ -171,6 +171,7 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.DELETE("/:id", web.WrapH(api.delDevice))               // 删除设备（所有协议）
 		group.GET("/channels", web.WrapH(api.FindChannelsForDevice)) // 设备与通道列表（所有协议）
 		group.POST("/:id/catalog", web.WrapH(api.queryCatalog))
+		group.GET("/:id/history", web.WrapH(api.deviceHistory))
 		group.POST("/:id/gb/control", web.WrapH(api.gbDeviceControl)) // GB 附录A.2.3 设备控制
 		group.POST("/:id/gb/query", web.WrapH(api.gbDeviceQuery))     // GB 附录A.2.4 设备查询
 		group.POST("/:id/gb/config", web.WrapH(api.gbDeviceConfig))   // GB 设备配置（2014 BasicParam）
@@ -261,6 +262,23 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/options_probe", web.WrapH(api.optionsProbe))
 		group.POST("/:id/ptz_probe", web.WrapH(api.devicePTZProbe))
 	}
+}
+
+type deviceHistoryInput struct {
+	Kind string `form:"kind" binding:"required"`
+	web.PagerFilter
+}
+
+func (a IPCAPI) deviceHistory(c *gin.Context, in *deviceHistoryInput) (any, error) {
+	if in.Kind != ipc.DeviceHistoryHeartbeat && in.Kind != ipc.DeviceHistoryRegister {
+		return nil, reason.ErrBadRequest.SetMsg("kind 仅支持 heartbeat 或 register")
+	}
+	device, err := a.ipc.GetDevice(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
+	items, total, err := a.ipc.DeviceHistory().List(c.Request.Context(), device.DeviceID, in.Kind, &in.PagerFilter)
+	return gin.H{"items": items, "total": total}, err
 }
 
 func resolveGBSnapshotUploadTarget(c *gin.Context) (deviceID, coverKey, sessionID string) {

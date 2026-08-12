@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Activity, Camera, CircleGauge, Film, Radio, RadioTower, Search, Server, Siren, Video } from '@lucide/vue'
+import { Activity, Camera, CircleGauge, Film, MonitorCog, Radio, RadioTower, Search, Server, Siren, Truck, Video } from '@lucide/vue'
 import { useUiStore } from '../stores/ui'
 
 const ui = useUiStore()
@@ -17,11 +17,13 @@ const items = [
   { label: '进入实时监控', hint: '视频值守', path: '/live', icon: Video },
   { label: '查询统一事件', hint: 'AI / 国标报警', path: '/events', icon: Siren },
   { label: '检索历史录像', hint: '月历 / 时间轴', path: '/recordings', icon: Film },
-  { label: '查找接入设备', hint: '四协议统一管理', path: '/devices', icon: Camera },
+  { label: '查找国标设备', hint: 'GB/T 28181', path: '/devices', icon: Camera },
+  { label: '查找部标设备', hint: 'JT/T 808 / 1078', path: '/transport-devices', icon: Truck },
   { label: '查找视频通道', hint: '通道能力', path: '/channels', icon: Radio },
   { label: '管理 RTSP 拉流', hint: '资源管理', path: '/pull-streams', icon: RadioTower },
   { label: '检查媒体节点', hint: '平台运维', path: '/media-servers', icon: Server },
   { label: '查看系统状态', hint: '资源与 API 指标', path: '/system-status', icon: Activity },
+  { label: '调整播放器参数', hint: '协议 / 解码 / 缓冲', path: '/player-settings', icon: MonitorCog },
 ]
 const filtered = computed(() => items.filter((item) => `${item.label}${item.hint}`.toLowerCase().includes(query.value.toLowerCase())))
 

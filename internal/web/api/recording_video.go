@@ -32,8 +32,11 @@ func (a RecordingAPI) serveVideoOnly(c *gin.Context) {
 	}
 
 	// 构建原始文件路径
-	storageDir := a.conf.Server.Recording.StorageDir
-	originalPath := filepath.Join(storageDir, requestPath)
+	originalPath, err := a.recordingCore.ResolvePath(requestPath)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"code": 1, "msg": "invalid path"})
+		return
+	}
 
 	// 检查原始文件是否存在
 	if _, err := os.Stat(originalPath); os.IsNotExist(err) {
@@ -78,7 +81,11 @@ func (a RecordingAPI) createVideoOnlyFile(originalPath string) (string, error) {
 	hashStr := fmt.Sprintf("%x", hash)
 
 	// 在临时目录创建纯视频文件
-	cacheDir := filepath.Join(a.conf.Server.Recording.StorageDir, ".video-cache")
+	cacheDir, err := a.recordingCore.ResolvePath(".video-cache/cache.mp4")
+	if err != nil {
+		return "", fmt.Errorf("解析缓存目录失败: %w", err)
+	}
+	cacheDir = filepath.Dir(cacheDir)
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", fmt.Errorf("创建缓存目录失败: %w", err)
 	}

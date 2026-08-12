@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,6 +24,9 @@ import (
 )
 
 func Run(bc *conf.Bootstrap) {
+	if err := conf.SecureRuntimeSecrets(bc); err != nil {
+		panic(fmt.Errorf("secure runtime secrets: %w", err))
+	}
 	if bc.Server.Recording.DiskUsageThreshold <= 0 {
 		bc.Server.Recording.DiskUsageThreshold = 95.0
 	}
@@ -49,14 +53,6 @@ func Run(bc *conf.Bootstrap) {
 	// 每次启动生成进程内随机 UUID，用于 Python AI 回调鉴权
 	bc.AISecret = uuid.New().String()
 
-	// RecvSecret 为空时（旧配置文件升级场景）自动生成并持久化
-	if bc.Server.Webhook.RecvSecret == "" {
-		bc.Server.Webhook.RecvSecret = uuid.New().String()
-		if err := conf.WriteConfig(&bc, bc.ConfigPath); err != nil {
-			system.ErrPrintf("WriteConfig RecvSecret err[%s]", err)
-		}
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -69,14 +65,22 @@ func Run(bc *conf.Bootstrap) {
 	log, clean := SetupLog(bc)
 	defer clean()
 
-	go setupZLM(ctx, bc.ConfigDir)
+	if isContainerEnv() || os.Getenv("NVR_STREAM") == "ZLM" {
+		mediaServerPath := filepath.Join(system.Getwd(), "MediaServer")
+		if _, err := os.Stat(mediaServerPath); err == nil {
+			if err := ensureZLMSecret(filepath.Join(bc.ConfigDir, "zlm.ini"), bc.Media.Secret); err != nil {
+				panic(fmt.Errorf("initialize zlm secret: %w", err))
+			}
+		}
+	}
+	go setupZLM(ctx, bc.ConfigDir, bc.Media.Secret)
 	if !bc.Server.AI.Disabled {
-		go setupAIClient(ctx, "http://127.0.0.1:15123/ai", bc.Debug)
+		go setupAIClient(ctx, "http://127.0.0.1:15123/ai", bc.AISecret, bc.Debug)
 	}
 
 	// 如果需要执行表迁移，递增此版本号和表更新说明
-	versionapi.DBVersion = "0.0.23"
-	versionapi.DBRemark = "onvif device support"
+	versionapi.DBVersion = "0.0.28"
+	versionapi.DBRemark = "gb28181 device heartbeat and register history"
 
 	handler, cleanUp, err := wireApp(bc, log)
 	if err != nil {
@@ -155,7 +159,7 @@ func isContainerEnv() bool {
 	return false
 }
 
-func setupZLM(ctx context.Context, dir string) {
+func setupZLM(ctx context.Context, dir string, secret string) {
 	// 兼容多种容器运行时以及通过环境变量强制启用
 	if !(isContainerEnv() || os.Getenv("NVR_STREAM") == "ZLM") {
 		slog.Info("未在容器环境中运行，跳过启动 zlm")
@@ -171,6 +175,10 @@ func setupZLM(ctx context.Context, dir string) {
 
 	workDir := system.Getwd()
 	configPath := filepath.Join(dir, "zlm.ini")
+	if err := ensureZLMSecret(configPath, secret); err != nil {
+		slog.Error("写入 ZLM 媒体密钥失败", "err", err)
+		return
+	}
 
 	for {
 		select {
@@ -198,6 +206,62 @@ func setupZLM(ctx context.Context, dir string) {
 	}
 }
 
+func ensureZLMSecret(path, secret string) error {
+	if strings.TrimSpace(secret) == "" {
+		return fmt.Errorf("media secret is empty")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	text := string(content)
+	secretLine := "secret=" + secret
+	sectionPattern := regexp.MustCompile(`^\s*\[([^]]+)]\s*$`)
+	prefixedSecretPattern := regexp.MustCompile(`(?i)^\s*api\.secret\s*=`)
+	secretPattern := regexp.MustCompile(`(?i)^\s*secret\s*=`)
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	apiSection := -1
+	inAPI := false
+	updated := false
+	for i, line := range lines {
+		if prefixedSecretPattern.MatchString(line) {
+			lines[i] = "api.secret=" + secret
+			updated = true
+			break
+		}
+		if match := sectionPattern.FindStringSubmatch(line); len(match) == 2 {
+			inAPI = strings.EqualFold(strings.TrimSpace(match[1]), "api")
+			if inAPI {
+				apiSection = i
+			}
+			continue
+		}
+		if inAPI && secretPattern.MatchString(line) {
+			lines[i] = secretLine
+			updated = true
+			break
+		}
+	}
+	if !updated && apiSection >= 0 {
+		lines = append(lines[:apiSection+1], append([]string{secretLine}, lines[apiSection+1:]...)...)
+		updated = true
+	}
+	if !updated {
+		if len(lines) > 0 && lines[len(lines)-1] != "" {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "[api]", secretLine, "")
+	}
+	text = strings.Join(lines, "\n")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
 func findPythonPath() string {
 	candidates := []string{
 		"/opt/homebrew/Caskroom/miniconda/base/bin/python", // macOS Homebrew Miniconda
@@ -215,7 +279,7 @@ func findPythonPath() string {
 	return "python3"
 }
 
-func setupAIClient(ctx context.Context, callback string, debug bool) {
+func setupAIClient(ctx context.Context, callback, callbackSecret string, debug bool) {
 	workDir := filepath.Join(system.Getwd(), "analysis")
 	if _, err := os.Stat(filepath.Join(workDir, "main.py")); err != nil && os.IsNotExist(err) {
 		slog.Info("main.py 文件不存在，跳过启动 ai", "path", filepath.Join(workDir, "main.py"))
@@ -228,6 +292,9 @@ func setupAIClient(ctx context.Context, callback string, debug bool) {
 	args := []string{"main.py"}
 	if callback != "" {
 		args = append(args, "--callback-url", callback)
+	}
+	if callbackSecret != "" {
+		args = append(args, "--callback-secret", callbackSecret)
 	}
 	if debug {
 		args = append(args, "--log-level", "DEBUG")

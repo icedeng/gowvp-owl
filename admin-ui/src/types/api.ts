@@ -74,6 +74,16 @@ export interface ApiDevice {
   ptz_verified?: boolean
 }
 
+export interface DeviceHistoryRecord {
+  id: number
+  device_id: string
+  kind: 'heartbeat' | 'register' | string
+  recorded_at?: string
+  interval_seconds?: number
+  address?: string
+  status?: string
+}
+
 export interface ApiChannel {
   id: string
   did?: string
@@ -173,6 +183,7 @@ export interface MediaServer {
 }
 
 export interface SipConfig {
+  host?: string
   port?: number
   id?: string
   domain?: string
@@ -184,7 +195,16 @@ export interface SipConfig {
   strict_source_check?: boolean
   require_message_auth?: boolean
   ptz_weak_confirm?: boolean
+  device_history?: { max_records?: number; max_days?: number }
   direct_tcp_download?: Record<string, unknown>
+}
+
+export interface SipAccessInfo {
+  server_ip?: string
+  id?: string
+  domain?: string
+  port?: number
+  password?: string
 }
 
 export interface HealthInfo {
@@ -241,9 +261,19 @@ export interface VersionCheck {
 }
 
 export interface PlayAddress {
+  label?: string
   schema?: string
   url?: string
   type?: string
+  flv?: string
+  http_flv?: string
+  'http-flv'?: string
+  ws_flv?: string
+  'ws-flv'?: string
+  hls?: string
+  webrtc?: string
+  rtmp?: string
+  rtsp?: string
   [key: string]: unknown
 }
 

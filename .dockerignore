@@ -1,4 +1,7 @@
 __pycache__/
+admin-ui/node_modules/
+admin-ui/dist/
+.git/
 *.yaml
 *.pt
 webhook_openapi.yaml

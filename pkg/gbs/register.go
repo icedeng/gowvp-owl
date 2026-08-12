@@ -302,6 +302,11 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		applyGBProtocolVersion(&b.Ext, ctx.XGBVer)
 		return nil
 	})
+	if history := g.core.DeviceHistory(); history != nil {
+		if err := history.Record(context.TODO(), ctx.DeviceID, ipc.DeviceHistoryRegister, ctx.Source.String(), "online", time.Now()); err != nil {
+			ctx.Log.Error("持久化设备注册历史失败", "err", err)
+		}
+	}
 
 	// conn := ctx.Request.GetConnection()
 	// fmt.Printf(">>> %p\n", conn

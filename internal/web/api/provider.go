@@ -169,8 +169,12 @@ func NewUniqueID(db *gorm.DB) uniqueid.Core {
 // 需要迁移的版本阈值
 const migrateVersionThreshold = "0.0.20"
 
-func NewIPCStore(db *gorm.DB) ipc.Storer {
-	store := ipccache.NewCache(ipcdb.NewDB(db).AutoMigrate(orm.GetEnabledAutoMigrate()))
+func NewIPCStore(db *gorm.DB, cfg *conf.Bootstrap) ipc.Storer {
+	historyCfg := ipc.DeviceHistoryConfig{}
+	if cfg != nil {
+		historyCfg = ipc.DeviceHistoryConfig{MaxRecords: cfg.Sip.DeviceHistory.MaxRecords, MaxDays: cfg.Sip.DeviceHistory.MaxDays}
+	}
+	store := ipccache.NewCache(ipcdb.NewDBWithHistory(db, historyCfg).AutoMigrate(orm.GetEnabledAutoMigrate()))
 
 	// 检查版本并执行 RTMP/RTSP 数据迁移到 channels 表
 	if shouldMigrateStreamData(db) {

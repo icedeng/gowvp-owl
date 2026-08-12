@@ -85,13 +85,28 @@ func RegisterRecording(g gin.IRouter, api RecordingAPI, handler ...gin.HandlerFu
 		group.GET("/:id/download", api.downloadRecording)
 	}
 
-	// 静态文件服务，用于访问录像 MP4 文件
+	// 录像文件服务使用统一路径解析，拒绝目录穿越及指向根目录外的符号链接。
 	// 路径格式: /static/recordings/xxx.mp4?token=xxx
 	// Gin Static 支持 HTTP Range 请求，实现边下载边播放（秒播）
 	if api.conf != nil && api.conf.Server.Recording.StorageDir != "" {
 		slog.Info("注册录像静态文件服务", "path", "/static/recordings", "dir", api.conf.Server.Recording.StorageDir)
-		g.Group("/static", handler...).Static("/recordings", api.conf.Server.Recording.StorageDir)
+		g.Group("/static", handler...).GET("/recordings/*path", api.serveRecordingFile)
 	}
+}
+
+func (a RecordingAPI) serveRecordingFile(c *gin.Context) {
+	requestPath := strings.TrimPrefix(c.Param("path"), "/")
+	filePath, err := a.recordingCore.ResolvePath(requestPath)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"code": 1, "msg": "invalid recording path"})
+		return
+	}
+	info, err := os.Stat(filePath)
+	if err != nil || !info.Mode().IsRegular() {
+		c.JSON(http.StatusNotFound, gin.H{"code": 1, "msg": "recording file not found"})
+		return
+	}
+	c.File(filePath)
 }
 
 // listRecordings 分页查询录像列表
@@ -139,7 +154,11 @@ func (a RecordingAPI) downloadRecording(c *gin.Context) {
 	}
 
 	// 构建文件完整路径
-	filePath := a.recordingCore.GetFullPath(rec.Path)
+	filePath, err := a.recordingCore.ResolvePath(rec.Path)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"code": 1, "msg": "invalid recording path"})
+		return
+	}
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		c.JSON(http.StatusNotFound, gin.H{"code": 1, "msg": "recording file not found"})
 		return

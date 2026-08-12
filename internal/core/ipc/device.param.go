@@ -48,9 +48,11 @@ type EditDeviceInput struct {
 	// Ext          DeviceExt `json:"ext"`           // 设备属性
 }
 
-// 目前仅应用于 onvif 添加
+// AddDeviceInput 用于手动添加国标或 ONVIF 设备。
 type AddDeviceInput struct {
 	DeviceID string `json:"device_id"` // 20 位国标编号
+	// StreamMode 指定国标设备的 RTP 收流模式（0: UDP，1: TCP 被动，2: TCP 主动）。
+	StreamMode int `json:"stream_mode"`
 	// onvif
 	Username string `json:"username"` // 用户名
 	IP       string `json:"ip"`       // ip

@@ -179,9 +179,12 @@ func (c Core) cleanupByDiskUsage() bool {
 		var details []diskDeleteDetail
 
 		for _, rec := range oldestRecordings {
-			filePath := rec.Path
-			if !filepath.IsAbs(filePath) {
-				filePath = filepath.Join(system.Getwd(), filePath)
+			filePath, pathErr := c.ResolvePath(rec.Path)
+			if pathErr != nil {
+				batchFailed++
+				details = append(details, diskDeleteDetail{rec.ID, rec.CID, rec.Path, rec.StartedAt.Format(time.DateTime), rec.Size, "invalid_path"})
+				slog.Warn("拒绝删除录像根目录外文件", "path", rec.Path, "err", pathErr)
+				continue
 			}
 			if err := os.Remove(filePath); err != nil {
 				if os.IsNotExist(err) {
@@ -325,9 +328,12 @@ func (c Core) batchDeleteRecordings(ctx context.Context, reason string, conditio
 		var details []deleteDetail
 
 		for _, rec := range recordings {
-			filePath := rec.Path
-			if !filepath.IsAbs(filePath) {
-				filePath = filepath.Join(system.Getwd(), filePath)
+			filePath, pathErr := c.ResolvePath(rec.Path)
+			if pathErr != nil {
+				batchFailed++
+				details = append(details, deleteDetail{rec.ID, rec.CID, rec.Path, rec.StartedAt.Format(time.DateTime), rec.Size, "invalid_path"})
+				slog.Warn("拒绝删除录像根目录外文件", "path", rec.Path, "err", pathErr)
+				continue
 			}
 			if err := os.Remove(filePath); err != nil {
 				if os.IsNotExist(err) {

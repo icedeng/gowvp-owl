@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"math"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -48,15 +51,16 @@ func NewWebHookAPI(core sms.Core, conf *conf.Bootstrap, gbs *gbs.Server, ipcBund
 func registerZLMWebhookAPI(r gin.IRouter, api WebHookAPI, handler ...gin.HandlerFunc) {
 	{
 		group := r.Group("/webhook", handler...)
-		group.POST("/on_server_started", web.WrapH(api.onServerStarted))
-		group.POST("/on_server_keepalive", web.WrapH(api.onServerKeepalive))
-		group.POST("/on_stream_changed", web.WrapH(api.onStreamChanged))
-		group.POST("/on_publish", web.WrapH(api.onPublish))
-		group.POST("/on_play", web.WrapH(api.onPlay))
-		group.POST("/on_stream_none_reader", web.WrapH(api.onStreamNoneReader))
-		group.POST("/on_rtp_server_timeout", web.WrapH(api.onRTPServerTimeout))
-		group.POST("/on_stream_not_found", web.WrapH(api.onStreamNotFound))
-		group.POST("/on_record_mp4", web.WrapH(api.onRecordMP4))
+		zlmGroup := group.Group("", sharedSecretAuth(func() string { return api.conf.Media.Secret }))
+		zlmGroup.POST("/on_server_started", web.WrapH(api.onServerStarted))
+		zlmGroup.POST("/on_server_keepalive", web.WrapH(api.onServerKeepalive))
+		zlmGroup.POST("/on_stream_changed", web.WrapH(api.onStreamChanged))
+		zlmGroup.POST("/on_publish", web.WrapH(api.onPublish))
+		zlmGroup.POST("/on_play", web.WrapH(api.onPlay))
+		zlmGroup.POST("/on_stream_none_reader", web.WrapH(api.onStreamNoneReader))
+		zlmGroup.POST("/on_rtp_server_timeout", web.WrapH(api.onRTPServerTimeout))
+		zlmGroup.POST("/on_stream_not_found", web.WrapH(api.onStreamNotFound))
+		zlmGroup.POST("/on_record_mp4", web.WrapH(api.onRecordMP4))
 		// 统一事件接收入口：兼容 Python AI 推送和 gowvp 间转发
 		group.POST("/events", api.onWebhookEvents)
 	}
@@ -393,17 +397,26 @@ func (w WebHookAPI) onRecordMP4(c *gin.Context, in *onRecordMP4Input) (DefaultOu
 		"start_time", in.StartTime,
 	)
 
-	// 计算相对路径：从配置的存储目录开始
-	relativePath := in.FilePath
-	if w.conf.Server.Recording.StorageDir != "" {
-		// 尝试提取相对路径
-		storageDir := w.conf.Server.Recording.StorageDir
-		if idx := strings.Index(in.FilePath, storageDir); idx >= 0 {
-			relativePath = in.FilePath[idx:]
-		} else {
-			// 使用 URL 字段作为相对路径
-			relativePath = in.URL
-		}
+	if in.FileSize < 0 || in.TimeLen < 0 || math.IsNaN(in.TimeLen) || math.IsInf(in.TimeLen, 0) || in.StartTime <= 0 {
+		return DefaultOutput{}, fmt.Errorf("invalid recording metadata")
+	}
+	fullPath, err := w.recordingCore.ResolvePath(in.FilePath)
+	if err != nil {
+		return DefaultOutput{}, fmt.Errorf("invalid recording path: %w", err)
+	}
+	if !strings.EqualFold(filepath.Ext(fullPath), ".mp4") {
+		return DefaultOutput{}, fmt.Errorf("invalid recording file type")
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil || !info.Mode().IsRegular() {
+		return DefaultOutput{}, fmt.Errorf("recording file is unavailable")
+	}
+	if in.FileSize != info.Size() {
+		return DefaultOutput{}, fmt.Errorf("recording file size mismatch")
+	}
+	relativePath, err := w.recordingCore.RelativePath(fullPath)
+	if err != nil {
+		return DefaultOutput{}, fmt.Errorf("invalid recording path: %w", err)
 	}
 
 	// 计算开始和结束时间
@@ -429,7 +442,7 @@ func (w WebHookAPI) onRecordMP4(c *gin.Context, in *onRecordMP4Input) (DefaultOu
 		StartedAt: orm.Time{Time: startTime},
 		EndedAt:   orm.Time{Time: endTime},
 		Duration:  in.TimeLen,
-		Path:      filepath.Clean(relativePath),
+		Path:      relativePath,
 		Size:      in.FileSize,
 	})
 	if err != nil {

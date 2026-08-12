@@ -9,6 +9,7 @@ import (
 type Storer interface {
 	Device() DeviceStorer
 	Channel() ChannelStorer
+	DeviceHistory() *DeviceHistoryStore
 }
 
 // Core business domain
@@ -16,6 +17,13 @@ type Core struct {
 	store     Storer
 	uniqueID  uniqueid.Core
 	protocols map[string]Protocoler // 协议映射（Protocol 在同一个包内）
+}
+
+func (c Core) DeviceHistory() *DeviceHistoryStore {
+	if c.store == nil {
+		return nil
+	}
+	return c.store.DeviceHistory()
 }
 
 // NewCore create business domain

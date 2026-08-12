@@ -2,30 +2,22 @@ package conf
 
 import (
 	"time"
-
-	"github.com/google/uuid"
-	"github.com/ixugo/goddd/pkg/orm"
 )
 
 func DefaultConfig() Bootstrap {
 	return Bootstrap{
 		Server: Server{
-			Username:   "admin",
-			Password:   "admin",
-			RTMPSecret: "123",
+			Username: "admin",
 			HTTP: ServerHTTP{
-				Port:      15123,
-				Timeout:   Duration(60 * time.Second),
-				JwtSecret: orm.GenerateRandomString(24),
-				AuthURL:   "",
+				Port:    15123,
+				Timeout: Duration(60 * time.Second),
+				AuthURL: "",
 				PProf: ServerPPROF{
-					Enabled:   true,
+					Enabled:   false,
 					AccessIps: []string{"::1", "127.0.0.1"},
 				},
 			},
-			Webhook: ServerWebhook{
-				RecvSecret: uuid.New().String(),
-			},
+			Webhook: ServerWebhook{},
 			AI: ServerAI{
 				Disabled:             false,
 				RetainDays:           7,
@@ -63,6 +55,7 @@ func DefaultConfig() Bootstrap {
 			StrictSourceCheck:  false,
 			RequireMessageAuth: false,
 			PTZWeakConfirm:     false,
+			DeviceHistory:      DeviceHistoryConfig{MaxRecords: 1000, MaxDays: 30},
 			DirectTCPDownload: SIPDirectTCPDownload{
 				Enabled:              false,
 				DeviceAllowlist:      nil,

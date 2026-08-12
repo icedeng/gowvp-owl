@@ -1,3 +1,12 @@
+FROM node:22-alpine AS admin-ui-builder
+
+WORKDIR /src/admin-ui
+RUN corepack enable
+COPY admin-ui/package.json admin-ui/pnpm-lock.yaml admin-ui/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY admin-ui/ ./
+RUN pnpm build
+
 FROM alpine:latest
 
 ARG TARGETARCH
@@ -10,7 +19,7 @@ RUN apk --no-cache add ca-certificates \
 WORKDIR /app
 
 ADD ./build/linux_${TARGETARCH}/bin ./
-ADD ./www /app/www
+COPY --from=admin-ui-builder /src/admin-ui/dist /app/www
 
 LABEL Name=gowvp Version=0.0.1
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,35 +133,59 @@ func getSecret(configDir string) (string, error) {
 		if err != nil {
 			continue
 		}
-		re := regexp.MustCompile(`secret=(\w+)`)
-		matches := re.FindStringSubmatch(string(content))
-		if len(matches) < 2 {
-			continue
+		sectionPattern := regexp.MustCompile(`^\s*\[([^]]+)]\s*$`)
+		prefixedPattern := regexp.MustCompile(`(?i)^\s*api\.secret\s*=\s*([^\s#;]+)\s*$`)
+		secretPattern := regexp.MustCompile(`(?i)^\s*secret\s*=\s*([^\s#;]+)\s*$`)
+		inAPI := false
+		for _, line := range strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n") {
+			if matches := prefixedPattern.FindStringSubmatch(line); len(matches) == 2 {
+				return matches[1], nil
+			}
+			if matches := sectionPattern.FindStringSubmatch(line); len(matches) == 2 {
+				inAPI = strings.EqualFold(strings.TrimSpace(matches[1]), "api")
+				continue
+			}
+			if inAPI {
+				if matches := secretPattern.FindStringSubmatch(line); len(matches) == 2 {
+					return matches[1], nil
+				}
+			}
 		}
-		return matches[1], nil
 	}
 	return "", fmt.Errorf("unknow")
 }
 
 // TODO: 发现配置会导致程序延迟 1~2s 才能启动
 func setupSecret(bc *conf.Bootstrap) {
+	if bc.Media.Secret != "" {
+		return
+	}
 	// 六六大顺
 	for range 6 {
 		secret, err := getSecret(bc.ConfigDir)
 		if err == nil {
-			slog.Info("发现 zlm 配置，已赋值，未回写配置文件", "secret", secret)
+			if conf.IsRevokedSecret(secret) {
+				slog.Error("ZLM 配置仍使用已泄露的历史密钥，请设置 OWL_MEDIA_SECRET 并同步更新媒体服务")
+				return
+			}
+			slog.Info("发现 ZLM 配置并加载媒体密钥")
 			bc.Media.Secret = secret
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
 		continue
 	}
-	slog.Warn("未发现 zlm 配置，请手动配置 zlm secret")
+	if bc.Media.Secret == "" {
+		slog.Warn("未发现 zlm 配置，请通过 OWL_MEDIA_SECRET 或配置文件提供媒体密钥")
+	}
 }
 
 func (n *NodeManager) Run(bc *conf.Bootstrap, serverPort int) error {
 	ctx := context.Background()
 	setupSecret(bc)
+	if bc.Media.Secret == "" {
+		return fmt.Errorf("media secret is required; set OWL_MEDIA_SECRET or provide zlm.ini/config.ini")
+	}
 	cfg := bc.Media
 	setValueFn := func(ms *MediaServer) {
 		ms.ID = DefaultMediaServerID
@@ -242,6 +268,14 @@ func (n *NodeManager) connection(server *MediaServer, serverPort int) error {
 
 	log.Info("MediaServer 配置设置...")
 	hookPrefix := fmt.Sprintf("http://%s:%d/webhook", server.HookIP, serverPort)
+	u, err := url.Parse(hookPrefix)
+	if err != nil {
+		return fmt.Errorf("build media webhook URL: %w", err)
+	}
+	query := u.Query()
+	query.Set("secret", server.Secret)
+	u.RawQuery = query.Encode()
+	hookPrefix = u.String()
 	if err := driver.Setup(ctx, server, hookPrefix); err != nil {
 		log.Error("MediaServer 配置设置失败", "err", err)
 		return err

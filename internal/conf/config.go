@@ -118,8 +118,14 @@ type SIP struct {
 	StrictSourceCheck  bool                 `comment:"是否校验设备上报源IP与注册源IP一致" json:"strict_source_check"`
 	RequireMessageAuth bool                 `comment:"是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权" json:"require_message_auth"`
 	PTZWeakConfirm     bool                 `comment:"是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理" json:"ptz_weak_confirm"`
+	DeviceHistory      DeviceHistoryConfig  `comment:"设备心跳与注册历史保留策略" json:"device_history"`
 	DirectTCPDownload  SIPDirectTCPDownload `comment:"GB/T 28181-2014 附录 O 裸 TCP 文件下载" json:"direct_tcp_download"`
 	Log                SIPLog
+}
+
+type DeviceHistoryConfig struct {
+	MaxRecords int `comment:"每台设备最多保留记录条数，0 表示不限制" json:"max_records"`
+	MaxDays    int `comment:"最多保留天数，0 表示不限制" json:"max_days"`
 }
 
 // SIPDirectTCPDownload 控制 2014 附录 O 无 RTP 封装的 TCP 文件下载。

@@ -582,9 +582,9 @@ def serve(port, model_path):
     health_servicer = HealthServicer(servicer)
     analysis_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
 
-    server.add_insecure_port(f"[::]:{port}")
+    server.add_insecure_port(f"127.0.0.1:{port}")
     server.start()
-    slog.info(f"AnalysisService started: 0.0.0.0:{port}")
+    slog.info(f"AnalysisService started: 127.0.0.1:{port}")
 
     threading.Thread(target=servicer.initialize).start()
 
@@ -642,7 +642,7 @@ def main():
     model_path = discover_model(args.model)
 
     slog.debug(
-        f"log level: {args.log_level}, model: {model_path}, callback url: {args.callback_url}, callback secret: {args.callback_secret}"
+        f"log level: {args.log_level}, model: {model_path}, callback url: {args.callback_url}, callback secret configured: {bool(args.callback_secret)}"
     )
 
     serve(args.port, model_path)

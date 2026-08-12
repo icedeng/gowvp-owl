@@ -38,6 +38,9 @@ func (d *Device) Delete(ctx context.Context, dev *ipc.Device, opts ...orm.QueryO
 		func(tx *gorm.DB) error {
 			return tx.Model(&ipc.Channel{}).Where("did=?", dev.ID).Delete(nil).Error
 		},
+		func(tx *gorm.DB) error {
+			return tx.Where("device_id = ?", dev.DeviceID).Delete(new(ipc.DeviceHistoryRecord)).Error
+		},
 	); err != nil {
 		return err
 	}

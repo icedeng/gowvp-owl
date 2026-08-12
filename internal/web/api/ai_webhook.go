@@ -52,9 +52,10 @@ func NewAIWebhookAPI(conf *conf.Bootstrap, eventCore event.Core, ipcCore ipc.Cor
 //   - POST /ai/events     检测事件（别名指向 /webhook/events 的 handler，统一入库逻辑）
 func registerAIWebhookAPI(r gin.IRouter, api AIWebhookAPI, webhookAPI WebHookAPI, handler ...gin.HandlerFunc) {
 	group := r.Group("/ai", handler...)
-	group.POST("/keepalive", web.WrapH(api.onKeepalive))
-	group.POST("/started", web.WrapH(api.onStarted))
-	group.POST("/stopped", web.WrapH(api.onStopped))
+	lifecycle := group.Group("", sharedSecretAuth(func() string { return api.conf.AISecret }))
+	lifecycle.POST("/keepalive", web.WrapH(api.onKeepalive))
+	lifecycle.POST("/started", web.WrapH(api.onStarted))
+	lifecycle.POST("/stopped", web.WrapH(api.onStopped))
 	group.POST("/events", webhookAPI.onWebhookEvents)
 }
 

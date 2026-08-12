@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -144,6 +145,14 @@ func (l *LalmaxDriver) Protocol() string {
 // Setup implements Driver.
 func (l *LalmaxDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL string) error {
 	engine := l.withConfig(ms)
+	hookURL := func(path string) string {
+		u, err := url.Parse(webhookURL)
+		if err != nil {
+			return webhookURL
+		}
+		u.Path = strings.TrimRight(u.Path, "/") + path
+		return u.String()
+	}
 
 	ports := strings.Split(ms.RTPPortRange, "-")
 	var minPort, maxPort int
@@ -154,11 +163,11 @@ func (l *LalmaxDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL st
 	if err := engine.SetHttpNotifyConfig(ctx, lalmax.HttpNotifyConfig{
 		Enable:               true,
 		KeepaliveIntervalSec: ms.HookAliveInterval,
-		OnKeepalive:          fmt.Sprintf("%s/on_server_keepalive", webhookURL),
+		OnKeepalive:          hookURL("/on_server_keepalive"),
 		// OnPubStart:              webhookURL,
 		// OnPubStop:               webhookURL,
-		OnSubStartWithoutStream: fmt.Sprintf("%s/on_stream_not_found", webhookURL),
-		OnStreamChanged:         fmt.Sprintf("%s/on_stream_changed", webhookURL),
+		OnSubStartWithoutStream: hookURL("/on_stream_not_found"),
+		OnStreamChanged:         hookURL("/on_stream_changed"),
 		ClientSize:              50,
 	}, lalmax.MediaConfig{
 		ListenPort:            minPort,

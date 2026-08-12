@@ -4,6 +4,7 @@ import { useRoute } from "vue-router";
 import {
   Aperture,
   Camera,
+  ChevronDown,
   ChevronUp,
   CircleStop,
   ExternalLink,
@@ -21,6 +22,7 @@ import {
 import { api, errorMessage, typeLabel } from "../services/api";
 import type { ApiChannel, ApiDevice, PlayResult } from "../types/api";
 import { useUiStore } from "../stores/ui";
+import StreamPlayer from "../components/StreamPlayer.vue";
 
 const ui = useUiStore();
 const route = useRoute();
@@ -35,6 +37,7 @@ const channels = ref<ApiChannel[]>([]);
 const devices = ref<ApiDevice[]>([]);
 const playResults = ref<Record<string, PlayResult>>({});
 const snapshots = ref<Record<string, string>>({});
+const collapsedResourceGroups = ref<Set<string>>(new Set());
 const selectedChannel = computed(
   () =>
     channels.value.find((item) => item.id === selected.value) ||
@@ -90,6 +93,27 @@ const playAddresses = computed(() => {
       }))
   );
 });
+
+function channelsForDevice(deviceID: string) {
+  return filteredChannels.value.filter((item) => item.did === deviceID);
+}
+
+function unassignedChannels() {
+  return filteredChannels.value.filter(
+    (item) => !devices.value.some((device) => device.id === item.did)
+  );
+}
+
+function resourceGroupExpanded(groupID: string) {
+  return Boolean(query.value.trim()) || !collapsedResourceGroups.value.has(groupID);
+}
+
+function toggleResourceGroup(groupID: string) {
+  const next = new Set(collapsedResourceGroups.value);
+  if (next.has(groupID)) next.delete(groupID);
+  else next.add(groupID);
+  collapsedResourceGroups.value = next;
+}
 
 async function load() {
   loading.value = true;
@@ -282,52 +306,71 @@ onMounted(load);
             placeholder="搜索设备或通道"
         /></label>
         <div class="resource-tree">
-          <template v-for="device in devices" :key="device.id"
-            ><p
-              v-if="filteredChannels.some((item) => item.did === device.id)"
-              class="tree-group"
-            >
-              {{ device.name || device.device_id || device.id }}
-            </p>
+          <template v-for="device in devices" :key="device.id">
             <button
-              v-for="channel in filteredChannels.filter(
-                (item) => item.did === device.id
-              )"
+              v-if="channelsForDevice(device.id).length"
+              type="button"
+              class="tree-group"
+              :aria-expanded="resourceGroupExpanded(device.id)"
+              :aria-controls="`resource-group-${device.id}`"
+              @click="toggleResourceGroup(device.id)"
+            >
+              <span>{{ device.name || device.device_id || device.id }}</span>
+              <small>{{ channelsForDevice(device.id).length }}</small>
+              <ChevronDown :class="{ rotated: resourceGroupExpanded(device.id) }" />
+            </button>
+            <div
+              v-if="channelsForDevice(device.id).length"
+              v-show="resourceGroupExpanded(device.id)"
+              :id="`resource-group-${device.id}`"
+              class="tree-group-items"
+            >
+              <button
+                v-for="channel in channelsForDevice(device.id)"
+                :key="channel.id"
+                class="tree-item"
+                :class="{ active: selected === channel.id }"
+                :aria-pressed="selected === channel.id"
+                @click="selected = channel.id"
+              >
+                <Radio />{{ channel.name || channel.channel_id || channel.id
+                }}<i
+                  class="slot-led"
+                  :class="{ warn: !channel.is_online }"
+                />
+              </button>
+            </div>
+          </template>
+          <button
+            v-if="unassignedChannels().length"
+            type="button"
+            class="tree-group"
+            :aria-expanded="resourceGroupExpanded('__unassigned__')"
+            aria-controls="resource-group-unassigned"
+            @click="toggleResourceGroup('__unassigned__')"
+          >
+            <span>未归属设备</span>
+            <small>{{ unassignedChannels().length }}</small>
+            <ChevronDown :class="{ rotated: resourceGroupExpanded('__unassigned__') }" />
+          </button>
+          <div
+            v-if="unassignedChannels().length"
+            v-show="resourceGroupExpanded('__unassigned__')"
+            id="resource-group-unassigned"
+            class="tree-group-items"
+          >
+            <button
+              v-for="channel in unassignedChannels()"
               :key="channel.id"
               class="tree-item"
               :class="{ active: selected === channel.id }"
               :aria-pressed="selected === channel.id"
               @click="selected = channel.id"
             >
-              <Radio />{{ channel.name || channel.channel_id || channel.id
-              }}<i
-                class="slot-led"
-                :class="{ warn: !channel.is_online }"
-              /></button
-          ></template>
-          <p
-            v-if="
-              filteredChannels.some(
-                (item) => !devices.some((device) => device.id === item.did)
-              )
-            "
-            class="tree-group"
-          >
-            未归属设备
-          </p>
-          <button
-            v-for="channel in filteredChannels.filter(
-              (item) => !devices.some((device) => device.id === item.did)
-            )"
-            :key="channel.id"
-            class="tree-item"
-            :class="{ active: selected === channel.id }"
-            :aria-pressed="selected === channel.id"
-            @click="selected = channel.id"
-          >
-            <Radio />{{ channel.name || channel.id
-            }}<i class="slot-led" :class="{ warn: !channel.is_online }" />
-          </button>
+              <Radio />{{ channel.name || channel.id
+              }}<i class="slot-led" :class="{ warn: !channel.is_online }" />
+            </button>
+          </div>
         </div>
       </aside>
       <article class="card video-workspace">
@@ -361,25 +404,27 @@ onMounted(load);
           >
         </div>
         <div class="video-wall" :class="`grid-${layout}`">
-          <button
+          <div
             v-for="(channel, index) in wallChannels"
             :key="channel.id"
             class="video-tile"
             :class="{ active: selected === channel.id }"
+            role="button"
+            tabindex="0"
             :aria-label="'选择' + (channel.name || channel.channel_id || channel.id)"
             :aria-pressed="selected === channel.id"
             @click="selected = channel.id"
+            @keydown.enter="selected = channel.id"
+            @keydown.space.prevent="selected = channel.id"
           >
-            <img
-              v-if="snapshots[channel.id]"
-              :src="snapshots[channel.id]"
-              class="absolute inset-0 h-full w-full object-cover"
-              alt="通道快照"
-            /><span v-else class="video-placeholder"
-              ><Camera /><small>{{
-                channel.is_online ? "等待快照" : "通道离线"
-              }}</small></span
-            ><span class="video-meta"
+            <StreamPlayer
+              :result="playResults[channel.id]"
+              :poster="snapshots[channel.id]"
+              :muted="muted"
+              :autoplay="Boolean(playResults[channel.id])"
+              @error="(message) => ui.toast(message)"
+            />
+            <span class="video-meta"
               ><span
                 class="status"
                 :class="channel.is_online ? 'online' : 'offline'"
@@ -395,7 +440,7 @@ onMounted(load);
                 ><small>{{ channel.channel_id || channel.id }}</small></span
               ><span class="tile-index">{{ index + 1 }}</span></span
             >
-          </button>
+          </div>
         </div>
         <div class="video-foot">
           <div class="stream-context">

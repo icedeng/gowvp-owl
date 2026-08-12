@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -105,6 +106,14 @@ func (d *ZLMDriver) Connect(ctx context.Context, ms *MediaServer) error {
 
 func (d *ZLMDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL string) error {
 	engine := d.withConfig(ms)
+	hookURL := func(path string) string {
+		u, err := url.Parse(webhookURL)
+		if err != nil {
+			return webhookURL
+		}
+		u.Path = strings.TrimRight(u.Path, "/") + path
+		return u.String()
+	}
 
 	// 拼接 IP 但是不要空格
 	ips := make([]string, 0, 2)
@@ -142,19 +151,19 @@ func (d *ZLMDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL strin
 		ProtocolEnableHlsFmp4: new("1"),
 		RtmpEnhanced:          new("1"),
 
-		HookOnPlay:                     new(fmt.Sprintf("%s/on_play", webhookURL)),
-		HookOnPublish:                  new(fmt.Sprintf("%s/on_publish", webhookURL)),
-		HookOnStreamNoneReader:         new(fmt.Sprintf("%s/on_stream_none_reader", webhookURL)),
+		HookOnPlay:                     new(hookURL("/on_play")),
+		HookOnPublish:                  new(hookURL("/on_publish")),
+		HookOnStreamNoneReader:         new(hookURL("/on_stream_none_reader")),
 		GeneralStreamNoneReaderDelayMS: new("30000"),
-		HookOnStreamNotFound:           new(fmt.Sprintf("%s/on_stream_not_found", webhookURL)),
+		HookOnStreamNotFound:           new(hookURL("/on_stream_not_found")),
 		HookOnRecordTs:                 new(""),
-		HookOnRecordMp4:                new(fmt.Sprintf("%s/on_record_mp4", webhookURL)),
+		HookOnRecordMp4:                new(hookURL("/on_record_mp4")),
 		HookOnRtspAuth:                 new(""),
 		HookOnRtspRealm:                new(""),
 		HookOnShellLogin:               new(""),
-		HookOnStreamChanged:            new(fmt.Sprintf("%s/on_stream_changed", webhookURL)),
-		HookOnServerKeepalive:          new(fmt.Sprintf("%s/on_server_keepalive", webhookURL)),
-		HookOnServerStarted:            new(fmt.Sprintf("%s/on_server_started", webhookURL)),
+		HookOnStreamChanged:            new(hookURL("/on_stream_changed")),
+		HookOnServerKeepalive:          new(hookURL("/on_server_keepalive")),
+		HookOnServerStarted:            new(hookURL("/on_server_started")),
 		HookTimeoutSec:                 new("10"),
 		HookAliveInterval:              new(fmt.Sprint(ms.HookAliveInterval)),
 		ProtocolContinuePushMs:         new("3000"),

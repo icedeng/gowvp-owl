@@ -2,10 +2,13 @@
 package api
 
 import (
+	"strings"
+
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/internal/core/config"
 	"github.com/gowvp/owl/internal/core/config/store/configdb"
+	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/reason"
 	"github.com/ixugo/goddd/pkg/web"
@@ -73,22 +76,72 @@ func (a ConfigAPI) deleteConfig(c *gin.Context, in *configIDInput) (any, error) 
 }
 
 type getConfigInfoOutput struct {
-	SIP conf.SIP `json:"sip"`
+	SIP        conf.SIP      `json:"sip"`
+	AccessInfo SIPAccessInfo `json:"access_info"`
+}
+
+type SIPAccessInfo struct {
+	ServerIP string `json:"server_ip"`
+	ID       string `json:"id"`
+	Domain   string `json:"domain"`
+	Port     int    `json:"port"`
+	Password string `json:"password"`
+}
+
+func sipAccessInfo(cfg *conf.Bootstrap) SIPAccessInfo {
+	if cfg == nil {
+		return SIPAccessInfo{}
+	}
+	serverIP := strings.TrimSpace(cfg.Sip.Host)
+	if serverIP == "" {
+		serverIP = strings.TrimSpace(cfg.Media.SDPIP)
+	}
+	return SIPAccessInfo{
+		ServerIP: serverIP,
+		ID:       cfg.Sip.ID,
+		Domain:   cfg.Sip.GetDomain(),
+		Port:     cfg.Sip.Port,
+		Password: cfg.Sip.Password,
+	}
+}
+
+type updateSIPInput struct {
+	conf.SIP
+	DeviceHistory *conf.DeviceHistoryConfig `json:"device_history"`
 }
 
 func (a ConfigAPI) getConfigInfo(c *gin.Context, _ *struct{}) (*getConfigInfoOutput, error) {
 	return &getConfigInfoOutput{
-		SIP: a.conf.Sip,
+		SIP:        a.conf.Sip,
+		AccessInfo: sipAccessInfo(a.conf),
 	}, nil
 }
 
-func (a ConfigAPI) updateSIP(_ *gin.Context, in *conf.SIP) (gin.H, error) {
-	if err := copier.Copy(&a.conf.Sip, in); err != nil {
+func (a ConfigAPI) updateSIP(_ *gin.Context, in *updateSIPInput) (gin.H, error) {
+	next := in.SIP
+	if in.DeviceHistory == nil {
+		next.DeviceHistory = a.conf.Sip.DeviceHistory
+	} else {
+		next.DeviceHistory = *in.DeviceHistory
+	}
+	if next.DeviceHistory.MaxRecords < 0 || next.DeviceHistory.MaxRecords > 100000 {
+		return nil, reason.ErrBadRequest.WithMsg("设备历史最大记录数应在 0–100000 之间")
+	}
+	if next.DeviceHistory.MaxDays < 0 || next.DeviceHistory.MaxDays > 3650 {
+		return nil, reason.ErrBadRequest.WithMsg("设备历史保留天数应在 0–3650 之间")
+	}
+	if err := copier.Copy(&a.conf.Sip, &next); err != nil {
 		return nil, reason.ErrServer.WithMsg(err.Error())
 	}
 
 	if err := conf.WriteConfig(a.conf, a.conf.ConfigPath); err != nil {
 		return nil, reason.ErrServer.WithMsg(err.Error())
+	}
+	if a.uc != nil && a.uc.GB28181API.ipc.DeviceHistory() != nil {
+		a.uc.GB28181API.ipc.DeviceHistory().SetConfig(ipc.DeviceHistoryConfig{
+			MaxRecords: a.conf.Sip.DeviceHistory.MaxRecords,
+			MaxDays:    a.conf.Sip.DeviceHistory.MaxDays,
+		})
 	}
 	a.uc.SipServer.SetConfig()
 

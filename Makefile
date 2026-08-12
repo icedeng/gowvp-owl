@@ -146,15 +146,25 @@ BUILD_DIR_ROOT := ./build
 GOOS = $(shell go env GOOS)
 GOARCH = $(shell go env GOARCH)
 IMAGE_NAME := gospace/gowvp:latest
+ADMIN_UI_DIR := ./admin-ui
+ADMIN_UI_DIST := $(BUILD_DIR_ROOT)/admin-ui
 
 ## build/clean: 清理构建缓存目录
 .PHONY: build/clean
 build/clean:
 	@rm -rf $(BUILD_DIR_ROOT)/*
 
+## build/admin-ui: 构建正式管理端静态资源
+.PHONY: build/admin-ui
+build/admin-ui:
+	pnpm --dir $(ADMIN_UI_DIR) install --frozen-lockfile
+	pnpm --dir $(ADMIN_UI_DIR) build
+	@rm -rf $(ADMIN_UI_DIST)
+	@cp -R $(ADMIN_UI_DIR)/dist $(ADMIN_UI_DIST)
+
 ## build/local: 构建本地应用
 .PHONY: build/local
-build/local:
+build/local: build/admin-ui
 	$(eval dir := $(BUILD_DIR_ROOT)/$(GOOS)_$(GOARCH))
 	@echo 'Building $(VERSION) $(dir)...'
 	@rm -rf $(dir)
@@ -167,6 +177,8 @@ build/local:
 			-X main.buildTimeAt=$(shell date +%s) \
 			-X main.release=true \
 			" -o=$(dir)/bin ./main.go
+	@rm -rf $(dir)/www
+	@cp -R $(ADMIN_UI_DIST) $(dir)/www
 	@echo '>>> OK'
 
 ## build/linux: 构建 linux 应用
@@ -235,7 +247,7 @@ PRODUCTION_HOST = remoteHost
 ## release/push: 发布产品到服务器，仅上传文件
 # 中小项目可以引入 CI/CD，也可以通过命令快速发布到测试服务器上。
 release/push:
-	@scp build/linux_amd64/bin $(PRODUCTION_HOST):/home/app/$(MODULE_NAME)
+	@scp -r build/linux_amd64/bin build/linux_amd64/www $(PRODUCTION_HOST):/home/app/$(MODULE_NAME)
 	@echo "push Successed"
 
 

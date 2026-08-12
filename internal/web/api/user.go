@@ -120,10 +120,9 @@ func (api UserAPI) login(_ *gin.Context, in *loginInput) (*loginOutput, error) {
 		return nil, reason.ErrServer.WithMsg(err.Error())
 	}
 
-	// 验证用户名和密码
-	if api.conf.Server.Username == "" && api.conf.Server.Password == "" {
-		api.conf.Server.Username = "admin"
-		api.conf.Server.Password = "admin"
+	// 凭据必须由安全配置初始化，不再回退到固定默认密码。
+	if api.conf.Server.Username == "" || api.conf.Server.Password == "" {
+		return nil, reason.ErrServer.WithMsg("管理员凭据未配置")
 	}
 	if credentials.Username != api.conf.Server.Username || credentials.Password != api.conf.Server.Password {
 		return nil, reason.ErrNameOrPasswd
@@ -168,9 +167,6 @@ func (api UserAPI) updateCredentials(_ *gin.Context, in *updateCredentialsInput)
 
 	// 校验旧密码
 	currentPassword := api.conf.Server.Password
-	if currentPassword == "" {
-		currentPassword = "admin"
-	}
 	if credentials.OldPassword != currentPassword {
 		return nil, reason.ErrServer.WithMsg("旧密码错误")
 	}

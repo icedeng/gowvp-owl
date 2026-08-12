@@ -3,10 +3,12 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -96,6 +98,34 @@ func TestWebhookEvents_NoSecret(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestWebhookEventsRejectsUnsafeImagePath(t *testing.T) {
+	ev := &stubEventStorer{}
+	r := makeWebhookEngine("internal", "recv-secret", ev)
+	body := []byte(`{"cid":"cam001","label":"person","score":0.8,"image_path":"../../outside.jpg"}`)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/webhook/events?secret=recv-secret", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest || ev.addCount != 0 {
+		t.Fatalf("status=%d addCount=%d body=%s", w.Code, ev.addCount, w.Body.String())
+	}
+}
+
+func TestSaveEventSnapshotRejectsOversizeAndNonImage(t *testing.T) {
+	oversized := strings.Repeat("A", base64.StdEncoding.EncodedLen(maxSnapshotBytes)+1)
+	if _, err := saveEventSnapshot("cam", orm.Time{}, oversized); err == nil {
+		t.Fatal("oversized snapshot accepted")
+	}
+	nonImage := base64.StdEncoding.EncodeToString([]byte("not an image"))
+	if _, err := saveEventSnapshot("cam", orm.Time{}, nonImage); err == nil {
+		t.Fatal("non-image snapshot accepted")
+	}
+	jpeg := base64.StdEncoding.EncodeToString([]byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43})
+	if _, err := saveEventSnapshot("../cam", orm.Time{}, jpeg); err == nil {
+		t.Fatal("unsafe camera id accepted")
 	}
 }
 

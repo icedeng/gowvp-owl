@@ -1,8 +1,10 @@
 package gbs
 
 import (
+	"context"
 	"encoding/xml"
 	"log/slog"
+	"time"
 
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs/sip"
@@ -51,6 +53,11 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		d.setGBVersion(effectiveVersion)
 	}); err != nil {
 		ctx.Log.Error("keepalive", "err", err)
+	}
+	if history := g.core.DeviceHistory(); history != nil {
+		if err := history.Record(context.TODO(), ctx.DeviceID, ipc.DeviceHistoryHeartbeat, ctx.Source.String(), msg.Status, time.Now()); err != nil {
+			ctx.Log.Error("持久化设备心跳历史失败", "err", err)
+		}
 	}
 
 	// 9.6 状态信息报送：将心跳状态同步为结构化设备状态并推送订阅者。

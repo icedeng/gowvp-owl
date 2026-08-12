@@ -30,14 +30,21 @@ func AuthMiddleware(secret string, authURL string, handler ...HandlerOption) gin
 		}
 
 		auth := c.Request.Header.Get("Authorization")
+		queryAuth := false
 		// header 中没有时，尝试从 query 参数中取
 		if auth == "" {
 			auth = c.Query("token")
+			queryAuth = auth != ""
 		}
 
 		const prefix = "Bearer "
+		tokenStr := ""
 		if len(auth) > len(prefix) && strings.EqualFold(auth[:len(prefix)], prefix) {
-			tokenStr := auth[len(prefix):]
+			tokenStr = auth[len(prefix):]
+		} else if queryAuth {
+			tokenStr = auth
+		}
+		if tokenStr != "" {
 			claims, err := web.ParseToken(tokenStr, secret)
 			if err == nil {
 				// JWT 解析成功，检查有效期

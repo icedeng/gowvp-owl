@@ -2,10 +2,14 @@ package recording
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gowvp/owl/internal/conf"
+	"github.com/ixugo/goddd/pkg/system"
 )
 
 // Storer data persistence
@@ -105,15 +109,96 @@ func (c Core) IsEnabled() bool {
 	return c.conf != nil && !c.conf.Disabled
 }
 
-// GetFullPath 获取录像文件的完整路径
-// relativePath 可能是相对于 StorageDir 的路径，也可能是完整路径
-func (c Core) GetFullPath(relativePath string) string {
+// ResolvePath 将数据库相对路径解析为录像根目录内的绝对路径。
+func (c Core) ResolvePath(path string) (string, error) {
 	if c.conf == nil || c.conf.StorageDir == "" {
-		return relativePath
+		return "", fmt.Errorf("recording storage directory is not configured")
 	}
-	// 如果 relativePath 已经包含 StorageDir，直接返回
-	if len(relativePath) > 0 && (relativePath[0] == '/' || strings.HasPrefix(relativePath, c.conf.StorageDir)) {
-		return relativePath
+	storageDir := filepath.Clean(c.conf.StorageDir)
+	if !filepath.IsAbs(storageDir) {
+		storageDir = filepath.Join(system.Getwd(), storageDir)
 	}
-	return c.conf.StorageDir + "/" + relativePath
+	root, err := filepath.Abs(storageDir)
+	if err != nil {
+		return "", err
+	}
+	comparisonRoot := root
+	if evaluatedRoot, evalErr := filepath.EvalSymlinks(root); evalErr == nil {
+		comparisonRoot = evaluatedRoot
+	}
+	candidate := filepath.Clean(strings.TrimSpace(path))
+	if candidate == "" || candidate == "." {
+		return "", fmt.Errorf("recording path is empty")
+	}
+	if !filepath.IsAbs(candidate) {
+		// 兼容旧数据中包含 StorageDir 前缀的相对路径。
+		storagePrefix := filepath.Clean(c.conf.StorageDir)
+		if candidate == storagePrefix {
+			return "", fmt.Errorf("recording path points to storage root")
+		}
+		if strings.HasPrefix(candidate, storagePrefix+string(filepath.Separator)) {
+			candidate = strings.TrimPrefix(candidate, storagePrefix+string(filepath.Separator))
+		}
+		candidate = filepath.Join(root, candidate)
+	}
+	candidate, err = filepath.Abs(candidate)
+	if err != nil {
+		return "", err
+	}
+	if candidate == root {
+		return "", fmt.Errorf("recording path points to storage root")
+	}
+	if err := ensurePathBelowRoot(root, candidate); err != nil {
+		return "", err
+	}
+
+	// 已存在文件及其父目录需要解析符号链接，防止根目录内的链接指向外部文件。
+	checkPath := candidate
+	for {
+		if _, statErr := os.Lstat(checkPath); statErr == nil {
+			evaluated, evalErr := filepath.EvalSymlinks(checkPath)
+			if evalErr != nil {
+				return "", fmt.Errorf("resolve recording symlink: %w", evalErr)
+			}
+			if err := ensurePathBelowRoot(comparisonRoot, evaluated); err != nil {
+				return "", err
+			}
+			break
+		}
+		parent := filepath.Dir(checkPath)
+		if parent == checkPath {
+			break
+		}
+		checkPath = parent
+	}
+	return candidate, nil
+}
+
+func ensurePathBelowRoot(root, candidate string) error {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("recording path escapes storage directory")
+	}
+	return nil
+}
+
+// RelativePath 验证 Webhook 上报路径并转换为数据库相对路径。
+func (c Core) RelativePath(path string) (string, error) {
+	fullPath, err := c.ResolvePath(path)
+	if err != nil {
+		return "", err
+	}
+	storageDir := filepath.Clean(c.conf.StorageDir)
+	if !filepath.IsAbs(storageDir) {
+		storageDir = filepath.Join(system.Getwd(), storageDir)
+	}
+	root, err := filepath.Abs(storageDir)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, fullPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(rel), nil
 }

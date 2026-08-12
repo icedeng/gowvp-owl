@@ -17,6 +17,13 @@ type Adapter struct {
 	uni   uniqueid.Core
 }
 
+func (g Adapter) DeviceHistory() *DeviceHistoryStore {
+	if g.store == nil {
+		return nil
+	}
+	return g.store.DeviceHistory()
+}
+
 func GenerateDID(d *Device, uni uniqueid.Core) string {
 	if d.IsOnvif() {
 		return uni.UniqueID(bz.IDPrefixOnvif)

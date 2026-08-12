@@ -10,12 +10,17 @@ var _ ipc.Storer = DB{}
 
 // DB Related business namespaces
 type DB struct {
-	db *gorm.DB
+	db      *gorm.DB
+	history *ipc.DeviceHistoryStore
 }
 
 // NewDB instance object
 func NewDB(db *gorm.DB) DB {
 	return DB{db: db}
+}
+
+func NewDBWithHistory(db *gorm.DB, cfg ipc.DeviceHistoryConfig) DB {
+	return DB{db: db, history: ipc.NewDeviceHistoryStore(db, cfg, false)}
 }
 
 // Device Get business instance
@@ -28,6 +33,13 @@ func (d DB) Channel() ipc.ChannelStorer {
 	return Channel(d)
 }
 
+func (d DB) DeviceHistory() *ipc.DeviceHistoryStore {
+	if d.history != nil {
+		return d.history
+	}
+	return ipc.NewDeviceHistoryStore(d.db, ipc.DeviceHistoryConfig{}, false)
+}
+
 // AutoMigrate sync database
 func (d DB) AutoMigrate(ok bool) DB {
 	if !ok {
@@ -37,6 +49,11 @@ func (d DB) AutoMigrate(ok bool) DB {
 		new(ipc.Device),
 		new(ipc.Channel),
 	); err != nil {
+		panic(err)
+	}
+	if d.history == nil {
+		d.history = ipc.NewDeviceHistoryStore(d.db, ipc.DeviceHistoryConfig{}, true)
+	} else if err := d.db.AutoMigrate(new(ipc.DeviceHistoryRecord)); err != nil {
 		panic(err)
 	}
 	return d

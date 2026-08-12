@@ -1,8 +1,8 @@
 import { http } from './http'
 import type {
-  ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody,
+  ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord,
   ApiChannel as Channel, DeviceExt, GbMetrics, HealthInfo, MediaServer, MonthlyStats,
-  PlayResult, SipConfig, TimelineRange, VersionCheck, Zone,
+  PlayResult, SipAccessInfo, SipConfig, TimelineRange, VersionCheck, Zone,
   ResourceStats,
 } from '../types/api'
 
@@ -23,6 +23,7 @@ export const api = {
   editDevice: (id: string, body: Record<string, unknown>) => http.put<ApiDevice>(`/devices/${encodeURIComponent(id)}`, body),
   deleteDevice: (id: string) => http.delete<ApiDevice>(`/devices/${encodeURIComponent(id)}`),
   catalog: (id: string) => http.post(`/devices/${encodeURIComponent(id)}/catalog`),
+  deviceHistory: (id: string, kind: 'heartbeat' | 'register', params?: ListParams) => http.get<ApiPage<DeviceHistoryRecord>>(`/devices/${encodeURIComponent(id)}/history`, { params: { ...params, kind } }),
   timeSync: (id: string) => http.post(`/devices/${encodeURIComponent(id)}/time_sync`),
   subscribe: (id: string, body: Record<string, unknown>) => http.post(`/devices/${encodeURIComponent(id)}/subscribe`, body),
   optionsProbe: (id: string, body: Record<string, unknown> = {}) => http.post(`/devices/${encodeURIComponent(id)}/options_probe`, body),
@@ -61,19 +62,19 @@ export const api = {
   events: (params?: ListParams) => http.get<ApiPage<ApiEvent>>('/events', { params }),
   event: (id: number | string) => http.get<ApiEvent>(`/events/${id}`),
   deleteEvent: (id: number | string) => http.delete<ApiEvent>(`/events/${id}`),
-  eventImage: (path: string) => apiUrl(`/events/image/${path.replace(/^\/+/, '')}`),
+  eventImage: (path: string) => withToken(apiUrl(`/events/image/${path.replace(/^\/+/, '')}`)),
 
   recordings: (params?: ListParams) => http.get<ApiPage<ApiRecording>>('/recordings', { params }),
   recording: (id: number | string) => http.get<ApiRecording>(`/recordings/${id}`),
   timeline: (params?: ListParams) => http.get<{ items?: TimelineRange[] }>('/recordings/timeline', { params }),
   monthly: (params?: ListParams) => http.get<MonthlyStats>('/recordings/monthly', { params }),
   downloadRecording: (id: number | string) => http.get<Blob>(`/recordings/${id}/download`, { responseType: 'blob', timeout: 0 }),
-  recordingDownloadUrl: (id: number | string) => apiUrl(`/recordings/${id}/download`),
+  recordingDownloadUrl: (id: number | string) => withToken(apiUrl(`/recordings/${id}/download`)),
   hlsPlaylist: (cid: string, startMs: number, endMs: number) => apiUrl(`/recordings/channels/${encodeURIComponent(cid)}/index.m3u8?start_ms=${startMs}&end_ms=${endMs}`),
 
   mediaServers: (params?: ListParams) => http.get<ApiPage<MediaServer>>('/media_servers', { params }),
   editMediaServer: (id: string, body: Record<string, unknown>) => http.put<MediaServer>(`/media_servers/${encodeURIComponent(id)}`, body),
-  configInfo: () => http.get<{ sip?: SipConfig }>('/configs/info'),
+  configInfo: () => http.get<{ sip?: SipConfig; access_info?: SipAccessInfo }>('/configs/info'),
   updateSip: (body: SipConfig) => http.put('/configs/info/sip', body),
 }
 

@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { Component } from "vue";
-import { RouterLink, RouterView, useRoute } from "vue-router";
+import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import {
   Activity,
   Bell,
   Camera,
+  ChevronDown,
   CircleGauge,
   Film,
+  KeyRound,
+  LogOut,
   Menu,
+  MonitorCog,
   PanelLeftClose,
   PanelLeftOpen,
   Radio,
@@ -20,6 +24,7 @@ import {
   SlidersHorizontal,
   UploadCloud,
   Video,
+  Truck,
   X,
 } from "@lucide/vue";
 import CommandPalette from "../components/CommandPalette.vue";
@@ -31,10 +36,14 @@ import type { HealthInfo } from "../types/api";
 import { formatUptime } from "../utils/format";
 
 const route = useRoute();
+const router = useRouter();
 const ui = useUiStore();
 const session = useSessionStore();
 const health = ref<HealthInfo>({});
 const eventCount = ref(0);
+const userMenuOpen = ref(false);
+const userMenu = ref<HTMLElement | null>(null);
+const userMenuTrigger = ref<HTMLButtonElement | null>(null);
 const eventBadge = computed(() =>
   eventCount.value > 99 ? "99+" : String(eventCount.value)
 );
@@ -61,7 +70,8 @@ const nav: { label: string; items: NavItem[] }[] = [
   {
     label: "资源管理",
     items: [
-      { name: "devices", label: "设备管理", icon: Camera },
+      { name: "devices", label: "国标设备", icon: Camera },
+      { name: "transport-devices", label: "部标设备", icon: Truck },
       { name: "channels", label: "通道管理", icon: Radio },
       { name: "push-streams", label: "RTMP 推流", icon: UploadCloud },
       { name: "pull-streams", label: "RTSP 拉流", icon: RadioTower },
@@ -72,6 +82,7 @@ const nav: { label: string; items: NavItem[] }[] = [
     items: [
       { name: "media-servers", label: "媒体节点", icon: Server },
       { name: "system-status", label: "系统状态", icon: Activity },
+      { name: "player-settings", label: "播放器设置", icon: MonitorCog },
       { name: "sip-settings", label: "SIP 设置", icon: SlidersHorizontal },
       { name: "diagnostics", label: "协议诊断", icon: ShieldCheck },
       { name: "upgrade", label: "版本升级", icon: UploadCloud },
@@ -85,6 +96,7 @@ function active(name: string) {
   return (
     route.name === name ||
     (route.name === "device-detail" && name === "devices") ||
+    (route.name === "transport-device-detail" && name === "transport-devices") ||
     (route.name === "channel-detail" && name === "channels")
   );
 }
@@ -94,11 +106,34 @@ function onKeydown(event: KeyboardEvent) {
     event.preventDefault();
     ui.openCommand();
   }
-  if (event.key === "Escape") ui.closeCommand();
+  if (event.key === "Escape") {
+    ui.closeCommand();
+    if (userMenuOpen.value) {
+      userMenuOpen.value = false;
+      userMenuTrigger.value?.focus();
+    }
+  }
+}
+
+function onDocumentPointerDown(event: PointerEvent) {
+  if (userMenuOpen.value && !userMenu.value?.contains(event.target as Node)) {
+    userMenuOpen.value = false;
+  }
+}
+
+function toggleUserMenu() {
+  userMenuOpen.value = !userMenuOpen.value;
+}
+
+async function logout() {
+  userMenuOpen.value = false;
+  session.signOut();
+  await router.replace("/login");
 }
 
 onMounted(() => {
   window.addEventListener("keydown", onKeydown);
+  document.addEventListener("pointerdown", onDocumentPointerDown);
   const now = Date.now();
   Promise.all([
     api.health(),
@@ -110,7 +145,10 @@ onMounted(() => {
     })
     .catch(() => undefined);
 });
-onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKeydown);
+  document.removeEventListener("pointerdown", onDocumentPointerDown);
+});
 </script>
 
 <template>
@@ -200,16 +238,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
           :class="serviceConnected ? 'connected' : 'waiting'"
           to="/system-status"
           aria-live="polite"
+          :aria-label="`${serviceConnected ? '核心服务已连接' : '服务连接中'}，版本 ${health.version || '未知'}，${formatUptime(health.start_at)}`"
         >
           <span class="service-led" aria-hidden="true" />
-          <span class="service-copy"
-            ><strong>{{
-              serviceConnected ? "核心服务已连接" : "服务连接中"
-            }}</strong
-            ><small
-              >{{ health.version || "—" }} ·
-              {{ formatUptime(health.start_at) }}</small
-            ></span
+          <strong>{{ serviceConnected ? "服务正常" : "连接中" }}</strong>
+          <span class="service-meta" aria-hidden="true"
+            >{{ health.version || "—" }} · {{ formatUptime(health.start_at) }}</span
           >
         </RouterLink>
         <div class="top-actions">
@@ -222,9 +256,51 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
               eventBadge
             }}</span>
           </button>
-          <RouterLink class="user-chip" to="/account">
-            <strong>{{ session.user || "管理员" }}</strong>
-          </RouterLink>
+          <div ref="userMenu" class="user-menu-wrap">
+            <button
+              ref="userMenuTrigger"
+              type="button"
+              class="user-chip"
+              aria-haspopup="menu"
+              aria-controls="user-menu"
+              :aria-expanded="userMenuOpen"
+              @click="toggleUserMenu"
+            >
+              <strong>{{ session.user || "管理员" }}</strong>
+              <ChevronDown :class="{ rotated: userMenuOpen }" />
+            </button>
+            <Transition name="user-menu">
+              <div
+                v-if="userMenuOpen"
+                id="user-menu"
+                class="user-menu"
+                role="menu"
+                aria-label="用户菜单"
+              >
+                <div class="user-menu-identity">
+                  <strong>系统管理员</strong>
+                  <span>{{ session.user || "管理员" }}</span>
+                </div>
+                <div class="user-menu-divider" />
+                <RouterLink
+                  class="user-menu-item"
+                  role="menuitem"
+                  to="/account"
+                  @click="userMenuOpen = false"
+                >
+                  <KeyRound /><span>修改密码</span>
+                </RouterLink>
+                <button
+                  type="button"
+                  class="user-menu-item danger"
+                  role="menuitem"
+                  @click="logout"
+                >
+                  <LogOut /><span>退出登录</span>
+                </button>
+              </div>
+            </Transition>
+          </div>
         </div>
       </header>
       <RouterView />

@@ -2,8 +2,10 @@
 package api
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/conf"
@@ -60,9 +62,7 @@ func RegisterEvent(g gin.IRouter, api EventAPI, handler ...gin.HandlerFunc) {
 		group.PUT("/:id", web.WrapH(api.updateEvent))
 		group.DELETE("/:id", web.WrapH(api.deleteEvent))
 	}
-	// 图片接口不需要认证中间件
-	// TODO: 待添加鉴权
-	g.GET("/events/image/*path", api.getEventImage)
+	g.Group("/events", handler...).GET("/image/*path", api.getEventImage)
 }
 
 // listEvents 分页查询事件列表
@@ -100,21 +100,37 @@ func (a EventAPI) getEventImage(c *gin.Context) {
 		imagePath = imagePath[1:]
 	}
 
-	fullPath := filepath.Join(system.Getwd(), "configs", "events", imagePath)
-
 	// 安全检查：防止路径遍历攻击
 	eventsDir := filepath.Join(system.Getwd(), "configs", "events")
-	absPath, err := filepath.Abs(fullPath)
-	if err != nil || !filepath.HasPrefix(absPath, eventsDir) {
+	root, err := filepath.Abs(eventsDir)
+	if err != nil {
 		web.Fail(c, reason.ErrNotFound.WithMsg("invalid path"))
 		return
 	}
+	absPath, err := filepath.Abs(filepath.Join(root, filepath.Clean(imagePath)))
+	rel, relErr := filepath.Rel(root, absPath)
+	if err != nil || relErr != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		web.Fail(c, reason.ErrNotFound.WithMsg("invalid path"))
+		return
+	}
+	evaluatedRoot, rootErr := filepath.EvalSymlinks(root)
+	evaluatedPath, pathErr := filepath.EvalSymlinks(absPath)
+	if rootErr != nil || pathErr != nil {
+		web.Fail(c, reason.ErrNotFound.WithMsg("image not found"))
+		return
+	}
+	rel, relErr = filepath.Rel(evaluatedRoot, evaluatedPath)
+	if relErr != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		web.Fail(c, reason.ErrNotFound.WithMsg("invalid path"))
+		return
+	}
+	absPath = evaluatedPath
 
-	body, err := os.ReadFile(fullPath)
+	body, err := os.ReadFile(absPath)
 	if err != nil {
 		web.Fail(c, reason.ErrNotFound.WithMsg(err.Error()))
 		return
 	}
 
-	c.Data(200, "image/jpeg", body)
+	c.Data(200, http.DetectContentType(body), body)
 }

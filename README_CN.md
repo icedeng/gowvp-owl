@@ -129,9 +129,9 @@ proxy_set_header Connection "upgrade";
 
 [推荐] sqlite 应该为本地磁盘路径，建议默认  configs/data.db
 
-[推荐] postgres 参考格式 `postgres://postgres:123456@127.0.0.1:5432/gb28181?sslmode=disable`
+[推荐] postgres 参考格式 `postgres://<user>:<password>@127.0.0.1:5432/gb28181?sslmode=disable`
 
-mysql 参考格式 `mysql://root:123456@127.0.0.1:5432/gb28181?sslmode=disable`
+mysql 参考格式 `mysql://<user>:<password>@127.0.0.1:3306/gb28181?sslmode=disable`
 
 postgres 和 mysql 的格式即:
 `<db_type>://<username>:<password>@<ip>:<port>/<db_name>?sslmode=disable`
@@ -351,7 +351,7 @@ ONVIF SOAP 路径（与 Web 共用 HTTP 端口）：
 - `POST http://<主机>:15123/onvif/device_service`
 - `POST http://<host>:15123/onvif/media_service`
 
-鉴权使用 `configs/config.toml` 中的 `Server.Username` / `Server.Password`（WS-Security），与 Web 登录默认一致（`admin` / `admin`）。
+鉴权使用 `configs/config.toml` 中的 `Server.Username` / `Server.Password`（WS-Security）。正式环境没有默认密码，请在启动前配置 `OWL_ADMIN_USERNAME` 和 `OWL_ADMIN_PASSWORD`。
 
 **Home Assistant 手动添加示例：**
 

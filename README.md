@@ -121,9 +121,9 @@ In the `configs/config.toml` configuration file, modify `database.dsn`
 
 [Recommended] SQLite should be a local disk path, default is `configs/data.db`
 
-[Recommended] PostgreSQL format: `postgres://postgres:123456@127.0.0.1:5432/gb28181?sslmode=disable`
+[Recommended] PostgreSQL format: `postgres://<user>:<password>@127.0.0.1:5432/gb28181?sslmode=disable`
 
-MySQL format: `mysql://root:123456@127.0.0.1:5432/gb28181?sslmode=disable`
+MySQL format: `mysql://<user>:<password>@127.0.0.1:3306/gb28181?sslmode=disable`
 
 PostgreSQL and MySQL format pattern:
 `<db_type>://<username>:<password>@<ip>:<port>/<db_name>?sslmode=disable`
@@ -299,7 +299,7 @@ ONVIF SOAP endpoints (same HTTP port as the web UI):
 - `POST http://<host>:15123/onvif/device_service`
 - `POST http://<host>:15123/onvif/media_service`
 
-Authentication uses `Server.Username` / `Server.Password` in `configs/config.toml` (WS-Security `PasswordDigest` or `PasswordText`), same defaults as web login (`admin` / `admin`).
+Authentication uses `Server.Username` / `Server.Password` in `configs/config.toml` (WS-Security `PasswordDigest` or `PasswordText`). There is no default production password; configure `OWL_ADMIN_USERNAME` and `OWL_ADMIN_PASSWORD` before startup.
 
 **Home Assistant (manual add):**
 

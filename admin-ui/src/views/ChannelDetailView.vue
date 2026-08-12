@@ -24,6 +24,7 @@ import type {
 } from "../types/api";
 import { formatDate } from "../utils/format";
 import { useUiStore } from "../stores/ui";
+import StreamPlayer from "../components/StreamPlayer.vue";
 
 const route = useRoute();
 const ui = useUiStore();
@@ -336,16 +337,13 @@ onMounted(load);
             }}</span>
           </div>
           <div class="video-tile active !border-0 !aspect-video">
-            <img
-              v-if="snapshotUrl"
-              :src="snapshotUrl"
-              class="absolute inset-0 h-full w-full object-cover"
-              alt="通道快照"
-            /><span v-else class="video-placeholder"
-              ><Camera /><small>{{
-                channel.is_online ? "等待快照" : "通道离线"
-              }}</small></span
-            ><span class="video-meta"
+            <StreamPlayer
+              :result="play"
+              :poster="snapshotUrl"
+              :autoplay="Boolean(play)"
+              @error="(message) => ui.toast(message)"
+            />
+            <span class="video-meta"
               ><span
                 class="status"
                 :class="channel.is_online ? 'online' : 'offline'"

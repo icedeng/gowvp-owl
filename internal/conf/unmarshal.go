@@ -12,7 +12,27 @@ func SetupConfig(v any, path string) error {
 	if err != nil {
 		return err
 	}
-	return toml.Unmarshal(b, v)
+	if err := os.Chmod(path, 0o600); err != nil {
+		return err
+	}
+	if err := toml.Unmarshal(b, v); err != nil {
+		return err
+	}
+	// 兼容升级前不存在 DeviceHistory 配置段的文件；只有显式配置 0 才表示不限制。
+	if bootstrap, ok := v.(*Bootstrap); ok {
+		var sections struct {
+			SIP struct {
+				DeviceHistory *DeviceHistoryConfig
+			}
+		}
+		if err := toml.Unmarshal(b, &sections); err != nil {
+			return err
+		}
+		if sections.SIP.DeviceHistory == nil {
+			bootstrap.Sip.DeviceHistory = DeviceHistoryConfig{MaxRecords: 1000, MaxDays: 30}
+		}
+	}
+	return nil
 }
 
 // WriteConfig 将配置写回文件

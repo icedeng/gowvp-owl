@@ -4,6 +4,14 @@ services:
     # registry.cn-shanghai.aliyuncs.com/ixugo/homenvr:latest
     image: gospace/gowvp:latest
     restart: always
+    environment:
+      OWL_ADMIN_USERNAME: ${OWL_ADMIN_USERNAME:-admin}
+      OWL_ADMIN_PASSWORD: ${OWL_ADMIN_PASSWORD:-}
+      OWL_JWT_SECRET: ${OWL_JWT_SECRET:-}
+      OWL_RTMP_SECRET: ${OWL_RTMP_SECRET:-}
+      OWL_MEDIA_SECRET: ${OWL_MEDIA_SECRET:-}
+      OWL_WEBHOOK_SECRET: ${OWL_WEBHOOK_SECRET:-}
+      OWL_SIP_PASSWORD: ${OWL_SIP_PASSWORD:-}
     # linux 解开下行注释，并将 ports 全部注释
     # network_mode: host
     ports:
