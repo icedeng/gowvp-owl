@@ -12,27 +12,27 @@ import (
 
 // ConfigStorer Instantiation interface
 type ConfigStorer interface {
-	Find(context.Context, *[]*Config, orm.Pager, ...orm.QueryOption) (int64, error)
+	List(context.Context, *[]*Config, orm.Pager, ...orm.QueryOption) (int64, error)
 	Get(context.Context, *Config, ...orm.QueryOption) error
-	Add(context.Context, *Config) error
-	Edit(context.Context, *Config, func(*Config), ...orm.QueryOption) error
-	Del(context.Context, *Config, ...orm.QueryOption) error
+	Create(context.Context, *Config) error
+	Update(context.Context, *Config, func(*Config), ...orm.QueryOption) error
+	Delete(context.Context, *Config, ...orm.QueryOption) error
 
 	FirstOrCreate(*Config) error
 }
 
-// FindConfig Paginated search
-func (c *Core) FindConfig(ctx context.Context, in *FindConfigInput) ([]*Config, int64, error) {
+// ListConfigs Paginated search
+func (c Core) ListConfigs(ctx context.Context, in *FindConfigInput) ([]*Config, int64, error) {
 	items := make([]*Config, 0)
-	total, err := c.store.Config().Find(ctx, &items, in)
+	total, err := c.store.Config().List(ctx, &items, in)
 	if err != nil {
-		return nil, 0, reason.ErrDB.Withf(`Find err[%s]`, err.Error())
+		return nil, 0, reason.ErrDB.Withf(`List err[%s]`, err.Error())
 	}
 	return items, total, nil
 }
 
 // GetConfig Query a single object
-func (c *Core) GetConfig(ctx context.Context, id int) (*Config, error) {
+func (c Core) GetConfig(ctx context.Context, id int) (*Config, error) {
 	var out Config
 	if err := c.store.Config().Get(ctx, &out, orm.Where("id=?", id)); err != nil {
 		if orm.IsErrRecordNotFound(err) {
@@ -43,36 +43,36 @@ func (c *Core) GetConfig(ctx context.Context, id int) (*Config, error) {
 	return &out, nil
 }
 
-// AddConfig Insert into database
-func (c *Core) AddConfig(ctx context.Context, in *AddConfigInput) (*Config, error) {
+// CreateConfig Insert into database
+func (c Core) CreateConfig(ctx context.Context, in *AddConfigInput) (*Config, error) {
 	var out Config
 	if err := copier.Copy(&out, in); err != nil {
 		slog.ErrorContext(ctx, "Copy", "err", err)
 	}
-	if err := c.store.Config().Add(ctx, &out); err != nil {
-		return nil, reason.ErrDB.Withf(`Add err[%s]`, err.Error())
+	if err := c.store.Config().Create(ctx, &out); err != nil {
+		return nil, reason.ErrDB.Withf(`Create err[%s]`, err.Error())
 	}
 	return &out, nil
 }
 
-// EditConfig Update object information
-func (c *Core) EditConfig(ctx context.Context, in *EditConfigInput, id int) (*Config, error) {
+// UpdateConfig Update object information
+func (c Core) UpdateConfig(ctx context.Context, in *EditConfigInput, id int) (*Config, error) {
 	var out Config
-	if err := c.store.Config().Edit(ctx, &out, func(b *Config) {
+	if err := c.store.Config().Update(ctx, &out, func(b *Config) {
 		if err := copier.Copy(b, in); err != nil {
 			slog.ErrorContext(ctx, "Copy", "err", err)
 		}
 	}, orm.Where("id=?", id)); err != nil {
-		return nil, reason.ErrDB.Withf(`Edit err[%s]`, err.Error())
+		return nil, reason.ErrDB.Withf(`Update err[%s]`, err.Error())
 	}
 	return &out, nil
 }
 
-// DelConfig Delete object
-func (c *Core) DelConfig(ctx context.Context, id int) (*Config, error) {
+// DeleteConfig Delete object
+func (c Core) DeleteConfig(ctx context.Context, id int) (*Config, error) {
 	var out Config
-	if err := c.store.Config().Del(ctx, &out, orm.Where("id=?", id)); err != nil {
-		return nil, reason.ErrDB.Withf(`Del err[%s]`, err.Error())
+	if err := c.store.Config().Delete(ctx, &out, orm.Where("id=?", id)); err != nil {
+		return nil, reason.ErrDB.Withf(`Delete err[%s]`, err.Error())
 	}
 	return &out, nil
 }

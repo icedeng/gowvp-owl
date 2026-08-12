@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/conf"
+	"github.com/gowvp/owl/internal/core/event"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/recording"
 	"github.com/gowvp/owl/internal/core/sms"
@@ -22,6 +23,7 @@ type WebHookAPI struct {
 	smsCore       sms.Core
 	ipcCore       ipc.Core
 	recordingCore recording.Core
+	eventCore     event.Core
 	conf          *conf.Bootstrap
 	log           *slog.Logger
 	gbs           *gbs.Server
@@ -30,11 +32,12 @@ type WebHookAPI struct {
 	protocols map[string]ipc.Protocoler
 }
 
-func NewWebHookAPI(core sms.Core, conf *conf.Bootstrap, gbs *gbs.Server, ipcBundle IPCBundle, recordingCore recording.Core) WebHookAPI {
+func NewWebHookAPI(core sms.Core, conf *conf.Bootstrap, gbs *gbs.Server, ipcBundle IPCBundle, recordingCore recording.Core, eventCore event.Core) WebHookAPI {
 	return WebHookAPI{
 		smsCore:       core,
 		ipcCore:       ipcBundle.Core,
 		recordingCore: recordingCore,
+		eventCore:     eventCore,
 		conf:          conf,
 		log:           slog.With("hook", "zlm"),
 		gbs:           gbs,
@@ -54,6 +57,8 @@ func registerZLMWebhookAPI(r gin.IRouter, api WebHookAPI, handler ...gin.Handler
 		group.POST("/on_rtp_server_timeout", web.WrapH(api.onRTPServerTimeout))
 		group.POST("/on_stream_not_found", web.WrapH(api.onStreamNotFound))
 		group.POST("/on_record_mp4", web.WrapH(api.onRecordMP4))
+		// 统一事件接收入口：兼容 Python AI 推送和 gowvp 间转发
+		group.POST("/events", api.onWebhookEvents)
 	}
 }
 
@@ -204,7 +209,7 @@ func (w WebHookAPI) onStreamChanged(c *gin.Context, in *onStreamChangedInput) (D
 		}
 
 		if !ch.Ext.IsNoneRecord() {
-			// always 模式：自动启动录制
+			// 保持既有行为：always/ai 均在流注册时启动录制，none 不录制。
 			if err := w.recordingCore.StartRecording(ctx, channelType, app, stream); err != nil {
 				w.log.WarnContext(ctx, "启动录制失败", "stream", stream, "err", err)
 			}
@@ -247,7 +252,7 @@ func (w WebHookAPI) onPlay(c *gin.Context, in *onPublishInput) (DefaultOutput, e
 	w.log.InfoContext(ctx, "webhook onPlay", "app", in.App, "stream", in.Stream, "schema", in.Schema)
 
 	// 更新通道的播放状态（所有协议统一处理）
-	if _, err := w.ipcCore.EditChannelPlaying(ctx, in.Stream, true); err != nil {
+	if _, err := w.ipcCore.UpdateChannelPlaying(ctx, in.Stream, true); err != nil {
 		w.log.WarnContext(ctx, "更新播放状态失败", "stream", in.Stream, "err", err)
 	}
 
@@ -277,7 +282,7 @@ func (w WebHookAPI) onStreamNoneReader(c *gin.Context, in *onStreamNoneReaderInp
 	// 禁用录像时，直接关闭流
 	if w.uc.Conf.Server.Recording.Disabled {
 		// 更新通道的播放状态为未播放（所有协议统一处理）
-		if _, err := w.ipcCore.EditChannelPlaying(ctx, in.Stream, false); err != nil {
+		if _, err := w.ipcCore.UpdateChannelPlaying(ctx, in.Stream, false); err != nil {
 			w.log.WarnContext(ctx, "更新播放状态失败", "stream", in.Stream, "err", err)
 		}
 		return onStreamNoneReaderOutput{Close: true}, nil
@@ -298,7 +303,7 @@ func (w WebHookAPI) onStreamNoneReader(c *gin.Context, in *onStreamNoneReaderInp
 	w.log.InfoContext(ctx, "无人观看判断", "stream", in.Stream, "record_mode", ch.Ext.GetRecordMode(), "close", shouldClose)
 	if shouldClose {
 		// 更新通道的播放状态为未播放（所有协议统一处理）
-		if _, err := w.ipcCore.EditChannelPlaying(ctx, in.Stream, false); err != nil {
+		if _, err := w.ipcCore.UpdateChannelPlaying(ctx, in.Stream, false); err != nil {
 			w.log.WarnContext(ctx, "更新播放状态失败", "stream", in.Stream, "err", err)
 		}
 		return onStreamNoneReaderOutput{Close: true}, nil
@@ -417,7 +422,7 @@ func (w WebHookAPI) onRecordMP4(c *gin.Context, in *onRecordMP4Input) (DefaultOu
 	}
 
 	// 入库
-	_, err = w.recordingCore.AddRecording(ctx, &recording.AddRecordingInput{
+	_, err = w.recordingCore.CreateRecording(ctx, &recording.AddRecordingInput{
 		CID:       cid,
 		App:       in.App,
 		Stream:    in.Stream,

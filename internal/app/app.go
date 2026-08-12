@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/ixugo/goddd/domain/version/versionapi"
@@ -44,6 +45,17 @@ func Run(bc *conf.Bootstrap) {
 		bc.Server.Recording.DefaultMode = "always"
 	}
 	ipc.SetDefaultRecordMode(bc.Server.Recording.DefaultMode)
+
+	// 每次启动生成进程内随机 UUID，用于 Python AI 回调鉴权
+	bc.AISecret = uuid.New().String()
+
+	// RecvSecret 为空时（旧配置文件升级场景）自动生成并持久化
+	if bc.Server.Webhook.RecvSecret == "" {
+		bc.Server.Webhook.RecvSecret = uuid.New().String()
+		if err := conf.WriteConfig(&bc, bc.ConfigPath); err != nil {
+			system.ErrPrintf("WriteConfig RecvSecret err[%s]", err)
+		}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -101,12 +113,14 @@ func SetupLog(bc *conf.Bootstrap) (*slog.Logger, func()) {
 	logDir := filepath.Join(bc.ConfigDir, bc.Log.Dir)
 	_ = os.MkdirAll(logDir, 0o755)
 	return logger.SetupSlog(logger.Config{
-		Dir:          logDir,                            // 日志地址
-		Debug:        bc.Debug,                          // 服务级别Debug/Release
-		MaxAge:       bc.Log.MaxAge.Duration(),          // 日志存储时间
-		RotationTime: bc.Log.RotationTime.Duration(),    // 循环时间
-		RotationSize: bc.Log.RotationSize * 1024 * 1024, // 循环大小
-		Level:        bc.Log.Level,                      // 日志级别
+		FileConfig: logger.FileConfig{
+			Dir:          logDir,
+			MaxAge:       bc.Log.MaxDays,
+			RotationTime: bc.Log.RotationTime.Duration(),
+			MaxSize:      bc.Log.MaxSize,
+		},
+		Debug: bc.Debug,     // 服务级别Debug/Release
+		Level: bc.Log.Level, // 日志级别
 	})
 }
 

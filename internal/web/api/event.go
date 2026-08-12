@@ -4,7 +4,6 @@ package api
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/conf"
@@ -23,10 +22,10 @@ type EventAPI struct {
 	conf      *conf.Bootstrap
 }
 
-func NewEventCore(db *gorm.DB, conf *conf.Bootstrap) event.Core {
+func NewEventCore(db *gorm.DB, conf *conf.Bootstrap, notifier event.Dispatcher) event.Core {
 	var store event.Storer
 	store = eventdb.NewDB(db).AutoMigrate(orm.GetEnabledAutoMigrate())
-	core := event.NewCore(store)
+	core := event.NewCore(store, notifier)
 
 	// 启动定时清理协程
 	days := conf.Server.AI.RetainDays
@@ -42,101 +41,57 @@ func NewEventAPI(core event.Core, conf *conf.Bootstrap) EventAPI {
 	return EventAPI{eventCore: core, conf: conf}
 }
 
+// eventIDInput 事件 ID 路径参数
+type eventIDInput struct {
+	ID int64 `uri:"id" binding:"required"`
+}
+
+// updateEventInput 更新事件的请求参数（路径 ID + 请求体）
+type updateEventInput struct {
+	ID int64 `uri:"id" binding:"required"`
+	event.EditEventInput
+}
+
 func RegisterEvent(g gin.IRouter, api EventAPI, handler ...gin.HandlerFunc) {
 	{
 		group := g.Group("/events", handler...)
-		group.GET("", web.WrapH(api.findEvents))
+		group.GET("", web.WrapH(api.listEvents))
 		group.GET("/:id", web.WrapH(api.getEvent))
-		group.PUT("/:id", web.WrapH(api.editEvent))
-		group.DELETE("/:id", web.WrapH(api.delEvent))
+		group.PUT("/:id", web.WrapH(api.updateEvent))
+		group.DELETE("/:id", web.WrapH(api.deleteEvent))
 	}
 	// 图片接口不需要认证中间件
 	// TODO: 待添加鉴权
 	g.GET("/events/image/*path", api.getEventImage)
 }
 
-// findEvents 分页查询事件列表
-// findEvents godoc
-// @Summary 查询事件列表
-// @Tags Event
-// @Security BearerAuth
-// @Produce json
-// @Param page query int false "页码"
-// @Param size query int false "每页数量"
-// @Param did query string false "设备ID"
-// @Param cid query string false "通道ID"
-// @Param label query string false "标签"
-// @Param start_ms query int false "开始毫秒时间戳"
-// @Param end_ms query int false "结束毫秒时间戳"
-// @Success 200 {object} SwaggerEventsResponse
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /events [get]
-func (a EventAPI) findEvents(c *gin.Context, in *event.FindEventInput) (any, error) {
-	ctx := c.Request.Context()
-	items, total, err := a.eventCore.FindEvents(ctx, in)
+// listEvents 分页查询事件列表
+func (a EventAPI) listEvents(c *gin.Context, in *event.FindEventInput) (any, error) {
+	ctx := web.WithContext(c.Request)
+	items, total, err := a.eventCore.ListEvents(ctx, in)
 	return gin.H{"items": items, "total": total}, err
 }
 
 // getEvent 获取单个事件详情
-// getEvent godoc
-// @Summary 获取事件详情
-// @Tags Event
-// @Security BearerAuth
-// @Produce json
-// @Param id path int true "事件ID"
-// @Success 200 {object} event.Event
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /events/{id} [get]
-func (a EventAPI) getEvent(c *gin.Context, _ *struct{}) (*event.Event, error) {
-	eventID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	return a.eventCore.GetEvent(c.Request.Context(), eventID)
+func (a EventAPI) getEvent(c *gin.Context, in *eventIDInput) (*event.Event, error) {
+	return a.eventCore.GetEvent(c.Request.Context(), in.ID)
 }
 
-// editEvent 更新事件信息
-// editEvent godoc
-// @Summary 修改事件
-// @Tags Event
-// @Security BearerAuth
-// @Accept json
-// @Produce json
-// @Param id path int true "事件ID"
-// @Param body body event.EditEventInput true "事件更新参数"
-// @Success 200 {object} event.Event
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /events/{id} [put]
-func (a EventAPI) editEvent(c *gin.Context, in *event.EditEventInput) (*event.Event, error) {
-	eventID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	return a.eventCore.EditEvent(c.Request.Context(), in, eventID)
+// updateEvent 更新事件信息
+func (a EventAPI) updateEvent(c *gin.Context, in *updateEventInput) (*event.Event, error) {
+	return a.eventCore.UpdateEvent(c.Request.Context(), &in.EditEventInput, in.ID)
 }
 
-// delEvent 删除事件
-// delEvent godoc
-// @Summary 删除事件
-// @Tags Event
-// @Security BearerAuth
-// @Produce json
-// @Param id path int true "事件ID"
-// @Success 200 {object} event.Event
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /events/{id} [delete]
-func (a EventAPI) delEvent(c *gin.Context, _ *struct{}) (*event.Event, error) {
-	eventID, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	return a.eventCore.DelEvent(c.Request.Context(), eventID)
+// deleteEvent 删除事件
+func (a EventAPI) deleteEvent(c *gin.Context, in *eventIDInput) (*event.Event, error) {
+	return a.eventCore.DeleteEvent(c.Request.Context(), in.ID)
 }
 
 // getEventImage 获取事件快照图片
-// getEventImage godoc
-// @Summary 获取事件快照图片
-// @Tags Event
-// @Produce jpeg
-// @Param path path string true "图片相对路径"
-// @Success 200 {file} file "JPEG 图片"
-// @Failure 404 {object} SwaggerErrorResponse
-// @Router /events/image/{path} [get]
 func (a EventAPI) getEventImage(c *gin.Context) {
 	imagePath := c.Param("path")
 	if imagePath == "" {
-		web.Fail(c, reason.ErrNotFound.SetMsg("image path is required"))
+		web.Fail(c, reason.ErrNotFound.WithMsg("image path is required"))
 		return
 	}
 
@@ -151,13 +106,13 @@ func (a EventAPI) getEventImage(c *gin.Context) {
 	eventsDir := filepath.Join(system.Getwd(), "configs", "events")
 	absPath, err := filepath.Abs(fullPath)
 	if err != nil || !filepath.HasPrefix(absPath, eventsDir) {
-		web.Fail(c, reason.ErrNotFound.SetMsg("invalid path"))
+		web.Fail(c, reason.ErrNotFound.WithMsg("invalid path"))
 		return
 	}
 
 	body, err := os.ReadFile(fullPath)
 	if err != nil {
-		web.Fail(c, reason.ErrNotFound.SetMsg(err.Error()))
+		web.Fail(c, reason.ErrNotFound.WithMsg(err.Error()))
 		return
 	}
 

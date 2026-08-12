@@ -19,9 +19,9 @@ func (c *Event) cacheKey(key any) string {
 	return fmt.Sprintf("EVENT:%v", key)
 }
 
-// Find implements event.EventStorer.
-func (c *Event) Find(ctx context.Context, bs *[]*event.Event, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
-	return c.store.Event().Find(ctx, bs, page, opts...)
+// List implements event.EventStorer.
+func (c *Event) List(ctx context.Context, bs *[]*event.Event, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
+	return c.store.Event().List(ctx, bs, page, opts...)
 }
 
 // Get implements event.EventStorer.
@@ -42,27 +42,27 @@ func (c *Event) Get(ctx context.Context, model *event.Event, opts ...orm.QueryOp
 	return nil
 }
 
-// Add implements event.EventStorer.
-func (c *Event) Add(ctx context.Context, model *event.Event) error {
-	if err := c.store.Event().Add(ctx, model); err != nil {
+// Create implements event.EventStorer.
+func (c *Event) Create(ctx context.Context, model *event.Event) error {
+	if err := c.store.Event().Create(ctx, model); err != nil {
 		return err
 	}
 	c.event.Set(ctx, c.cacheKey(model.CacheKey()), model)
 	return nil
 }
 
-// Edit implements event.EventStorer.
-func (c *Event) Edit(ctx context.Context, model *event.Event, changeFn func(*event.Event), opts ...orm.QueryOption) error {
-	if err := c.store.Event().Edit(ctx, model, changeFn, opts...); err != nil {
+// Update implements event.EventStorer.
+func (c *Event) Update(ctx context.Context, model *event.Event, changeFn func(*event.Event), opts ...orm.QueryOption) error {
+	if err := c.store.Event().Update(ctx, model, changeFn, opts...); err != nil {
 		return err
 	}
 	c.event.Set(ctx, c.cacheKey(model.CacheKey()), model)
 	return nil
 }
 
-// Del implements event.EventStorer.
-func (c *Event) Del(ctx context.Context, model *event.Event, opts ...orm.QueryOption) error {
-	if err := c.store.Event().Del(ctx, model, opts...); err != nil {
+// Delete implements event.EventStorer.
+func (c *Event) Delete(ctx context.Context, model *event.Event, opts ...orm.QueryOption) error {
+	if err := c.store.Event().Delete(ctx, model, opts...); err != nil {
 		return err
 	}
 	c.event.Del(ctx, c.cacheKey(model.CacheKey()))
@@ -80,9 +80,9 @@ func (c *Event) Session(ctx context.Context, changeFns ...func(*gorm.DB) error) 
 	return nil
 }
 
-// EditWithSession 修改事务
-func (c *Event) EditWithSession(tx *gorm.DB, model *event.Event, changeFn func(b *event.Event) error, opts ...orm.QueryOption) error {
-	//	if err := c.store.Event().EditWithSession(ctx,model, changeFn,opts...);err!=nil{
+// UpdateWithSession 修改事务
+func (c *Event) UpdateWithSession(tx *gorm.DB, model *event.Event, changeFn func(b *event.Event) error, opts ...orm.QueryOption) error {
+	//	if err := c.store.Event().UpdateWithSession(ctx,model, changeFn,opts...);err!=nil{
 	// return err
 	//	}
 	//	c.event.Set(ctx, c.cacheKey(model.CacheKey() ),  model)

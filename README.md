@@ -47,6 +47,8 @@ Two streaming media servers are supported:
 
 Project framework based on @ixugo's [goddd](https://github.com/ixugo/goddd)
 
+For commercial licensing, please contact WeChat: **golangxx**. Unauthorized modifications must open-source both frontend and backend source code under the GPL license.
+
 ## FAQ
 
 > Where are the frontend resources? How to load the web interface?
@@ -197,7 +199,8 @@ services:
     # network_mode: host
     ports:
       # gb28181
-      - 15123:15123 # Management platform HTTP port
+      - 15123:15123 # HTTP: Web UI + ONVIF SOAP server
+      - 3702:3702/udp # ONVIF WS-Discovery (能够被其它内网 onvif 发现本平台)
       - 15060:15060 # GB28181 SIP TCP port
       - 15060:15060/udp # GB28181 SIP UDP port
       # zlm
@@ -242,7 +245,7 @@ If you're a Go developer familiar with Docker, you can download the source code 
 ## Features
 
 - [x] Out-of-the-box with responsive web management
-- [x] Multiple protocol output: HTTP_FLV, Websocket_FLV, HLS, WebRTC, RTSP, RTMP
+- [x] Multiple protocol output: FLV, WS-FLV, HLS, WebRTC, RTSP, RTMP
 - [x] LAN/Internet/Multi-layer NAT/Special network environment deployment
 - [x] SQLite database for quick deployment
 - [x] PostgreSQL/MySQL database support
@@ -263,14 +266,133 @@ If you're a Go developer familiar with Docker, you can download the source code 
   - [x] g711a/g711u/aac audio codec support
   - [x] Snapshots
   - [x] CORS support
-  - [ ] SD Recording playback (ipc, recorded on camera SD card, no development plan)
-- [x] ONVIF device access and playback
+- [x] ONVIF device access and playback (client)
+- [x] ONVIF virtual device / server (expose channels to Home Assistant, etc.)
 - [x] RTMP push streaming support
 - [x] RTSP pull streaming support
 - [x] AI algorithm analysis and alerting support
 - [x] Cloud Recording playback (owl)
 - [ ] ONVIF PTZ control support
 - [x] Chinese and English language support
+
+**OWL PRO**
+
+- [x] 分屏预览
+- [x] 分屏卡存录像回放(摄像头内置录像)
+- [x] 主子码流
+- [x] 自研 owl 播放器，兼容不同环境的 H265 流播放(仅支持 FLV 协议)
+
+## ONVIF Virtual Device (Server)
+
+GoWVP can act as an **ONVIF Network Video Transmitter** so integrators (e.g. Home Assistant) can add it like a camera and pull RTSP URLs for platform channels.
+
+### Ports and firewall (LAN)
+
+| Purpose | Protocol | Port | Open in firewall? |
+| --- | --- | --- | --- |
+| Web UI + ONVIF SOAP | TCP | `Server.HTTP.Port` (default **15123**) | Only if HA/NVR is on another subnet; same LAN usually needs no extra rule |
+| RTSP playback after `GetStreamUri` | TCP | ZLM RTSP (default **554**, see `docker-compose` mapping) | Same as above when the client pulls stream from ZLM |
+| ONVIF WS-Discovery (server advertisement) | UDP | **3702** (multicast `239.255.255.250`) | Map `3702:3702/udp` in Docker; LAN usually needs no extra rule |
+
+ONVIF SOAP endpoints (same HTTP port as the web UI):
+
+- `POST http://<host>:15123/onvif/device_service`
+- `POST http://<host>:15123/onvif/media_service`
+
+Authentication uses `Server.Username` / `Server.Password` in `configs/config.toml` (WS-Security `PasswordDigest` or `PasswordText`), same defaults as web login (`admin` / `admin`).
+
+**Home Assistant (manual add):**
+
+- Host: `http://<lan-ip>:15123/onvif/device_service`
+- Username / password: values from `config.toml` `Server.Username` / `Server.Password`
+
+**Auto-discovery:** After startup, GoWVP answers WS-Discovery Probe on **UDP 3702**. Set `Media.IP` (or `Sip.Host`) in `configs/config.toml` to your LAN IP so `XAddrs` is reachable from Home Assistant.
+
+**Not the same as** `GET /onvif/discover`: that API lets GoWVP **scan the LAN for external ONVIF cameras** (client role).
+
+## Webhook Alert Push & Receive
+
+GoWVP supports pushing alert events to external systems via HTTP Webhook, and receiving pushes from other GoWVP instances for **master-slave cascading** deployments.
+
+### Endpoint
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/webhook/events` | Unified event receiver, compatible with both Python AI and gowvp-to-gowvp forwarding |
+
+### Configuration (`configs/config.toml`)
+
+```toml
+[Server.Webhook]
+  # Target URL array; embed the secret as a query parameter
+  Targets = [
+    "http://192.168.1.100:15123/webhook/events?secret=your-recv-secret",
+  ]
+  # Max retries, 0 = built-in default of 3
+  MaxRetry = 3
+  # Channel buffer size per target, 0 = built-in default of 64
+  BufferSize = 64
+  # Secret for validating incoming webhook requests (auto-generated on first launch)
+  RecvSecret = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+```
+
+### Authentication
+
+`/webhook/events` accepts two authentication methods (either one suffices):
+
+| Source | Method | Notes |
+|--------|--------|-------|
+| Python AI | `Authorization: Basic <InternalSecret>` header | Random UUID generated at startup, not persisted |
+| Other gowvp | URL query `?secret=<RecvSecret>` | Configured in `RecvSecret`, auto-generated on first launch |
+
+### Master-Slave Cascading
+
+**Master node**: Receives AI detection events and pushes alerts to slave nodes.
+
+```toml
+# Master node config.toml
+[Server.Webhook]
+  Targets = ["http://<slave-ip>:15123/webhook/events?secret=<slave-RecvSecret>"]
+```
+
+**Slave node**: Receives pushes and stores events directly (device/channel existence is not validated).
+
+```toml
+# Slave node config.toml (RecvSecret is auto-generated on first launch)
+[Server.Webhook]
+  RecvSecret = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+```
+
+### Forward Payload Format (gowvp → gowvp)
+
+```json
+{
+  "did": "device-id",
+  "cid": "channel-id",
+  "started_at": "2024-01-01T10:00:00Z",
+  "ended_at": "2024-01-01T10:00:01Z",
+  "label": "person",
+  "score": 0.95,
+  "zones": "{\"x_min\":0,\"y_min\":0,\"x_max\":100,\"y_max\":100}",
+  "image_base64": "<base64-encoded JPEG image>",
+  "model": "yolov8"
+}
+```
+
+> `image_base64`: The master node reads the local image file and encodes it as base64 for transmission. The slave node decodes and saves it locally, resolving cross-node file path issues.
+> If the image cannot be read, `image_base64` is omitted; the event is still saved without an image.
+
+### Retry Strategy
+
+On failure, the push is retried with **exponential backoff ± 25% jitter**:
+
+| Attempt | Base Delay |
+|---------|------------|
+| 1st | ~1s |
+| 2nd | ~2s |
+| 3rd | ~4s (max 10s) |
+
+HTTP 4xx responses (except 429/408) are treated as permanent failures and not retried. Each retry failure is logged as `warn`; exhausted retries are logged as `error`.
 
 ## Acknowledgments
 

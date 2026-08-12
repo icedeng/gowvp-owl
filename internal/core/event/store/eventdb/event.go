@@ -19,8 +19,8 @@ func NewEvent(db *gorm.DB) Event {
 	return Event{db: db}
 }
 
-// Find implements event.EventStorer.
-func (d Event) Find(ctx context.Context, bs *[]*event.Event, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
+// List implements event.EventStorer.
+func (d Event) List(ctx context.Context, bs *[]*event.Event, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
 	return orm.FindWithContext(ctx, d.db, bs, page, opts...)
 }
 
@@ -29,18 +29,18 @@ func (d Event) Get(ctx context.Context, model *event.Event, opts ...orm.QueryOpt
 	return orm.FirstWithContext(ctx, d.db, model, opts...)
 }
 
-// Add implements event.EventStorer.
-func (d Event) Add(ctx context.Context, model *event.Event) error {
+// Create implements event.EventStorer.
+func (d Event) Create(ctx context.Context, model *event.Event) error {
 	return d.db.WithContext(ctx).Create(model).Error
 }
 
-// Edit implements event.EventStorer.
-func (d Event) Edit(ctx context.Context, model *event.Event, changeFn func(*event.Event), opts ...orm.QueryOption) error {
+// Update implements event.EventStorer.
+func (d Event) Update(ctx context.Context, model *event.Event, changeFn func(*event.Event), opts ...orm.QueryOption) error {
 	return orm.UpdateWithContext(ctx, d.db, model, changeFn, opts...)
 }
 
-// Del implements event.EventStorer.
-func (d Event) Del(ctx context.Context, model *event.Event, opts ...orm.QueryOption) error {
+// Delete implements event.EventStorer.
+func (d Event) Delete(ctx context.Context, model *event.Event, opts ...orm.QueryOption) error {
 	return orm.DeleteWithContext(ctx, d.db, model, opts...)
 }
 
@@ -61,7 +61,7 @@ func (d Event) Session(ctx context.Context, changeFns ...func(*gorm.DB) error) e
 	})
 }
 
-// EditWithSession 修改事务
-func (d Event) EditWithSession(tx *gorm.DB, model *event.Event, changeFn func(b *event.Event) error, opts ...orm.QueryOption) error {
+// UpdateWithSession 修改事务
+func (d Event) UpdateWithSession(tx *gorm.DB, model *event.Event, changeFn func(b *event.Event) error, opts ...orm.QueryOption) error {
 	return orm.UpdateWithSession(tx, model, changeFn, opts...)
 }

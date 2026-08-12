@@ -249,7 +249,7 @@ func (g *GB28181API) persistAppendixA4Objects(deviceID string, objs []AppendixA4
 		return
 	}
 	var dev ipc.Device
-	if err := g.core.Store().Device().Edit(context.TODO(), &dev, func(d *ipc.Device) error {
+	if err := g.core.Store().Device().Update(context.TODO(), &dev, func(d *ipc.Device) error {
 		exist := fromIPCAppendixA4Objects(d.Ext.GBAppendixA4)
 		merged := mergeAppendixA4Objects(exist, objs, 256)
 		d.Ext.GBAppendixA4 = toIPCAppendixA4Objects(merged)

@@ -8,28 +8,30 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class StartCameraRequest(_message.Message):
-    __slots__ = ("camera_id", "camera_name", "rtsp_url", "detect_fps", "labels", "threshold", "roi_points", "retry_limit", "callback_url", "callback_secret")
+    __slots__ = ("camera_id", "camera_name", "rtsp_url", "detect_interval_seconds", "labels", "threshold", "zones", "alert_cooldown_seconds", "retry_limit", "callback_url", "callback_secret")
     CAMERA_ID_FIELD_NUMBER: _ClassVar[int]
     CAMERA_NAME_FIELD_NUMBER: _ClassVar[int]
     RTSP_URL_FIELD_NUMBER: _ClassVar[int]
-    DETECT_FPS_FIELD_NUMBER: _ClassVar[int]
+    DETECT_INTERVAL_SECONDS_FIELD_NUMBER: _ClassVar[int]
     LABELS_FIELD_NUMBER: _ClassVar[int]
     THRESHOLD_FIELD_NUMBER: _ClassVar[int]
-    ROI_POINTS_FIELD_NUMBER: _ClassVar[int]
+    ZONES_FIELD_NUMBER: _ClassVar[int]
+    ALERT_COOLDOWN_SECONDS_FIELD_NUMBER: _ClassVar[int]
     RETRY_LIMIT_FIELD_NUMBER: _ClassVar[int]
     CALLBACK_URL_FIELD_NUMBER: _ClassVar[int]
     CALLBACK_SECRET_FIELD_NUMBER: _ClassVar[int]
     camera_id: str
     camera_name: str
     rtsp_url: str
-    detect_fps: int
+    detect_interval_seconds: float
     labels: _containers.RepeatedScalarFieldContainer[str]
     threshold: float
-    roi_points: _containers.RepeatedScalarFieldContainer[float]
+    zones: _containers.RepeatedCompositeFieldContainer[AnalysisZone]
+    alert_cooldown_seconds: float
     retry_limit: int
     callback_url: str
     callback_secret: str
-    def __init__(self, camera_id: _Optional[str] = ..., camera_name: _Optional[str] = ..., rtsp_url: _Optional[str] = ..., detect_fps: _Optional[int] = ..., labels: _Optional[_Iterable[str]] = ..., threshold: _Optional[float] = ..., roi_points: _Optional[_Iterable[float]] = ..., retry_limit: _Optional[int] = ..., callback_url: _Optional[str] = ..., callback_secret: _Optional[str] = ...) -> None: ...
+    def __init__(self, camera_id: _Optional[str] = ..., camera_name: _Optional[str] = ..., rtsp_url: _Optional[str] = ..., detect_interval_seconds: _Optional[float] = ..., labels: _Optional[_Iterable[str]] = ..., threshold: _Optional[float] = ..., zones: _Optional[_Iterable[_Union[AnalysisZone, _Mapping]]] = ..., alert_cooldown_seconds: _Optional[float] = ..., retry_limit: _Optional[int] = ..., callback_url: _Optional[str] = ..., callback_secret: _Optional[str] = ...) -> None: ...
 
 class StartCameraResponse(_message.Message):
     __slots__ = ("success", "message", "source_width", "source_height", "source_fps")
@@ -114,3 +116,13 @@ class HealthCheckResponse(_message.Message):
     STATUS_FIELD_NUMBER: _ClassVar[int]
     status: HealthCheckResponse.ServingStatus
     def __init__(self, status: _Optional[_Union[HealthCheckResponse.ServingStatus, str]] = ...) -> None: ...
+
+class AnalysisZone(_message.Message):
+    __slots__ = ("points", "labels", "name")
+    POINTS_FIELD_NUMBER: _ClassVar[int]
+    LABELS_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    points: _containers.RepeatedScalarFieldContainer[float]
+    labels: _containers.RepeatedScalarFieldContainer[str]
+    name: str
+    def __init__(self, points: _Optional[_Iterable[float]] = ..., labels: _Optional[_Iterable[str]] = ..., name: _Optional[str] = ...) -> None: ...

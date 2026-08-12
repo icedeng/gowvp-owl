@@ -49,8 +49,11 @@ func (a *AIClient) GetStatus(ctx context.Context, in *protos.StatusRequest, opts
 
 // StartCamera implements [protos.AnalysisServiceClient].
 func (a *AIClient) StartCamera(ctx context.Context, in *protos.StartCameraRequest, opts ...grpc.CallOption) (*protos.StartCameraResponse, error) {
-	if in.GetDetectFps() == 0 {
-		in.DetectFps = 5
+	if in.GetDetectIntervalSeconds() <= 0 {
+		in.DetectIntervalSeconds = 5.0
+	}
+	if in.GetAlertCooldownSeconds() <= 0 {
+		in.AlertCooldownSeconds = 30.0
 	}
 	if in.GetThreshold() == 0 {
 		in.Threshold = 0.5

@@ -13,22 +13,22 @@ import (
 
 // StreamProxyStorer Instantiation interface
 type StreamProxyStorer interface {
-	Find(context.Context, *[]*StreamProxy, orm.Pager, ...orm.QueryOption) (int64, error)
+	List(context.Context, *[]*StreamProxy, orm.Pager, ...orm.QueryOption) (int64, error)
 	Get(context.Context, *StreamProxy, ...orm.QueryOption) error
-	Add(context.Context, *StreamProxy) error
-	Edit(context.Context, *StreamProxy, func(*StreamProxy), ...orm.QueryOption) error
-	Del(context.Context, *StreamProxy, ...orm.QueryOption) error
+	Create(context.Context, *StreamProxy) error
+	Update(context.Context, *StreamProxy, func(*StreamProxy), ...orm.QueryOption) error
+	Delete(context.Context, *StreamProxy, ...orm.QueryOption) error
 }
 
-// FindStreamProxy Paginated search
-func (c *Core) FindStreamProxy(ctx context.Context, in *FindStreamProxyInput) ([]*StreamProxy, int64, error) {
+// ListStreamProxys Paginated search
+func (c *Core) ListStreamProxys(ctx context.Context, in *FindStreamProxyInput) ([]*StreamProxy, int64, error) {
 	query := orm.NewQuery(1)
 	query.OrderBy("created_at desc")
 
 	items := make([]*StreamProxy, 0)
-	total, err := c.store.StreamProxy().Find(ctx, &items, in, query.Encode()...)
+	total, err := c.store.StreamProxy().List(ctx, &items, in, query.Encode()...)
 	if err != nil {
-		return nil, 0, reason.ErrDB.Withf(`Find err[%s]`, err.Error())
+		return nil, 0, reason.ErrDB.Withf(`List err[%s]`, err.Error())
 	}
 	return items, total, nil
 }
@@ -56,8 +56,8 @@ func (c *Core) GetStreamProxyByAppStream(ctx context.Context, app, stream string
 	return &out, nil
 }
 
-// AddStreamProxy Insert into database
-func (c *Core) AddStreamProxy(ctx context.Context, in *AddStreamProxyInput) (*StreamProxy, error) {
+// CreateStreamProxy Insert into database
+func (c *Core) CreateStreamProxy(ctx context.Context, in *AddStreamProxyInput) (*StreamProxy, error) {
 	var out StreamProxy
 	if err := copier.Copy(&out, in); err != nil {
 		slog.ErrorContext(ctx, "Copy", "err", err)
@@ -65,43 +65,43 @@ func (c *Core) AddStreamProxy(ctx context.Context, in *AddStreamProxyInput) (*St
 	out.ID = c.uniqueID.UniqueID(bz.IDPrefixRTSP)
 	out.Stream = out.ID
 	out.App = "live"
-	if err := c.store.StreamProxy().Add(ctx, &out); err != nil {
+	if err := c.store.StreamProxy().Create(ctx, &out); err != nil {
 		if orm.IsDuplicatedKey(err) {
-			return nil, reason.ErrDB.SetMsg("stream 重复，请勿重复添加")
+			return nil, reason.ErrDB.WithMsg("stream 重复，请勿重复添加")
 		}
-		return nil, reason.ErrDB.Withf(`Add err[%s]`, err.Error())
+		return nil, reason.ErrDB.Withf(`Create err[%s]`, err.Error())
 	}
 	return &out, nil
 }
 
-// EditStreamProxy Update object information
-func (c *Core) EditStreamProxy(ctx context.Context, in *EditStreamProxyInput, id string) (*StreamProxy, error) {
+// UpdateStreamProxy Update object information
+func (c *Core) UpdateStreamProxy(ctx context.Context, in *EditStreamProxyInput, id string) (*StreamProxy, error) {
 	var out StreamProxy
-	if err := c.store.StreamProxy().Edit(ctx, &out, func(b *StreamProxy) {
+	if err := c.store.StreamProxy().Update(ctx, &out, func(b *StreamProxy) {
 		if err := copier.Copy(b, in); err != nil {
 			slog.ErrorContext(ctx, "Copy", "err", err)
 		}
 	}, orm.Where("id=?", id)); err != nil {
-		return nil, reason.ErrDB.Withf(`Edit err[%s]`, err.Error())
+		return nil, reason.ErrDB.Withf(`Update err[%s]`, err.Error())
 	}
 	return &out, nil
 }
 
-func (c *Core) EditStreamProxyKey(ctx context.Context, streamKey, id string) (*StreamProxy, error) {
+func (c *Core) UpdateStreamProxyKey(ctx context.Context, streamKey, id string) (*StreamProxy, error) {
 	var out StreamProxy
-	if err := c.store.StreamProxy().Edit(ctx, &out, func(b *StreamProxy) {
+	if err := c.store.StreamProxy().Update(ctx, &out, func(b *StreamProxy) {
 		out.StreamKey = streamKey
 	}, orm.Where("id=?", id)); err != nil {
-		return nil, reason.ErrDB.Withf(`Edit err[%s]`, err.Error())
+		return nil, reason.ErrDB.Withf(`Update err[%s]`, err.Error())
 	}
 	return &out, nil
 }
 
-// DelStreamProxy Delete object
-func (c *Core) DelStreamProxy(ctx context.Context, id string) (*StreamProxy, error) {
+// DeleteStreamProxy Delete object
+func (c *Core) DeleteStreamProxy(ctx context.Context, id string) (*StreamProxy, error) {
 	var out StreamProxy
-	if err := c.store.StreamProxy().Del(ctx, &out, orm.Where("id=?", id)); err != nil {
-		return nil, reason.ErrDB.Withf(`Del err[%s]`, err.Error())
+	if err := c.store.StreamProxy().Delete(ctx, &out, orm.Where("id=?", id)); err != nil {
+		return nil, reason.ErrDB.Withf(`Delete err[%s]`, err.Error())
 	}
 	return &out, nil
 }

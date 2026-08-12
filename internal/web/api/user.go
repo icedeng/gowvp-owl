@@ -97,36 +97,27 @@ func RegisterUser(r gin.IRouter, api UserAPI, mid ...gin.HandlerFunc) {
 type loginInput struct {
 	// Username string `json:"username" binding:"required"`
 	// Password string `json:"password" binding:"required"`
-	Data string `json:"data" binding:"required" example:"Base64(RSA-OAEP(username/password JSON))"` // 使用 `/login/key` 返回公钥加密后的 Base64 字符串
+	Data string `json:"data" binding:"required"`
 }
 
 // 登录响应结构体
 type loginOutput struct {
-	Token string `json:"token"` // 登录成功后返回的 JWT
-	User  string `json:"user"`  // 当前登录用户名
+	Token string `json:"token"`
+	User  string `json:"user"`
 }
 
-// login godoc
-// @Summary 用户登录
-// @Description 使用前端 RSA 公钥加密后的用户名密码进行登录，返回 JWT
-// @Tags Auth
-// @Accept json
-// @Produce json
-// @Param body body loginInput true "登录参数"
-// @Success 200 {object} loginOutput
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /login [post]
+// 登录接口
 func (api UserAPI) login(_ *gin.Context, in *loginInput) (*loginOutput, error) {
 	body, err := api.secret.Decrypt(in.Data)
 	if err != nil {
-		return nil, reason.ErrServer.SetMsg(err.Error())
+		return nil, reason.ErrServer.WithMsg(err.Error())
 	}
 	var credentials struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if err := json.Unmarshal(body, &credentials); err != nil {
-		return nil, reason.ErrServer.SetMsg(err.Error())
+		return nil, reason.ErrServer.WithMsg(err.Error())
 	}
 
 	// 验证用户名和密码
@@ -142,7 +133,7 @@ func (api UserAPI) login(_ *gin.Context, in *loginInput) (*loginOutput, error) {
 
 	token, err := web.NewToken(data, api.conf.Server.HTTP.JwtSecret, web.WithExpiresAt(time.Now().Add(3*24*time.Hour)))
 	if err != nil {
-		return nil, reason.ErrServer.SetMsg("生成token失败: " + err.Error())
+		return nil, reason.ErrServer.WithMsg("生成token失败: " + err.Error())
 	}
 
 	return &loginOutput{
@@ -151,47 +142,53 @@ func (api UserAPI) login(_ *gin.Context, in *loginInput) (*loginOutput, error) {
 	}, nil
 }
 
-// 修改凭据请求结构体
+// 修改凭据请求结构体（加密传输）
 type updateCredentialsInput struct {
-	Username string `json:"username" binding:"required" example:"admin"` // 新用户名
-	Password string `json:"password" binding:"required" example:"admin"` // 新密码
+	Data string `json:"data" binding:"required"`
 }
 
-// updateCredentials godoc
-// @Summary 修改登录凭据
-// @Tags Auth
-// @Security BearerAuth
-// @Accept json
-// @Produce json
-// @Param body body updateCredentialsInput true "新用户名和密码"
-// @Success 200 {object} SwaggerMessageResponse
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /users [put]
+// 修改凭据接口，需旧密码校验通过才允许修改
 func (api UserAPI) updateCredentials(_ *gin.Context, in *updateCredentialsInput) (gin.H, error) {
-	// 更新配置中的用户名和密码
-	api.conf.Server.Username = in.Username
-	api.conf.Server.Password = in.Password
+	body, err := api.secret.Decrypt(in.Data)
+	if err != nil {
+		return nil, reason.ErrServer.WithMsg(err.Error())
+	}
+	var credentials struct {
+		OldPassword string `json:"old_password"`
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+	}
+	if err := json.Unmarshal(body, &credentials); err != nil {
+		return nil, reason.ErrServer.WithMsg(err.Error())
+	}
 
-	// 写入配置文件
+	if credentials.Username == "" || credentials.Password == "" {
+		return nil, reason.ErrServer.WithMsg("账号和密码不能为空")
+	}
+
+	// 校验旧密码
+	currentPassword := api.conf.Server.Password
+	if currentPassword == "" {
+		currentPassword = "admin"
+	}
+	if credentials.OldPassword != currentPassword {
+		return nil, reason.ErrServer.WithMsg("旧密码错误")
+	}
+
+	api.conf.Server.Username = credentials.Username
+	api.conf.Server.Password = credentials.Password
+
 	if err := conf.WriteConfig(api.conf, api.conf.ConfigPath); err != nil {
-		return nil, reason.ErrServer.SetMsg("保存配置失败: " + err.Error())
+		return nil, reason.ErrServer.WithMsg("保存配置失败: " + err.Error())
 	}
 
 	return gin.H{"msg": "凭据更新成功"}, nil
 }
 
-// getPublicKey godoc
-// @Summary 获取登录公钥
-// @Description 获取用于登录前端加密的 RSA 公钥，返回 Base64 编码的 PEM 文本
-// @Tags Auth
-// @Produce json
-// @Success 200 {object} SwaggerLoginKeyOutput
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /login/key [get]
 func (api UserAPI) getPublicKey(_ *gin.Context, _ *struct{}) (gin.H, error) {
 	publicKey, err := api.secret.GetOrCreatePublicKey()
 	if err != nil {
-		return nil, reason.ErrServer.SetMsg(err.Error())
+		return nil, reason.ErrServer.WithMsg(err.Error())
 	}
 	result := api.secret.MarshalPKIXPublicKey(publicKey)
 	return gin.H{"key": base64.StdEncoding.EncodeToString(result)}, nil

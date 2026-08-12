@@ -17,7 +17,7 @@ func (a *Adapter) OnStreamChanged(ctx context.Context, app, stream string) error
 	if err := a.adapter.Store().Channel().Get(ctx, &ch, orm.Where("id=?", stream)); err != nil {
 		return err
 	}
-	if err := a.adapter.EditPlayingByID(ctx, ch.ID, false); err != nil {
+	if err := a.adapter.UpdatePlayingByID(ctx, ch.ID, false); err != nil {
 		slog.ErrorContext(ctx, "编辑播放状态失败", "err", err)
 	}
 	return nil
@@ -43,13 +43,13 @@ func (a *Adapter) OnStreamNotFound(ctx context.Context, app, stream string) erro
 		return err
 	}
 
-	_, err = a.sms.AddStreamProxy(svr, sms.AddStreamProxyRequest{
+	_, err = a.sms.CreateStreamProxy(svr, sms.AddStreamProxyRequest{
 		App:    app,
 		Stream: stream,
 		URL:    streamURI,
 	})
 	if err == nil {
-		if err := a.adapter.EditPlaying(ctx, ch.DeviceID, ch.ChannelID, true); err != nil {
+		if err := a.adapter.UpdatePlaying(ctx, ch.DeviceID, ch.ChannelID, true); err != nil {
 			slog.ErrorContext(ctx, "编辑播放状态失败", "err", err)
 		}
 	}

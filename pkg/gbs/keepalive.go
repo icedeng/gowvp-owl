@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"encoding/xml"
+	"log/slog"
 
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs/sip"
@@ -26,8 +27,8 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		return
 	}
 
-	// 程序重启时会丢内存，收到 keepalive 时，补上
-	// 并未补充到
+	// 程序重启后内存丢失，收到 keepalive 时补上；首次补载后还需主动加载 Catalog。
+	_, alreadyLoaded := g.svr.memoryStorer.Load(ctx.DeviceID)
 	g.svr.memoryStorer.LoadOrStore(ctx.DeviceID, &Device{
 		conn:   ctx.Request.GetConnection(),
 		source: ctx.Source,
@@ -37,7 +38,8 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 	effectiveVersion := GBVersion10
 	if err := g.svr.memoryStorer.Change(ctx.DeviceID, func(d *ipc.Device) error {
 		d.KeepaliveAt = orm.Now()
-		d.IsOnline = msg.Status == "OK" || msg.Status == "ON"
+		// 兼容省略 Status 的厂商，同时保留显式 OFF/ERROR 状态的语义。
+		d.IsOnline = msg.Status == "" || msg.Status == "OK" || msg.Status == "ON"
 		d.Address = ctx.Source.String()
 		d.Transport = ctx.Source.Network()
 		effectiveVersion = applyGBProtocolVersion(&d.Ext, ctx.XGBVer)
@@ -72,6 +74,12 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		DeviceStatusData: status,
 	}); err == nil {
 		g.publishEventNotify("DeviceStatus", ctx.DeviceID, body)
+	}
+
+	// QueryCatalog 会检查在线状态，因此必须放在 Change(IsOnline=true) 之后。
+	if !alreadyLoaded {
+		slog.Info("keepalive 触发 Catalog 补载", "device_id", ctx.DeviceID)
+		_ = g.QueryCatalog(ctx.DeviceID)
 	}
 
 	ctx.String(200, "OK")

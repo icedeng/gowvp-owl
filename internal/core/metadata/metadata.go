@@ -13,22 +13,22 @@ import (
 
 // MetadataStorer Instantiation interface
 type MetadataStorer interface {
-	Find(context.Context, *[]*Metadata, orm.Pager, ...orm.QueryOption) (int64, error)
+	List(context.Context, *[]*Metadata, orm.Pager, ...orm.QueryOption) (int64, error)
 	Get(context.Context, *Metadata, ...orm.QueryOption) error
-	Add(context.Context, *Metadata) error
-	Edit(context.Context, *Metadata, func(*Metadata), ...orm.QueryOption) error
-	Del(context.Context, *Metadata, ...orm.QueryOption) error
+	Create(context.Context, *Metadata) error
+	Update(context.Context, *Metadata, func(*Metadata), ...orm.QueryOption) error
+	Delete(context.Context, *Metadata, ...orm.QueryOption) error
 	Count(context.Context, ...orm.QueryOption) (int64, error)
 
 	Session(context.Context, ...func(*gorm.DB) error) error
-	EditWithSession(*gorm.DB, *Metadata, func(b *Metadata) error, ...orm.QueryOption) error
+	UpdateWithSession(*gorm.DB, *Metadata, func(b *Metadata) error, ...orm.QueryOption) error
 }
 
 // FindMetadatas 分页查询（保留代码，当前不提供列表接口）
 // func (c Core) FindMetadatas(ctx context.Context, in *FindMetadataInput) ([]*Metadata, int64, error) {
 // 	query := orm.NewQuery(1).OrderBy("created_at DESC")
 // 	items := make([]*Metadata, 0, in.Limit())
-// 	total, err := c.store.Metadata().Find(ctx, &items, in, query.Encode()...)
+// 	total, err := c.store.Metadata().List(ctx, &items, in, query.Encode()...)
 // 	if err != nil {
 // 		return nil, 0, reason.ErrDB.Withf(`Find in[%+v] err[%s]`, in, err.Error())
 // 	}
@@ -47,26 +47,26 @@ func (c Core) GetMetadata(ctx context.Context, id string) (*Metadata, error) {
 	return &out, nil
 }
 
-// AddMetadata 创建数据记录
-func (c Core) AddMetadata(ctx context.Context, in *AddMetadataInput) (*Metadata, error) {
+// CreateMetadata 创建数据记录
+func (c Core) CreateMetadata(ctx context.Context, in *AddMetadataInput) (*Metadata, error) {
 	var out Metadata
 	if err := copier.Copy(&out, in); err != nil {
 		slog.ErrorContext(ctx, "Copy", "err", err)
 	}
 
-	if err := c.store.Metadata().Add(ctx, &out); err != nil {
+	if err := c.store.Metadata().Create(ctx, &out); err != nil {
 		if orm.IsDuplicatedKey(err) {
-			return nil, reason.ErrBadRequest.SetMsg("数据重复").Withf("key[%s]", in.ID)
+			return nil, reason.ErrBadRequest.WithMsg("数据重复").Withf("key[%s]", in.ID)
 		}
-		return nil, reason.ErrDB.Withf(`Add err[%s]`, err.Error())
+		return nil, reason.ErrDB.Withf(`Create err[%s]`, err.Error())
 	}
 	return &out, nil
 }
 
-// EditMetadata 更新数据记录
-func (c Core) EditMetadata(ctx context.Context, in *EditMetadataInput, id string) (*Metadata, error) {
+// UpdateMetadata 更新数据记录
+func (c Core) UpdateMetadata(ctx context.Context, in *EditMetadataInput, id string) (*Metadata, error) {
 	var out Metadata
-	if err := c.store.Metadata().Edit(ctx, &out, func(b *Metadata) {
+	if err := c.store.Metadata().Update(ctx, &out, func(b *Metadata) {
 		if err := copier.Copy(b, in); err != nil {
 			slog.ErrorContext(ctx, "Copy", "err", err)
 		}
@@ -80,7 +80,7 @@ func (c Core) EditMetadata(ctx context.Context, in *EditMetadataInput, id string
 // SaveMetadata 幂等保存：先尝试更新已有记录，不存在则创建
 func (c Core) SaveMetadata(ctx context.Context, in *SaveMetadataInput, id string) (*Metadata, error) {
 	var out Metadata
-	err := c.store.Metadata().Edit(ctx, &out, func(b *Metadata) {
+	err := c.store.Metadata().Update(ctx, &out, func(b *Metadata) {
 		b.Ext = in.Ext
 		b.LastUpdatedBy = in.LastUpdatedBy
 	}, orm.Where("id=?", id))
@@ -97,19 +97,19 @@ func (c Core) SaveMetadata(ctx context.Context, in *SaveMetadataInput, id string
 		CreatedBy:     in.CreatedBy,
 		LastUpdatedBy: in.LastUpdatedBy,
 	}
-	if err := c.store.Metadata().Add(ctx, &out); err != nil {
+	if err := c.store.Metadata().Create(ctx, &out); err != nil {
 		if orm.IsDuplicatedKey(err) {
-			return nil, reason.ErrBadRequest.SetMsg("数据重复").Withf("key[%s]", id)
+			return nil, reason.ErrBadRequest.WithMsg("数据重复").Withf("key[%s]", id)
 		}
-		return nil, reason.ErrDB.Withf(`Add err[%s]`, err.Error())
+		return nil, reason.ErrDB.Withf(`Create err[%s]`, err.Error())
 	}
 	return &out, nil
 }
 
-// DelMetadata 删除数据（保留代码，当前不提供删除接口）
-// func (c Core) DelMetadata(ctx context.Context, id string) (*Metadata, error) {
+// DeleteMetadata 删除数据（保留代码，当前不提供删除接口）
+// func (c Core) DeleteMetadata(ctx context.Context, id string) (*Metadata, error) {
 // 	var out Metadata
-// 	if err := c.store.Metadata().Del(ctx, &out, orm.Where("id=?", id)); err != nil {
+// 	if err := c.store.Metadata().Delete(ctx, &out, orm.Where("id=?", id)); err != nil {
 // 		return nil, reason.ErrDB.Withf(`Del id[%v] err[%s]`, id, err.Error())
 // 	}
 // 	return &out, nil

@@ -90,11 +90,16 @@ class CameraTask:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
+        # 告警去重缓存：key=label, value=(last_alert_time, last_box)
+        # 冷却期内同一目标（标签相同 + IoU > 0.3）不重复告警
+        self._alert_cache: dict[str, tuple[float, dict]] = {}
+        self._cooldown: float = config.get("alert_cooldown_seconds", 30.0)
+
         self.frame_queue = queue.Queue(maxsize=1)
         self.capture = FrameCapture(
             rtsp_url,
             self.frame_queue,
-            config.get("detect_fps", 5),
+            config.get("detect_interval_seconds", 5.0),
             config.get("retry_limit", 10),
         )
 
@@ -139,32 +144,24 @@ class CameraTask:
                 error_streak = 0
                 self.frames_processed += 1
 
-                roi_points = self.config.get("roi_points")
+                zones = self.config.get("zones") or []
                 motion_boxes, has_motion = self.motion_detector.detect(
-                    frame, self.camera_id, roi_points
+                    frame, self.camera_id, zones if zones else None
                 )
 
                 if not has_motion:
                     continue
 
                 try:
-                    labels = self.config.get("labels")
-                    if labels and isinstance(labels, list):
-                        safe_labels = [str(l) for l in labels]
-                    else:
-                        safe_labels = None
-
-                    detections, _ = self.detector.detect(
-                        frame,
-                        threshold=self.config.get("threshold", 0.5),
-                        label_filter=safe_labels,
-                        # 暂时只支持全图检测，未来优化可以只检测 motion_boxes 区域
-                        regions=None,
-                    )
+                    detections = self._detect_with_zones(frame, zones)
                 except Exception as e:
-                    slog.error(f"CameraTask labels error: {e}")
+                    slog.error(f"CameraTask detect error: {e}")
                     continue
 
+                if not detections:
+                    continue
+
+                detections = self._dedup(detections)
                 if not detections:
                     continue
                 self._send_detection_callback(detections, frame)
@@ -179,6 +176,108 @@ class CameraTask:
                     break
                 # 防止 cpu 在异常里空转
                 time.sleep(1)
+
+    def _detect_with_zones(self, frame, zones: list[dict]) -> list[dict]:
+        """
+        多区域目标检测：有区域配置时逐区域过滤，无区域时全图检测。
+        每个区域使用自己的 labels；检测框中心点必须在多边形内部才计入。
+        """
+        import numpy as np
+        import cv2
+
+        threshold = self.config.get("threshold", 0.5)
+        global_labels = self.config.get("labels") or []
+        safe_global = [str(l) for l in global_labels] if global_labels else None
+
+        if not zones:
+            dets, _ = self.detector.detect(frame, threshold=threshold, label_filter=safe_global)
+            return dets
+
+        h, w = frame.shape[:2]
+        result = []
+        seen_boxes: set[tuple] = set()
+
+        for zone in zones:
+            pts_flat = zone.get("points", [])
+            zone_labels = zone.get("labels") or global_labels
+            safe_labels = [str(l) for l in zone_labels] if zone_labels else safe_global
+
+            # 将归一化坐标转为像素多边形
+            poly = None
+            if pts_flat and len(pts_flat) >= 6:
+                pts = [(int(pts_flat[i] * w), int(pts_flat[i + 1] * h)) for i in range(0, len(pts_flat), 2)]
+                poly = np.array(pts, dtype=np.float32)
+
+            dets, _ = self.detector.detect(frame, threshold=threshold, label_filter=safe_labels)
+
+            for det in dets:
+                box = det["box"]
+                # 判断：检测框底部中心点或框中心点，任意一个在多边形内则计入
+                # 底部中心点适合人物检测（人的脚在区域内即视为进入区域）
+                if poly is not None:
+                    cx = (box["x_min"] + box["x_max"]) / 2.0
+                    cy_center = (box["y_min"] + box["y_max"]) / 2.0
+                    cy_bottom = float(box["y_max"])
+                    in_zone = (
+                        cv2.pointPolygonTest(poly, (cx, cy_bottom), measureDist=False) >= 0
+                        or cv2.pointPolygonTest(poly, (cx, cy_center), measureDist=False) >= 0
+                    )
+                    if not in_zone:
+                        continue
+
+                key = (det["label"], box["x_min"], box["y_min"], box["x_max"], box["y_max"])
+                if key not in seen_boxes:
+                    seen_boxes.add(key)
+                    result.append(det)
+
+        return result
+
+    @staticmethod
+    def _iou(a: dict, b: dict) -> float:
+        """
+        计算两个检测框的 IoU（交并比）。
+        用于判断两次检测是否为同一目标，避免因目标轻微移动导致重复告警。
+        """
+        ax1, ay1, ax2, ay2 = a["x_min"], a["y_min"], a["x_max"], a["y_max"]
+        bx1, by1, bx2, by2 = b["x_min"], b["y_min"], b["x_max"], b["y_max"]
+
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+
+        inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+        if inter_area == 0:
+            return 0.0
+
+        area_a = (ax2 - ax1) * (ay2 - ay1)
+        area_b = (bx2 - bx1) * (by2 - by1)
+        union_area = area_a + area_b - inter_area
+        return inter_area / union_area if union_area > 0 else 0.0
+
+    def _dedup(self, detections: list[dict]) -> list[dict]:
+        """
+        告警去重（方案 B：时间窗口 + IoU 空间比对）。
+        冷却期内，标签相同且 IoU > 0.3 的目标视为重复，过滤掉不告警。
+        冷却期外，或空间位置差异大（新目标），放行并刷新缓存。
+        """
+        now = time.time()
+        result = []
+        for det in detections:
+            label = det["label"]
+            box = det["box"]
+            cached = self._alert_cache.get(label)
+            if cached is not None:
+                last_time, last_box = cached
+                if now - last_time < self._cooldown and self._iou(box, last_box) > 0.3:
+                    slog.debug(
+                        f"[dedup] 抑制重复告警: camera={self.camera_id} label={label} "
+                        f"cooldown_remaining={self._cooldown - (now - last_time):.1f}s"
+                    )
+                    continue
+            self._alert_cache[label] = (now, box)
+            result.append(det)
+        return result
 
     def _send_detection_callback(self, detections, frame):
         timestamp = int(time.time() * 1000)
@@ -297,11 +396,17 @@ class AnalysisServiceServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 return analysis_pb2.StartCameraResponse(
                     success=False, message="callback url is required"
                 )
+            # 将 proto AnalysisZone 列表转为纯 Python dict 存入 config
+            zones = [
+                {"points": list(z.points), "labels": list(z.labels), "name": z.name}
+                for z in request.zones
+            ]
             config = {
-                "detect_fps": request.detect_fps,
+                "detect_interval_seconds": request.detect_interval_seconds,
+                "alert_cooldown_seconds": request.alert_cooldown_seconds,
                 "labels": list(request.labels),
                 "threshold": request.threshold,
-                "roi_points": list(request.roi_points),
+                "zones": zones,
                 "retry_limit": request.retry_limit,
                 "callback_url": cb_url,
                 "callback_secret": cb_secret,
@@ -367,8 +472,9 @@ class AnalysisServiceServicer(analysis_pb2_grpc.AnalysisServiceServicer):
 def send_callback(config: dict, path: str, payload: dict):
     """
     发送回调到指定路径，路径会拼接到 callback_url 后面。
-    例如: callback_url=http://127.0.0.1:15123, path=/events
-    最终请求: POST http://127.0.0.1:15123/events
+    例如: callback_url=http://127.0.0.1:15123/webhook, path=/events
+    最终请求: POST http://127.0.0.1:15123/webhook/events
+    secret 通过 Secret header 传递，不出现在 URL 中
     """
     url = config.get("callback_url", "")
     secret = config.get("callback_secret", "")
@@ -378,7 +484,7 @@ def send_callback(config: dict, path: str, payload: dict):
     full_url = url.rstrip("/") + path
     headers = {"Content-Type": "application/json"}
     if secret:
-        headers["Authorization"] = secret
+        headers["Secret"] = secret
 
     try:
         threading.Thread(
@@ -407,7 +513,7 @@ def send_started_callback():
     full_url = url.rstrip("/") + "/started"
     headers = {"Content-Type": "application/json"}
     if secret:
-        headers["Authorization"] = secret
+        headers["Secret"] = secret
 
     payload = {
         "timestamp": int(time.time() * 1000),
@@ -451,7 +557,7 @@ def send_keepalive_callback(stats: dict):
     full_url = url.rstrip("/") + "/keepalive"
     headers = {"Content-Type": "application/json"}
     if secret:
-        headers["Authorization"] = secret
+        headers["Secret"] = secret
 
     payload = {
         "timestamp": int(time.time() * 1000),

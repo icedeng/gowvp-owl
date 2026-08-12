@@ -7,6 +7,8 @@ type Bootstrap struct {
 	BuildVersion string `toml:"-" json:"-"`
 	ConfigDir    string `toml:"-" json:"-"`
 	ConfigPath   string `toml:"-" json:"-"`
+	// AISecret 进程内随机 UUID，用于 Python AI 回调鉴权，重启后失效，不写配置文件
+	AISecret string `toml:"-" json:"-"`
 
 	Server Server // 服务器
 	Data   Data   // 数据
@@ -25,6 +27,18 @@ type Server struct {
 	AI        ServerAI        `comment:"ai 分析服务"`
 	HTTP      ServerHTTP      `comment:"对外提供的服务，建议由 nginx 代理"` // HTTP服务器
 	Recording ServerRecording `comment:"录像配置"`
+	Webhook   ServerWebhook   `comment:"告警 webhook 推送与接收配置"`
+}
+
+// ServerWebhook webhook 推送与接收配置
+type ServerWebhook struct {
+	// Targets 推送目标 URL 数组，secret 直接内嵌于 URL query 参数
+	// 例如: ["http://192.168.1.20:15123/webhook/event?secret=abc123"]
+	Targets    []string `comment:"推送目标 URL 数组，secret 直接内嵌于 URL query 参数，如 http://host/webhook/event?secret=xxx"`
+	MaxRetry   int      `comment:"推送最大重试次数，0=内置默认3次"`
+	BufferSize int      `comment:"每个目标的 channel 缓冲队列大小，0=内置默认64，满队列时新事件被丢弃并记录警告"`
+	// RecvSecret 本节点接收 webhook 时校验的密钥，首次启动若为空则自动生成随机值并持久化
+	RecvSecret string `comment:"本节点接收 webhook 事件时校验的密钥，发送方在 URL query 参数 secret 中携带此值"`
 }
 
 // ServerRecording 录像配置，控制流媒体录制行为和存储策略
@@ -41,6 +55,10 @@ type ServerRecording struct {
 type ServerAI struct {
 	Disabled   bool `comment:"是否禁用 ai 分析服务"`
 	RetainDays int  `comment:"保留天数"`
+	// 全局默认分析间隔（秒）。0=内置默认5秒；0.5=每秒2张；1=每秒1张；5=每5秒1张；30=每30秒1张
+	AnalysisInterval float32 `comment:"全局默认分析间隔（秒）"`
+	// 告警冷却时间（秒）。同一目标在冷却期内不重复告警。0=内置默认30秒；10=10秒；60=1分钟
+	AlertCooldownSeconds float32 `comment:"告警冷却时间（秒）"`
 }
 
 type ServerHTTP struct {
@@ -76,11 +94,13 @@ type Database struct {
 
 // Log 结构体，包含 Dir、Level、MaxAge、RotationTime 和 RotationSize 五个字段
 type Log struct {
-	Dir          string   `comment:"日志存储目录，不能使用特殊符号"`
-	Level        string   `comment:"记录级别 debug/info/warn/error"`
-	MaxAge       Duration `comment:"保留日志多久，超过时间自动删除"`
+	Dir     string   `comment:"日志存储目录，不能使用特殊符号"`
+	Level   string   `comment:"记录级别 debug/info/warn/error"`
+	MaxAge  Duration `comment:"弃用，请使用 MaxDays 替代"`
+	MaxDays int      `comment:"保留日志天数，超过时间自动删除"`
+	MaxSize int      `comment:"日志文件最大大小(MB)"`
+
 	RotationTime Duration `comment:"多久时间，分割一个新的日志文件"`
-	RotationSize int64    `comment:"多大文件，分割一个新的日志文件(MB)"`
 }
 
 type SIP struct {

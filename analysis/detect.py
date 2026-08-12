@@ -698,7 +698,7 @@ class MotionDetector:
         self,
         image: np.ndarray,
         camera_name: str,
-        roi_points: list[float] | None = None,
+        zones: list[dict] | None = None,
     ) -> tuple[list[dict[str, Any]], bool]:
         h, w = image.shape[:2]
         if len(image.shape) == 3:
@@ -722,14 +722,15 @@ class MotionDetector:
             frame_delta, self.motion_threshold, 255, cv2.THRESH_BINARY
         )[1]
 
-        # ROI 区域掩码
-        if roi_points and len(roi_points) > 0:
+        # 多区域联合掩码：有 zones 时仅在所有区域内检测运动
+        if zones:
             mask = np.zeros((h, w), dtype=np.uint8)
-            pts = []
-            for i in range(0, len(roi_points), 2):
-                pts.append((int(roi_points[i] * w), int(roi_points[i + 1] * h)))
-            pts_np = np.array([pts], dtype=np.int32)
-            cv2.fillPoly(mask, [pts_np], (255,))  # type: ignore
+            for zone in zones:
+                pts_flat = zone.get("points", [])
+                if len(pts_flat) >= 6:  # 至少 3 个点
+                    pts = [(int(pts_flat[i] * w), int(pts_flat[i + 1] * h)) for i in range(0, len(pts_flat), 2)]
+                    pts_np = np.array([pts], dtype=np.int32)
+                    cv2.fillPoly(mask, [pts_np], (255,))  # type: ignore
             thresh = cv2.bitwise_and(thresh, thresh, mask=mask)
 
         kernel = np.ones((3, 3), np.uint8)

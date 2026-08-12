@@ -17,9 +17,9 @@ func (c *Channel) Session(ctx context.Context, changeFns ...func(*gorm.DB) error
 	return c.Storer.Channel().Session(ctx, changeFns...)
 }
 
-// Add implements ipc.ChannelStorer.
-func (c *Channel) Add(ctx context.Context, ch *ipc.Channel) error {
-	if err := c.Storer.Channel().Add(ctx, ch); err != nil {
+// Create implements ipc.ChannelStorer.
+func (c *Channel) Create(ctx context.Context, ch *ipc.Channel) error {
+	if err := c.Storer.Channel().Create(ctx, ch); err != nil {
 		return err
 	}
 	dev, ok := c.devices.Load(ch.DeviceID)
@@ -34,19 +34,24 @@ func (c *Channel) BatchEdit(ctx context.Context, field string, value any, opts .
 	return c.Storer.Channel().BatchEdit(ctx, field, value, opts...)
 }
 
-// Del implements ipc.ChannelStorer.
-func (c *Channel) Del(ctx context.Context, ch *ipc.Channel, opts ...orm.QueryOption) error {
-	return c.Storer.Channel().Del(ctx, ch, opts...)
+// Delete implements ipc.ChannelStorer.
+func (c *Channel) Delete(ctx context.Context, ch *ipc.Channel, opts ...orm.QueryOption) error {
+	return c.Storer.Channel().Delete(ctx, ch, opts...)
 }
 
-// Edit implements ipc.ChannelStorer.
-func (c *Channel) Edit(ctx context.Context, ch *ipc.Channel, changeFn func(*ipc.Channel) error, opts ...orm.QueryOption) error {
-	return c.Storer.Channel().Edit(ctx, ch, changeFn, opts...)
+// Update implements ipc.ChannelStorer.
+func (c *Channel) Update(ctx context.Context, ch *ipc.Channel, changeFn func(*ipc.Channel) error, opts ...orm.QueryOption) error {
+	return c.Storer.Channel().Update(ctx, ch, changeFn, opts...)
 }
 
-// Find implements ipc.ChannelStorer.
-func (c *Channel) Find(ctx context.Context, chs *[]*ipc.Channel, pager orm.Pager, opts ...orm.QueryOption) (int64, error) {
-	return c.Storer.Channel().Find(ctx, chs, pager, opts...)
+// EditGB28181Config implements ipc.ChannelStorer.
+func (c *Channel) EditGB28181Config(ctx context.Context, ch *ipc.Channel) error {
+	return c.Storer.Channel().EditGB28181Config(ctx, ch)
+}
+
+// List implements ipc.ChannelStorer.
+func (c *Channel) List(ctx context.Context, chs *[]*ipc.Channel, pager orm.Pager, opts ...orm.QueryOption) (int64, error) {
+	return c.Storer.Channel().List(ctx, chs, pager, opts...)
 }
 
 // Get implements ipc.ChannelStorer.

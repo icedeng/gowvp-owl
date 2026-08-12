@@ -2,10 +2,13 @@
 package metadataapi
 
 import (
+	"errors"
+
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/core/metadata"
 	"github.com/gowvp/owl/internal/core/metadata/store/metadatadb"
 	"github.com/ixugo/goddd/pkg/orm"
+	"github.com/ixugo/goddd/pkg/reason"
 	"github.com/ixugo/goddd/pkg/web"
 	"gorm.io/gorm"
 )
@@ -25,10 +28,23 @@ func NewMetadataAPI(core metadata.Core) MetadataAPI {
 	return MetadataAPI{metadataCore: core}
 }
 
+// metadataIDInput 元数据 ID 路径参数
+type metadataIDInput struct {
+	ID string `uri:"id" binding:"required"`
+}
+
+// saveMetadataInput 保存元数据的请求参数（路径 ID + 请求体）
+type saveMetadataInput struct {
+	ID string `uri:"id" binding:"required"`
+	metadata.SaveMetadataInput
+}
+
 // RegisterMetadata 注册通用数据持久化路由
+// GET 读取不鉴权：登录页需要在未认证状态下加载页面配置（login_page 等），
+// 鉴权会导致 401→重定向→登录页→再请求→401 死循环。
 func RegisterMetadata(g gin.IRouter, api MetadataAPI, handler ...gin.HandlerFunc) {
+	g.GET("/metadatas/:id", web.WrapH(api.getMetadata))
 	group := g.Group("/metadatas", handler...)
-	group.GET("/:id", web.WrapH(api.getMetadata))
 	group.POST("/:id", web.WrapH(api.saveMetadata))
 }
 
@@ -40,22 +56,27 @@ func RegisterMetadata(g gin.IRouter, api MetadataAPI, handler ...gin.HandlerFunc
 // 	return gin.H{"items": items, "total": total}, err
 // }
 
-// getMetadata 按 ID 查询数据
-func (a MetadataAPI) getMetadata(c *gin.Context, _ *struct{}) (*metadata.Metadata, error) {
-	metadataID := c.Param("id")
-	return a.metadataCore.GetMetadata(c.Request.Context(), metadataID)
+// getMetadata 按 ID 查询数据，未找到时返回空对象而非错误，避免前端 400
+func (a MetadataAPI) getMetadata(c *gin.Context, in *metadataIDInput) (*metadata.Metadata, error) {
+	out, err := a.metadataCore.GetMetadata(c.Request.Context(), in.ID)
+	if err != nil {
+		if errors.Is(err, reason.ErrNotFound) {
+			return &metadata.Metadata{ID: in.ID}, nil
+		}
+		return nil, err
+	}
+	return out, nil
 }
 
 // saveMetadata 幂等保存：已存在则更新，不存在则创建
-func (a MetadataAPI) saveMetadata(c *gin.Context, in *metadata.SaveMetadataInput) (*metadata.Metadata, error) {
-	metadataID := c.Param("id")
+func (a MetadataAPI) saveMetadata(c *gin.Context, in *saveMetadataInput) (*metadata.Metadata, error) {
 	in.CreatedBy = web.GetUsername(c)
 	in.LastUpdatedBy = in.CreatedBy
-	return a.metadataCore.SaveMetadata(c.Request.Context(), in, metadataID)
+	return a.metadataCore.SaveMetadata(c.Request.Context(), &in.SaveMetadataInput, in.ID)
 }
 
 // delMetadata 删除数据（保留代码，当前不提供）
 // func (a MetadataAPI) delMetadata(c *gin.Context, _ *struct{}) (*metadata.Metadata, error) {
 // 	metadataID := c.Param("id")
-// 	return a.metadataCore.DelMetadata(c.Request.Context(), metadataID)
+// 	return a.metadataCore.DeleteMetadata(c.Request.Context(), metadataID)
 // }

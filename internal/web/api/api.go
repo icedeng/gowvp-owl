@@ -21,6 +21,7 @@ import (
 	docs "github.com/gowvp/owl/docs"
 	"github.com/gowvp/owl/internal/core/metadata/metadataapi"
 	"github.com/gowvp/owl/internal/core/sms"
+	"github.com/gowvp/owl/internal/web/onvifserver"
 	"github.com/gowvp/owl/pkg/ota"
 	"github.com/gowvp/owl/plugin/stat"
 	"github.com/gowvp/owl/plugin/stat/statapi"
@@ -108,6 +109,7 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	auth := AuthMiddleware(uc.Conf.Server.HTTP.JwtSecret, uc.Conf.Server.HTTP.AuthURL)
+	onvifserver.Register(r, uc.GB28181API.ipc, uc.SMSAPI.smsCore, uc.Conf)
 	r.Any("/health", web.WrapH(uc.getHealth))
 	r.GET("/app/metrics/api", web.WrapH(uc.getMetricsAPI))
 	r.GET("/app/version/check", web.WrapH(uc.checkVersion))
@@ -122,11 +124,13 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 	registerSms(r, uc.SMSAPI, auth)
 	RegisterUser(r, uc.UserAPI, auth)
 
+	registerWS(r, uc.Conf.Server.HTTP.JwtSecret)
+
 	// 反向代理流媒体数据
 	r.Any("/proxy/sms/*path", uc.proxySMS)
 
-	// 注册 AI 分析服务回调接口
-	registerAIWebhookAPI(r, uc.AIWebhookAPI)
+	// 注册 AI 分析服务回调接口，/ai/events 是 /webhook/events 的别名
+	registerAIWebhookAPI(r, uc.AIWebhookAPI, uc.WebHookAPI)
 	// 启动 AI 任务同步协程，每 5 分钟检测一次数据库与内存状态差异
 	uc.AIWebhookAPI.StartAISyncLoop(context.Background(), uc.SMSAPI.smsCore)
 	RegisterEvent(r, uc.EventAPI, auth)
@@ -366,12 +370,19 @@ func (uc *Usecase) proxySMS(c *gin.Context) {
 		_ = recover()
 	}()
 
+	path := c.Param("path")
+
+	// 播放流鉴权：校验 token 中的 app+stream 与请求路径的包含关系
+	if err := uc.verifyPlayToken(c, path); err != nil {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": err.Error()})
+		return
+	}
+
 	rc := http.NewResponseController(c.Writer)
 	exp := time.Now().AddDate(99, 0, 0)
 	_ = rc.SetReadDeadline(exp)
 	_ = rc.SetWriteDeadline(exp)
 
-	path := c.Param("path")
 	addr, err := url.JoinPath(fmt.Sprintf("http://%s:%d", uc.Conf.Media.IP, uc.Conf.Media.HTTPPort), path)
 	if err != nil {
 		web.Fail(c, err)
@@ -382,7 +393,6 @@ func (uc *Usecase) proxySMS(c *gin.Context) {
 	proxy := httputil.NewSingleHostReverseProxy(fullAddr)
 
 	proxy.Director = func(req *http.Request) {
-		// 设置请求的URL
 		req.URL.Scheme = "http"
 		req.URL.Host = fmt.Sprintf("%s:%d", uc.Conf.Media.IP, uc.Conf.Media.HTTPPort)
 		req.URL.Path = path
@@ -400,4 +410,53 @@ func (uc *Usecase) proxySMS(c *gin.Context) {
 		return nil
 	}
 	proxy.ServeHTTP(c.Writer, c.Request)
+}
+
+// verifyPlayToken 校验播放 token：解析 JWT，确认 token 中的 app+stream 被请求路径包含
+// HLS 子片段（init.mp4、ts 切片等）由播放器自动请求且不带 token，予以豁免
+func (uc *Usecase) verifyPlayToken(c *gin.Context, path string) error {
+	tokenStr := c.Query("token")
+	if tokenStr == "" {
+		if isHLSSegment(path) {
+			return nil
+		}
+		return fmt.Errorf("缺少播放鉴权 token")
+	}
+
+	secret := uc.Conf.Server.HTTP.JwtSecret + "_play"
+	claims, err := web.ParseToken(tokenStr, secret)
+	if err != nil {
+		return fmt.Errorf("无效的播放 token")
+	}
+	if err := claims.Valid(); err != nil {
+		return fmt.Errorf("播放 token 已过期")
+	}
+
+	app, _ := claims.Data["app"].(string)
+	stream, _ := claims.Data["stream"].(string)
+	if stream == "" {
+		return fmt.Errorf("播放 token 缺少 stream 信息")
+	}
+
+	// 校验：path 中必须包含 stream（对于 webrtc 类请求，stream 在 query 参数中）
+	if strings.Contains(path, stream) {
+		return nil
+	}
+	// webrtc 的 path 是 /index/api/webrtc，stream 在 query 中
+	if qStream := c.Query("stream"); qStream == stream && c.Query("app") == app {
+		return nil
+	}
+
+	return fmt.Errorf("播放 token 与请求流不匹配")
+}
+
+// isHLSSegment 判断路径是否为 HLS 子片段资源（m3u8 播放列表引用的 init.mp4、ts 切片等）
+// 这些资源由播放器内部解析 m3u8 后自动请求，无法携带 query token，故豁免鉴权
+func isHLSSegment(path string) bool {
+	for _, suffix := range []string{".mp4", ".m4s", ".ts"} {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
 }

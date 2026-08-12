@@ -31,8 +31,8 @@ func NewChannel(db *gorm.DB) Channel {
 	return Channel{db: db}
 }
 
-// Find implements ipc.ChannelStorer.
-func (d Channel) Find(ctx context.Context, bs *[]*ipc.Channel, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
+// List implements ipc.ChannelStorer.
+func (d Channel) List(ctx context.Context, bs *[]*ipc.Channel, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
 	return orm.FindWithContext(ctx, d.db, bs, page, opts...)
 }
 
@@ -41,18 +41,26 @@ func (d Channel) Get(ctx context.Context, model *ipc.Channel, opts ...orm.QueryO
 	return orm.FirstWithContext(ctx, d.db, model, opts...)
 }
 
-// Add implements ipc.ChannelStorer.
-func (d Channel) Add(ctx context.Context, model *ipc.Channel) error {
+// Create implements ipc.ChannelStorer.
+func (d Channel) Create(ctx context.Context, model *ipc.Channel) error {
 	return d.db.WithContext(ctx).Create(model).Error
 }
 
-// Edit implements ipc.ChannelStorer.
-func (d Channel) Edit(ctx context.Context, model *ipc.Channel, changeFn func(*ipc.Channel) error, opts ...orm.QueryOption) error {
+// Update implements ipc.ChannelStorer.
+func (d Channel) Update(ctx context.Context, model *ipc.Channel, changeFn func(*ipc.Channel) error, opts ...orm.QueryOption) error {
 	return orm.UpdateWithContext2(ctx, d.db, model, changeFn, opts...)
 }
 
-// Del implements ipc.ChannelStorer.
-func (d Channel) Del(ctx context.Context, model *ipc.Channel, opts ...orm.QueryOption) error {
+// EditGB28181Config 直接更新 GB28181 上报的字段（name/is_online/ptztype/ext），跳过 SELECT FOR UPDATE，因为调用方已持有 existing 对象。
+func (d Channel) EditGB28181Config(ctx context.Context, model *ipc.Channel) error {
+	return d.db.WithContext(ctx).
+		Model(model).
+		Select("name", "is_online", "ptztype", "ext").
+		Updates(model).Error
+}
+
+// Delete implements ipc.ChannelStorer.
+func (d Channel) Delete(ctx context.Context, model *ipc.Channel, opts ...orm.QueryOption) error {
 	return orm.DeleteWithContext(ctx, d.db, model, opts...)
 }
 
@@ -67,6 +75,6 @@ func (d Channel) Session(ctx context.Context, changeFns ...func(*gorm.DB) error)
 	})
 }
 
-func (d Channel) EditWithSession(tx *gorm.DB, model *ipc.Channel, changeFn func(b *ipc.Channel) error, opts ...orm.QueryOption) error {
+func (d Channel) UpdateWithSession(tx *gorm.DB, model *ipc.Channel, changeFn func(b *ipc.Channel) error, opts ...orm.QueryOption) error {
 	return orm.UpdateWithSession(tx, model, changeFn, opts...)
 }

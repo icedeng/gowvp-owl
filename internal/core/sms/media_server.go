@@ -12,19 +12,19 @@ import (
 
 // MediaServerStorer Instantiation interface
 type MediaServerStorer interface {
-	Find(context.Context, *[]*MediaServer, orm.Pager, ...orm.QueryOption) (int64, error)
+	List(context.Context, *[]*MediaServer, orm.Pager, ...orm.QueryOption) (int64, error)
 	Get(context.Context, *MediaServer, ...orm.QueryOption) error
-	Add(context.Context, *MediaServer) error
-	Edit(context.Context, *MediaServer, func(*MediaServer), ...orm.QueryOption) error
-	Del(context.Context, *MediaServer, ...orm.QueryOption) error
+	Create(context.Context, *MediaServer) error
+	Update(context.Context, *MediaServer, func(*MediaServer), ...orm.QueryOption) error
+	Delete(context.Context, *MediaServer, ...orm.QueryOption) error
 }
 
-// FindMediaServer Paginated search
-func (c *Core) FindMediaServer(ctx context.Context, in *FindMediaServerInput) ([]*MediaServer, int64, error) {
+// ListMediaServers Paginated search
+func (c Core) ListMediaServers(ctx context.Context, in *FindMediaServerInput) ([]*MediaServer, int64, error) {
 	items := make([]*MediaServer, 0)
-	total, err := c.storer.MediaServer().Find(ctx, &items, in)
+	total, err := c.storer.MediaServer().List(ctx, &items, in)
 	if err != nil {
-		return nil, 0, reason.ErrDB.Withf(`Find err[%s]`, err.Error())
+		return nil, 0, reason.ErrDB.Withf(`List err[%s]`, err.Error())
 	}
 
 	for _, item := range items {
@@ -37,7 +37,7 @@ func (c *Core) FindMediaServer(ctx context.Context, in *FindMediaServerInput) ([
 }
 
 // GetMediaServer Query a single object
-func (c *Core) GetMediaServer(ctx context.Context, id string) (*MediaServer, error) {
+func (c Core) GetMediaServer(ctx context.Context, id string) (*MediaServer, error) {
 	var out MediaServer
 	if err := c.storer.MediaServer().Get(ctx, &out, orm.Where("id=?", id)); err != nil {
 		if orm.IsErrRecordNotFound(err) {
@@ -48,47 +48,47 @@ func (c *Core) GetMediaServer(ctx context.Context, id string) (*MediaServer, err
 	return &out, nil
 }
 
-// AddMediaServer Insert into database
-func (c *Core) AddMediaServer(ctx context.Context, in *AddMediaServerInput) (*MediaServer, error) {
+// CreateMediaServer Insert into database
+func (c Core) CreateMediaServer(ctx context.Context, in *AddMediaServerInput) (*MediaServer, error) {
 	var out MediaServer
 	if err := copier.Copy(&out, in); err != nil {
 		slog.ErrorContext(ctx, "Copy", "err", err)
 	}
-	if err := c.storer.MediaServer().Add(ctx, &out); err != nil {
-		return nil, reason.ErrDB.Withf(`Add err[%s]`, err.Error())
+	if err := c.storer.MediaServer().Create(ctx, &out); err != nil {
+		return nil, reason.ErrDB.Withf(`Create err[%s]`, err.Error())
 	}
 	return &out, nil
 }
 
-// EditMediaServer Update object information
-func (c *Core) EditMediaServer(ctx context.Context, in *EditMediaServerInput, id string, serverPort int) (*MediaServer, error) {
+// UpdateMediaServer Update object information
+func (c Core) UpdateMediaServer(ctx context.Context, in *EditMediaServerInput, id string, serverPort int) (*MediaServer, error) {
 	var out MediaServer
-	if err := c.storer.MediaServer().Edit(ctx, &out, func(b *MediaServer) {
+	if err := c.storer.MediaServer().Update(ctx, &out, func(b *MediaServer) {
 		if err := copier.Copy(b, in); err != nil {
 			slog.ErrorContext(ctx, "Copy", "err", err)
 		}
 	}, orm.Where("id=?", id)); err != nil {
-		return nil, reason.ErrDB.Withf(`Edit err[%s]`, err.Error())
+		return nil, reason.ErrDB.Withf(`Update err[%s]`, err.Error())
 	}
 	c.connection(&out, serverPort)
 	return &out, nil
 }
 
-// DelMediaServer Delete object
-func (c *Core) DelMediaServer(ctx context.Context, id string) (*MediaServer, error) {
+// DeleteMediaServer Delete object
+func (c Core) DeleteMediaServer(ctx context.Context, id string) (*MediaServer, error) {
 	var out MediaServer
-	if err := c.storer.MediaServer().Del(ctx, &out, orm.Where("id=?", id)); err != nil {
-		return nil, reason.ErrDB.Withf(`Del err[%s]`, err.Error())
+	if err := c.storer.MediaServer().Delete(ctx, &out, orm.Where("id=?", id)); err != nil {
+		return nil, reason.ErrDB.Withf(`Delete err[%s]`, err.Error())
 	}
 	return &out, nil
 }
 
-func (c *Core) getDefaultMediaServer(ctx context.Context) (*MediaServer, error) {
+func (c Core) getDefaultMediaServer(ctx context.Context) (*MediaServer, error) {
 	var out MediaServer
 	return &out, c.storer.MediaServer().Get(ctx, &out, orm.Where("id=?", DefaultMediaServerID))
 }
 
 // GetDefaultMediaServer 获取默认流媒体服务器
-func (c *Core) GetDefaultMediaServer() (*MediaServer, error) {
+func (c Core) GetDefaultMediaServer() (*MediaServer, error) {
 	return c.getDefaultMediaServer(context.Background())
 }

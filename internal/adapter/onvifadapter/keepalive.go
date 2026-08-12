@@ -91,7 +91,7 @@ func (a *Adapter) startStatusChecker(ctx context.Context, interval, heartbeatTim
 // syncDeviceStatusToDB 同步设备状态到数据库（状态变化时调用）
 func (a *Adapter) syncDeviceStatusToDB(ctx context.Context, did string, isOnline bool) {
 	// 更新设备状态
-	if err := a.adapter.Edit(did, func(d *ipc.Device) {
+	if err := a.adapter.Update(did, func(d *ipc.Device) {
 		d.IsOnline = isOnline
 		if isOnline {
 			d.KeepaliveAt = orm.Now()

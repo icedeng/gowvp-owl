@@ -49,7 +49,7 @@ func NewCache(store ipc.Storer) *Cache {
 func (c *Cache) LoadDeviceToMemory(conn sip.Connection) {
 	// TODO: 加载 gb28181 设备
 	devices := make([]*ipc.Device, 0, 100)
-	_, err := c.Storer.Device().Find(context.TODO(), &devices, web.NewPagerFilterMaxSize(), orm.Where("type != ?", ipc.TypeOnvif))
+	_, err := c.Storer.Device().List(context.TODO(), &devices, web.NewPagerFilterMaxSize(), orm.Where("type != ?", ipc.TypeOnvif))
 	if err != nil {
 		panic(err)
 	}
@@ -75,7 +75,7 @@ func (c *Cache) LoadDeviceToMemory(conn sip.Connection) {
 
 			slog.Debug("load device to memory", "username", d.GetGB28181DeviceID(), "to", dev.To())
 			channels := make([]*ipc.Channel, 0, 8)
-			_, err := c.Storer.Channel().Find(context.TODO(), &channels, web.NewPagerFilterMaxSize(), orm.Where("device_id=?", d.GetGB28181DeviceID()))
+			_, err := c.Storer.Channel().List(context.TODO(), &channels, web.NewPagerFilterMaxSize(), orm.Where("device_id=?", d.GetGB28181DeviceID()))
 			if err != nil {
 				panic(err)
 			}
@@ -93,7 +93,7 @@ func (c *Cache) RangeDevices(fn func(key string, value *gbs.Device) bool) {
 // Change implements gbs.MemoryStorer.
 func (c *Cache) Change(deviceID string, changeFn func(*ipc.Device) error, changeFn2 func(*gbs.Device)) error {
 	var dev ipc.Device
-	if err := c.Storer.Device().Edit(context.TODO(), &dev, changeFn, orm.Where("device_id=?", deviceID)); err != nil {
+	if err := c.Storer.Device().Update(context.TODO(), &dev, changeFn, orm.Where("device_id=?", deviceID)); err != nil {
 		return err
 	}
 

@@ -24,6 +24,7 @@ import (
 	"github.com/gowvp/owl/internal/core/recording/adapter"
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/internal/data"
+	"github.com/gowvp/owl/internal/push"
 	"github.com/gowvp/owl/pkg/gbs"
 	"github.com/ixugo/goddd/domain/uniqueid"
 	"github.com/ixugo/goddd/domain/uniqueid/store/uniqueiddb"
@@ -51,9 +52,10 @@ var (
 		NewConfigAPI,
 		NewUserAPI,
 		NewAIWebhookAPIWithDeps,
-		NewEventCore, NewEventAPI,
-		// Recording: Store -> SMSProvider(adapter) -> Core -> API
-		NewRecordingStore, NewSMSProviderAdapter, NewRecordingCore, NewRecordingAPI,
+		NewNotifier, NewEventCoreWithNotifier, NewEventAPI,
+		// Recording: Store -> SMSProvider(adapter) -> IPCProvider(adapter) -> PlayProvider(adapter) -> Core -> API
+		NewRecordingStore, NewSMSProviderAdapter, NewIPCProviderAdapter, NewPlayProviderAdapter,
+		NewRecordingCore, NewRecordingAPI,
 		metadataapi.NewMetadataCore, metadataapi.NewMetadataAPI,
 	)
 )
@@ -144,7 +146,7 @@ func setupGBAlarmBridge(uc *Usecase) {
 
 		// 原始报警内容序列化到 zones 字段，便于审计和回溯。
 		zones, _ := json.Marshal(in)
-		if _, err := uc.EventAPI.eventCore.AddEvent(ctx, &event.AddEventInput{
+		if _, err := uc.EventAPI.eventCore.CreateEventAndNotify(ctx, &event.AddEventInput{
 			DID:       dev.ID,
 			CID:       cid,
 			StartedAt: started,
@@ -220,23 +222,23 @@ type IPCBundle struct {
 }
 
 // NewIPCCoreWithProtocols 创建 IPC Core 和 Protocols
-// 通过在函数内部分两步创建来解决：先创建不含 protocols 的 Core，再创建 Protocols，最后注入
+// 先用临时 Core 构建 protocols（adapter 仅存引用，运行时才调用方法），再创建含 protocols 的最终 Core
 func NewIPCCoreWithProtocols(store ipc.Storer, uni uniqueid.Core, adapter ipc.Adapter, smsCore sms.Core, gbsServer *gbs.Server, conf *conf.Bootstrap) IPCBundle {
-	// 第一步：创建不含 protocols 的 ipc.Core
-	ipcCore := ipc.NewCore(store, uni, nil)
+	// 第一步：创建临时 Core（adapter 构造时仅存储引用，不依赖 protocols）
+	tmpCore := ipc.NewCore(store, uni, nil)
 
-	// 第二步：创建 protocols（需要 ipc.Core）
+	// 第二步：构建 protocols（adapter 内部持有 tmpCore 的值副本，运行时访问 DB 方法不依赖 protocols）
 	protocols := make(map[string]ipc.Protocoler)
 	protocols[ipc.TypeOnvif] = onvifadapter.NewAdapter(adapter, smsCore)
-	protocols[ipc.TypeRTSP] = rtspadapter.NewAdapter(ipcCore, smsCore)
-	protocols[ipc.TypeRTMP] = rtmpadapter.NewAdapter(ipcCore, conf)
+	protocols[ipc.TypeRTSP] = rtspadapter.NewAdapter(tmpCore, smsCore)
+	protocols[ipc.TypeRTMP] = rtmpadapter.NewAdapter(tmpCore, conf)
 	protocols[ipc.TypeGB28181] = gbadapter.NewAdapter(adapter, gbsServer, smsCore)
 
-	// 第三步：将 protocols 注入到 ipc.Core
-	ipcCore.SetProtocols(protocols)
+	// 第三步：创建含 protocols 的最终 Core
+	core := ipc.NewCore(store, uni, protocols)
 
 	return IPCBundle{
-		Core:      ipcCore,
+		Core:      core,
 		Protocols: protocols,
 	}
 }
@@ -250,4 +252,31 @@ func NewAIWebhookAPIWithDeps(conf *conf.Bootstrap, eventCore event.Core, ipcBund
 // 通过接口解耦 recording 领域与 sms 领域，避免循环依赖
 func NewSMSProviderAdapter(smsCore sms.Core) recording.SMSProvider {
 	return adapter.NewSMSAdapter(smsCore)
+}
+
+// NewIPCProviderAdapter 创建 IPC 适配器，将 ipc.Core 适配为 recording.IPCProvider
+// 用于录制同步时查询应录制的在线通道
+func NewIPCProviderAdapter(ipcBundle IPCBundle) recording.IPCProvider {
+	return adapter.NewIPCAdapter(ipcBundle.Core)
+}
+
+// NewPlayProviderAdapter 创建 Play 适配器，桥接拉流能力给录制同步使用
+// 通过 ZLM getSnap 取最新快照触发拉流，所有协议通用
+func NewPlayProviderAdapter(smsCore sms.Core) recording.PlayProvider {
+	return adapter.NewPlayAdapter(smsCore)
+}
+
+// NewNotifier 创建 webhook 推送器，Targets 为空时返回 nil（不推送）
+func NewNotifier(conf *conf.Bootstrap) *push.Notifier {
+	cfg := conf.Server.Webhook
+	if len(cfg.Targets) == 0 {
+		return nil
+	}
+	return push.NewNotifier(cfg.Targets, cfg.MaxRetry, cfg.BufferSize)
+}
+
+// NewEventCoreWithNotifier 在 NewEventCore 基础上注入 webhook 推送器
+// notifier 为 nil 时，CreateEventAndNotify 只入库不推送
+func NewEventCoreWithNotifier(conf *conf.Bootstrap, db *gorm.DB, notifier event.Dispatcher) event.Core {
+	return NewEventCore(db, conf, notifier)
 }

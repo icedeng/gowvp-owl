@@ -13,19 +13,19 @@ import (
 
 // RecordingStorer Instantiation interface
 type RecordingStorer interface {
-	Find(context.Context, *[]*Recording, orm.Pager, ...orm.QueryOption) (int64, error)
+	List(context.Context, *[]*Recording, orm.Pager, ...orm.QueryOption) (int64, error)
 	Get(context.Context, *Recording, ...orm.QueryOption) error
-	Add(context.Context, *Recording) error
-	Edit(context.Context, *Recording, func(*Recording), ...orm.QueryOption) error
-	Del(context.Context, *Recording, ...orm.QueryOption) error
+	Create(context.Context, *Recording) error
+	Update(context.Context, *Recording, func(*Recording), ...orm.QueryOption) error
+	Delete(context.Context, *Recording, ...orm.QueryOption) error
 	Count(context.Context, ...orm.QueryOption) (int64, error)
 
 	Session(context.Context, ...func(*gorm.DB) error) error
-	EditWithSession(*gorm.DB, *Recording, func(b *Recording) error, ...orm.QueryOption) error
+	UpdateWithSession(*gorm.DB, *Recording, func(b *Recording) error, ...orm.QueryOption) error
 }
 
-// FindRecordings 分页查询录像列表，支持通道ID和时间范围筛选
-func (c Core) FindRecordings(ctx context.Context, in *FindRecordingInput) ([]*Recording, int64, error) {
+// ListRecordings 分页查询录像列表，支持通道ID和时间范围筛选
+func (c Core) ListRecordings(ctx context.Context, in *FindRecordingInput) ([]*Recording, int64, error) {
 	query := orm.NewQuery(4).OrderBy("started_at DESC")
 
 	if in.CID != "" {
@@ -42,7 +42,7 @@ func (c Core) FindRecordings(ctx context.Context, in *FindRecordingInput) ([]*Re
 	}
 
 	items := make([]*Recording, 0, in.Limit())
-	total, err := c.store.Recording().Find(ctx, &items, in, query.Encode()...)
+	total, err := c.store.Recording().List(ctx, &items, in, query.Encode()...)
 	if err != nil {
 		return nil, 0, reason.ErrDB.Withf(`Find in[%+v] err[%s]`, in, err.Error())
 	}
@@ -61,23 +61,23 @@ func (c Core) GetRecording(ctx context.Context, id int64) (*Recording, error) {
 	return &out, nil
 }
 
-// AddRecording Insert into database
-func (c Core) AddRecording(ctx context.Context, in *AddRecordingInput) (*Recording, error) {
+// CreateRecording Insert into database
+func (c Core) CreateRecording(ctx context.Context, in *AddRecordingInput) (*Recording, error) {
 	var out Recording
 	if err := copier.Copy(&out, in); err != nil {
 		slog.ErrorContext(ctx, "Copy", "err", err)
 	}
 
-	if err := c.store.Recording().Add(ctx, &out); err != nil {
-		return nil, reason.ErrDB.Withf(`Add err[%s]`, err.Error())
+	if err := c.store.Recording().Create(ctx, &out); err != nil {
+		return nil, reason.ErrDB.Withf(`Create err[%s]`, err.Error())
 	}
 	return &out, nil
 }
 
-// EditRecording Update object information
-func (c Core) EditRecording(ctx context.Context, in *EditRecordingInput, id int64) (*Recording, error) {
+// UpdateRecording Update object information
+func (c Core) UpdateRecording(ctx context.Context, in *EditRecordingInput, id int64) (*Recording, error) {
 	var out Recording
-	if err := c.store.Recording().Edit(ctx, &out, func(b *Recording) {
+	if err := c.store.Recording().Update(ctx, &out, func(b *Recording) {
 		if err := copier.Copy(b, in); err != nil {
 			slog.ErrorContext(ctx, "Copy", "err", err)
 		}
@@ -87,10 +87,10 @@ func (c Core) EditRecording(ctx context.Context, in *EditRecordingInput, id int6
 	return &out, nil
 }
 
-// DelRecording Delete object
-func (c Core) DelRecording(ctx context.Context, id int64) (*Recording, error) {
+// DeleteRecording Delete object
+func (c Core) DeleteRecording(ctx context.Context, id int64) (*Recording, error) {
 	var out Recording
-	if err := c.store.Recording().Del(ctx, &out, orm.Where("id=?", id)); err != nil {
+	if err := c.store.Recording().Delete(ctx, &out, orm.Where("id=?", id)); err != nil {
 		return nil, reason.ErrDB.Withf(`Del id[%v] err[%s]`, id, err.Error())
 	}
 	return &out, nil
@@ -113,7 +113,7 @@ func (c Core) GetTimeline(ctx context.Context, in *TimelineInput) ([]TimeRange, 
 	var recordings []*Recording
 	// 使用默认分页器避免 nil pointer
 	pager := &defaultPager{limit: 1000}
-	_, err := c.store.Recording().Find(ctx, &recordings, pager, query.Encode()...)
+	_, err := c.store.Recording().List(ctx, &recordings, pager, query.Encode()...)
 	if err != nil {
 		return nil, reason.ErrDB.Withf(`GetTimeline err[%s]`, err.Error())
 	}
@@ -196,7 +196,7 @@ func (c Core) GetMonthlyStats(ctx context.Context, in *MonthlyStatsInput) (*Mont
 	var recordings []*Recording
 	// 使用默认分页器避免 nil pointer
 	pager := &defaultPager{limit: 10000}
-	_, err := c.store.Recording().Find(ctx, &recordings, pager, query.Encode()...)
+	_, err := c.store.Recording().List(ctx, &recordings, pager, query.Encode()...)
 	if err != nil {
 		return nil, reason.ErrDB.Withf(`GetMonthlyStats err[%s]`, err.Error())
 	}

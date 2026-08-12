@@ -3,6 +3,7 @@ package conf
 import (
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/ixugo/goddd/pkg/orm"
 )
 
@@ -22,9 +23,14 @@ func DefaultConfig() Bootstrap {
 					AccessIps: []string{"::1", "127.0.0.1"},
 				},
 			},
+			Webhook: ServerWebhook{
+				RecvSecret: uuid.New().String(),
+			},
 			AI: ServerAI{
-				Disabled:   false,
-				RetainDays: 7,
+				Disabled:             false,
+				RetainDays:           7,
+				AnalysisInterval:     2.0,
+				AlertCooldownSeconds: 10,
 			},
 			Recording: ServerRecording{
 				Disabled:           false,
@@ -95,9 +101,10 @@ func DefaultConfig() Bootstrap {
 		Log: Log{
 			Dir:          "./logs",
 			Level:        "error",
-			MaxAge:       Duration(3 * 24 * time.Hour),
-			RotationTime: Duration(8 * time.Hour),
-			RotationSize: 50,
+			MaxAge:       0,
+			MaxDays:      7,
+			MaxSize:      50,
+			RotationTime: Duration(12 * time.Hour),
 		},
 	}
 }

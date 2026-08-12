@@ -24,21 +24,32 @@ func NewPushAPI(mc push.Core, sc sms.Core, conf *conf.Bootstrap) PushAPI {
 	return PushAPI{pushCore: mc, smsCore: sc, conf: conf}
 }
 
+// streamPushIDInput 推流 ID 路径参数
+type streamPushIDInput struct {
+	ID string `uri:"id" binding:"required"`
+}
+
+// updateStreamPushInput 更新推流的请求参数（路径 ID + 请求体）
+type updateStreamPushInput struct {
+	ID string `uri:"id" binding:"required"`
+	push.EditStreamPushInput
+}
+
 func registerPushAPI(g gin.IRouter, api PushAPI, handler ...gin.HandlerFunc) {
 	{
 		group := g.Group("/stream_pushs", handler...)
-		group.GET("", web.WrapH(api.findStreamPush))
+		group.GET("", web.WrapH(api.listStreamPushs))
 		group.GET("/:id", web.WrapH(api.getStreamPush))
-		group.PUT("/:id", web.WrapH(api.editStreamPush))
-		group.POST("", web.WrapH(api.addStreamPush))
-		group.DELETE("/:id", web.WrapH(api.delStreamPush))
+		group.PUT("/:id", web.WrapH(api.updateStreamPush))
+		group.POST("", web.WrapH(api.createStreamPush))
+		group.DELETE("/:id", web.WrapH(api.deleteStreamPush))
 	}
 }
 
 // >>> streamPush >>>>>>>>>>>>>>>>>>>>
 
-func (a PushAPI) findStreamPush(c *gin.Context, in *push.FindStreamPushInput) (*web.PageOutput[*push.FindStreamPushOutputItem], error) {
-	items, total, err := a.pushCore.FindStreamPush(c.Request.Context(), in)
+func (a PushAPI) listStreamPushs(c *gin.Context, in *push.FindStreamPushInput) (*web.PageOutput[*push.FindStreamPushOutputItem], error) {
+	items, total, err := a.pushCore.ListStreamPushs(c.Request.Context(), in)
 	if err != nil {
 		return nil, err
 	}
@@ -78,21 +89,18 @@ func (a PushAPI) findStreamPush(c *gin.Context, in *push.FindStreamPushInput) (*
 	return &web.PageOutput[*push.FindStreamPushOutputItem]{Items: out, Total: total}, err
 }
 
-func (a PushAPI) getStreamPush(c *gin.Context, _ *struct{}) (*push.StreamPush, error) {
-	streamPushID := c.Param("id")
-	return a.pushCore.GetStreamPush(c.Request.Context(), streamPushID)
+func (a PushAPI) getStreamPush(c *gin.Context, in *streamPushIDInput) (*push.StreamPush, error) {
+	return a.pushCore.GetStreamPush(c.Request.Context(), in.ID)
 }
 
-func (a PushAPI) editStreamPush(c *gin.Context, in *push.EditStreamPushInput) (*push.StreamPush, error) {
-	streamPushID := c.Param("id")
-	return a.pushCore.EditStreamPush(c.Request.Context(), in, streamPushID)
+func (a PushAPI) updateStreamPush(c *gin.Context, in *updateStreamPushInput) (*push.StreamPush, error) {
+	return a.pushCore.UpdateStreamPush(c.Request.Context(), &in.EditStreamPushInput, in.ID)
 }
 
-func (a PushAPI) addStreamPush(c *gin.Context, in *push.AddStreamPushInput) (*push.StreamPush, error) {
-	return a.pushCore.AddStreamPush(c.Request.Context(), in)
+func (a PushAPI) createStreamPush(c *gin.Context, in *push.AddStreamPushInput) (*push.StreamPush, error) {
+	return a.pushCore.CreateStreamPush(c.Request.Context(), in)
 }
 
-func (a PushAPI) delStreamPush(c *gin.Context, _ *struct{}) (*push.StreamPush, error) {
-	streamPushID := c.Param("id")
-	return a.pushCore.DelStreamPush(c.Request.Context(), streamPushID)
+func (a PushAPI) deleteStreamPush(c *gin.Context, in *streamPushIDInput) (*push.StreamPush, error) {
+	return a.pushCore.DeleteStreamPush(c.Request.Context(), in.ID)
 }

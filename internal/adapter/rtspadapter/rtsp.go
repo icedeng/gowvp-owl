@@ -43,7 +43,7 @@ func (a *Adapter) OnStreamChanged(ctx context.Context, app, stream string) error
 		slog.WarnContext(ctx, "RTSP 通道未找到", "app", app, "stream", stream, "err", err)
 		return nil
 	}
-	if _, err := a.ipcCore.EditChannelOnlineAndPlaying(ctx, ch.Stream, false, false); err != nil {
+	if _, err := a.ipcCore.UpdateChannelOnlineAndPlaying(ctx, ch.Stream, false, false); err != nil {
 		slog.WarnContext(ctx, "更新 RTSP 通道状态失败", "app", app, "stream", stream, "err", err)
 	}
 	return nil
@@ -62,7 +62,7 @@ func (a *Adapter) OnStreamNotFound(ctx context.Context, app string, stream strin
 	if err != nil {
 		return err
 	}
-	resp, err := a.smsCore.AddStreamProxy(svr, sms.AddStreamProxyRequest{
+	resp, err := a.smsCore.CreateStreamProxy(svr, sms.AddStreamProxyRequest{
 		App:     ch.App,
 		Stream:  ch.Stream,
 		URL:     ch.Config.SourceURL,
@@ -73,7 +73,7 @@ func (a *Adapter) OnStreamNotFound(ctx context.Context, app string, stream strin
 	}
 
 	// 更新 StreamKey 和 IsOnline（用于后续关闭拉流代理）
-	_, err = a.ipcCore.EditChannelConfigAndOnline(ctx, ch.ID, true, func(cfg *ipc.StreamConfig) {
+	_, err = a.ipcCore.UpdateChannelConfigAndOnline(ctx, ch.ID, true, func(cfg *ipc.StreamConfig) {
 		cfg.StreamKey = resp.Data.Key
 	})
 

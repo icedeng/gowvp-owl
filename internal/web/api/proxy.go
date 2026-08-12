@@ -23,39 +23,47 @@ func NewProxyAPI(proxyCore *proxy.Core) ProxyAPI {
 	return ProxyAPI{proxyCore: proxyCore}
 }
 
+// streamProxyIDInput 拉流代理 ID 路径参数
+type streamProxyIDInput struct {
+	ID string `uri:"id" binding:"required"`
+}
+
+// updateStreamProxyInput 更新拉流代理的请求参数（路径 ID + 请求体）
+type updateStreamProxyInput struct {
+	ID string `uri:"id" binding:"required"`
+	proxy.EditStreamProxyInput
+}
+
 func registerProxy(g gin.IRouter, api ProxyAPI, handler ...gin.HandlerFunc) {
 	{
 		group := g.Group("/stream_proxys", handler...)
-		group.GET("", web.WrapH(api.findStreamProxy))
+		group.GET("", web.WrapH(api.listStreamProxys))
 		group.GET("/:id", web.WrapH(api.getStreamProxy))
-		group.PUT("/:id", web.WrapH(api.editStreamProxy))
-		group.POST("", web.WrapH(api.addStreamProxy))
-		group.DELETE("/:id", web.WrapH(api.delStreamProxy))
+		group.PUT("/:id", web.WrapH(api.updateStreamProxy))
+		group.POST("", web.WrapH(api.createStreamProxy))
+		group.DELETE("/:id", web.WrapH(api.deleteStreamProxy))
 	}
 }
 
 // >>> streamProxy >>>>>>>>>>>>>>>>>>>>
 
-func (a ProxyAPI) findStreamProxy(c *gin.Context, in *proxy.FindStreamProxyInput) (any, error) {
-	items, total, err := a.proxyCore.FindStreamProxy(c.Request.Context(), in)
+func (a ProxyAPI) listStreamProxys(c *gin.Context, in *proxy.FindStreamProxyInput) (any, error) {
+	items, total, err := a.proxyCore.ListStreamProxys(c.Request.Context(), in)
 	return gin.H{"items": items, "total": total}, err
 }
 
-func (a ProxyAPI) getStreamProxy(c *gin.Context, _ *struct{}) (any, error) {
-	streamProxyID := c.Param("id")
-	return a.proxyCore.GetStreamProxy(c.Request.Context(), streamProxyID)
+func (a ProxyAPI) getStreamProxy(c *gin.Context, in *streamProxyIDInput) (any, error) {
+	return a.proxyCore.GetStreamProxy(c.Request.Context(), in.ID)
 }
 
-func (a ProxyAPI) editStreamProxy(c *gin.Context, in *proxy.EditStreamProxyInput) (any, error) {
-	streamProxyID := c.Param("id")
-	return a.proxyCore.EditStreamProxy(c.Request.Context(), in, streamProxyID)
+func (a ProxyAPI) updateStreamProxy(c *gin.Context, in *updateStreamProxyInput) (any, error) {
+	return a.proxyCore.UpdateStreamProxy(c.Request.Context(), &in.EditStreamProxyInput, in.ID)
 }
 
-func (a ProxyAPI) addStreamProxy(c *gin.Context, in *proxy.AddStreamProxyInput) (any, error) {
-	return a.proxyCore.AddStreamProxy(c.Request.Context(), in)
+func (a ProxyAPI) createStreamProxy(c *gin.Context, in *proxy.AddStreamProxyInput) (any, error) {
+	return a.proxyCore.CreateStreamProxy(c.Request.Context(), in)
 }
 
-func (a ProxyAPI) delStreamProxy(c *gin.Context, _ *struct{}) (any, error) {
-	streamProxyID := c.Param("id")
-	return a.proxyCore.DelStreamProxy(c.Request.Context(), streamProxyID)
+func (a ProxyAPI) deleteStreamProxy(c *gin.Context, in *streamProxyIDInput) (any, error) {
+	return a.proxyCore.DeleteStreamProxy(c.Request.Context(), in.ID)
 }

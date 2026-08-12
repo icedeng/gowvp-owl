@@ -19,8 +19,8 @@ func NewMediaServer(db *gorm.DB) MediaServer {
 	return MediaServer{db: db}
 }
 
-// Find implements sms.MediaServerStorer.
-func (d MediaServer) Find(ctx context.Context, bs *[]*sms.MediaServer, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
+// List implements sms.MediaServerStorer.
+func (d MediaServer) List(ctx context.Context, bs *[]*sms.MediaServer, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
 	return orm.FindWithContext(ctx, d.db, bs, page, opts...)
 }
 
@@ -29,18 +29,18 @@ func (d MediaServer) Get(ctx context.Context, model *sms.MediaServer, opts ...or
 	return orm.FirstWithContext(ctx, d.db, model, opts...)
 }
 
-// Add implements sms.MediaServerStorer.
-func (d MediaServer) Add(ctx context.Context, model *sms.MediaServer) error {
+// Create implements sms.MediaServerStorer.
+func (d MediaServer) Create(ctx context.Context, model *sms.MediaServer) error {
 	return d.db.WithContext(ctx).Create(model).Error
 }
 
-// Edit implements sms.MediaServerStorer.
-func (d MediaServer) Edit(ctx context.Context, model *sms.MediaServer, changeFn func(*sms.MediaServer), opts ...orm.QueryOption) error {
+// Update implements sms.MediaServerStorer.
+func (d MediaServer) Update(ctx context.Context, model *sms.MediaServer, changeFn func(*sms.MediaServer), opts ...orm.QueryOption) error {
 	return orm.UpdateWithContext(ctx, d.db, model, changeFn, opts...)
 }
 
-// Del implements sms.MediaServerStorer.
-func (d MediaServer) Del(ctx context.Context, model *sms.MediaServer, opts ...orm.QueryOption) error {
+// Delete implements sms.MediaServerStorer.
+func (d MediaServer) Delete(ctx context.Context, model *sms.MediaServer, opts ...orm.QueryOption) error {
 	return orm.DeleteWithContext(ctx, d.db, model, opts...)
 }
 
@@ -55,6 +55,6 @@ func (d MediaServer) Session(ctx context.Context, changeFns ...func(*gorm.DB) er
 	})
 }
 
-func (d MediaServer) EditWithSession(tx *gorm.DB, model *sms.MediaServer, changeFn func(b *sms.MediaServer) error, opts ...orm.QueryOption) error {
+func (d MediaServer) UpdateWithSession(tx *gorm.DB, model *sms.MediaServer, changeFn func(b *sms.MediaServer) error, opts ...orm.QueryOption) error {
 	return orm.UpdateWithSession(tx, model, changeFn, opts...)
 }

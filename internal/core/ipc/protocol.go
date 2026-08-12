@@ -52,6 +52,14 @@ func (g Adapter) Store() Storer {
 	return g.store
 }
 
+func (g Adapter) ListDevices(ctx context.Context) ([]*Device, error) {
+	var devices []*Device
+	if _, err := g.store.Device().List(ctx, &devices, web.NewPagerFilterMaxSize()); err != nil {
+		return nil, err
+	}
+	return devices, nil
+}
+
 func (g Adapter) GetDeviceByDeviceID(gbDeviceID string) (*Device, error) {
 	ctx := context.TODO()
 	var d Device
@@ -60,7 +68,7 @@ func (g Adapter) GetDeviceByDeviceID(gbDeviceID string) (*Device, error) {
 			return nil, err
 		}
 		d.init(g.uni.UniqueID(bz.IDPrefixGB), gbDeviceID)
-		if err := g.store.Device().Add(ctx, &d); err != nil {
+		if err := g.store.Device().Create(ctx, &d); err != nil {
 			return nil, err
 		}
 	}
@@ -69,7 +77,7 @@ func (g Adapter) GetDeviceByDeviceID(gbDeviceID string) (*Device, error) {
 
 func (g Adapter) Logout(deviceID string, changeFn func(*Device)) error {
 	var d Device
-	if err := g.store.Device().Edit(context.TODO(), &d, func(d *Device) error {
+	if err := g.store.Device().Update(context.TODO(), &d, func(d *Device) error {
 		changeFn(d)
 		return nil
 	}, orm.Where("device_id=?", deviceID)); err != nil {
@@ -81,7 +89,7 @@ func (g Adapter) Logout(deviceID string, changeFn func(*Device)) error {
 
 func (g Adapter) Edit(deviceID string, changeFn func(*Device)) error {
 	var d Device
-	if err := g.store.Device().Edit(context.TODO(), &d, func(d *Device) error {
+	if err := g.store.Device().Update(context.TODO(), &d, func(d *Device) error {
 		changeFn(d)
 		return nil
 	}, orm.Where("device_id=?", deviceID)); err != nil {
@@ -91,9 +99,13 @@ func (g Adapter) Edit(deviceID string, changeFn func(*Device)) error {
 	return nil
 }
 
+func (g Adapter) Update(deviceID string, changeFn func(*Device)) error {
+	return g.Edit(deviceID, changeFn)
+}
+
 func (g Adapter) EditPlayingByID(ctx context.Context, id string, playing bool) error {
 	var ch Channel
-	if err := g.store.Channel().Edit(ctx, &ch, func(c *Channel) error {
+	if err := g.store.Channel().Update(ctx, &ch, func(c *Channel) error {
 		c.IsPlaying = playing
 		return nil
 	}, orm.Where("id=?", id)); err != nil {
@@ -102,15 +114,23 @@ func (g Adapter) EditPlayingByID(ctx context.Context, id string, playing bool) e
 	return nil
 }
 
+func (g Adapter) UpdatePlayingByID(ctx context.Context, id string, playing bool) error {
+	return g.EditPlayingByID(ctx, id, playing)
+}
+
 func (g Adapter) EditPlaying(ctx context.Context, deviceID, channelID string, playing bool) error {
 	var ch Channel
-	if err := g.store.Channel().Edit(ctx, &ch, func(c *Channel) error {
+	if err := g.store.Channel().Update(ctx, &ch, func(c *Channel) error {
 		c.IsPlaying = playing
 		return nil
 	}, orm.Where("device_id = ? AND channel_id = ?", deviceID, channelID)); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (g Adapter) UpdatePlaying(ctx context.Context, deviceID, channelID string, playing bool) error {
+	return g.EditPlaying(ctx, deviceID, channelID, playing)
 }
 
 // SaveChannels 保存通道列表（增量更新 + 删除多余通道）
@@ -130,14 +150,14 @@ func (g Adapter) SaveChannels(channels []*Channel) error {
 
 	// 1. 获取设备信息
 	var dev Device
-	_ = g.store.Device().Edit(context.TODO(), &dev, func(d *Device) error {
+	_ = g.store.Device().Update(context.TODO(), &dev, func(d *Device) error {
 		d.Channels = len(channels)
 		return nil
 	}, orm.Where("device_id=?", channels[0].DeviceID))
 
 	// 2. 批量查询该设备的所有现有通道（一次查询，避免循环查询）
 	var existingChannels []*Channel
-	_, _ = g.store.Channel().Find(ctx, &existingChannels,
+	_, _ = g.store.Channel().List(ctx, &existingChannels,
 		web.NewPagerFilterMaxSize(),
 		orm.Where("device_id = ?", deviceID),
 	)
@@ -157,7 +177,7 @@ func (g Adapter) SaveChannels(channels []*Channel) error {
 
 		if existing, ok := existingMap[channel.ChannelID]; ok {
 			// 只更新设备上报的字段，保留用户手动配置的 EnabledAI / Zones / RecordMode
-			_ = g.store.Channel().Edit(ctx, existing, func(c *Channel) error {
+			_ = g.store.Channel().Update(ctx, existing, func(c *Channel) error {
 				c.Name = channel.Name
 				c.IsOnline = channel.IsOnline
 				c.PTZType = channel.PTZType
@@ -172,7 +192,7 @@ func (g Adapter) SaveChannels(channels []*Channel) error {
 			// 通道不存在，新增
 			channel.ID = GenerateChannelID(channel, g.uni)
 			channel.DID = dev.ID
-			_ = g.store.Channel().Add(ctx, channel)
+			_ = g.store.Channel().Create(ctx, channel)
 		}
 	}
 
@@ -188,13 +208,13 @@ func (g Adapter) SaveChannels(channels []*Channel) error {
 	// 方案B：硬删除（如果需要完全删除）
 	// 可根据业务需求在配置中选择
 	// var ch Channel
-	// _ = g.store.Channel().Del(ctx, &ch,
+	// _ = g.store.Channel().Delete(ctx, &ch,
 	// 	orm.Where("device_id = ?", deviceID),
 	// 	orm.Where("channel_id NOT IN ?", currentChannelIDs),
 	// )
 
 	// 7. 更新设备的通道数量
-	_ = g.store.Device().Edit(ctx, &dev, func(d *Device) error {
+	_ = g.store.Device().Update(ctx, &dev, func(d *Device) error {
 		d.Channels = len(channels)
 		return nil
 	}, orm.Where("device_id=?", deviceID))
@@ -205,7 +225,7 @@ func (g Adapter) SaveChannels(channels []*Channel) error {
 // FindDevices 获取所有设备
 func (g Adapter) FindDevices(ctx context.Context) ([]*Device, error) {
 	var devices []*Device
-	if _, err := g.store.Device().Find(ctx, &devices, web.NewPagerFilterMaxSize()); err != nil {
+	if _, err := g.store.Device().List(ctx, &devices, web.NewPagerFilterMaxSize()); err != nil {
 		return nil, err
 	}
 	return devices, nil

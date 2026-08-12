@@ -27,14 +27,16 @@ message StartCameraRequest {
   string rtsp_url = 3;            // RTSP 子码流地址 (必填)
 
   // === 检测配置 ===
-  int32 detect_fps = 4;           // 检测帧率，默认 5
+  float detect_interval_seconds = 4; // 分析间隔（秒），默认 2.0，支持小数（如 0.5 表示每秒 2 帧）
   repeated string labels = 5;     // 要检测的标签，如 ["person", "car"]，空则检测全部
   float threshold = 6;            // 置信度阈值，默认 0.5
 
-  // === ROI 区域 (多边形点位) ===
-  // n 个坐标组合成的多边形，例如 [0.1, 0.2, 0.12, 0.22, 0.1, 0.3...]
-  // 归一化坐标 (x1, y1, x2, y2, ...)
-  repeated float roi_points = 7;
+  // === ROI 区域（多区域，替代旧的 roi_points）===
+  // 每个 Zone 含独立的多边形坐标和标签，支持不同区域检测不同目标
+  repeated AnalysisZone zones = 7;
+
+  // 告警冷却时间（秒），冷却期内同一目标（标签相同且框 IoU>0.3）不重复告警，默认 30 秒
+  float alert_cooldown_seconds = 9;
 
   // 错误处理
   int32 retry_limit = 8;          // 遇到错误的自动重试次数，默认 10
@@ -99,4 +101,14 @@ message HealthCheckResponse {
     NOT_SERVING = 2;// 服务不可用 (加载模型中)
   }
   ServingStatus status = 1;
+}
+
+// 单个检测区域：归一化多边形 + 该区域关注的标签
+message AnalysisZone {
+  // 归一化坐标，按 x1,y1,x2,y2,... 顺序平铺，如 [0.1,0.2, 0.5,0.2, 0.5,0.8, 0.1,0.8]
+  repeated float points = 1;
+  // 该区域关注的目标标签，空则使用全局 labels
+  repeated string labels = 2;
+  // 区域名称，用于日志（可选）
+  string name = 3;
 }

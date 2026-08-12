@@ -19,8 +19,8 @@ func NewRecording(db *gorm.DB) Recording {
 	return Recording{db: db}
 }
 
-// Find implements recording.RecordingStorer.
-func (d Recording) Find(ctx context.Context, bs *[]*recording.Recording, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
+// List implements recording.RecordingStorer.
+func (d Recording) List(ctx context.Context, bs *[]*recording.Recording, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
 	return orm.FindWithContext(ctx, d.db, bs, page, opts...)
 }
 
@@ -29,18 +29,18 @@ func (d Recording) Get(ctx context.Context, model *recording.Recording, opts ...
 	return orm.FirstWithContext(ctx, d.db, model, opts...)
 }
 
-// Add implements recording.RecordingStorer.
-func (d Recording) Add(ctx context.Context, model *recording.Recording) error {
+// Create implements recording.RecordingStorer.
+func (d Recording) Create(ctx context.Context, model *recording.Recording) error {
 	return d.db.WithContext(ctx).Create(model).Error
 }
 
-// Edit implements recording.RecordingStorer.
-func (d Recording) Edit(ctx context.Context, model *recording.Recording, changeFn func(*recording.Recording), opts ...orm.QueryOption) error {
+// Update implements recording.RecordingStorer.
+func (d Recording) Update(ctx context.Context, model *recording.Recording, changeFn func(*recording.Recording), opts ...orm.QueryOption) error {
 	return orm.UpdateWithContext(ctx, d.db, model, changeFn, opts...)
 }
 
-// Del implements recording.RecordingStorer.
-func (d Recording) Del(ctx context.Context, model *recording.Recording, opts ...orm.QueryOption) error {
+// Delete implements recording.RecordingStorer.
+func (d Recording) Delete(ctx context.Context, model *recording.Recording, opts ...orm.QueryOption) error {
 	return orm.DeleteWithContext(ctx, d.db, model, opts...)
 }
 
@@ -61,7 +61,7 @@ func (d Recording) Session(ctx context.Context, changeFns ...func(*gorm.DB) erro
 	})
 }
 
-// EditWithSession 修改事务
-func (d Recording) EditWithSession(tx *gorm.DB, model *recording.Recording, changeFn func(b *recording.Recording) error, opts ...orm.QueryOption) error {
+// UpdateWithSession 修改事务
+func (d Recording) UpdateWithSession(tx *gorm.DB, model *recording.Recording, changeFn func(b *recording.Recording) error, opts ...orm.QueryOption) error {
 	return orm.UpdateWithSession(tx, model, changeFn, opts...)
 }

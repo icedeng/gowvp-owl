@@ -19,8 +19,8 @@ func NewDevice(db *gorm.DB) Device {
 	return Device{db: db}
 }
 
-// Find implements ipc.DeviceStorer.
-func (d Device) Find(ctx context.Context, bs *[]*ipc.Device, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
+// List implements ipc.DeviceStorer.
+func (d Device) List(ctx context.Context, bs *[]*ipc.Device, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
 	return orm.FindWithContext(ctx, d.db, bs, page, opts...)
 }
 
@@ -29,18 +29,18 @@ func (d Device) Get(ctx context.Context, model *ipc.Device, opts ...orm.QueryOpt
 	return orm.FirstWithContext(ctx, d.db, model, opts...)
 }
 
-// Add implements ipc.DeviceStorer.
-func (d Device) Add(ctx context.Context, model *ipc.Device) error {
+// Create implements ipc.DeviceStorer.
+func (d Device) Create(ctx context.Context, model *ipc.Device) error {
 	return d.db.WithContext(ctx).Create(model).Error
 }
 
-// Edit implements ipc.DeviceStorer.
-func (d Device) Edit(ctx context.Context, model *ipc.Device, changeFn func(*ipc.Device) error, opts ...orm.QueryOption) error {
+// Update implements ipc.DeviceStorer.
+func (d Device) Update(ctx context.Context, model *ipc.Device, changeFn func(*ipc.Device) error, opts ...orm.QueryOption) error {
 	return orm.UpdateWithContext2(ctx, d.db, model, changeFn, opts...)
 }
 
-// Del implements ipc.DeviceStorer.
-func (d Device) Del(ctx context.Context, model *ipc.Device, opts ...orm.QueryOption) error {
+// Delete implements ipc.DeviceStorer.
+func (d Device) Delete(ctx context.Context, model *ipc.Device, opts ...orm.QueryOption) error {
 	return orm.DeleteWithContext(ctx, d.db, model, opts...)
 }
 
@@ -55,6 +55,6 @@ func (d Device) Session(ctx context.Context, changeFns ...func(*gorm.DB) error) 
 	})
 }
 
-func (d Device) EditWithSession(tx *gorm.DB, model *ipc.Device, changeFn func(b *ipc.Device) error, opts ...orm.QueryOption) error {
+func (d Device) UpdateWithSession(tx *gorm.DB, model *ipc.Device, changeFn func(b *ipc.Device) error, opts ...orm.QueryOption) error {
 	return orm.UpdateWithSession(tx, model, changeFn, opts...)
 }

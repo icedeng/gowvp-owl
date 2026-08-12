@@ -102,8 +102,8 @@ func main() {
 	}
 
 	// 如果需要执行表迁移，递增此版本号和表更新说明
-	versionapi.DBVersion = "0.0.26"
-	versionapi.DBRemark = "onvif device support"
+	versionapi.DBVersion = "0.0.27"
+	versionapi.DBRemark = "gb28181 channel ptz support"
 
 	app.Run(&bc)
 }

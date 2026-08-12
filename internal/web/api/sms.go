@@ -29,77 +29,62 @@ func NewSmsAPI(core sms.Core) SmsAPI {
 	return SmsAPI{smsCore: core}
 }
 
+// mediaServerIDInput 流媒体服务器 ID 路径参数
+type mediaServerIDInput struct {
+	ID string `uri:"id" binding:"required"`
+}
+
+// updateMediaServerInput 更新流媒体服务器的请求参数（路径 ID + 请求体）
+type updateMediaServerInput struct {
+	ID string `uri:"id" binding:"required"`
+	sms.EditMediaServerInput
+}
+
 func registerSms(g gin.IRouter, api SmsAPI, handler ...gin.HandlerFunc) {
 	{
 		group := g.Group("/media_servers", handler...)
-		group.GET("", web.WrapH(api.findMediaServer))
-		group.PUT("/:id", web.WrapH(api.editMediaServer))
+		group.GET("", web.WrapH(api.listMediaServers))
+		group.PUT("/:id", web.WrapH(api.updateMediaServer))
 
 		// group.GET("/:id", web.WrapH(api.getMediaServer))
-		// group.POST("", web.WrapH(api.addMediaServer))
-		// group.DELETE("/:id", web.WrapH(api.delMediaServer))
+		// group.POST("", web.WrapH(api.createMediaServer))
+		// group.DELETE("/:id", web.WrapH(api.deleteMediaServer))
 	}
 }
 
 // >>> mediaServer >>>>>>>>>>>>>>>>>>>>
 
-// findMediaServer godoc
-// @Summary 查询流媒体服务器列表
-// @Tags MediaServer
-// @Security BearerAuth
-// @Produce json
-// @Param page query int false "页码"
-// @Param size query int false "每页数量"
-// @Param ip query string false "IP"
-// @Param type query string false "类型"
-// @Success 200 {object} SwaggerMediaServersResponse
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /media_servers [get]
-func (a SmsAPI) findMediaServer(c *gin.Context, in *sms.FindMediaServerInput) (any, error) {
-	items, total, err := a.smsCore.FindMediaServer(c.Request.Context(), in)
+func (a SmsAPI) listMediaServers(c *gin.Context, in *sms.FindMediaServerInput) (any, error) {
+	items, total, err := a.smsCore.ListMediaServers(c.Request.Context(), in)
 	return gin.H{"items": items, "total": total}, err
 }
 
-func (a SmsAPI) getMediaServer(c *gin.Context, _ *struct{}) (any, error) {
-	mediaServerID := c.Param("id")
-	return a.smsCore.GetMediaServer(c.Request.Context(), mediaServerID)
+func (a SmsAPI) getMediaServer(c *gin.Context, in *mediaServerIDInput) (any, error) {
+	return a.smsCore.GetMediaServer(c.Request.Context(), in.ID)
 }
 
-// editMediaServer godoc
-// @Summary 修改流媒体服务器
-// @Tags MediaServer
-// @Security BearerAuth
-// @Accept json
-// @Produce json
-// @Param id path string true "流媒体服务器ID"
-// @Param body body sms.EditMediaServerInput true "流媒体服务器参数"
-// @Success 200 {object} sms.MediaServer
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /media_servers/{id} [put]
-func (a SmsAPI) editMediaServer(c *gin.Context, in *sms.EditMediaServerInput) (any, error) {
-	mediaServerID := c.Param("id")
-	out, err := a.smsCore.EditMediaServer(c.Request.Context(), in, mediaServerID, a.uc.Conf.Server.HTTP.Port)
+func (a SmsAPI) updateMediaServer(c *gin.Context, in *updateMediaServerInput) (any, error) {
+	out, err := a.smsCore.UpdateMediaServer(c.Request.Context(), &in.EditMediaServerInput, in.ID, a.uc.Conf.Server.HTTP.Port)
 	if err != nil {
 		return nil, err
 	}
-	if mediaServerID == "local" {
+	if in.ID == "local" {
 		a.uc.Conf.Media.IP = out.IP
 		a.uc.Conf.Media.SDPIP = out.SDPIP
 		a.uc.Conf.Media.Secret = out.Secret
 		a.uc.Conf.Media.WebHookIP = out.HookIP
 		a.uc.Conf.Media.Type = out.Type
 		if err := conf.WriteConfig(a.uc.Conf, a.uc.Conf.ConfigPath); err != nil {
-			return nil, reason.ErrServer.SetMsg(err.Error())
+			return nil, reason.ErrServer.WithMsg(err.Error())
 		}
 	}
 	return out, err
 }
 
-func (a SmsAPI) addMediaServer(c *gin.Context, in *sms.AddMediaServerInput) (any, error) {
-	return a.smsCore.AddMediaServer(c.Request.Context(), in)
+func (a SmsAPI) createMediaServer(c *gin.Context, in *sms.AddMediaServerInput) (any, error) {
+	return a.smsCore.CreateMediaServer(c.Request.Context(), in)
 }
 
-func (a SmsAPI) delMediaServer(c *gin.Context, _ *struct{}) (any, error) {
-	mediaServerID := c.Param("id")
-	return a.smsCore.DelMediaServer(c.Request.Context(), mediaServerID)
+func (a SmsAPI) deleteMediaServer(c *gin.Context, in *mediaServerIDInput) (any, error) {
+	return a.smsCore.DeleteMediaServer(c.Request.Context(), in.ID)
 }

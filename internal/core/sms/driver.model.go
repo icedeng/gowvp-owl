@@ -1,6 +1,10 @@
 package sms
 
-import "github.com/gowvp/owl/pkg/zlm"
+import (
+	"encoding/json"
+
+	"github.com/gowvp/owl/pkg/zlm"
+)
 
 type AddStreamProxyRequest struct {
 	App     string `json:"app"`      // 添加的流的应用名，例如 live
@@ -41,10 +45,34 @@ type GetSnapRequest struct {
 
 type StreamLiveAddr struct {
 	Label   string `json:"label"`
-	WSFLV   string `json:"ws_flv"`
-	HTTPFLV string `json:"http_flv"`
+	WSFLV   string `json:"-"`
+	FLV     string `json:"-"`
+	HTTPFLV string `json:"-"` // Deprecated: 使用 FLV；保留以兼容旧调用方。
 	RTMP    string `json:"rtmp"`
 	RTSP    string `json:"rtsp"`
 	WebRTC  string `json:"webrtc"`
 	HLS     string `json:"hls"`
+}
+
+// MarshalJSON 同时输出新旧播放地址字段，避免升级后破坏既有客户端。
+func (s StreamLiveAddr) MarshalJSON() ([]byte, error) {
+	flv := s.FLV
+	if flv == "" {
+		flv = s.HTTPFLV
+	}
+	return json.Marshal(struct {
+		Label    string `json:"label"`
+		WSFLV    string `json:"ws-flv"`
+		FLV      string `json:"flv"`
+		OldWSFLV string `json:"ws_flv"`
+		HTTPFLV  string `json:"http_flv"`
+		RTMP     string `json:"rtmp"`
+		RTSP     string `json:"rtsp"`
+		WebRTC   string `json:"webrtc"`
+		HLS      string `json:"hls"`
+	}{
+		Label: s.Label, WSFLV: s.WSFLV, FLV: flv,
+		OldWSFLV: s.WSFLV, HTTPFLV: flv,
+		RTMP: s.RTMP, RTSP: s.RTSP, WebRTC: s.WebRTC, HLS: s.HLS,
+	})
 }

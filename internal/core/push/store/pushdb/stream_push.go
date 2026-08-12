@@ -19,8 +19,8 @@ func NewStreamPush(db *gorm.DB) StreamPush {
 	return StreamPush{db: db}
 }
 
-// Find implements push.StreamPushStorer.
-func (d StreamPush) Find(ctx context.Context, bs *[]*push.StreamPush, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
+// List implements push.StreamPushStorer.
+func (d StreamPush) List(ctx context.Context, bs *[]*push.StreamPush, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
 	return orm.FindWithContext(ctx, d.db, bs, page, opts...)
 }
 
@@ -29,18 +29,18 @@ func (d StreamPush) Get(ctx context.Context, model *push.StreamPush, opts ...orm
 	return orm.FirstWithContext(ctx, d.db, model, opts...)
 }
 
-// Add implements push.StreamPushStorer.
-func (d StreamPush) Add(ctx context.Context, model *push.StreamPush) error {
+// Create implements push.StreamPushStorer.
+func (d StreamPush) Create(ctx context.Context, model *push.StreamPush) error {
 	return d.db.WithContext(ctx).Create(model).Error
 }
 
-// Edit implements push.StreamPushStorer.
-func (d StreamPush) Edit(ctx context.Context, model *push.StreamPush, changeFn func(*push.StreamPush), opts ...orm.QueryOption) error {
+// Update implements push.StreamPushStorer.
+func (d StreamPush) Update(ctx context.Context, model *push.StreamPush, changeFn func(*push.StreamPush), opts ...orm.QueryOption) error {
 	return orm.UpdateWithContext(ctx, d.db, model, changeFn, opts...)
 }
 
-// Del implements push.StreamPushStorer.
-func (d StreamPush) Del(ctx context.Context, model *push.StreamPush, opts ...orm.QueryOption) error {
+// Delete implements push.StreamPushStorer.
+func (d StreamPush) Delete(ctx context.Context, model *push.StreamPush, opts ...orm.QueryOption) error {
 	return orm.DeleteWithContext(ctx, d.db, model, opts...)
 }
 
@@ -55,6 +55,6 @@ func (d StreamPush) Session(ctx context.Context, changeFns ...func(*gorm.DB) err
 	})
 }
 
-func (d StreamPush) EditWithSession(tx *gorm.DB, model *push.StreamPush, changeFn func(b *push.StreamPush) error, opts ...orm.QueryOption) error {
+func (d StreamPush) UpdateWithSession(tx *gorm.DB, model *push.StreamPush, changeFn func(b *push.StreamPush) error, opts ...orm.QueryOption) error {
 	return orm.UpdateWithSession(tx, model, changeFn, opts...)
 }

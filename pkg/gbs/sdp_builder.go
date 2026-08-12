@@ -86,11 +86,15 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 		return nil, err
 	}
 
+	formats := []string{"96", "97", "98"}
+	if version.Capabilities().H265 {
+		formats = append(formats, "99")
+	}
 	video := sdp.Media{
 		Description: sdp.MediaDescription{
 			Type:     "video",
 			Port:     in.Port,
-			Formats:  []string{"96", "97", "98"},
+			Formats:  formats,
 			Protocol: protocol,
 		},
 	}
@@ -108,6 +112,9 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 	video.AddAttribute("rtpmap", "96", "PS/90000")
 	video.AddAttribute("rtpmap", "97", "MPEG4/90000")
 	video.AddAttribute("rtpmap", "98", "H264/90000")
+	if version.Capabilities().H265 {
+		video.AddAttribute("rtpmap", "99", "H265/90000")
+	}
 
 	message := &sdp.Message{
 		Origin: sdp.Origin{
@@ -135,6 +142,9 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 		body = append(body, "f="...)
 		body = append(body, in.MediaDescription...)
 		body = append(body, '\r', '\n')
+	} else if in.SessionName == historyModePlay && !in.DirectTCP {
+		// 上游设备兼容修复：声明 G.711 A-law 音频参数，未提供视频描述时使用直播默认值。
+		body = append(body, "f=v/////a/1/8/1\r\n"...)
 	}
 	return body, nil
 }

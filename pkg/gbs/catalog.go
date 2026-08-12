@@ -200,7 +200,11 @@ func (g *GB28181API) saveCatalogChannels(deviceID string, items []Channels) {
 	if device, ok := g.svr.memoryStorer.Load(deviceID); ok {
 		for _, item := range items {
 			channel := &Channel{ChannelID: item.ChannelID, device: device}
-			channel.init(g.cfg.Domain)
+			domain := g.cfg.GetDomain()
+			if device.To() != nil && device.To().URI != nil && device.To().URI.Host() != "" {
+				domain = device.To().URI.Host()
+			}
+			channel.init(domain)
 			device.Channels.Store(channel.ChannelID, channel)
 		}
 	}
@@ -210,6 +214,7 @@ func (g *GB28181API) saveCatalogChannels(deviceID string, items []Channels) {
 			DeviceID:  deviceID,
 			ChannelID: item.ChannelID,
 			Name:      item.Name,
+			PTZType:   item.Info.PTZType,
 			IsOnline:  item.Status == "OK" || item.Status == "ON",
 			Ext:       catalogChannelExt(item),
 			Type:      ipc.TypeGB28181,

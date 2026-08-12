@@ -3,6 +3,7 @@ package recording
 import (
 	"context"
 	"log/slog"
+	"strings"
 )
 
 // StartRecording 启动录制，在流注册时调用
@@ -36,12 +37,18 @@ func (c Core) StartRecording(ctx context.Context, channelType, app, stream strin
 }
 
 // StopRecording 停止录制，在流注销时调用
+// 流不存在时视为已停止（幂等），打 debug 而非 error
 func (c Core) StopRecording(ctx context.Context, app, stream string) error {
 	if c.smsProvider == nil {
 		return nil
 	}
 
 	if err := c.smsProvider.StopRecord(app, stream); err != nil {
+		// ZLM 的 stopRecord 接口在流不存在时返回此错误，属于正常的幂等语义
+		if strings.Contains(err.Error(), "can not find the stream") {
+			slog.DebugContext(ctx, "流已不存在，无需停止录制", "app", app, "stream", stream)
+			return nil
+		}
 		slog.ErrorContext(ctx, "停止录制失败", "app", app, "stream", stream, "err", err)
 		return err
 	}

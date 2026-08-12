@@ -15,17 +15,17 @@ var _ ipc.DeviceStorer = &Device{}
 
 type Device = Cache
 
-// Add implements ipc.DeviceStorer.
-func (d *Device) Add(ctx context.Context, dev *ipc.Device) error {
-	if err := d.Storer.Device().Add(ctx, dev); err != nil {
+// Create implements ipc.DeviceStorer.
+func (d *Device) Create(ctx context.Context, dev *ipc.Device) error {
+	if err := d.Storer.Device().Create(ctx, dev); err != nil {
 		return err
 	}
 	d.devices.LoadOrStore(dev.GetGB28181DeviceID(), gbs.NewDevice(nil, dev))
 	return nil
 }
 
-// Del implements ipc.DeviceStorer.
-func (d *Device) Del(ctx context.Context, dev *ipc.Device, opts ...orm.QueryOption) error {
+// Delete implements ipc.DeviceStorer.
+func (d *Device) Delete(ctx context.Context, dev *ipc.Device, opts ...orm.QueryOption) error {
 	if err := d.Storer.Device().Session(
 		ctx,
 		func(tx *gorm.DB) error {
@@ -46,9 +46,9 @@ func (d *Device) Del(ctx context.Context, dev *ipc.Device, opts ...orm.QueryOpti
 	return nil
 }
 
-// Edit implements ipc.DeviceStorer.
-func (d *Device) Edit(ctx context.Context, dev *ipc.Device, changeFn func(*ipc.Device) error, opts ...orm.QueryOption) error {
-	if err := d.Storer.Device().Edit(ctx, dev, changeFn, opts...); err != nil {
+// Update implements ipc.DeviceStorer.
+func (d *Device) Update(ctx context.Context, dev *ipc.Device, changeFn func(*ipc.Device) error, opts ...orm.QueryOption) error {
+	if err := d.Storer.Device().Update(ctx, dev, changeFn, opts...); err != nil {
 		return err
 	}
 	dev2, ok := d.devices.Load(dev.GetGB28181DeviceID())
@@ -69,9 +69,9 @@ func (d *Device) Edit(ctx context.Context, dev *ipc.Device, changeFn func(*ipc.D
 	return nil
 }
 
-// Find implements ipc.DeviceStorer.
-func (d *Device) Find(ctx context.Context, devs *[]*ipc.Device, pager orm.Pager, opts ...orm.QueryOption) (int64, error) {
-	return d.Storer.Device().Find(ctx, devs, pager, opts...)
+// List implements ipc.DeviceStorer.
+func (d *Device) List(ctx context.Context, devs *[]*ipc.Device, pager orm.Pager, opts ...orm.QueryOption) (int64, error) {
+	return d.Storer.Device().List(ctx, devs, pager, opts...)
 }
 
 // Get implements ipc.DeviceStorer.

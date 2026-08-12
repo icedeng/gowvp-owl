@@ -64,7 +64,7 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 		return
 	}
 
-	if err := g.core.Edit(ctx.DeviceID, func(d *ipc.Device) {
+	if err := g.core.Update(ctx.DeviceID, func(d *ipc.Device) {
 		// 为什么: 可选字段为空时不覆盖，避免把上一次成功拿到的信息抹成空串。
 		if msg.Firmware != "" {
 			d.Ext.Firmware = msg.Firmware

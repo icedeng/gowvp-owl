@@ -46,14 +46,14 @@ func (a *Adapter) OnStreamChanged(ctx context.Context, app, stream string) error
 		slog.WarnContext(ctx, "RTMP 通道未找到", "app", app, "stream", stream, "err", err)
 		return nil
 	}
-	_, err = a.ipcCore.EditChannelConfigAndOnline(ctx, ch.ID, false, func(cfg *ipc.StreamConfig) {
+	_, err = a.ipcCore.UpdateChannelConfigAndOnline(ctx, ch.ID, false, func(cfg *ipc.StreamConfig) {
 		cfg.StoppedAt = &now
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "更新 RTMP 通道停流状态失败", "app", app, "stream", stream, "err", err)
 	}
 	// 同时更新 IsPlaying
-	if _, err := a.ipcCore.EditChannelPlaying(ctx, ch.Stream, false); err != nil {
+	if _, err := a.ipcCore.UpdateChannelPlaying(ctx, ch.Stream, false); err != nil {
 		slog.WarnContext(ctx, "更新 RTMP 通道播放状态失败", "stream", stream, "err", err)
 	}
 	return nil
@@ -85,7 +85,7 @@ func (a *Adapter) OnPublish(ctx context.Context, app, stream string, params map[
 
 	// 更新通道推流状态
 	now := orm.Now()
-	_, err = a.ipcCore.EditChannelConfigAndOnline(ctx, ch.ID, true, func(cfg *ipc.StreamConfig) {
+	_, err = a.ipcCore.UpdateChannelConfigAndOnline(ctx, ch.ID, true, func(cfg *ipc.StreamConfig) {
 		cfg.PushedAt = &now
 		cfg.Session = params["session"]
 	})

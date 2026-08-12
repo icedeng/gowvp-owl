@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -103,11 +104,16 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	stream.ChannelID = in.Channel.ChannelID
 	stream.StreamID = in.Channel.ID
 
-	log.Debug("1. 开启RTP服务器等待接收视频流")
+	// SSRC 在打开 ZLM RTP 端口前生成并绑定，避免不同设备向同一端口串流。
+	ssrc := g.getSSRC(0)
+	ssrcValue, _ := strconv.ParseUint(ssrc, 10, 64)
+	stream.ssrc = ssrc
+	log.Debug("1. 开启RTP服务器等待接收视频流", "ssrc", ssrc)
 	// 开启RTP服务器等待接收视频流
 	resp, err := g.sms.OpenRTPServer(in.SMS, zlm.OpenRTPServerRequest{
 		TCPMode:  in.StreamMode,
 		StreamID: in.Channel.ID,
+		SSRC:     ssrcValue,
 	})
 	if err != nil {
 		log.Debug("1.1. 开启RTP服务器失败", "err", err)
@@ -129,6 +135,7 @@ func (g *GB28181API) Play(in *PlayInput) error {
 			resp, err = g.sms.OpenRTPServer(in.SMS, zlm.OpenRTPServerRequest{
 				TCPMode:  in.StreamMode,
 				StreamID: in.Channel.ID,
+				SSRC:     ssrcValue,
 			})
 			if err != nil {
 				log.Debug("1.2. 重新开启RTP服务器失败", "err", err)
@@ -209,7 +216,7 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 	}
 	slog.Info("域名解析成功", "原始域名", ipstr, "解析IP", ip4str)
 
-	ssrc := g.getSSRC(0)
+	ssrc := stream.ssrc
 	body, err := buildGBSDP(gbSDPInput{
 		Version:     g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
 		SessionName: historyModePlay,

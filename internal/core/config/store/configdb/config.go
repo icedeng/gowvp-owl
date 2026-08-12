@@ -19,8 +19,8 @@ func NewConfig(db *gorm.DB) Config {
 	return Config{db: db}
 }
 
-// Find implements config.ConfigStorer.
-func (d Config) Find(ctx context.Context, bs *[]*config.Config, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
+// List implements config.ConfigStorer.
+func (d Config) List(ctx context.Context, bs *[]*config.Config, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
 	return orm.FindWithContext(ctx, d.db, bs, page, opts...)
 }
 
@@ -29,18 +29,18 @@ func (d Config) Get(ctx context.Context, model *config.Config, opts ...orm.Query
 	return orm.FirstWithContext(ctx, d.db, model, opts...)
 }
 
-// Add implements config.ConfigStorer.
-func (d Config) Add(ctx context.Context, model *config.Config) error {
+// Create implements config.ConfigStorer.
+func (d Config) Create(ctx context.Context, model *config.Config) error {
 	return d.db.WithContext(ctx).Create(model).Error
 }
 
-// Edit implements config.ConfigStorer.
-func (d Config) Edit(ctx context.Context, model *config.Config, changeFn func(*config.Config), opts ...orm.QueryOption) error {
+// Update implements config.ConfigStorer.
+func (d Config) Update(ctx context.Context, model *config.Config, changeFn func(*config.Config), opts ...orm.QueryOption) error {
 	return orm.UpdateWithContext(ctx, d.db, model, changeFn, opts...)
 }
 
-// Del implements config.ConfigStorer.
-func (d Config) Del(ctx context.Context, model *config.Config, opts ...orm.QueryOption) error {
+// Delete implements config.ConfigStorer.
+func (d Config) Delete(ctx context.Context, model *config.Config, opts ...orm.QueryOption) error {
 	return orm.DeleteWithContext(ctx, d.db, model, opts...)
 }
 
@@ -55,7 +55,7 @@ func (d Config) Session(ctx context.Context, changeFns ...func(*gorm.DB) error) 
 	})
 }
 
-func (d Config) EditWithSession(tx *gorm.DB, model *config.Config, changeFn func(b *config.Config) error, opts ...orm.QueryOption) error {
+func (d Config) UpdateWithSession(tx *gorm.DB, model *config.Config, changeFn func(b *config.Config) error, opts ...orm.QueryOption) error {
 	return orm.UpdateWithSession(tx, model, changeFn, opts...)
 }
 

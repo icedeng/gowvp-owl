@@ -204,11 +204,13 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.GET("/:id/snapshot", api.getSnapshot)                  // 获取图像（所有协议）
 		group.POST("/:id/zones", web.WrapH(api.addZone))             // 添加区域（所有协议）
 		group.GET("/:id/zones", web.WrapH(api.getZones))             // 获取区域（所有协议）
+		group.DELETE("/:id/zones/:name", web.WrapH(api.deleteZone))  // 删除区域（所有协议）
 		group.POST("/:id/ai/enable", web.WrapH(api.enableAI))        // 启用 AI 检测
 		group.POST("/:id/ai/disable", web.WrapH(api.disableAI))      // 禁用 AI 检测
 		group.POST("/:id/record_mode", web.WrapH(api.setRecordMode)) // 设置录像模式
 		group.POST("/:id/ptz/control", web.WrapH(api.ptzControl))    // 云台控制（所有协议）
 		group.POST("/:id/stop", web.WrapH(api.stopPlay))             // 停止播放（所有协议）
+		group.GET("/:id/media_info", web.WrapH(api.getMediaInfo))    // 查询在线流编码与分辨率
 	}
 	{
 		group := g.Group("/gb28181/devices/:device_id/channels/:channel_id", handler...)
@@ -1096,7 +1098,16 @@ func (a IPCAPI) play(c *gin.Context, _ *struct{}) (*playOutput, error) {
 		host = h
 	}
 
-	item := a.uc.SMSAPI.smsCore.GetStreamLiveAddr(svr, prefix, host, app, appStream)
+	playToken, err := web.NewToken(
+		map[string]any{"stream": appStream, "app": app},
+		a.uc.Conf.Server.HTTP.JwtSecret+"_play",
+		web.WithExpiresAt(time.Now().Add(42*time.Hour)),
+	)
+	if err != nil {
+		return nil, reason.ErrServer.SetMsg("生成播放 token 失败")
+	}
+
+	item := a.uc.SMSAPI.smsCore.GetStreamLiveAddr(svr, prefix, host, app, appStream, playToken)
 	out := playOutput{
 		App:    app,
 		Stream: appStream,
@@ -1229,6 +1240,38 @@ func (a IPCAPI) stopPlay(c *gin.Context, _ *struct{}) (gin.H, error) {
 
 	log.InfoContext(ctx, "停止播放完成")
 	return gin.H{"msg": "ok"}, nil
+}
+
+// getMediaInfo 返回当前在线流的媒体编码、分辨率和帧率等信息。
+func (a IPCAPI) getMediaInfo(c *gin.Context, _ *struct{}) (any, error) {
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
+	ch, err := a.ipc.GetChannel(c.Request.Context(), channelID)
+	if err != nil {
+		return nil, err
+	}
+	app, stream := ch.GetApp(), ch.GetStream()
+	if app == "" {
+		app = "rtp"
+	}
+	mediaServerID := ch.Config.MediaServerID
+	if mediaServerID == "" {
+		mediaServerID = sms.DefaultMediaServerID
+	}
+	svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(c.Request.Context(), mediaServerID)
+	if err != nil {
+		return nil, err
+	}
+	items, err := a.uc.SMSAPI.smsCore.GetMediaInfo(svr, app, stream)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, reason.ErrNotFound.SetMsg("流不在线或不存在")
+	}
+	return items[0], nil
 }
 
 type refreshSnapshotInput struct {
@@ -2810,6 +2853,24 @@ func (a IPCAPI) getZones(c *gin.Context, _ *struct{}) (any, error) {
 	return a.ipc.GetZones(c.Request.Context(), channelID)
 }
 
+func (a IPCAPI) deleteZone(c *gin.Context, _ *struct{}) (gin.H, error) {
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
+	zones, err := a.ipc.DeleteZone(c.Request.Context(), channelID, c.Param("name"))
+	if err != nil {
+		return nil, err
+	}
+	ch, chErr := a.ipc.GetChannel(c.Request.Context(), channelID)
+	if chErr == nil && ch.Ext.EnabledAI {
+		if reloadErr := a.uc.AIWebhookAPI.ReloadAITask(c.Request.Context(), ch); reloadErr != nil {
+			slog.WarnContext(c.Request.Context(), "reload AI task after zone delete failed", "channel_id", channelID, "err", reloadErr)
+		}
+	}
+	return gin.H{"items": zones}, nil
+}
+
 // getSnapshot godoc
 // @Summary 获取通道快照图片
 // @Tags Channel
@@ -3045,9 +3106,7 @@ func (a IPCAPI) setRecordMode(c *gin.Context, in *setRecordModeInput) (gin.H, er
 		return nil, err
 	}
 
-	// 根据录像模式控制 ZLM 录制：
-	// - always/ai: 如果流在线则启动录制
-	// - none: 停止录制
+	// 根据录像模式控制 ZLM 录制：always/ai 在线时启动，none 停止。
 	if channel.Ext.IsNoneRecord() {
 		// none 模式：停止录制
 		if err := a.recordingCore.StopRecording(ctx, channel.GetApp(), channel.GetStream()); err != nil {

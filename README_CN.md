@@ -47,12 +47,15 @@
 
 + lalmax 已支持 zlm 接口，[lalmax](https://github.com/q191201771/lalmax)
 
-+ **lalmax-pro 有 golang 流媒体的需求请联系微信 [joezhang202512](https://github.com/joestarzxh)(备注留言gowvp)**
++ **[lalmax-pro/streamsvr](./docs/streamsvr_product_intro_zh.md) 有 golang 企业级流媒体的需求请联系微信 [joestar2006](https://github.com/joestarzxh)(备注留言gowvp)**
   - 对环境没有要求，不需要安装任何静态库，支持跨平台编译
   - 支持特色功能定制
   - 支持 G711(G711A/G711U) 转 AAC
+  - 支持 AAC 转 opus 音频转码
 
 项目框架基于 @ixugo [goddd](https://github.com/ixugo/goddd)
+
+商用授权请联系微信 **golangxx**，申请备注 "owl"，非授权改动请按照 GPL 协议开源前后端源代码。
 
 ## QA
 
@@ -224,12 +227,7 @@ ZLM使用文档 [github.com/ZLMediaKit/ZLMediaKit](https://github.com/ZLMediaKit
 
 [如何用 docker compose 部署项目](https://www.bilibili.com/video/BV112QYY3EZX)
 
-
-
-
 [docker hub](https://hub.docker.com/r/gospace/gowvp)
-
-
 
 ** gowvp & zlmediakit 融合镜像(推荐)**
 
@@ -245,7 +243,8 @@ services:
     # network_mode: host
     ports:
       # gb28181
-      - 15123:15123 # 管理平台 http 端口
+      - 15123:15123 # HTTP：Web 管理 + ONVIF SOAP 服务端
+      - 3702:3702/udp # ONVIF WS-Discovery 组播发现
       - 15060:15060 # gb28181 sip tcp 端口
       - 15060:15060/udp # gb28181 sip udp 端口
       # zlm
@@ -294,8 +293,10 @@ services:
 
 ## 功能特性
 
+**OWL**
+
 - [x] 开箱即用，支持响应式 web 管理
-- [x] 支持输出 HTTP_FLV,Websocket_FLV,HLS,WebRTC,RTSP、RTMP 等多种协议流地址
+- [x] 支持输出 FLV、WS-FLV、HLS、WebRTC、RTSP、RTMP 等多种协议流地址
 - [x] 支持局域网/互联网/多层 NAT/特殊网络环境部署
 - [x] 支持 SQLite 数据库快速部署
 - [x] 支持 PostgreSQL/MySQL 数据库
@@ -316,16 +317,107 @@ services:
   - [x] 音频支持 g711a/g711u/aac
   - [x] 快照
   - [x] 支持跨域
-  - [ ] 卡存录像回放(由 摄像头 录制在SD卡，暂无开发计划)
-- [x] 支持 onvif 接入与播放
+- [x] 支持 onvif 接入与播放（客户端，发现外部摄像机）
+- [x] 支持 onvif 虚拟设备/服务端（向 Home Assistant 等暴露平台通道）
 - [x] 支持 rtmp 推流
 - [x] 支持 rtsp 拉流
 - [x] 支持 ai 算法分析与告警
-- [x] 云端录像回放(由 owl 录制)
+- [x] 平台录像回放(由 owl 录制在服务器磁盘)
 - [ ] 支持 ONVIF PTZ 云台控制
 - [x] 支持中文和 English
 - [x] SIP IP 限流，国外攻击特征系统防护，防止云服务被境外 sip 攻击
 
+**OWL PRO**
+
+- [x] 分屏预览
+- [x] 分屏卡存录像回放(摄像头内置录像)
+- [x] 主子码流
+- [x] 自研 owl 播放器，兼容不同环境的 H265 流播放(仅支持 FLV 协议)
+
+## ONVIF 虚拟设备（服务端）
+
+GoWVP 可作为 **ONVIF 网络视频发送设备（NVT）**，供 Home Assistant 等系统按 ONVIF 摄像机方式接入，并通过 `GetStreamUri` 获取平台通道对应的 RTSP 地址。
+
+### 端口与防火墙（局域网）
+
+| 用途 | 协议 | 端口 | 是否要开端口 |
+| --- | --- | --- | --- |
+| Web 管理 + ONVIF SOAP | TCP | `Server.HTTP.Port`（默认 **15123**） | 仅当 HA/NVR 与 GoWVP 跨网段访问时需要；同网段一般不用单独放行 |
+| `GetStreamUri` 返回的 RTSP 拉流 | TCP | ZLM RTSP（默认 **554**，见 `docker-compose` 映射） | 客户端从 ZLM 拉流时，跨网段需能访问该端口 |
+| ONVIF WS-Discovery（本机对外广播） | UDP | **3702**（组播 `239.255.255.250`） | Docker 需映射 `3702:3702/udp`；同网段一般无需单独防火 |
+
+ONVIF SOAP 路径（与 Web 共用 HTTP 端口）：
+
+- `POST http://<主机>:15123/onvif/device_service`
+- `POST http://<host>:15123/onvif/media_service`
+
+鉴权使用 `configs/config.toml` 中的 `Server.Username` / `Server.Password`（WS-Security），与 Web 登录默认一致（`admin` / `admin`）。
+
+**Home Assistant 手动添加示例：**
+
+- 主机：`http://<局域网IP>:15123/onvif/device_service`
+- 用户名 / 密码：与 `config.toml` 中 `Server.Username`、`Server.Password` 一致
+
+**自动发现：** 启动后在本机 **UDP 3702** 应答 WS-Discovery Probe，HA 可搜索到设备；`configs/config.toml` 中 `Media.IP`（或 `Sip.Host`）会写入 `XAddrs`，宜填局域网 IP。
+
+**说明：** `GET /onvif/discover` 是 GoWVP **扫描局域网内其它 ONVIF 摄像机**（客户端能力），与上述服务端组播发现不是同一功能。
+
+## Webhook 告警事件推送与接收
+
+GoWVP 支持将告警事件通过 HTTP Webhook 推送到外部系统，也支持接收来自其他 GoWVP 实例的告警推送，实现**主从级联**部署。
+
+### 路由
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/webhook/events` | 统一事件接收入口，兼容 Python AI 和 gowvp 间转发两种来源 |
+
+### 配置（`configs/config.toml`）
+
+```toml
+[Server.Webhook]
+  # 推送目标 URL 数组，secret 直接内嵌于 URL query 参数
+  Targets = [
+    "http://192.168.1.100:15123/webhook/events?secret=your-recv-secret",
+  ]
+  # 最大重试次数，0 = 使用内置默认值 3
+  MaxRetry = 3
+  # 每个目标的 channel 缓冲队列大小，0 = 内置默认 64
+  BufferSize = 64
+  # 本节点接收 webhook 时校验的密钥（首次启动自动生成并持久化）
+  RecvSecret = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+```
+
+### 推送 payload 格式（gowvp → gowvp）
+
+```json
+{
+  "did": "device-id",
+  "cid": "channel-id",
+  "started_at": "2024-01-01T10:00:00Z",
+  "ended_at": "2024-01-01T10:00:01Z",
+  "label": "person",
+  "score": 0.95,
+  "zones": "{\"x_min\":0,\"y_min\":0,\"x_max\":100,\"y_max\":100}",
+  "image_base64": "<base64 编码的 JPEG 图片>",
+  "model": "yolov8"
+}
+```
+
+> `image_base64`：主节点读取本地图片后 base64 编码随 payload 发送，副节点解码后落盘存储，解决跨节点文件路径失效问题。
+> 若图片读取失败，`image_base64` 字段为空，副节点不存图片但事件数据仍会入库。
+
+### 重试策略
+
+推送失败时自动重试，采用**指数退避 + ±25% jitter**：
+
+| 重试次 | 基础延迟 |
+|--------|----------|
+| 第 1 次 | ~1s |
+| 第 2 次 | ~2s |
+| 第 3 次 | ~4s（上限 10s）|
+
+HTTP 4xx（除 429/408）视为永久失败，不再重试。每次重试失败记录 warn 日志，耗尽重试次数记录 error 日志。
 
 ## 感谢
 

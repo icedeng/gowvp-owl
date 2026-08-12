@@ -2,8 +2,6 @@
 package api
 
 import (
-	"strconv"
-
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/internal/core/config"
@@ -26,81 +24,71 @@ func NewConfigAPI(db *gorm.DB, conf *conf.Bootstrap) ConfigAPI {
 	return ConfigAPI{configCore: core, conf: conf}
 }
 
+// configIDInput 配置 ID 路径参数
+type configIDInput struct {
+	ID int `uri:"id" binding:"required"`
+}
+
+// updateConfigInput 更新配置的请求参数（路径 ID + 请求体）
+type updateConfigInput struct {
+	ID int `uri:"id" binding:"required"`
+	config.EditConfigInput
+}
+
 func registerConfig(g gin.IRouter, api ConfigAPI, handler ...gin.HandlerFunc) {
 	{
 		group := g.Group("/configs", handler...)
-		// group.GET("", web.WrapH(api.findConfig))
+		// group.GET("", web.WrapH(api.listConfigs))
 		// group.GET("/:id", web.WrapH(api.getConfig))
-		// group.PUT("/:id", web.WrapH(api.editConfig))
-		// group.POST("", web.WrapH(api.addConfig))
-		// group.DELETE("/:id", web.WrapH(api.delConfig))
+		// group.PUT("/:id", web.WrapH(api.updateConfig))
+		// group.POST("", web.WrapH(api.createConfig))
+		// group.DELETE("/:id", web.WrapH(api.deleteConfig))
 
 		group.GET("/info", web.WrapH(api.getConfigInfo))
-		group.PUT("/info/sip", web.WrapH(api.editSIP))
+		group.PUT("/info/sip", web.WrapH(api.updateSIP))
 	}
 }
 
 // >>> config >>>>>>>>>>>>>>>>>>>>
 
-func (a ConfigAPI) findConfig(c *gin.Context, in *config.FindConfigInput) (any, error) {
-	items, total, err := a.configCore.FindConfig(c.Request.Context(), in)
+func (a ConfigAPI) listConfigs(c *gin.Context, in *config.FindConfigInput) (any, error) {
+	items, total, err := a.configCore.ListConfigs(c.Request.Context(), in)
 	return gin.H{"items": items, "total": total}, err
 }
 
-func (a ConfigAPI) getConfig(c *gin.Context, _ *struct{}) (any, error) {
-	configID, _ := strconv.Atoi(c.Param("id"))
-	return a.configCore.GetConfig(c.Request.Context(), configID)
+func (a ConfigAPI) getConfig(c *gin.Context, in *configIDInput) (any, error) {
+	return a.configCore.GetConfig(c.Request.Context(), in.ID)
 }
 
-func (a ConfigAPI) editConfig(c *gin.Context, in *config.EditConfigInput) (any, error) {
-	configID, _ := strconv.Atoi(c.Param("id"))
-	return a.configCore.EditConfig(c.Request.Context(), in, configID)
+func (a ConfigAPI) updateConfig(c *gin.Context, in *updateConfigInput) (any, error) {
+	return a.configCore.UpdateConfig(c.Request.Context(), &in.EditConfigInput, in.ID)
 }
 
-func (a ConfigAPI) addConfig(c *gin.Context, in *config.AddConfigInput) (any, error) {
-	return a.configCore.AddConfig(c.Request.Context(), in)
+func (a ConfigAPI) createConfig(c *gin.Context, in *config.AddConfigInput) (any, error) {
+	return a.configCore.CreateConfig(c.Request.Context(), in)
 }
 
-func (a ConfigAPI) delConfig(c *gin.Context, _ *struct{}) (any, error) {
-	configID, _ := strconv.Atoi(c.Param("id"))
-	return a.configCore.DelConfig(c.Request.Context(), configID)
+func (a ConfigAPI) deleteConfig(c *gin.Context, in *configIDInput) (any, error) {
+	return a.configCore.DeleteConfig(c.Request.Context(), in.ID)
 }
 
 type getConfigInfoOutput struct {
 	SIP conf.SIP `json:"sip"`
 }
 
-// getConfigInfo godoc
-// @Summary 获取系统配置摘要
-// @Tags Config
-// @Security BearerAuth
-// @Produce json
-// @Success 200 {object} SwaggerConfigInfoOutput
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /configs/info [get]
 func (a ConfigAPI) getConfigInfo(c *gin.Context, _ *struct{}) (*getConfigInfoOutput, error) {
 	return &getConfigInfoOutput{
 		SIP: a.conf.Sip,
 	}, nil
 }
 
-// editSIP godoc
-// @Summary 修改 SIP 配置
-// @Tags Config
-// @Security BearerAuth
-// @Accept json
-// @Produce json
-// @Param body body SwaggerSIPConfig true "SIP 配置"
-// @Success 200 {object} SwaggerMessageResponse
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /configs/info/sip [put]
-func (a ConfigAPI) editSIP(_ *gin.Context, in *conf.SIP) (gin.H, error) {
+func (a ConfigAPI) updateSIP(_ *gin.Context, in *conf.SIP) (gin.H, error) {
 	if err := copier.Copy(&a.conf.Sip, in); err != nil {
-		return nil, reason.ErrServer.SetMsg(err.Error())
+		return nil, reason.ErrServer.WithMsg(err.Error())
 	}
 
 	if err := conf.WriteConfig(a.conf, a.conf.ConfigPath); err != nil {
-		return nil, reason.ErrServer.SetMsg(err.Error())
+		return nil, reason.ErrServer.WithMsg(err.Error())
 	}
 	a.uc.SipServer.SetConfig()
 

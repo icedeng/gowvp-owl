@@ -19,8 +19,8 @@ func NewMetadata(db *gorm.DB) Metadata {
 	return Metadata{db: db}
 }
 
-// Find implements metadata.MetadataStorer.
-func (d Metadata) Find(ctx context.Context, bs *[]*metadata.Metadata, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
+// List implements metadata.MetadataStorer.
+func (d Metadata) List(ctx context.Context, bs *[]*metadata.Metadata, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
 	return orm.FindWithContext(ctx, d.db, bs, page, opts...)
 }
 
@@ -29,18 +29,18 @@ func (d Metadata) Get(ctx context.Context, model *metadata.Metadata, opts ...orm
 	return orm.FirstWithContext(ctx, d.db, model, opts...)
 }
 
-// Add implements metadata.MetadataStorer.
-func (d Metadata) Add(ctx context.Context, model *metadata.Metadata) error {
+// Create implements metadata.MetadataStorer.
+func (d Metadata) Create(ctx context.Context, model *metadata.Metadata) error {
 	return d.db.WithContext(ctx).Create(model).Error
 }
 
-// Edit implements metadata.MetadataStorer.
-func (d Metadata) Edit(ctx context.Context, model *metadata.Metadata, changeFn func(*metadata.Metadata), opts ...orm.QueryOption) error {
+// Update implements metadata.MetadataStorer.
+func (d Metadata) Update(ctx context.Context, model *metadata.Metadata, changeFn func(*metadata.Metadata), opts ...orm.QueryOption) error {
 	return orm.UpdateWithContext(ctx, d.db, model, changeFn, opts...)
 }
 
-// Del implements metadata.MetadataStorer.
-func (d Metadata) Del(ctx context.Context, model *metadata.Metadata, opts ...orm.QueryOption) error {
+// Delete implements metadata.MetadataStorer.
+func (d Metadata) Delete(ctx context.Context, model *metadata.Metadata, opts ...orm.QueryOption) error {
 	return orm.DeleteWithContext(ctx, d.db, model, opts...)
 }
 
@@ -61,7 +61,7 @@ func (d Metadata) Session(ctx context.Context, changeFns ...func(*gorm.DB) error
 	})
 }
 
-// EditWithSession 修改事务
-func (d Metadata) EditWithSession(tx *gorm.DB, model *metadata.Metadata, changeFn func(b *metadata.Metadata) error, opts ...orm.QueryOption) error {
+// UpdateWithSession 修改事务
+func (d Metadata) UpdateWithSession(tx *gorm.DB, model *metadata.Metadata, changeFn func(b *metadata.Metadata) error, opts ...orm.QueryOption) error {
 	return orm.UpdateWithSession(tx, model, changeFn, opts...)
 }

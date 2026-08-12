@@ -178,19 +178,19 @@ func (n *NodeManager) Run(bc *conf.Bootstrap, serverPort int) error {
 	}
 
 	var ms MediaServer
-	if err := n.storer.MediaServer().Edit(ctx, &ms, func(b *MediaServer) {
+	if err := n.storer.MediaServer().Update(ctx, &ms, func(b *MediaServer) {
 		setValueFn(b)
 	}, orm.Where("id=?", DefaultMediaServerID)); err != nil {
 		if !orm.IsErrRecordNotFound(err) {
 			return err
 		}
 		setValueFn(&ms)
-		if err := n.storer.MediaServer().Add(ctx, &ms); err != nil {
+		if err := n.storer.MediaServer().Create(ctx, &ms); err != nil {
 			return err
 		}
 	}
 
-	mediaServers, _, err := n.findMediaServer(ctx, &FindMediaServerInput{
+	mediaServers, _, err := n.listMediaServers(ctx, &FindMediaServerInput{
 		PagerFilter: web.NewPagerFilterMaxSize(),
 	})
 	if err != nil {
@@ -231,7 +231,7 @@ func (n *NodeManager) connection(server *MediaServer, serverPort int) error {
 	log.Info("MediaServer 连接成功")
 
 	// 更新数据库中的端口信息等
-	if err := n.storer.MediaServer().Edit(ctx, &MediaServer{}, func(b *MediaServer) {
+	if err := n.storer.MediaServer().Update(ctx, &MediaServer{}, func(b *MediaServer) {
 		// 更新字段
 		b.Ports = server.Ports
 		b.HookAliveInterval = server.HookAliveInterval
@@ -267,12 +267,12 @@ func (n *NodeManager) IsOnline(serverID string) bool {
 	return isOnline
 }
 
-// findMediaServer Paginated search
-func (n *NodeManager) findMediaServer(ctx context.Context, in *FindMediaServerInput) ([]*MediaServer, int64, error) {
+// listMediaServers Paginated search
+func (n *NodeManager) listMediaServers(ctx context.Context, in *FindMediaServerInput) ([]*MediaServer, int64, error) {
 	items := make([]*MediaServer, 0)
-	total, err := n.storer.MediaServer().Find(ctx, &items, in)
+	total, err := n.storer.MediaServer().List(ctx, &items, in)
 	if err != nil {
-		return nil, 0, reason.ErrDB.Withf(`Find err[%s]`, err.Error())
+		return nil, 0, reason.ErrDB.Withf(`List err[%s]`, err.Error())
 	}
 	return items, total, nil
 }
@@ -304,8 +304,8 @@ func (n *NodeManager) CloseStreams(server *MediaServer, in zlm.CloseStreamsReque
 	return driver.CloseStreams(context.Background(), server, &in)
 }
 
-// AddStreamProxy 添加流代理
-func (n *NodeManager) AddStreamProxy(server *MediaServer, in AddStreamProxyRequest) (*zlm.AddStreamProxyResponse, error) {
+// CreateStreamProxy 添加流代理
+func (n *NodeManager) CreateStreamProxy(server *MediaServer, in AddStreamProxyRequest) (*zlm.AddStreamProxyResponse, error) {
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
@@ -321,12 +321,21 @@ func (n *NodeManager) GetSnapshot(server *MediaServer, in GetSnapRequest) ([]byt
 	return driver.GetSnapshot(context.Background(), server, &in)
 }
 
-func (n *NodeManager) GetStreamLiveAddr(server *MediaServer, httpPrefix, host, app, stream string) StreamLiveAddr {
+func (n *NodeManager) GetStreamLiveAddr(server *MediaServer, httpPrefix, host, app, stream, token string) StreamLiveAddr {
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return StreamLiveAddr{Label: err.Error()}
 	}
-	return driver.GetStreamLiveAddr(context.Background(), server, httpPrefix, host, app, stream)
+	return driver.GetStreamLiveAddr(context.Background(), server, httpPrefix, host, app, stream, token)
+}
+
+// GetMediaInfo 获取指定流的详细音视频轨道信息
+func (n *NodeManager) GetMediaInfo(server *MediaServer, app, stream string) ([]zlm.MediaItem, error) {
+	driver, err := n.getDriver(server.Type)
+	if err != nil {
+		return nil, err
+	}
+	return driver.GetMediaInfo(context.Background(), server, app, stream)
 }
 
 // StartRecord 开始录制指定流
@@ -345,4 +354,13 @@ func (n *NodeManager) StopRecord(server *MediaServer, in zlm.StopRecordRequest) 
 		return nil, err
 	}
 	return driver.StopRecord(context.Background(), server, &in)
+}
+
+// GetMediaList 批量获取所有在线流列表（含录制状态）
+func (n *NodeManager) GetMediaList(server *MediaServer) (*zlm.GetMediaListResponse, error) {
+	driver, err := n.getDriver(server.Type)
+	if err != nil {
+		return nil, err
+	}
+	return driver.GetMediaList(context.Background(), server)
 }

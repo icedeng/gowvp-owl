@@ -19,8 +19,8 @@ func NewStreamProxy(db *gorm.DB) StreamProxy {
 	return StreamProxy{db: db}
 }
 
-// Find implements proxy.StreamProxyStorer.
-func (d StreamProxy) Find(ctx context.Context, bs *[]*proxy.StreamProxy, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
+// List implements proxy.StreamProxyStorer.
+func (d StreamProxy) List(ctx context.Context, bs *[]*proxy.StreamProxy, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
 	return orm.FindWithContext(ctx, d.db, bs, page, opts...)
 }
 
@@ -29,18 +29,18 @@ func (d StreamProxy) Get(ctx context.Context, model *proxy.StreamProxy, opts ...
 	return orm.FirstWithContext(ctx, d.db, model, opts...)
 }
 
-// Add implements proxy.StreamProxyStorer.
-func (d StreamProxy) Add(ctx context.Context, model *proxy.StreamProxy) error {
+// Create implements proxy.StreamProxyStorer.
+func (d StreamProxy) Create(ctx context.Context, model *proxy.StreamProxy) error {
 	return d.db.WithContext(ctx).Create(model).Error
 }
 
-// Edit implements proxy.StreamProxyStorer.
-func (d StreamProxy) Edit(ctx context.Context, model *proxy.StreamProxy, changeFn func(*proxy.StreamProxy), opts ...orm.QueryOption) error {
+// Update implements proxy.StreamProxyStorer.
+func (d StreamProxy) Update(ctx context.Context, model *proxy.StreamProxy, changeFn func(*proxy.StreamProxy), opts ...orm.QueryOption) error {
 	return orm.UpdateWithContext(ctx, d.db, model, changeFn, opts...)
 }
 
-// Del implements proxy.StreamProxyStorer.
-func (d StreamProxy) Del(ctx context.Context, model *proxy.StreamProxy, opts ...orm.QueryOption) error {
+// Delete implements proxy.StreamProxyStorer.
+func (d StreamProxy) Delete(ctx context.Context, model *proxy.StreamProxy, opts ...orm.QueryOption) error {
 	return orm.DeleteWithContext(ctx, d.db, model, opts...)
 }
 
@@ -55,6 +55,6 @@ func (d StreamProxy) Session(ctx context.Context, changeFns ...func(*gorm.DB) er
 	})
 }
 
-func (d StreamProxy) EditWithSession(tx *gorm.DB, model *proxy.StreamProxy, changeFn func(b *proxy.StreamProxy) error, opts ...orm.QueryOption) error {
+func (d StreamProxy) UpdateWithSession(tx *gorm.DB, model *proxy.StreamProxy, changeFn func(b *proxy.StreamProxy) error, opts ...orm.QueryOption) error {
 	return orm.UpdateWithSession(tx, model, changeFn, opts...)
 }

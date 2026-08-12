@@ -52,7 +52,7 @@ func (c Core) cleanupExpiredEvents(days int) {
 		// 查询一批过期事件
 		var events []*Event
 		pager := web.PagerFilter{Page: 1, Size: batchSize}
-		_, err := c.store.Event().Find(ctx, &events, &pager,
+		_, err := c.store.Event().List(ctx, &events, &pager,
 			orm.Where("started_at < ?", cutoffMs),
 		)
 		if err != nil {

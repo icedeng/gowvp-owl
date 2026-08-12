@@ -163,6 +163,13 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		g.respondRegister(ctx, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Request-URI 的 user 应为平台 SIP ID。非空且不匹配时尽早拒绝，避免后续信令静默失败。
+	if recipient := ctx.Request.Recipient(); recipient != nil {
+		if user := recipient.User(); user != nil && user.String() != "" && user.String() != g.cfg.ID {
+			g.respondRegister(ctx, http.StatusForbidden, fmt.Sprintf("server id mismatch, expect %s got %s", g.cfg.ID, user.String()))
+			return
+		}
+	}
 
 	// 9.1.2.3 注册重定向：当网关层注入 X-GB-Redirect 时返回 302。
 	// 示例值：sip:34020000002000000001@10.0.0.8:5060

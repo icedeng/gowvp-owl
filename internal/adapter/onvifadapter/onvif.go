@@ -74,7 +74,7 @@ func NewAdapter(adapter ipc.Adapter, sms sms.Core) *Adapter {
 }
 
 func (a *Adapter) init() {
-	devices, err := a.adapter.FindDevices(context.TODO())
+	devices, err := a.adapter.ListDevices(context.TODO())
 	if err != nil {
 		panic(err)
 	}
@@ -88,7 +88,7 @@ func (a *Adapter) init() {
 					HttpClient: a.client,
 				})
 				if err != nil {
-					_ = a.adapter.Edit(device.ID, func(d *ipc.Device) {
+					_ = a.adapter.Update(device.ID, func(d *ipc.Device) {
 						d.IsOnline = false
 					})
 					slog.Error("初始化 ONVIF 设备失败", "err", err, "device_id", device.ID)

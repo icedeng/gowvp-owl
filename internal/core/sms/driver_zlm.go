@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gowvp/owl/internal/notify"
 	"github.com/gowvp/owl/pkg/zlm"
 )
 
@@ -40,15 +41,15 @@ type ZLMDriver struct {
 }
 
 // GetStreamLiveAddr implements Driver.
-func (d *ZLMDriver) GetStreamLiveAddr(ctx context.Context, ms *MediaServer, httpPrefix, host, app, stream string) StreamLiveAddr {
+func (d *ZLMDriver) GetStreamLiveAddr(ctx context.Context, ms *MediaServer, httpPrefix, host, app, stream, token string) StreamLiveAddr {
 	var out StreamLiveAddr
 	out.Label = "ZLM"
 	wsPrefix := strings.Replace(strings.Replace(httpPrefix, "https", "wss", 1), "http", "ws", 1)
-	out.WSFLV = fmt.Sprintf("%s/proxy/sms/%s/%s.live.flv", wsPrefix, app, stream)
-	out.HTTPFLV = fmt.Sprintf("%s/proxy/sms/%s/%s.live.flv", httpPrefix, app, stream)
-	out.HLS = fmt.Sprintf("%s/proxy/sms/%s/%s/hls.fmp4.m3u8", httpPrefix, app, stream)
+	out.WSFLV = fmt.Sprintf("%s/proxy/sms/%s/%s.live.flv?token=%s", wsPrefix, app, stream, token)
+	out.FLV = fmt.Sprintf("%s/proxy/sms/%s/%s.live.flv?token=%s", httpPrefix, app, stream, token)
+	out.HLS = fmt.Sprintf("%s/proxy/sms/%s/%s/hls.fmp4.m3u8?token=%s", httpPrefix, app, stream, token)
 	rtcPrefix := strings.Replace(strings.Replace(httpPrefix, "https", "webrtc", 1), "http", "webrtc", 1)
-	out.WebRTC = fmt.Sprintf("%s/proxy/sms/index/api/webrtc?app=%s&stream=%s&type=play", rtcPrefix, app, stream)
+	out.WebRTC = fmt.Sprintf("%s/proxy/sms/index/api/webrtc?app=%s&stream=%s&type=play&token=%s", rtcPrefix, app, stream, token)
 	out.RTMP = fmt.Sprintf("rtmp://%s:%d/%s/%s", host, ms.Ports.RTMP, app, stream)
 	out.RTSP = fmt.Sprintf("rtsp://%s:%d/%s/%s", host, ms.Ports.RTSP, app, stream)
 	return out
@@ -139,6 +140,7 @@ func (d *ZLMDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL strin
 		ProtocolEnableFmp4:    new("0"),
 		ProtocolEnableHls:     new("0"),
 		ProtocolEnableHlsFmp4: new("1"),
+		RtmpEnhanced:          new("1"),
 
 		HookOnPlay:                     new(fmt.Sprintf("%s/on_play", webhookURL)),
 		HookOnPublish:                  new(fmt.Sprintf("%s/on_publish", webhookURL)),
@@ -170,6 +172,7 @@ func (d *ZLMDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL strin
 		RtspLowLatency:           new("1"),
 		GeneralUnreadyFrameCache: new("50"),
 		GeneralMergeWriteMS:      new("100"),
+		GeneralListenIP:          new("0.0.0.0"),
 
 		// 录像配置
 		// 移除默认的 "record" 目录层级，简化路径结构
@@ -206,6 +209,7 @@ func (d *ZLMDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL strin
 			"from", currentRtcPort, "to", rtcPort)
 		if rerr := engine.RestartServer(); rerr != nil {
 			slog.Warn("ZLM 重启调用失败, WebRTC 可能因端口未重绑而黑屏, 请手动重启容器", "err", rerr)
+			notify.Warn("ZLM 重启调用失败, WebRTC 可能因端口未重绑而黑屏, 请手动重启容器")
 			return nil
 		}
 		waitZLMReady(ctx, engine, rtcPort)
@@ -235,6 +239,7 @@ func waitZLMReady(ctx context.Context, engine zlm.Engine, expectRtcPort string) 
 		}
 	}
 	slog.Warn("等待 ZLM 重启就绪超时, 建议检查容器状态", "expect_rtc_port", expectRtcPort)
+	notify.Warn(fmt.Sprintf("等待 ZLM 重启就绪超时 (期望 rtc.port=%s), 建议检查容器状态", expectRtcPort))
 }
 
 func (d *ZLMDriver) Ping(ctx context.Context, ms *MediaServer) error {
@@ -284,6 +289,21 @@ func (d *ZLMDriver) GetSnapshot(ctx context.Context, ms *MediaServer, req *GetSn
 	return engine.GetSnap(req.GetSnapRequest)
 }
 
+// GetMediaInfo 获取指定流的详细音视频轨道信息
+func (d *ZLMDriver) GetMediaInfo(ctx context.Context, ms *MediaServer, app, stream string) ([]zlm.MediaItem, error) {
+	engine := d.withConfig(ms)
+	resp, err := engine.GetMediaInfo(zlm.GetMediaInfoRequest{
+		Schema: "rtsp",
+		Vhost:  "__defaultVhost__",
+		App:    app,
+		Stream: stream,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
 // StartRecord 开始录制，通知 ZLM 对指定流进行 MP4 录制
 func (d *ZLMDriver) StartRecord(ctx context.Context, ms *MediaServer, req *zlm.StartRecordRequest) (*zlm.StartRecordResponse, error) {
 	engine := d.withConfig(ms)
@@ -294,4 +314,10 @@ func (d *ZLMDriver) StartRecord(ctx context.Context, ms *MediaServer, req *zlm.S
 func (d *ZLMDriver) StopRecord(ctx context.Context, ms *MediaServer, req *zlm.StopRecordRequest) (*zlm.StopRecordResponse, error) {
 	engine := d.withConfig(ms)
 	return engine.StopRecord(*req)
+}
+
+// GetMediaList 批量获取所有在线流列表（含录制状态）
+func (d *ZLMDriver) GetMediaList(ctx context.Context, ms *MediaServer) (*zlm.GetMediaListResponse, error) {
+	engine := d.withConfig(ms)
+	return engine.GetMediaList()
 }

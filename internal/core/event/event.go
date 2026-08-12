@@ -13,19 +13,19 @@ import (
 
 // EventStorer Instantiation interface
 type EventStorer interface {
-	Find(context.Context, *[]*Event, orm.Pager, ...orm.QueryOption) (int64, error)
+	List(context.Context, *[]*Event, orm.Pager, ...orm.QueryOption) (int64, error)
 	Get(context.Context, *Event, ...orm.QueryOption) error
-	Add(context.Context, *Event) error
-	Edit(context.Context, *Event, func(*Event), ...orm.QueryOption) error
-	Del(context.Context, *Event, ...orm.QueryOption) error
+	Create(context.Context, *Event) error
+	Update(context.Context, *Event, func(*Event), ...orm.QueryOption) error
+	Delete(context.Context, *Event, ...orm.QueryOption) error
 	Count(context.Context, ...orm.QueryOption) (int64, error)
 
 	Session(context.Context, ...func(*gorm.DB) error) error
-	EditWithSession(*gorm.DB, *Event, func(b *Event) error, ...orm.QueryOption) error
+	UpdateWithSession(*gorm.DB, *Event, func(b *Event) error, ...orm.QueryOption) error
 }
 
-// FindEvents 分页查询事件列表，支持按 CID 和时间范围筛选
-func (c Core) FindEvents(ctx context.Context, in *FindEventInput) ([]*Event, int64, error) {
+// ListEvents 分页查询事件列表，支持按 CID 和时间范围筛选
+func (c Core) ListEvents(ctx context.Context, in *FindEventInput) ([]*Event, int64, error) {
 	query := orm.NewQuery(4).OrderBy("started_at DESC")
 
 	if in.CID != "" {
@@ -42,7 +42,7 @@ func (c Core) FindEvents(ctx context.Context, in *FindEventInput) ([]*Event, int
 	}
 
 	items := make([]*Event, 0, in.Limit())
-	total, err := c.store.Event().Find(ctx, &items, in, query.Encode()...)
+	total, err := c.store.Event().List(ctx, &items, in, query.Encode()...)
 	if err != nil {
 		return nil, 0, reason.ErrDB.Withf(`Find in[%+v] err[%s]`, in, err.Error())
 	}
@@ -61,23 +61,23 @@ func (c Core) GetEvent(ctx context.Context, id int64) (*Event, error) {
 	return &out, nil
 }
 
-// AddEvent 新增事件记录
-func (c Core) AddEvent(ctx context.Context, in *AddEventInput) (*Event, error) {
+// CreateEvent 新增事件记录
+func (c Core) CreateEvent(ctx context.Context, in *AddEventInput) (*Event, error) {
 	var out Event
 	if err := copier.Copy(&out, in); err != nil {
 		slog.ErrorContext(ctx, "Copy", "err", err)
 	}
 
-	if err := c.store.Event().Add(ctx, &out); err != nil {
-		return nil, reason.ErrDB.Withf(`Add err[%s]`, err.Error())
+	if err := c.store.Event().Create(ctx, &out); err != nil {
+		return nil, reason.ErrDB.Withf(`Create err[%s]`, err.Error())
 	}
 	return &out, nil
 }
 
-// EditEvent 更新事件信息
-func (c Core) EditEvent(ctx context.Context, in *EditEventInput, id int64) (*Event, error) {
+// UpdateEvent 更新事件信息
+func (c Core) UpdateEvent(ctx context.Context, in *EditEventInput, id int64) (*Event, error) {
 	var out Event
-	if err := c.store.Event().Edit(ctx, &out, func(b *Event) {
+	if err := c.store.Event().Update(ctx, &out, func(b *Event) {
 		if !in.EndedAt.IsZero() {
 			b.EndedAt = in.EndedAt
 		}
@@ -87,10 +87,10 @@ func (c Core) EditEvent(ctx context.Context, in *EditEventInput, id int64) (*Eve
 	return &out, nil
 }
 
-// DelEvent 删除事件
-func (c Core) DelEvent(ctx context.Context, id int64) (*Event, error) {
+// DeleteEvent 删除事件
+func (c Core) DeleteEvent(ctx context.Context, id int64) (*Event, error) {
 	var out Event
-	if err := c.store.Event().Del(ctx, &out, orm.Where("id=?", id)); err != nil {
+	if err := c.store.Event().Delete(ctx, &out, orm.Where("id=?", id)); err != nil {
 		return nil, reason.ErrDB.Withf(`Del id[%v] err[%s]`, id, err.Error())
 	}
 	return &out, nil

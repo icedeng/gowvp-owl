@@ -36,7 +36,6 @@ tables/
 .idea/
 cover/
 *.pprof
-*.go.yaml
 *.test
 *.jpg
 __pycache__/
@@ -46,3 +45,6 @@ __pycache__/
 *.mp4
 owl
 .DS_Store
+.cursor/memory/
+.cursor/scopes/
+graphify-out/

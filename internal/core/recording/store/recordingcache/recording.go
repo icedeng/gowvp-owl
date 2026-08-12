@@ -19,9 +19,9 @@ func (c *Recording) cacheKey(key any) string {
 	return fmt.Sprintf("RECORDING:%v", key)
 }
 
-// Find implements recording.RecordingStorer.
-func (c *Recording) Find(ctx context.Context, bs *[]*recording.Recording, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
-	return c.store.Recording().Find(ctx, bs, page, opts...)
+// List implements recording.RecordingStorer.
+func (c *Recording) List(ctx context.Context, bs *[]*recording.Recording, page orm.Pager, opts ...orm.QueryOption) (int64, error) {
+	return c.store.Recording().List(ctx, bs, page, opts...)
 }
 
 // Get implements recording.RecordingStorer.
@@ -42,27 +42,27 @@ func (c *Recording) Get(ctx context.Context, model *recording.Recording, opts ..
 	return nil
 }
 
-// Add implements recording.RecordingStorer.
-func (c *Recording) Add(ctx context.Context, model *recording.Recording) error {
-	if err := c.store.Recording().Add(ctx, model); err != nil {
+// Create implements recording.RecordingStorer.
+func (c *Recording) Create(ctx context.Context, model *recording.Recording) error {
+	if err := c.store.Recording().Create(ctx, model); err != nil {
 		return err
 	}
 	c.recording.Set(ctx, c.cacheKey(model.CacheKey()), model)
 	return nil
 }
 
-// Edit implements recording.RecordingStorer.
-func (c *Recording) Edit(ctx context.Context, model *recording.Recording, changeFn func(*recording.Recording), opts ...orm.QueryOption) error {
-	if err := c.store.Recording().Edit(ctx, model, changeFn, opts...); err != nil {
+// Update implements recording.RecordingStorer.
+func (c *Recording) Update(ctx context.Context, model *recording.Recording, changeFn func(*recording.Recording), opts ...orm.QueryOption) error {
+	if err := c.store.Recording().Update(ctx, model, changeFn, opts...); err != nil {
 		return err
 	}
 	c.recording.Set(ctx, c.cacheKey(model.CacheKey()), model)
 	return nil
 }
 
-// Del implements recording.RecordingStorer.
-func (c *Recording) Del(ctx context.Context, model *recording.Recording, opts ...orm.QueryOption) error {
-	if err := c.store.Recording().Del(ctx, model, opts...); err != nil {
+// Delete implements recording.RecordingStorer.
+func (c *Recording) Delete(ctx context.Context, model *recording.Recording, opts ...orm.QueryOption) error {
+	if err := c.store.Recording().Delete(ctx, model, opts...); err != nil {
 		return err
 	}
 	c.recording.Del(ctx, c.cacheKey(model.CacheKey()))
@@ -76,15 +76,10 @@ func (c *Recording) Count(ctx context.Context, opts ...orm.QueryOption) (int64, 
 
 // Session 事务组合
 func (c *Recording) Session(ctx context.Context, changeFns ...func(*gorm.DB) error) error {
-	// return c.store.Recording().Session(ctx, changeFns...)
-	return nil
+	return c.store.Recording().Session(ctx, changeFns...)
 }
 
-// EditWithSession 修改事务
-func (c *Recording) EditWithSession(tx *gorm.DB, model *recording.Recording, changeFn func(b *recording.Recording) error, opts ...orm.QueryOption) error {
-	//	if err := c.store.Recording().EditWithSession(ctx,model, changeFn,opts...);err!=nil{
-	// return err
-	//	}
-	//	c.recording.Set(ctx, c.cacheKey(model.CacheKey() ),  model)
-	return nil
+// UpdateWithSession 修改事务
+func (c *Recording) UpdateWithSession(tx *gorm.DB, model *recording.Recording, changeFn func(b *recording.Recording) error, opts ...orm.QueryOption) error {
+	return c.store.Recording().UpdateWithSession(tx, model, changeFn, opts...)
 }
