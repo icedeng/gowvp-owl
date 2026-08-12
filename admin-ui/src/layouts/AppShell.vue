@@ -15,7 +15,6 @@ import {
   MonitorCog,
   PanelLeftClose,
   PanelLeftOpen,
-  Radio,
   RadioTower,
   Search,
   Server,
@@ -72,7 +71,6 @@ const nav: { label: string; items: NavItem[] }[] = [
     items: [
       { name: "devices", label: "国标设备", icon: Camera },
       { name: "transport-devices", label: "部标设备", icon: Truck },
-      { name: "channels", label: "通道管理", icon: Radio },
       { name: "push-streams", label: "RTMP 推流", icon: UploadCloud },
       { name: "pull-streams", label: "RTSP 拉流", icon: RadioTower },
     ],

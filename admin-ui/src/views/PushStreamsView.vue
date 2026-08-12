@@ -215,7 +215,7 @@ onMounted(load);
         </p>
       </div>
       <div class="head-actions">
-        <RouterLink class="btn" to="/channels">全部通道</RouterLink
+        <RouterLink class="btn" to="/live">实时监控</RouterLink
         ><button class="btn" :disabled="loading" @click="load">
           <RefreshCcw :class="{ 'animate-spin': loading }" />刷新</button
         ><button class="btn btn-primary" @click="create">

@@ -269,17 +269,19 @@ export function buildEasyPlayerOptions(
   } = advanced
 
   const poster = runtime.poster?.trim() || settings.posterUrl.trim()
+  const autoMse = settings.decoderMode === 'auto' &&
+    (runtime.protocol === 'ws-flv' || runtime.protocol === 'http-flv')
 
-  return {
+  const options = {
     ...EASYPLAYER_CONFIG,
     ...extraOptions,
     bufferTime: settings.bufferTime,
     loadTimeOut: settings.loadTimeOut,
     loadTimeReplay: settings.loadTimeReplay,
-    // 自动模式不显式传入解码开关，保留 EasyPlayer 内置的兼容性降级策略。
-    MSE: settings.decoderMode === 'mse' ? true : undefined,
-    WCS: settings.decoderMode === 'wcs' ? true : undefined,
-    WASM: settings.decoderMode === 'wasm' ? true : undefined,
+    // FLV 在自动模式下优先使用浏览器 MSE，避免回落到需要额外 WASM 初始化的路径。
+    MSE: settings.decoderMode === 'mse' || autoMse,
+    WCS: settings.decoderMode === 'wcs',
+    WASM: settings.decoderMode === 'wasm',
     WASMSIMD: settings.wasmSimd,
     gpuDecoder: settings.gpuDecoder,
     webGPU: settings.webGPU,
@@ -306,6 +308,10 @@ export function buildEasyPlayerOptions(
     isMute: !runtime.muted,
     isRtcZLM: runtime.protocol === 'webrtc',
   }
+  // EasyPlayer Pro 会把存在但值为 undefined 的字段视为非法配置。
+  return Object.fromEntries(
+    Object.entries(options).filter(([, value]) => value !== undefined)
+  )
 }
 
 export type EasyPlayerConfig = typeof EASYPLAYER_CONFIG

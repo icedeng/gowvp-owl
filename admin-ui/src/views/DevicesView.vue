@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import {
   Clock3,
+  ChevronRight,
   Eye,
   EyeOff,
   History,
@@ -327,20 +328,22 @@ onMounted(load);
                 </small>
               </td>
               <td data-label="操作">
-                <div class="row-actions">
+                <div class="device-row-actions">
                   <button
                     type="button"
-                    class="btn btn-sm"
+                    class="device-row-action"
                     :disabled="actionLoading === device.id"
+                    :aria-label="`刷新${device.name || device.device_id || '设备'}目录`"
+                    title="刷新目录"
                     @click="refreshDevice(device)"
                   >
                     <LoaderCircle v-if="actionLoading === device.id" class="animate-spin" />
-                    <RefreshCcw v-else />刷新
+                    <RefreshCcw v-else />
                   </button>
                   <RouterLink
-                    class="btn btn-sm"
+                    class="device-row-detail"
                     :to="`/devices/${encodeURIComponent(device.id)}`"
-                  >详情</RouterLink>
+                  >详情<ChevronRight /></RouterLink>
                 </div>
               </td>
             </tr>

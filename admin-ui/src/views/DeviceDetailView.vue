@@ -5,6 +5,7 @@ import {
   Activity,
   ArrowLeft,
   Camera,
+  ChevronDown,
   ChevronRight,
   Clock3,
   Download,
@@ -36,6 +37,7 @@ const route = useRoute();
 const router = useRouter();
 const ui = useUiStore();
 type DetailTab = "overview" | "channels" | "operations" | "diagnostics";
+type HistoryKind = "heartbeat" | "register";
 
 const tab = ref<DetailTab>("overview");
 const loading = ref(false);
@@ -47,6 +49,10 @@ const diagnostics = ref<Record<string, unknown> | null>(null);
 const a4 = ref<Record<string, unknown> | null>(null);
 const heartbeatHistory = ref<DeviceHistoryRecord[]>([]);
 const registerHistory = ref<DeviceHistoryRecord[]>([]);
+const historyKind = ref<HistoryKind | null>(null);
+const historyRows = ref<DeviceHistoryRecord[]>([]);
+const historyLoading = ref(false);
+const historyError = ref("");
 const editOpen = ref(false);
 const deleteOpen = ref(false);
 const deleting = ref(false);
@@ -92,11 +98,50 @@ const streamMode = computed(() => {
   return ({ 0: "UDP", 1: "TCP 被动", 2: "TCP 主动" } as Record<number, string>)[mode] || device.value?.transport?.toUpperCase() || "—";
 });
 const onlineChannels = computed(() => relatedChannels.value.filter((item) => item.is_online).length);
-const recentActivity = computed(() =>
-  [...heartbeatHistory.value, ...registerHistory.value]
+const recentActivity = computed(() => {
+  const rows = [...heartbeatHistory.value, ...registerHistory.value];
+  const kinds = new Set(rows.map((item) => item.kind));
+  if (!kinds.has("heartbeat") && device.value?.keepalive_at) {
+    rows.push({
+      id: -1,
+      device_id: device.value.device_id || device.value.id,
+      kind: "heartbeat",
+      recorded_at: device.value.keepalive_at,
+      address: deviceAddress.value,
+      status: device.value.is_online ? "在线" : "最近状态",
+    });
+  }
+  if (!kinds.has("register") && device.value?.registered_at) {
+    rows.push({
+      id: -2,
+      device_id: device.value.device_id || device.value.id,
+      kind: "register",
+      recorded_at: device.value.registered_at,
+      address: deviceAddress.value,
+      status: "已注册",
+    });
+  }
+  return rows
     .sort((a, b) => new Date(b.recorded_at || 0).getTime() - new Date(a.recorded_at || 0).getTime())
-    .slice(0, 6)
+    .slice(0, 6);
+});
+const historyTitle = computed(() =>
+  historyKind.value === "heartbeat" ? "心跳记录" : "注册记录"
 );
+
+function latestHistorySnapshot(kind: HistoryKind): DeviceHistoryRecord[] {
+  if (!device.value) return [];
+  const recordedAt = kind === "heartbeat" ? device.value.keepalive_at : device.value.registered_at;
+  if (!recordedAt) return [];
+  return [{
+    id: kind === "heartbeat" ? -1 : -2,
+    device_id: device.value.device_id || device.value.id,
+    kind,
+    recorded_at: recordedAt,
+    address: deviceAddress.value,
+    status: kind === "heartbeat" ? (device.value.is_online ? "在线" : "最近状态") : "已注册",
+  }];
+}
 
 async function load() {
   loading.value = true;
@@ -192,6 +237,23 @@ async function deleteDevice() {
   }
 }
 
+async function openHistory(kind: HistoryKind) {
+  if (!device.value) return;
+  historyKind.value = kind;
+  const loadedRows = kind === "heartbeat" ? heartbeatHistory.value : registerHistory.value;
+  historyRows.value = loadedRows.length ? loadedRows : latestHistorySnapshot(kind);
+  historyError.value = "";
+  historyLoading.value = true;
+  try {
+    const { data } = await api.deviceHistory(device.value.id, kind, { page: 1, size: 100 });
+    historyRows.value = data.items || [];
+  } catch (cause) {
+    historyError.value = "历史明细接口暂不可用，当前展示设备最近状态。";
+  } finally {
+    historyLoading.value = false;
+  }
+}
+
 async function saveBasic() {
   if (!device.value) return;
   await runAction("下发 BasicParam", () =>
@@ -221,7 +283,6 @@ onMounted(load);
 
 <template>
   <main class="page-content device-detail-page">
-    <RouterLink class="detail-back-link" to="/devices"><ArrowLeft />返回国标设备</RouterLink>
     <div v-if="loadError" class="warning-box mb-4" role="alert">
       <ShieldAlert /><span>{{ loadError }}</span><button class="btn btn-sm ml-auto" @click="load">重试</button>
     </div>
@@ -233,6 +294,12 @@ onMounted(load);
     <template v-if="device">
       <section class="device-command-header">
         <div class="device-command-identity">
+          <RouterLink
+            class="device-command-back"
+            to="/devices"
+            aria-label="返回国标设备列表"
+            title="返回国标设备"
+          ><ArrowLeft /></RouterLink>
           <span class="device-command-icon"><Camera /></span>
           <div>
             <div class="device-command-title">
@@ -249,9 +316,7 @@ onMounted(load);
         </div>
         <div class="head-actions">
           <button class="btn" @click="openEdit"><SlidersHorizontal />编辑档案</button>
-          <button class="btn btn-primary" :disabled="!isGb || actionLoading === '同步目录'" @click="runAction('同步目录', () => api.catalog(device!.id), true)">
-            <LoaderCircle v-if="actionLoading === '同步目录'" class="animate-spin" /><RefreshCcw v-else />同步目录
-          </button>
+          <button class="btn btn-danger" type="button" @click="deleteOpen = true"><Trash2 />删除设备</button>
         </div>
       </section>
 
@@ -278,14 +343,12 @@ onMounted(load);
             <div><span>型号</span><strong>{{ device.ext?.model || "—" }}</strong></div>
             <div><span>接入地址</span><strong class="mono">{{ deviceAddress }}</strong></div>
           </article>
-          <button class="detail-delete-action" @click="deleteOpen = true"><Trash2 />删除设备</button>
         </aside>
 
         <div class="device-workspace-content">
           <template v-if="tab === 'overview'">
             <section class="detail-section-head">
               <div><h2>运行概览</h2><p>核对设备注册档案、协议能力与最近信令活动。</p></div>
-              <RouterLink v-if="relatedChannels[0]" class="btn btn-primary" :to="`/live?channel=${encodeURIComponent(relatedChannels[0].id)}`"><Play />进入实时监控</RouterLink>
             </section>
             <section class="detail-overview-grid">
               <article class="card detail-profile-card">
@@ -309,7 +372,13 @@ onMounted(load);
                 </div>
               </article>
               <article class="card detail-activity-card">
-                <div class="card-head"><div><h3 class="card-title">最近信令活动</h3><p class="card-sub">设备心跳与注册事件</p></div><History /></div>
+                <div class="card-head detail-activity-head">
+                  <div><h3 class="card-title">最近信令活动</h3><p class="card-sub">设备心跳与注册事件</p></div>
+                  <div class="detail-history-actions">
+                    <button type="button" @click="openHistory('heartbeat')"><Activity />心跳记录</button>
+                    <button type="button" @click="openHistory('register')"><Radio />注册记录</button>
+                  </div>
+                </div>
                 <div v-if="recentActivity.length" class="device-activity-list">
                   <div v-for="record in recentActivity" :key="`${record.kind}-${record.id}`">
                     <span class="activity-kind" :class="record.kind"><Activity v-if="record.kind === 'heartbeat'" /><Radio v-else /></span>
@@ -317,15 +386,17 @@ onMounted(load);
                     <time>{{ relativeTime(record.recorded_at) }}</time>
                   </div>
                 </div>
-                <div v-else class="compact-empty"><History /><span><strong>暂无历史记录</strong><small>新心跳或注册事件到达后会自动记录。</small></span></div>
+                <div v-else class="compact-empty"><History /><span><strong>暂无信令时间</strong><small>设备产生心跳或注册事件后会显示在这里。</small></span></div>
               </article>
             </section>
           </template>
 
           <template v-else-if="tab === 'channels'">
             <section class="detail-section-head">
-              <div><h2>通道资源</h2><p>查看目录资源、在线状态并进入实时预览或通道级配置。</p></div>
-              <button class="btn" :disabled="actionLoading === '同步目录'" @click="runAction('同步目录', () => api.catalog(device!.id), true)"><RefreshCcw />同步目录</button>
+              <div><h2>通道资源</h2><p>查看通道目录、在线状态并进入通道详情。</p></div>
+              <button class="btn" :disabled="actionLoading === '同步通道'" @click="runAction('同步通道', () => api.catalog(device!.id), true)">
+                <LoaderCircle v-if="actionLoading === '同步通道'" class="animate-spin" /><RefreshCcw v-else />同步通道
+              </button>
             </section>
             <section class="card detail-channel-list">
               <div v-for="channel in relatedChannels" :key="channel.id" class="detail-channel-row">
@@ -334,9 +405,11 @@ onMounted(load);
                 <span><small>状态</small><b class="status" :class="channel.is_online ? 'online' : 'offline'">{{ channel.is_online ? "在线" : "离线" }}</b></span>
                 <span><small>PTZ</small><b>{{ channel.ptz_verified ? "已验证" : channel.ptz_capable ? "声明支持" : "不支持" }}</b></span>
                 <span><small>AI</small><b>{{ channel.ext?.enabled_ai ? "已启用" : "未启用" }}</b></span>
-                <div class="row-actions"><RouterLink class="btn btn-sm" :to="`/channels/${encodeURIComponent(channel.id)}`">详情</RouterLink><RouterLink class="btn btn-sm btn-primary" :to="`/live?channel=${encodeURIComponent(channel.id)}`"><Play />预览</RouterLink></div>
+                <div class="device-row-actions channel-row-actions">
+                  <RouterLink class="device-row-detail" :to="`/channels/${encodeURIComponent(channel.id)}`">详情<ChevronRight /></RouterLink>
+                </div>
               </div>
-              <div v-if="!relatedChannels.length" class="compact-empty"><ListVideo /><span><strong>暂无通道资源</strong><small>执行目录同步，从设备获取最新通道。</small></span></div>
+              <div v-if="!relatedChannels.length" class="compact-empty"><ListVideo /><span><strong>暂无通道资源</strong><small>执行同步通道，从设备获取最新通道。</small></span></div>
             </section>
           </template>
 
@@ -392,6 +465,35 @@ onMounted(load);
           </template>
         </div>
       </section>
+      <ModalDialog
+        :open="Boolean(historyKind)"
+        :title="`${device.name || device.device_id || '设备'} · ${historyTitle}`"
+        description="按时间倒序展示后端持久化的最近 100 条记录。"
+        @close="historyKind = null"
+      >
+        <div class="history-summary">
+          <span>{{ historyKind === "heartbeat" ? "最近心跳" : "最近注册" }}</span>
+          <strong>{{ relativeTime(historyKind === "heartbeat" ? device.keepalive_at : device.registered_at) }}</strong>
+        </div>
+        <div class="table-wrap history-table-wrap">
+          <table class="data-table history-table">
+            <thead><tr><th>序号</th><th>时间</th><th>间隔（秒）</th><th>来源地址</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr v-for="(record, index) in historyRows" :key="record.id">
+                <td>{{ index + 1 }}</td>
+                <td>{{ formatDate(record.recorded_at) }}</td>
+                <td>{{ record.interval_seconds || "—" }}</td>
+                <td class="mono">{{ record.address || "—" }}</td>
+                <td>{{ record.status || "—" }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="historyLoading" class="empty-state"><LoaderCircle class="mx-auto mb-2 animate-spin" />正在加载历史记录…</div>
+          <div v-else-if="historyError && historyRows.length" class="history-inline-warning"><ShieldAlert /><span>{{ historyError }}</span><button class="btn btn-sm" @click="historyKind && openHistory(historyKind)">重试</button></div>
+          <div v-else-if="historyError" class="empty-state empty-action"><ShieldAlert /><strong>历史记录加载失败</strong><span>{{ historyError }}</span><button class="btn" @click="historyKind && openHistory(historyKind)">重试</button></div>
+          <div v-else-if="!historyRows.length" class="empty-state">当前仅有最近{{ historyKind === "heartbeat" ? "心跳" : "注册" }}时间，尚无已持久化的明细记录。</div>
+        </div>
+      </ModalDialog>
       <ModalDialog
         :open="deleteOpen"
         title="删除设备及关联通道"
@@ -458,23 +560,29 @@ onMounted(load);
               placeholder="留空保留" /></label
           ><label class="form-group"
             ><span class="form-label">流模式</span
-            ><select
-              v-model.number="editForm.stream_mode"
-              class="select w-full"
-            >
-              <option :value="0">UDP</option>
-              <option :value="1">TCP Passive</option>
-              <option :value="2">TCP Active</option>
-            </select></label
+            ><span class="select-control">
+              <select
+                v-model.number="editForm.stream_mode"
+                class="select w-full"
+              >
+                <option :value="0">UDP</option>
+                <option :value="1">TCP 被动模式</option>
+                <option :value="2">TCP 主动模式</option>
+              </select>
+              <ChevronDown aria-hidden="true" />
+            </span></label
           ><label v-if="isGb" class="form-group"
             ><span class="form-label">GB 版本覆盖</span
-            ><select v-model="editForm.gb_version" class="select w-full">
-              <option value="">自动协商</option>
-              <option value="1.0">1.0 / 2011</option>
-              <option value="1.1">1.1 / 2014</option>
-              <option value="2.0">2.0 / 2016</option>
-              <option value="3.0">3.0 / 2022</option>
-            </select></label
+            ><span class="select-control">
+              <select v-model="editForm.gb_version" class="select w-full">
+                <option value="">自动协商</option>
+                <option value="1.0">1.0 / 2011</option>
+                <option value="1.1">1.1 / 2014</option>
+                <option value="2.0">2.0 / 2016</option>
+                <option value="3.0">3.0 / 2022</option>
+              </select>
+              <ChevronDown aria-hidden="true" />
+            </span></label
           >
           <div class="modal-foot full">
             <button type="button" class="btn" @click="editOpen = false">

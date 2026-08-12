@@ -35,7 +35,7 @@ export const api = {
   channels: (params?: ListParams) => http.get<ApiPage<ApiChannel>>('/channels', { params }),
   channel: async (id: string) => {
     const response = await http.get<ApiPage<ApiChannel>>('/channels', { params: { page: 1, size: 20, key: id } })
-    const item = (response.data.items || []).find((channel) => channel.id === id || channel.channel_id === id)
+    const item = (response.data?.items || []).find((channel) => channel.id === id || channel.channel_id === id)
     if (!item) throw new Error('通道不存在或已被删除')
     return { ...response, data: item }
   },

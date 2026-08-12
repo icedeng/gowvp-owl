@@ -332,8 +332,8 @@ onMounted(load);
             <h2 class="card-title">协议接入矩阵</h2>
             <p class="card-sub">统一核验各协议在线率与离线规模</p>
           </div>
-          <RouterLink class="btn btn-sm" to="/channels"
-            >全部通道<ArrowRight
+          <RouterLink class="btn btn-sm" to="/devices"
+            >查看国标设备<ArrowRight
           /></RouterLink>
         </div>
         <div class="protocol-board">
@@ -346,7 +346,9 @@ onMounted(load);
                 ? '/push-streams'
                 : item.protocol === 'RTSP'
                 ? '/pull-streams'
-                : `/channels?type=${item.protocol}`
+                : item.protocol === 'GB28181'
+                ? '/devices'
+                : '/live'
             "
             ><span class="protocol-lane-name"
               ><i class="slot-led" :class="item.state" />

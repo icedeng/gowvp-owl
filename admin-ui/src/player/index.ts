@@ -1,4 +1,5 @@
 import type { PlayAddress, PlayResult } from '../types/api'
+import * as CryptoJS from 'crypto-js'
 import {
   buildEasyPlayerOptions,
   DEFAULT_PROTOCOL_PRIORITY as EASYPLAYER_PROTOCOL_PRIORITY,
@@ -104,6 +105,7 @@ type EasyPlayerConstructor = new (
 
 declare global {
   interface Window {
+    CryptoJS?: typeof CryptoJS
     EasyPlayerPro?: EasyPlayerConstructor
     'EasyPlayer-pro'?: EasyPlayerConstructor
   }
@@ -127,6 +129,8 @@ function loadEasyPlayer() {
   if (pending) return pending
 
   const load = new Promise<EasyPlayerConstructor>((resolve, reject) => {
+    // EasyPlayer 的 UMD 构建在浏览器环境从全局读取 CryptoJS。
+    window.CryptoJS = CryptoJS
     const script = document.createElement('script')
     const complete = () => {
       const constructor = easyPlayerConstructor()

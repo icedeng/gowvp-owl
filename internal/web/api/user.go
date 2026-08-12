@@ -186,6 +186,13 @@ func (api UserAPI) getPublicKey(_ *gin.Context, _ *struct{}) (gin.H, error) {
 	if err != nil {
 		return nil, reason.ErrServer.WithMsg(err.Error())
 	}
+	oaepSeed := make([]byte, sha256.Size)
+	if _, err := rand.Read(oaepSeed); err != nil {
+		return nil, reason.ErrServer.WithMsg(err.Error())
+	}
 	result := api.secret.MarshalPKIXPublicKey(publicKey)
-	return gin.H{"key": base64.StdEncoding.EncodeToString(result)}, nil
+	return gin.H{
+		"key":       base64.StdEncoding.EncodeToString(result),
+		"oaep_seed": base64.StdEncoding.EncodeToString(oaepSeed),
+	}, nil
 }

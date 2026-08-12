@@ -17,7 +17,7 @@ const router = createRouter({
         { path: 'transport-devices', name: 'transport-devices', component: () => import('../views/TransportDevicesView.vue'), meta: { title: '部标设备', group: '资源管理' } },
         { path: 'devices/:id', name: 'device-detail', component: () => import('../views/DeviceDetailView.vue'), meta: { title: '设备详情', group: '资源管理' } },
         { path: 'transport-devices/:id', name: 'transport-device-detail', component: () => import('../views/DeviceDetailView.vue'), meta: { title: '部标设备详情', group: '资源管理' } },
-        { path: 'channels', name: 'channels', component: () => import('../views/ChannelsView.vue'), meta: { title: '通道管理', group: '资源管理' } },
+        { path: 'channels', redirect: '/live' },
         { path: 'channels/:id', name: 'channel-detail', component: () => import('../views/ChannelDetailView.vue'), meta: { title: '通道详情', group: '资源管理' } },
         { path: 'push-streams', name: 'push-streams', component: () => import('../views/PushStreamsView.vue'), meta: { title: 'RTMP 推流', group: '资源管理' } },
         { path: 'pull-streams', name: 'pull-streams', component: () => import('../views/PullStreamsView.vue'), meta: { title: 'RTSP 拉流', group: '资源管理' } },
