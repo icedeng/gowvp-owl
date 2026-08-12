@@ -45,6 +45,7 @@ __pycache__/
 *.mp4
 owl
 .DS_Store
+.pnpm-store/
 .cursor/memory/
 .cursor/scopes/
 graphify-out/
