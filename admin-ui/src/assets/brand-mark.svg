@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">国标视频管理平台标志</title>
+  <rect x="2" y="2" width="44" height="44" rx="12" fill="#173f73"/>
+  <path d="M14 18v-4h4M30 14h4v4M34 30v4h-4M18 34h-4v-4" fill="none" stroke="#9fc9f8" stroke-width="2.2" stroke-linecap="round"/>
+  <circle cx="24" cy="24" r="8" fill="#1768d4" stroke="#ffffff" stroke-width="1.8"/>
+  <path d="m22 20 6 4-6 4z" fill="#ffffff"/>
+  <circle cx="35" cy="13" r="3" fill="#45d59c" stroke="#173f73" stroke-width="1.5"/>
+</svg>

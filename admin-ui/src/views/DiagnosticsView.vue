@@ -1,0 +1,311 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from "vue";
+import { useRoute } from "vue-router";
+import {
+  Activity,
+  CheckCircle2,
+  LoaderCircle,
+  Radio,
+  RefreshCcw,
+  Search,
+  ShieldAlert,
+  ShieldCheck,
+  XCircle,
+} from "@lucide/vue";
+import { api, errorMessage, typeLabel } from "../services/api";
+import type { ApiDevice, GbMetrics } from "../types/api";
+import { formatDate } from "../utils/format";
+import { useUiStore } from "../stores/ui";
+
+const route = useRoute();
+const ui = useUiStore();
+const devices = ref<ApiDevice[]>([]);
+const selectedId = ref("");
+const loading = ref(false);
+const running = ref(false);
+const loadError = ref("");
+const metrics = ref<GbMetrics>({});
+const lastResult = ref("尚未在本次会话执行探测");
+const selected = computed(
+  () =>
+    devices.value.find((item) => item.id === selectedId.value) ||
+    devices.value[0]
+);
+const capabilities = computed(
+  () => new Set(selected.value?.ext?.gb_version_capabilities || [])
+);
+const matrix = computed(() =>
+  [
+    ["目录查询", "2011+", "catalog"],
+    ["BasicParam", "2014+", "basic_param"],
+    ["移动位置订阅", "2016+", "mobile_position"],
+    ["A.4 快照", "2022", "appendix_a4"],
+    ["设备升级", "2022", "device_upgrade"],
+    ["语音广播", "2016+", "broadcast"],
+  ].map(([name, version, key]) => ({
+    name,
+    version,
+    supported: capabilities.value.has(key) || capabilities.value.has(name),
+  }))
+);
+const registerRate = computed(() =>
+  metrics.value.register_requests
+    ? (Number(metrics.value.register_success || 0) /
+        metrics.value.register_requests) *
+      100
+    : 0
+);
+const mediaRate = computed(() =>
+  metrics.value.media_requests
+    ? (Number(metrics.value.media_success || 0) /
+        metrics.value.media_requests) *
+      100
+    : 0
+);
+
+async function load() {
+  loading.value = true;
+  loadError.value = "";
+  try {
+    const [deviceResult, metricsResult] = await Promise.allSettled([
+      api.devices({ page: 1, size: 99999 }),
+      api.gbMetrics(),
+    ]);
+    if (deviceResult.status === "rejected") throw deviceResult.reason;
+    devices.value = (deviceResult.value.data.items || []).filter(
+      (item) =>
+        typeLabel(item.type, item.device_id || item.id) === "GB28181"
+    );
+    const routeId = String(route.query.device || "");
+    selectedId.value = devices.value.some((item) => item.id === routeId)
+      ? routeId
+      : devices.value[0]?.id || "";
+    if (metricsResult.status === "fulfilled")
+      metrics.value = metricsResult.value.data;
+  } catch (cause) {
+    loadError.value = errorMessage(cause, "诊断数据加载失败");
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function run() {
+  if (!selected.value) return;
+  running.value = true;
+  try {
+    await api.optionsProbe(selected.value.id);
+    const { data } = await api.devicePtzProbe(selected.value.id, {
+      action: "stop",
+      speed: 30,
+      timeout: 5,
+    });
+    lastResult.value = `OPTIONS 成功；PTZ ${String(
+      (data as { success_count?: number }).success_count ?? "—"
+    )} 路通过`;
+    ui.toast("OPTIONS 与 PTZ 能力探测已完成");
+    const { data: refreshed } = await api.device(selected.value.id);
+    const index = devices.value.findIndex((item) => item.id === refreshed.id);
+    if (index >= 0) devices.value[index] = refreshed;
+  } catch (cause) {
+    lastResult.value = errorMessage(cause, "探测失败");
+    ui.toast(lastResult.value);
+  } finally {
+    running.value = false;
+  }
+}
+
+onMounted(load);
+</script>
+
+<template>
+  <main class="page-content">
+    <header class="page-head">
+      <div>
+        <h1 class="page-title">协议诊断</h1>
+        <p class="page-desc">
+          集中检查 GB 版本、能力矩阵、运行指标、最近不支持命令与探测结果。
+        </p>
+      </div>
+          <button
+            class="btn btn-primary"
+            :disabled="running || !selected || !selected.is_online"
+            :title="selected && !selected.is_online ? '设备离线时无法执行能力探测' : undefined"
+        @click="run"
+      >
+        <RefreshCcw :class="{ 'animate-spin': running }" />{{
+          running ? "正在探测…" : "执行能力探测"
+        }}
+      </button>
+    </header>
+    <div v-if="loadError" class="warning-box mb-4">
+      <ShieldAlert /><span>{{ loadError }}</span
+      ><button class="btn btn-sm ml-auto" @click="load">重试</button>
+    </div>
+    <section class="card card-pad mb-4">
+      <div class="toolbar mb-0">
+        <label class="field"
+          ><Search /><select
+            v-model="selectedId"
+            class="select !border-0 !bg-transparent"
+          >
+            <option v-for="item in devices" :key="item.id" :value="item.id">
+              {{ item.name || item.device_id || item.id }}
+            </option>
+          </select></label
+        ><span class="protocol-tag blue"
+          >GB/T 28181-{{
+            selected?.ext?.gb_effective_version ||
+            selected?.ext?.gb_version ||
+            "未知"
+          }}</span
+        ><span
+          class="status"
+          :class="selected?.is_online ? 'online' : 'offline'"
+          >{{ selected?.is_online ? "设备在线" : "设备离线" }}</span
+        ><span class="toolbar-spacer" /><span class="section-note">{{
+          lastResult
+        }}</span>
+      </div>
+      <div v-if="loading" class="empty-state">
+        <LoaderCircle class="mx-auto mb-2 animate-spin" />正在加载设备档案…
+      </div>
+      <div v-else-if="!devices.length" class="empty-state">
+        当前环境没有 GB28181 设备。
+      </div>
+    </section>
+    <section class="grid three-col mb-4">
+      <article class="card card-pad">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">注册成功率</h2>
+            <p class="card-sub">SIP 进程累计指标</p>
+          </div>
+          <Activity />
+        </div>
+        <div class="metric-value">{{ registerRate.toFixed(1) }}%</div>
+        <p class="section-note mt-2">
+          {{ metrics.register_success || 0 }} /
+          {{ metrics.register_requests || 0 }} 次
+        </p>
+      </article>
+      <article class="card card-pad">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">媒体请求成功率</h2>
+            <p class="card-sub">实时媒体请求</p>
+          </div>
+          <Radio />
+        </div>
+        <div class="metric-value">{{ mediaRate.toFixed(1) }}%</div>
+        <p class="section-note mt-2">
+          {{ metrics.media_success || 0 }} /
+          {{ metrics.media_requests || 0 }} 次
+        </p>
+      </article>
+      <article class="card card-pad">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">直连下载</h2>
+            <p class="card-sub">进程累计任务</p>
+          </div>
+          <ShieldCheck />
+        </div>
+        <div class="metric-value">{{ metrics.direct_tcp_started || 0 }}</div>
+        <p class="section-note mt-2">
+          {{ metrics.direct_tcp_completed || 0 }} 完成 ·
+          {{ metrics.direct_tcp_failed || 0 }} 失败
+        </p>
+      </article>
+    </section>
+    <section class="grid equal-col">
+      <article class="card table-card">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">版本能力矩阵</h2>
+            <p class="card-sub">
+              来源：{{ selected?.ext?.gb_version_source || "未记录" }}
+            </p>
+          </div>
+          <ShieldCheck />
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>能力</th>
+                <th>最低版本</th>
+                <th>协商结果</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in matrix" :key="row.name">
+                <td>{{ row.name }}</td>
+                <td>{{ row.version }}</td>
+                <td>
+                  <span
+                    class="status"
+                    :class="row.supported ? 'online' : 'offline'"
+                    ><CheckCircle2 v-if="row.supported" /><XCircle v-else />{{
+                      row.supported ? "支持" : "未声明"
+                    }}</span
+                  >
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+      <article class="card card-pad">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">当前设备诊断</h2>
+            <p class="card-sub">协议档案与最近不支持命令</p>
+          </div>
+          <ShieldAlert />
+        </div>
+        <dl class="definition-grid !grid-cols-1">
+          <div>
+            <dt>设备</dt>
+            <dd>{{ selected?.name || selected?.device_id || "—" }}</dd>
+          </div>
+          <div>
+            <dt>有效版本</dt>
+            <dd>
+              {{
+                selected?.ext?.gb_effective_version ||
+                selected?.ext?.gb_version ||
+                "—"
+              }}
+            </dd>
+          </div>
+          <div>
+            <dt>声明版本</dt>
+            <dd>{{ selected?.ext?.gb_declared_version || "—" }}</dd>
+          </div>
+          <div>
+            <dt>手动覆盖</dt>
+            <dd>{{ selected?.ext?.gb_manual_version || "未设置" }}</dd>
+          </div>
+          <div>
+            <dt>最后不支持命令</dt>
+            <dd>
+              {{ selected?.ext?.gb_last_unsupported_command || "暂无记录" }}
+            </dd>
+          </div>
+          <div>
+            <dt>记录时间</dt>
+            <dd>
+              {{
+                selected?.ext?.gb_last_unsupported_updated_at
+                  ? formatDate(
+                      selected.ext.gb_last_unsupported_updated_at * 1000
+                    )
+                  : "—"
+              }}
+            </dd>
+          </div>
+        </dl>
+      </article>
+    </section>
+  </main>
+</template>
