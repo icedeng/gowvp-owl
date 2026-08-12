@@ -34,6 +34,13 @@ type Channel struct {
 	PTZVerified  bool `gorm:"-" json:"ptz_verified" example:"true"` // 是否已通过实际命令验证支持 PTZ
 }
 
+func (c *Channel) GetType() string {
+	if c.Type != "" {
+		return c.Type
+	}
+	return GetType(c.ID)
+}
+
 // TableName database table name
 func (*Channel) TableName() string {
 	return "channels"

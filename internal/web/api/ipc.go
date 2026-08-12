@@ -207,6 +207,8 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/ai/enable", web.WrapH(api.enableAI))        // 启用 AI 检测
 		group.POST("/:id/ai/disable", web.WrapH(api.disableAI))      // 禁用 AI 检测
 		group.POST("/:id/record_mode", web.WrapH(api.setRecordMode)) // 设置录像模式
+		group.POST("/:id/ptz/control", web.WrapH(api.ptzControl))    // 云台控制（所有协议）
+		group.POST("/:id/stop", web.WrapH(api.stopPlay))             // 停止播放（所有协议）
 	}
 	{
 		group := g.Group("/gb28181/devices/:device_id/channels/:channel_id", handler...)
@@ -768,7 +770,7 @@ func (a IPCAPI) queryCatalog(c *gin.Context, _ *struct{}) (any, error) {
 	}
 
 	if err := a.ipc.QueryCatalog(c.Request.Context(), did); err != nil {
-		return nil, ErrDevice.SetMsg(err.Error())
+		return nil, err
 	}
 
 	return gin.H{"msg": "ok"}, nil
@@ -1153,6 +1155,80 @@ func (a IPCAPI) play(c *gin.Context, _ *struct{}) (*playOutput, error) {
 		// }
 	}()
 	return &out, nil
+}
+
+// stopPlay 停止播放（幂等：始终返回成功）
+//
+// 根据通道协议类型分发：
+//   - GB28181: SIP BYE + CloseRTPServer
+//   - ONVIF/RTSP/RTMP: ZLM close_streams
+func (a IPCAPI) stopPlay(c *gin.Context, _ *struct{}) (gin.H, error) {
+	channelID := c.Param("id")
+	ctx := c.Request.Context()
+	log := slog.With("channel_id", channelID)
+
+	ch, err := a.ipc.GetChannel(ctx, channelID)
+	if err != nil {
+		return nil, reason.ErrBadRequest.SetMsg("通道不存在")
+	}
+
+	log = log.With("type", ch.GetType())
+
+	if bz.IsGB28181(channelID) {
+		device, err := a.ipc.GetDevice(ctx, ch.DID)
+		if err != nil {
+			return nil, reason.ErrBadRequest.SetMsg("设备不存在")
+		}
+
+		protocol := a.ipc.GetProtocol(ch.GetType())
+		if protocol == nil {
+			return nil, reason.ErrBadRequest.SetMsg("协议适配器不存在")
+		}
+
+		if err := protocol.StopPlay(ctx, device, ch); err != nil {
+			log.ErrorContext(ctx, "停止播放：GB28181 StopPlay 失败", "err", err)
+		}
+
+		// 关闭 ZLM 的 RTP 接收端口
+		svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
+		if err == nil {
+			if _, err := a.uc.SMSAPI.smsCore.CloseRTPServer(svr, zlm.CloseRTPServerRequest{
+				StreamID: ch.GetStream(),
+			}); err != nil {
+				log.WarnContext(ctx, "停止播放：CloseRTPServer 失败", "err", err)
+			}
+		}
+	} else {
+		// ONVIF/RTSP/RTMP 统一通过 ZLM close_streams 关闭
+		svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
+		if err != nil {
+			log.WarnContext(ctx, "停止播放：获取流媒体服务器失败", "err", err)
+			return gin.H{"msg": "ok"}, nil
+		}
+
+		app := ch.GetApp()
+		stream := ch.GetStream()
+		log.InfoContext(ctx, "停止播放：关闭流", "app", app, "stream", stream)
+
+		resp, err := a.uc.SMSAPI.smsCore.CloseStreams(svr, zlm.CloseStreamsRequest{
+			App:    app,
+			Stream: stream,
+			Force:  true,
+		})
+		if err != nil {
+			log.ErrorContext(ctx, "停止播放：CloseStreams 失败", "err", err)
+		} else {
+			log.InfoContext(ctx, "停止播放：CloseStreams 完成", "count_hit", resp.CountHit, "count_closed", resp.CountClosed)
+		}
+
+		// 更新播放状态
+		if _, err := a.ipc.EditChannelPlaying(ctx, ch.GetStream(), false); err != nil {
+			log.WarnContext(ctx, "停止播放：更新播放状态失败", "err", err)
+		}
+	}
+
+	log.InfoContext(ctx, "停止播放完成")
+	return gin.H{"msg": "ok"}, nil
 }
 
 type refreshSnapshotInput struct {
@@ -2980,7 +3056,7 @@ func (a IPCAPI) setRecordMode(c *gin.Context, in *setRecordModeInput) (gin.H, er
 	} else {
 		// always/ai 模式：如果流在线则启动录制
 		if channel.IsOnline {
-			if err := a.recordingCore.StartRecording(ctx, channel.Type, channel.GetApp(), channel.GetStream()); err != nil {
+			if err := a.recordingCore.StartRecording(ctx, channel.GetType(), channel.GetApp(), channel.GetStream()); err != nil {
 				slog.WarnContext(ctx, "启动录制失败", "channel", channelID, "err", err)
 			}
 		}

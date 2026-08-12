@@ -61,6 +61,11 @@ func (l *LalmaxDriver) CloseRTPServer(ctx context.Context, ms *MediaServer, req 
 	panic("unimplemented")
 }
 
+// CloseStreams lalmax 暂不支持关闭流功能
+func (l *LalmaxDriver) CloseStreams(ctx context.Context, ms *MediaServer, req *zlm.CloseStreamsRequest) (*zlm.CloseStreamsResponse, error) {
+	return nil, fmt.Errorf("lalmax 暂不支持关闭流功能")
+}
+
 // Connect implements Driver.
 func (l *LalmaxDriver) Connect(ctx context.Context, ms *MediaServer) error {
 	engine := l.withConfig(ms)

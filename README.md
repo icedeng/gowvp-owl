@@ -45,8 +45,6 @@ Two streaming media servers are supported:
   - Custom feature development available
   - G711 (G711A/G711U) to AAC transcoding support
 
-Player uses @dexter's [jessibuca](https://github.com/langhuihui/jessibuca/tree/v3)
-
 Project framework based on @ixugo's [goddd](https://github.com/ixugo/goddd)
 
 ## FAQ
@@ -134,6 +132,35 @@ AI detection is enabled by default, detecting 5 frames per second.
 
 You can disable AI detection by setting `disabledAI = true` in `configs/config.toml`
 
+## Third-Party Authentication
+
+GoWVP supports forwarding authentication requests to a third-party service, ideal for environments with an existing unified authentication system (SSO, OAuth2, corporate account systems, etc.).
+
+**Sequence Diagram**
+
+![](./docs/auth.webp)
+
+**Use Cases**
+
++ Your organization has a unified login system and you want GoWVP to reuse existing sessions without requiring users to log in again
++ Enterprise intranet environments that need to integrate with LDAP, CAS, OAuth2, or other authentication providers
++ API gateway handles authentication and you want to pass the verification result through to GoWVP
+
+**Configuration**
+
+Set `AuthURL` to your third-party authentication service address in `configs/config.toml`:
+
+```toml
+[Server.HTTP]
+  AuthURL = "https://your-auth-server.com/api/verify"
+```
+
+**How It Works**
+
+Once `AuthURL` is configured, all requests are verified through the third-party authentication service. GoWVP forwards the original request headers and body as a POST to the specified URL. A `200` response means authentication passes; any other status code means failure, and the response body is returned directly to the client.
+
+> Note: The third-party auth service must respond within 10 seconds, otherwise the request is considered timed out.
+
 ## Documentation
 
 GoWVP [Online API Documentation](https://apifox.com/apidoc/shared-7b67c918-5f72-4f64-b71d-0593d7427b93)
@@ -176,11 +203,9 @@ services:
       # zlm
       - 1935:1935 # rtmp
       - 554:554 # rtsp
-      - 8080:80 # http
-      - 8443:443 # https
-      - 10000:10000
-      - 8000:8000/udp
-      - 9000:9000/udp
+      # - 8080:80 # http
+      # - 8443:443 # https
+      # - 10000:10000
       - 20000-20100:20000-20100 # GB28181 stream receiving ports
       - 20000-20100:20000-20100/udp # GB28181 stream receiving UDP ports
     volumes:
@@ -226,6 +251,7 @@ If you're a Go developer familiar with Docker, you can download the source code 
   - [x] Device registration with 7 connection methods
   - [x] UDP and TCP signaling transport modes
   - [x] Device time synchronization
+  - [x] PTZ control support
   - [x] Information queries support
     - [x] Device catalog query
     - [x] Device info query
@@ -237,12 +263,14 @@ If you're a Go developer familiar with Docker, you can download the source code 
   - [x] g711a/g711u/aac audio codec support
   - [x] Snapshots
   - [x] CORS support
-  - [x] Chinese and English language support
-  - [x] ONVIF support
-  - [x] RTMP push streaming support
-  - [x] RTSP pull streaming support
-  - [x] AI algorithm analysis and alerting support
-  - [ ] Recording playback (in development...)
+  - [ ] SD Recording playback (ipc, recorded on camera SD card, no development plan)
+- [x] ONVIF device access and playback
+- [x] RTMP push streaming support
+- [x] RTSP pull streaming support
+- [x] AI algorithm analysis and alerting support
+- [x] Cloud Recording playback (owl)
+- [ ] ONVIF PTZ control support
+- [x] Chinese and English language support
 
 ## Acknowledgments
 

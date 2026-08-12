@@ -51,6 +51,7 @@ func RegisterEvent(g gin.IRouter, api EventAPI, handler ...gin.HandlerFunc) {
 		group.DELETE("/:id", web.WrapH(api.delEvent))
 	}
 	// 图片接口不需要认证中间件
+	// TODO: 待添加鉴权
 	g.GET("/events/image/*path", api.getEventImage)
 }
 
@@ -71,7 +72,8 @@ func RegisterEvent(g gin.IRouter, api EventAPI, handler ...gin.HandlerFunc) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /events [get]
 func (a EventAPI) findEvents(c *gin.Context, in *event.FindEventInput) (any, error) {
-	items, total, err := a.eventCore.FindEvents(c.Request.Context(), in)
+	ctx := c.Request.Context()
+	items, total, err := a.eventCore.FindEvents(ctx, in)
 	return gin.H{"items": items, "total": total}, err
 }
 

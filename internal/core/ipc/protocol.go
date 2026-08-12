@@ -26,7 +26,7 @@ func GenerateDID(d *Device, uni uniqueid.Core) string {
 
 // GenerateChannelID 根据通道类型生成唯一 ID
 func GenerateChannelID(c *Channel, uni uniqueid.Core) string {
-	switch c.Type {
+	switch c.GetType() {
 	case TypeOnvif:
 		return uni.UniqueID(bz.IDPrefixOnvifChannel)
 	case TypeRTMP:
@@ -160,6 +160,7 @@ func (g Adapter) SaveChannels(channels []*Channel) error {
 			_ = g.store.Channel().Edit(ctx, existing, func(c *Channel) error {
 				c.Name = channel.Name
 				c.IsOnline = channel.IsOnline
+				c.PTZType = channel.PTZType
 				c.Ext.Manufacturer = channel.Ext.Manufacturer
 				c.Ext.Firmware = channel.Ext.Firmware
 				c.Ext.GBVersion = channel.Ext.GBVersion

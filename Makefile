@@ -217,6 +217,10 @@ docker/build/ai: build/clean build/linux
 docker/publish: build/clean build/linux
 	@docker build --force-rm=true --push --platform linux/amd64,linux/arm64  -t registry.cn-shanghai.aliyuncs.com/ixugo/homenvr:latest -t $(IMAGE_NAME) -f Dockerfile_ai .
 
+docker/publish/test: build/clean build/linux
+	@docker build --force-rm=true --push --platform linux/amd64  -t registry.cn-shanghai.aliyuncs.com/ixugo/homenvr:latest -f Dockerfile_ai .
+
+
 # 构建 gowvp 独立镜像(弃用)
 docker/build/gowvp: build/clean build/linux
 	@docker build --force-rm=true --push --platform linux/amd64,linux/arm64 -t registry.cn-shanghai.aliyuncs.com/ixugo/gowvp:latest -f Dockerfile .

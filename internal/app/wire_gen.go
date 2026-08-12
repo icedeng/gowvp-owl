@@ -8,6 +8,7 @@ package app
 
 import (
 	"github.com/gowvp/owl/internal/conf"
+	"github.com/gowvp/owl/internal/core/metadata/metadataapi"
 	"github.com/gowvp/owl/internal/data"
 	"github.com/gowvp/owl/internal/web/api"
 	"github.com/gowvp/owl/pkg/gbs"
@@ -43,6 +44,8 @@ func wireApp(bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error)
 	aiWebhookAPI := api.NewAIWebhookAPIWithDeps(bc, eventCore, ipcBundle)
 	eventAPI := api.NewEventAPI(eventCore, bc)
 	recordingAPI := api.NewRecordingAPI(recordingCore, bc)
+	metadataCore := metadataapi.NewMetadataCore(db)
+	metadataAPI := metadataapi.NewMetadataAPI(metadataCore)
 	usecase := &api.Usecase{
 		Conf:         bc,
 		DB:           db,
@@ -57,6 +60,7 @@ func wireApp(bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error)
 		AIWebhookAPI: aiWebhookAPI,
 		EventAPI:     eventAPI,
 		RecordingAPI: recordingAPI,
+		MetadataAPI:  metadataAPI,
 	}
 	handler := api.NewHTTPHandler(usecase)
 	return handler, func() {

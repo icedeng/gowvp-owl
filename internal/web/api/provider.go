@@ -19,6 +19,7 @@ import (
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/ipc/store/ipccache"
 	"github.com/gowvp/owl/internal/core/ipc/store/ipcdb"
+	"github.com/gowvp/owl/internal/core/metadata/metadataapi"
 	"github.com/gowvp/owl/internal/core/recording"
 	"github.com/gowvp/owl/internal/core/recording/adapter"
 	"github.com/gowvp/owl/internal/core/sms"
@@ -53,6 +54,7 @@ var (
 		NewEventCore, NewEventAPI,
 		// Recording: Store -> SMSProvider(adapter) -> Core -> API
 		NewRecordingStore, NewSMSProviderAdapter, NewRecordingCore, NewRecordingAPI,
+		metadataapi.NewMetadataCore, metadataapi.NewMetadataAPI,
 	)
 )
 
@@ -73,6 +75,7 @@ type Usecase struct {
 	EventAPI EventAPI
 
 	RecordingAPI RecordingAPI
+	MetadataAPI  metadataapi.MetadataAPI
 }
 
 // NewHTTPHandler 生成Gin框架路由内容

@@ -16,6 +16,7 @@ func DefaultConfig() Bootstrap {
 				Port:      15123,
 				Timeout:   Duration(60 * time.Second),
 				JwtSecret: orm.GenerateRandomString(24),
+				AuthURL:   "",
 				PProf: ServerPPROF{
 					Enabled:   true,
 					AccessIps: []string{"::1", "127.0.0.1"},
@@ -44,6 +45,7 @@ func DefaultConfig() Bootstrap {
 			},
 		},
 		Sip: SIP{
+			Host:               "",
 			Port:               15060,
 			ID:                 "34010000002000000001",
 			Domain:             "3401000000",

@@ -29,6 +29,9 @@ type Server struct {
 
 	route conc.Map[string, []HandlerFunc]
 
+	// 全局中间件链，通过 Use() 注册，在所有路由 handler 之前执行
+	middlewares []HandlerFunc
+
 	port *Port
 	host net.IP
 
@@ -55,6 +58,12 @@ func NewServer(form *Address) *Server {
 		from:   form,
 	}
 	return srv
+}
+
+// Use 注册全局中间件，所有路由 handler 执行前先经过这些中间件；
+// 中间件内调用 ctx.Abort() 可中断后续链路
+func (s *Server) Use(middleware ...HandlerFunc) {
+	s.middlewares = append(s.middlewares, middleware...)
 }
 
 // SetFrom 热更新 SIP 源地址配置，用于配置变更时无需重启服务
@@ -347,15 +356,21 @@ func (s *Server) handlerRequest(msg *Request) {
 		}
 		key += "-" + parsed.CmdType
 	}
-	handlers, ok := s.route.Load(strings.ToUpper(key))
+	routeHandlers, ok := s.route.Load(strings.ToUpper(key))
 	if !ok {
 		slog.Debug("not found handler func", "method", msg.Method(), "msg", msg.String())
-		go handlerMethodNotAllowed(msg, tx)
-		return
+		routeHandlers = []HandlerFunc{func(c *Context) {
+			handlerMethodNotAllowed(c.Request, c.Tx)
+		}}
 	}
 
+	// 全局中间件 + 路由 handler 合并为完整链
+	chain := make([]HandlerFunc, 0, len(s.middlewares)+len(routeHandlers))
+	chain = append(chain, s.middlewares...)
+	chain = append(chain, routeHandlers...)
+
 	ctx := newContext(msg, tx)
-	ctx.handlers = handlers
+	ctx.handlers = chain
 	ctx.From = s.from
 	ctx.svr = s
 	go s.runContextSafely(ctx)
@@ -377,14 +392,20 @@ func (s *Server) Request(req *Request) (*Transaction, error) {
 	if !ok {
 		return nil, fmt.Errorf("missing required 'Via' header")
 	}
-	viaHop.Host = s.host.String()
-	viaHop.Port = s.port
+	if viaHop.Host == "" {
+		viaHop.Host = s.host.String()
+	}
+	if viaHop.Port == nil {
+		viaHop.Port = s.port
+	}
 	if viaHop.Params == nil {
 		viaHop.Params = NewParams().Add("branch", String{Str: GenerateBranch()})
 	}
 	if !viaHop.Params.Has("rport") {
 		viaHop.Params.Add("rport", nil)
 	}
+
+	slog.Debug("SIP 最终发送报文", "method", req.Method(), "request", req.String())
 
 	tx := s.mustTX(req)
 	return tx, tx.Request(req)

@@ -31,6 +31,15 @@ func (c *Core) GetProtocol(atype string) Protocoler {
 	return c.protocols[atype]
 }
 
+// getProtocolKeys 获取所有可用的协议类型键名（用于调试）
+func (c *Core) getProtocolKeys() []string {
+	keys := make([]string, 0, len(c.protocols))
+	for k := range c.protocols {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // SetProtocols 设置协议映射，用于解决循环依赖问题
 func (c *Core) SetProtocols(protocols map[string]Protocoler) {
 	c.protocols = protocols

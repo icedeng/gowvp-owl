@@ -63,7 +63,7 @@ func registerZLMWebhookAPI(r gin.IRouter, api WebHookAPI, handler ...gin.Handler
 func (w WebHookAPI) getChannelType(ctx context.Context, app, stream string) string {
 	ch, err := w.ipcCore.GetChannelByAppStreamOrID(ctx, app, stream)
 	if err == nil {
-		return ch.Type
+		return ch.GetType()
 	}
 	// 回退：使用 stream 前缀判断类型（兼容旧逻辑）
 	return ipc.GetType(stream)
