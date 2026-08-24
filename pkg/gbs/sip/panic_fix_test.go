@@ -62,6 +62,51 @@ func TestNewRequestFromResponseFallsBackToToWithoutContact(t *testing.T) {
 	}
 }
 
+func TestNewRequestFromResponseReversesRouteSetAndPreservesResponseCSeq(t *testing.T) {
+	target, err := ParseURI("sip:34020000001320000001@192.0.2.10:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := NewRequest("", MethodInvite, target, DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodInvite).
+		SetFrom(&Address{URI: target.Clone(), Params: NewParams()}).
+		SetTo(&Address{URI: target.Clone(), Params: NewParams()}).
+		AddVia(&ViaHop{Host: "192.0.2.20", Port: NewPort(5060), Params: NewParams()}).
+		Build(), nil)
+	response := NewResponseFromRequest("", request, 200, "OK", nil)
+	proxy1, _ := ParseURI("sip:proxy1.example;lr")
+	proxy2, _ := ParseURI("sip:proxy2.example;lr")
+	proxy3, _ := ParseURI("sip:proxy3.example;lr")
+	response.AppendHeader(&RecordRouteHeader{Addresses: []*URI{proxy1, proxy2}})
+	response.AppendHeader(&RecordRouteHeader{Addresses: []*URI{proxy3}})
+
+	ack := NewRequestFromResponse(MethodACK, response)
+	routes := ack.GetHeaders("Route")
+	if len(routes) != 1 {
+		t.Fatalf("ACK Route headers = %d, want 1", len(routes))
+	}
+	route, ok := routes[0].(*RouteHeader)
+	if !ok || len(route.Addresses) != 3 {
+		t.Fatalf("ACK route set = %#v", routes[0])
+	}
+	for index, want := range []string{"proxy3.example", "proxy2.example", "proxy1.example"} {
+		if got := route.Addresses[index].Host(); got != want {
+			t.Fatalf("ACK route[%d] = %q, want %q", index, got, want)
+		}
+	}
+	if original, _ := response.CSeq(); original.MethodName != MethodInvite || original.SeqNo != 1 {
+		t.Fatalf("response CSeq mutated after ACK: %+v", original)
+	}
+
+	bye := NewRequestFromResponse(MethodBYE, response)
+	if cseq, _ := bye.CSeq(); cseq.MethodName != MethodBYE || cseq.SeqNo != 2 {
+		t.Fatalf("BYE CSeq = %+v", cseq)
+	}
+	if original, _ := response.CSeq(); original.MethodName != MethodInvite || original.SeqNo != 1 {
+		t.Fatalf("response CSeq mutated after BYE: %+v", original)
+	}
+}
+
 func TestServerRunContextSafelyRecoversPanic(t *testing.T) {
 	srv := NewServer(&Address{})
 	ctx := &Context{

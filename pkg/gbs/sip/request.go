@@ -69,27 +69,32 @@ func NewRequestFromResponse(method string, resp *Response) *Request {
 	if len(resp.GetHeaders("Route")) > 0 {
 		CopyHeaders("Route", resp, ackRequest)
 	} else {
+		uris := make([]*URI, 0)
 		for _, h := range resp.GetHeaders("Record-Route") {
 			recordRoute, ok := h.(*RecordRouteHeader)
 			if !ok || recordRoute == nil {
 				continue
 			}
-			uris := make([]*URI, 0)
 			for _, u := range recordRoute.Addresses {
 				if u != nil {
 					uris = append(uris, u.Clone())
 				}
 			}
-			ackRequest.AppendHeader(&RouteHeader{
-				Addresses: uris,
-			})
+		}
+		// RFC 3261 12.1.2：UAC 从响应建立的路由集必须按 Record-Route 逆序排列。
+		for left, right := 0, len(uris)-1; left < right; left, right = left+1, right-1 {
+			uris[left], uris[right] = uris[right], uris[left]
+		}
+		if len(uris) > 0 {
+			ackRequest.AppendHeader(&RouteHeader{Addresses: uris})
 		}
 	}
 
 	CopyHeaders("From", resp, ackRequest)
 	CopyHeaders("To", resp, ackRequest)
 	CopyHeaders("Call-ID", resp, ackRequest)
-	cseq, _ := resp.CSeq()
+	responseCSeq, _ := resp.CSeq()
+	cseq := *responseCSeq
 	cseq.MethodName = method
 
 	// https://www.rfc-editor.org/rfc/rfc3261.html#section-12.2.1.1
@@ -104,7 +109,7 @@ func NewRequestFromResponse(method string, resp *Response) *Request {
 	if !(method == MethodACK || method == MethodCancel) {
 		cseq.SeqNo++
 	}
-	ackRequest.AppendHeader(cseq)
+	ackRequest.AppendHeader(&cseq)
 	ackRequest.SetSource(resp.Destination())
 	ackRequest.SetDestination(resp.Source())
 	return ackRequest

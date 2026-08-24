@@ -29,10 +29,14 @@ type WebHookAPI struct {
 	eventCore     event.Core
 	conf          *conf.Bootstrap
 	log           *slog.Logger
-	gbs           *gbs.Server
+	gbs           gbMediaLifecycle
 	uc            *Usecase
 
 	protocols map[string]ipc.Protocoler
+}
+
+type gbMediaLifecycle interface {
+	OnMediaStreamChanged(ctx context.Context, streamID string, active bool, reason string) error
 }
 
 func NewWebHookAPI(core sms.Core, conf *conf.Bootstrap, gbs *gbs.Server, ipcBundle IPCBundle, recordingCore recording.Core, eventCore event.Core) WebHookAPI {
@@ -196,6 +200,15 @@ func (w WebHookAPI) onStreamChanged(c *gin.Context, in *onStreamChangedInput) (D
 
 	// 通过 app+stream 查询通道获取类型，支持自定义 app/stream
 	channelType := w.getChannelType(ctx, app, stream)
+	// 指定路径级联和语音级联使用独立的 cascade-* 流 ID，不对应持久化通道，
+	// 因此不能依赖 channelType 才把媒体生命周期事件交给 GB28181 会话层。
+	if channelType != ipc.TypeGB28181 && w.gbs != nil {
+		reason := "stream_unregistered"
+		if in.Regist {
+			reason = "stream_registered"
+		}
+		_ = w.gbs.OnMediaStreamChanged(ctx, stream, in.Regist, reason)
+	}
 
 	if in.Regist {
 		if channelType == ipc.TypeGB28181 && w.gbs != nil {

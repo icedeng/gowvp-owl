@@ -35,13 +35,10 @@ func (a *Adapter) InitDevice(ctx context.Context, device *ipc.Device) error {
 
 // OnStreamChanged implements ipc.Protocoler.
 // 流注销时停止播放并更新播放状态（仅在 regist=false 时由 zlm_webhook 调用）
-// GB28181 协议的 stream 就是 channel.ID，app 固定为 rtp
+// stream 可能是普通 channel.ID，也可能是指定路径级联使用的独立流 ID。
 func (a *Adapter) OnStreamChanged(ctx context.Context, app, stream string) error {
-	ch, err := a.adapter.GetChannel(ctx, stream)
-	if err != nil {
-		return err
-	}
-	return a.gbs.OnMediaStreamChanged(ctx, ch.ID, false, "stream_unregistered")
+	_ = app
+	return a.gbs.OnMediaStreamChanged(ctx, stream, false, "stream_unregistered")
 }
 
 // OnStreamNotFound implements ipc.Protocoler.

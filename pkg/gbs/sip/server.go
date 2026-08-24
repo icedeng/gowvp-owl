@@ -273,6 +273,7 @@ func (s *Server) ProcessTcpConn(conn net.Conn) {
 	for {
 		var buffer bytes.Buffer
 		bodyLen := 0
+		bodyLenSeen := false
 		for {
 			// 读取一行数据，以 '\n' 为结束符
 			line, err := reader.ReadBytes('\n')
@@ -295,19 +296,41 @@ func (s *Server) ProcessTcpConn(conn net.Conn) {
 				break
 			}
 
-			if strings.Contains(string(line), "Content-Length") {
-				s := strings.Split(string(line), ":")
-				value := strings.Trim(s[len(s)-1], " \r\n")
-				bodyLen, err = strconv.Atoi(value)
-				if err != nil {
-					slog.Error("parse Content-Length failed")
-					break
+			length, found, parseErr := parseTCPContentLength(line)
+			if parseErr != nil {
+				slog.Error("parse Content-Length failed", "err", parseErr)
+				return
+			}
+			if found {
+				if bodyLenSeen {
+					slog.Error("multiple Content-Length headers")
+					return
 				}
+				bodyLen = length
+				bodyLenSeen = true
 			}
 		}
 
 		parser.in <- newPacket(buffer.Bytes(), conn.RemoteAddr(), c)
 	}
+}
+
+// parseTCPContentLength 按 SIP 头名称大小写不敏感规则解析消息帧长度，
+// 同时兼容 RFC 3261 定义的紧凑头名 l。
+func parseTCPContentLength(line []byte) (int, bool, error) {
+	name, value, ok := strings.Cut(strings.TrimSpace(string(line)), ":")
+	if !ok {
+		return 0, false, nil
+	}
+	name = strings.TrimSpace(name)
+	if !strings.EqualFold(name, "Content-Length") && !strings.EqualFold(name, "l") {
+		return 0, false, nil
+	}
+	length, err := strconv.ParseUint(strings.TrimSpace(value), 10, 31)
+	if err != nil {
+		return 0, true, fmt.Errorf("invalid %s value: %w", name, err)
+	}
+	return int(length), true, nil
 }
 
 func (s *Server) handlerListen(msgs chan Message) {
