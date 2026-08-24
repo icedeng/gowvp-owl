@@ -1,6 +1,6 @@
 export interface ApiPage<T> {
-  items: T[]
-  total: number
+  items?: T[]
+  total?: number
 }
 
 export interface DeviceExt {

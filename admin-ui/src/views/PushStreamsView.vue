@@ -78,14 +78,19 @@ async function load() {
   loading.value = true;
   loadError.value = "";
   try {
-    const [channelResponse, deviceResponse, mediaResponse] = await Promise.all([
+    const [channelResponse, deviceResponse, mediaResponse] = await Promise.allSettled([
       api.channels({ page: 1, size: 99999, type: "RTMP" }),
       api.devices({ page: 1, size: 99999 }),
       api.mediaServers({ page: 1, size: 100 }),
     ]);
-    rows.value = channelResponse.data.items || [];
-    devices.value = deviceResponse.data.items || [];
-    media.value = mediaResponse.data.items || [];
+    if (channelResponse.status === "rejected") throw channelResponse.reason;
+    rows.value = channelResponse.value.data?.items || [];
+    if (deviceResponse.status === "fulfilled") devices.value = deviceResponse.value.data?.items || [];
+    if (mediaResponse.status === "fulfilled") media.value = mediaResponse.value.data?.items || [];
+    const auxiliaryFailure = [deviceResponse, mediaResponse].find((item) => item.status === "rejected");
+    if (auxiliaryFailure?.status === "rejected") {
+      loadError.value = `推流列表已加载，部分表单选项暂不可用：${errorMessage(auxiliaryFailure.reason)}`;
+    }
     if (!routeEditHandled) {
       const target = String(route.query.channel || route.query.stream || "");
       const matched = rows.value.find((item) => item.id === target || item.stream === target);

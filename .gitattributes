@@ -1,0 +1,3 @@
+# 线级协议夹具必须保留 CRLF；空消息体以最后一个空行分隔。
+pkg/gbs/testdata/gb28181/**/*.sip -text whitespace=cr-at-eol,-blank-at-eof
+pkg/gbs/testdata/gb28181/**/*.sdp -text whitespace=cr-at-eol

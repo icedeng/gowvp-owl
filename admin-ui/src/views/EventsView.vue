@@ -28,6 +28,7 @@ const channels = ref<ApiChannel[]>([]);
 const total = ref(0);
 const autoRefresh = ref(false);
 let timer: number | undefined;
+let loadSequence = 0;
 
 const focusedId = computed(() => Number(route.query.event || 0));
 const channelNames = computed(() =>
@@ -93,10 +94,11 @@ function rangeParams() {
 }
 
 async function load(silent = false) {
+  const sequence = ++loadSequence;
   if (!silent) loading.value = true;
   loadError.value = "";
   try {
-    const [eventResponse, channelResponse] = await Promise.all([
+    const [eventResponse, channelResponse] = await Promise.allSettled([
       api.events({
         page: 1,
         size: 100,
@@ -107,24 +109,30 @@ async function load(silent = false) {
         ? Promise.resolve(null)
         : api.channels({ page: 1, size: 99999 }),
     ]);
-    events.value = eventResponse.data.items || [];
-    total.value = eventResponse.data.total || events.value.length;
-    if (channelResponse) channels.value = channelResponse.data.items || [];
+    if (sequence !== loadSequence) return;
+    if (eventResponse.status === "rejected") throw eventResponse.reason;
+    events.value = eventResponse.value.data?.items || [];
+    total.value = eventResponse.value.data?.total || events.value.length;
+    if (channelResponse.status === "fulfilled" && channelResponse.value) {
+      channels.value = channelResponse.value.data?.items || [];
+    } else if (channelResponse.status === "rejected") {
+      loadError.value = `事件已加载，通道名称暂不可用：${errorMessage(channelResponse.reason)}`;
+    }
     if (
       focusedId.value &&
       !events.value.some((item) => item.id === focusedId.value)
     ) {
       try {
         const focused = (await api.event(focusedId.value)).data;
-        events.value = [focused, ...events.value];
+        if (sequence === loadSequence) events.value = [focused, ...events.value];
       } catch {
         // 聚焦事件可能已过期或无权访问，保留当前列表。
       }
     }
   } catch (cause) {
-    loadError.value = errorMessage(cause, "事件列表加载失败");
+    if (sequence === loadSequence) loadError.value = errorMessage(cause, "事件列表加载失败");
   } finally {
-    loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
 }
 

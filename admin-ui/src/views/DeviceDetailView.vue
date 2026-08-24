@@ -156,9 +156,9 @@ async function load() {
       api.deviceHistory(data.id, "heartbeat", { page: 1, size: 6 }),
       api.deviceHistory(data.id, "register", { page: 1, size: 6 }),
     ]);
-    relatedChannels.value = channelResponse.status === "fulfilled" ? channelResponse.value.data.items || [] : [];
-    heartbeatHistory.value = heartbeatResponse.status === "fulfilled" ? heartbeatResponse.value.data.items || [] : [];
-    registerHistory.value = registerResponse.status === "fulfilled" ? registerResponse.value.data.items || [] : [];
+    relatedChannels.value = channelResponse.status === "fulfilled" ? channelResponse.value.data?.items || [] : [];
+    heartbeatHistory.value = heartbeatResponse.status === "fulfilled" ? heartbeatResponse.value.data?.items || [] : [];
+    registerHistory.value = registerResponse.status === "fulfilled" ? registerResponse.value.data?.items || [] : [];
     if (isGb.value) {
       try {
         diagnostics.value = (await api.gbDiagnostics(data.id)).data;
@@ -246,7 +246,7 @@ async function openHistory(kind: HistoryKind) {
   historyLoading.value = true;
   try {
     const { data } = await api.deviceHistory(device.value.id, kind, { page: 1, size: 100 });
-    historyRows.value = data.items || [];
+    historyRows.value = data?.items || [];
   } catch (cause) {
     historyError.value = "历史明细接口暂不可用，当前展示设备最近状态。";
   } finally {

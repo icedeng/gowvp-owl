@@ -36,6 +36,7 @@ func (g *GB28181API) Subscribe(_ context.Context, in *SubscribeInput) error {
 	if cmdType == "" {
 		cmdType = "Alarm"
 	}
+	version := g.getDeviceGBProtocolVersion(in.DeviceID)
 	body := fmt.Appendf(nil, `<?xml version="1.0" encoding="GB2312"?>
 <Query>
 <CmdType>%s</CmdType>
@@ -45,7 +46,7 @@ func (g *GB28181API) Subscribe(_ context.Context, in *SubscribeInput) error {
 `, cmdType, sip.RandInt(100000, 999999), in.DeviceID)
 
 	tx, err := g.svr.wrapRequest(ipc, sip.MethodSubscribe, &sip.ContentTypeXML, body, func(r *sip.Request) {
-		r.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: buildSubscriptionEventValue(cmdType, in.DeviceID)})
+		r.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: buildSubscriptionEventValueForVersion(version, cmdType, in.DeviceID)})
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: fmt.Sprintf("%d", in.Expires)})
 	})
 	if err != nil {

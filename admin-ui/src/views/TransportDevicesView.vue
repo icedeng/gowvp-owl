@@ -27,7 +27,7 @@ async function load() {
   loadError.value = "";
   try {
     const { data } = await api.devices({ page: 1, size: 99999 });
-    rows.value = data.items || [];
+    rows.value = data?.items || [];
   } catch (cause) {
     loadError.value = errorMessage(cause, "部标设备列表加载失败");
   } finally {

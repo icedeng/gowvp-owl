@@ -72,7 +72,7 @@ async function load() {
       api.gbMetrics(),
     ]);
     if (deviceResult.status === "rejected") throw deviceResult.reason;
-    devices.value = (deviceResult.value.data.items || []).filter(
+    devices.value = (deviceResult.value.data?.items || []).filter(
       (item) =>
         typeLabel(item.type, item.device_id || item.id) === "GB28181"
     );

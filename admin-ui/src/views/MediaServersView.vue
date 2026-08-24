@@ -25,13 +25,18 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
-    const [mediaResponse, channelResponse, statResponse] = await Promise.all([api.mediaServers({ page: 1, size: 100 }), api.channels({ page: 1, size: 99999 }), api.stats()])
-    rows.value = mediaResponse.data.items || []
-    channels.value = (channelResponse.data.items || []).map((item) => ({
-      ...item,
-      type: typeLabel(item.type, item.did || item.device_id || item.channel_id || item.id),
-    }))
-    stats.value = statResponse.data
+    const [mediaResponse, channelResponse, statResponse] = await Promise.allSettled([api.mediaServers({ page: 1, size: 100 }), api.channels({ page: 1, size: 99999 }), api.stats()])
+    if (mediaResponse.status === 'rejected') throw mediaResponse.reason
+    rows.value = mediaResponse.value.data?.items || []
+    if (channelResponse.status === 'fulfilled') {
+      channels.value = (channelResponse.value.data?.items || []).map((item) => ({
+        ...item,
+        type: typeLabel(item.type, item.did || item.device_id || item.channel_id || item.id),
+      }))
+    }
+    if (statResponse.status === 'fulfilled') stats.value = statResponse.value.data || {}
+    const auxiliaryFailure = [channelResponse, statResponse].find((item) => item.status === 'rejected')
+    if (auxiliaryFailure?.status === 'rejected') loadError.value = `媒体节点已加载，部分摘要暂不可用：${errorMessage(auxiliaryFailure.reason)}`
   } catch (cause) { loadError.value = errorMessage(cause, '媒体节点加载失败') } finally { loading.value = false }
 }
 

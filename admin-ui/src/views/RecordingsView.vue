@@ -42,6 +42,7 @@ const timeline = ref<TimelineRange[]>([]);
 const monthly = ref<MonthlyStats | null>(null);
 const total = ref(0);
 const downloading = ref<number | null>(null);
+let loadSequence = 0;
 
 const channelNames = computed(() =>
   Object.fromEntries(
@@ -119,38 +120,57 @@ function selectToday() {
 
 async function loadChannels() {
   const { data } = await api.channels({ page: 1, size: 99999 });
-  channels.value = data.items || [];
+  channels.value = data?.items || [];
   const routeChannel = String(route.query.channel || "");
   if (routeChannel && channels.value.some((item) => item.id === routeChannel))
     channelFilter.value = routeChannel;
 }
 
 async function load() {
+  const sequence = ++loadSequence;
   loading.value = true;
   loadError.value = "";
   try {
-    if (!channels.value.length) await loadChannels();
+    let channelLoadError = "";
+    if (!channels.value.length) {
+      try {
+        await loadChannels();
+      } catch (cause) {
+        channelLoadError = errorMessage(cause, "通道列表加载失败");
+        const routeChannel = String(route.query.channel || "");
+        if (routeChannel) channelFilter.value = routeChannel;
+      }
+    }
     const channel =
       channelFilter.value === "all" ? undefined : channelFilter.value;
-    const [listResponse, monthlyResponse] = await Promise.all([
+    const [listResponse, monthlyResponse, timelineResponse] = await Promise.allSettled([
       api.recordings({ page: 1, size: 500, cid: channel, ...dateRange.value }),
       api.monthly({
         cid: channel,
         year: date.value.getFullYear(),
         month: date.value.getMonth() + 1,
       }),
+      channel ? api.timeline({ cid: channel, ...dateRange.value }) : Promise.resolve(null),
     ]);
-    recordings.value = listResponse.data.items || [];
-    total.value = listResponse.data.total || recordings.value.length;
-    timeline.value = channel
-      ? (await api.timeline({ cid: channel, ...dateRange.value })).data.items ||
-        []
+    if (sequence !== loadSequence) return;
+    if (listResponse.status === "rejected") throw listResponse.reason;
+    recordings.value = listResponse.value.data?.items || [];
+    total.value = listResponse.value.data?.total || recordings.value.length;
+    monthly.value = monthlyResponse.status === "fulfilled" ? monthlyResponse.value.data : null;
+    timeline.value = timelineResponse.status === "fulfilled" && timelineResponse.value
+      ? timelineResponse.value.data?.items || []
       : [];
-    monthly.value = monthlyResponse.data;
+    const auxiliaryFailure = [monthlyResponse, timelineResponse].find((item) => item.status === "rejected");
+    const auxiliaryError = auxiliaryFailure?.status === "rejected"
+      ? errorMessage(auxiliaryFailure.reason)
+      : "";
+    if (channelLoadError || auxiliaryError) {
+      loadError.value = `录像列表已加载，部分辅助数据暂不可用：${channelLoadError || auxiliaryError}`;
+    }
   } catch (cause) {
-    loadError.value = errorMessage(cause, "录像数据加载失败");
+    if (sequence === loadSequence) loadError.value = errorMessage(cause, "录像数据加载失败");
   } finally {
-    loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
 }
 

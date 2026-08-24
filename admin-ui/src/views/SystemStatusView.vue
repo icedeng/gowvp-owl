@@ -84,24 +84,29 @@ async function load() {
   loading.value = true;
   loadError.value = "";
   try {
-    const [
-      healthResponse,
-      metricResponse,
-      statResponse,
-      mediaResponse,
-      channelResponse,
-    ] = await Promise.all([
+    const results = await Promise.allSettled([
       api.health(),
       api.metrics(),
       api.stats(),
       api.mediaServers({ page: 1, size: 100 }),
       api.channels({ page: 1, size: 99999 }),
     ]);
-    health.value = healthResponse.data;
-    metrics.value = metricResponse.data;
-    stats.value = statResponse.data;
-    media.value = mediaResponse.data.items || [];
-    channels.value = channelResponse.data.items || [];
+    const [
+      healthResponse,
+      metricResponse,
+      statResponse,
+      mediaResponse,
+      channelResponse,
+    ] = results;
+    if (healthResponse.status === "fulfilled") health.value = healthResponse.value.data || {};
+    if (metricResponse.status === "fulfilled") metrics.value = metricResponse.value.data || {};
+    if (statResponse.status === "fulfilled") stats.value = statResponse.value.data || {};
+    if (mediaResponse.status === "fulfilled") media.value = mediaResponse.value.data?.items || [];
+    if (channelResponse.status === "fulfilled") channels.value = channelResponse.value.data?.items || [];
+    const failures = results.filter((item) => item.status === "rejected");
+    if (failures.length) {
+      loadError.value = `部分系统指标加载失败（${failures.length}/5）：${errorMessage(failures[0].reason)}`;
+    }
   } catch (cause) {
     loadError.value = errorMessage(cause, "系统指标加载失败");
   } finally {

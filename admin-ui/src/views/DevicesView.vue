@@ -112,7 +112,7 @@ async function openStatistic(device: ApiDevice, kind: StatisticKind) {
   statisticLoading.value = true;
   try {
     const { data } = await api.deviceHistory(device.id, kind, { page: 1, size: 100 });
-    statisticRows.value = data.items || [];
+    statisticRows.value = data?.items || [];
   } catch (cause) {
     statisticError.value = errorMessage(cause, "历史记录加载失败");
   } finally {
@@ -125,7 +125,7 @@ async function load() {
   loadError.value = "";
   try {
     const { data } = await api.devices({ page: 1, size: 99999 });
-    rows.value = data.items || [];
+    rows.value = data?.items || [];
   } catch (cause) {
     loadError.value = errorMessage(cause, "国标设备列表加载失败");
   } finally {

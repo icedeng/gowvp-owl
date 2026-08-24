@@ -34,12 +34,14 @@ async function check() {
   loading.value = true;
   loadError.value = "";
   try {
-    const [healthResponse, versionResponse] = await Promise.all([
+    const [healthResponse, versionResponse] = await Promise.allSettled([
       api.health(),
       api.versionCheck(),
     ]);
-    health.value = healthResponse.data;
-    version.value = versionResponse.data;
+    if (versionResponse.status === "rejected") throw versionResponse.reason;
+    version.value = versionResponse.value.data || {};
+    if (healthResponse.status === "fulfilled") health.value = healthResponse.value.data || {};
+    else loadError.value = `版本信息已加载，当前服务状态暂不可用：${errorMessage(healthResponse.reason)}`;
     ui.toast(
       version.value.has_new_version
         ? `发现新版本 ${version.value.new_version}`

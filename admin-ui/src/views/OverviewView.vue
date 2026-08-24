@@ -53,7 +53,7 @@ const activeMedia = computed(
   () => mediaServers.value.filter((item) => item.status).length
 );
 const coreConnected = computed(
-  () => Boolean(health.value.version) && !loadError.value
+  () => Boolean(health.value.version)
 );
 const coreHeadline = computed(() => {
   if (loading.value && !health.value.version) return "正在核对核心链路";
@@ -184,15 +184,7 @@ async function load() {
   loadError.value = "";
   try {
     const now = Date.now();
-    const [
-      deviceResponse,
-      channelResponse,
-      eventResponse,
-      mediaResponse,
-      healthResponse,
-      metricsResponse,
-      statsResponse,
-    ] = await Promise.all([
+    const results = await Promise.allSettled([
       api.devices({ page: 1, size: 99999 }),
       api.channels({ page: 1, size: 99999 }),
       api.events({
@@ -206,13 +198,26 @@ async function load() {
       api.metrics(),
       api.stats(),
     ]);
-    devices.value = deviceResponse.data.items || [];
-    channels.value = channelResponse.data.items || [];
-    events.value = eventResponse.data.items || [];
-    mediaServers.value = mediaResponse.data.items || [];
-    health.value = healthResponse.data;
-    metrics.value = metricsResponse.data;
-    stats.value = statsResponse.data;
+    const [
+      deviceResponse,
+      channelResponse,
+      eventResponse,
+      mediaResponse,
+      healthResponse,
+      metricsResponse,
+      statsResponse,
+    ] = results;
+    if (deviceResponse.status === "fulfilled") devices.value = deviceResponse.value.data?.items || [];
+    if (channelResponse.status === "fulfilled") channels.value = channelResponse.value.data?.items || [];
+    if (eventResponse.status === "fulfilled") events.value = eventResponse.value.data?.items || [];
+    if (mediaResponse.status === "fulfilled") mediaServers.value = mediaResponse.value.data?.items || [];
+    if (healthResponse.status === "fulfilled") health.value = healthResponse.value.data || {};
+    if (metricsResponse.status === "fulfilled") metrics.value = metricsResponse.value.data || {};
+    if (statsResponse.status === "fulfilled") stats.value = statsResponse.value.data || {};
+    const failures = results.filter((item) => item.status === "rejected");
+    if (failures.length) {
+      loadError.value = `部分态势数据加载失败（${failures.length}/7），其余数据仍可使用：${errorMessage(failures[0].reason)}`;
+    }
   } catch (cause) {
     loadError.value = errorMessage(cause, "运行态势加载失败");
   } finally {

@@ -27,10 +27,11 @@ type Device struct {
 	// 播放互斥锁也可以移动到 channel 属性
 	playMutex sync.Mutex
 
-	IsOnline  bool
-	Address   string
-	Password  string
-	gbVersion string
+	IsOnline    bool
+	Address     string
+	Password    string
+	gbVersionMu sync.RWMutex
+	gbVersion   string
 
 	conn   sip.Connection
 	source net.Addr
@@ -77,11 +78,15 @@ func NewDevice(conn sip.Connection, d *ipc.Device) *Device {
 
 // GBVersion 返回设备实际使用的附录 I 协议版本号（1.0/1.1/2.0/3.0）。
 func (d *Device) GBVersion() string {
+	d.gbVersionMu.RLock()
+	defer d.gbVersionMu.RUnlock()
 	return d.gbVersion
 }
 
 func (d *Device) setGBVersion(version GBProtocolVersion) {
 	if version.Valid() {
+		d.gbVersionMu.Lock()
+		defer d.gbVersionMu.Unlock()
 		d.gbVersion = string(version)
 	}
 }
@@ -149,7 +154,7 @@ func (c *Channel) GBVersion() string {
 	if c.device == nil {
 		return ""
 	}
-	return c.device.gbVersion
+	return c.device.GBVersion()
 }
 
 // Conn implements Targeter.

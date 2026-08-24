@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,7 @@ func TestGBVersionXMLAndSDPFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			assertSDPFixtureFraming(t, sdpBody)
 			sdpText := string(sdpBody)
 			for _, required := range []string{"v=0", "s=Play", "a=rtpmap:96 PS/90000", "y=0100000001"} {
 				if !strings.Contains(sdpText, required) {
@@ -54,5 +56,20 @@ func TestGBVersionXMLAndSDPFixtures(t *testing.T) {
 				t.Fatalf("TCP SDP = %v; want %v", gotTCP, wantTCP)
 			}
 		})
+	}
+}
+
+func assertSDPFixtureFraming(t *testing.T, data []byte) {
+	t.Helper()
+	if len(data) == 0 {
+		t.Fatal("empty SDP fixture")
+	}
+	for i, b := range data {
+		if b == '\n' && (i == 0 || data[i-1] != '\r') {
+			t.Fatalf("SDP fixture contains bare LF at byte %d", i)
+		}
+	}
+	if !bytes.HasSuffix(data, []byte("\r\n")) {
+		t.Fatal("SDP fixture must end with CRLF")
 	}
 }

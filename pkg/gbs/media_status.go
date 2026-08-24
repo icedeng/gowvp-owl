@@ -10,7 +10,7 @@ import (
 
 const mediaStatusHistoryFinished = "121"
 
-// MediaStatusNotify 是 2014 修改补充文件 A.2.5 定义的媒体通知。
+// MediaStatusNotify 是 2011 附录 J 定义、后续版本延续的媒体通知。
 type MediaStatusNotify struct {
 	CmdType    string `xml:"CmdType" json:"cmd_type"`
 	SN         int    `xml:"SN" json:"sn"`

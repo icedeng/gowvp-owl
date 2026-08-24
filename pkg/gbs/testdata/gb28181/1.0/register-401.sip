@@ -7,3 +7,4 @@ CSeq: 1 REGISTER
 WWW-Authenticate: Digest realm="3402000000",qop="auth",nonce="fixture-nonce"
 X-GB-Ver: 3.0
 Content-Length: 0
+

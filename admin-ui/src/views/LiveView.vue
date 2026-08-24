@@ -119,12 +119,18 @@ async function load() {
   loading.value = true;
   loadError.value = "";
   try {
-    const [channelResponse, deviceResponse] = await Promise.all([
+    const [channelResponse, deviceResponse] = await Promise.allSettled([
       api.channels({ page: 1, size: 99999 }),
       api.devices({ page: 1, size: 99999 }),
     ]);
-    channels.value = channelResponse.data.items || [];
-    devices.value = deviceResponse.data.items || [];
+    if (channelResponse.status === "rejected") throw channelResponse.reason;
+    channels.value = channelResponse.value.data?.items || [];
+    if (deviceResponse.status === "fulfilled") {
+      devices.value = deviceResponse.value.data?.items || [];
+    } else {
+      devices.value = [];
+      loadError.value = `设备分组加载失败，通道已按未分组展示：${errorMessage(deviceResponse.reason)}`;
+    }
     syncRouteContext();
   } catch (cause) {
     loadError.value = errorMessage(cause, "实时通道加载失败");

@@ -121,6 +121,11 @@ func (v GBProtocolVersion) AtLeast(min GBProtocolVersion) bool {
 
 func (v GBProtocolVersion) Capabilities() GBCapabilities {
 	switch v {
+	case GBVersion10:
+		return GBCapabilities{
+			DirectoryNotify: true,
+			MediaStatus:     true,
+		}
 	case GBVersion11:
 		return GBCapabilities{
 			ConfigQuery:       true,

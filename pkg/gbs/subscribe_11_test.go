@@ -19,6 +19,26 @@ func TestCatalogSubscriptionEventValue11(t *testing.T) {
 	}
 }
 
+func TestCatalogSubscriptionEventValueByVersion(t *testing.T) {
+	tests := []struct {
+		version GBProtocolVersion
+		want    string
+	}{
+		{version: GBVersion10, want: "Catalog"},
+		{version: GBVersion11, want: "Catalog;id=" + gb10DeviceID},
+		{version: GBVersion20, want: "Catalog;id=" + gb10DeviceID},
+		{version: GBVersion30, want: "Catalog;id=" + gb10DeviceID},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.version), func(t *testing.T) {
+			if got := buildSubscriptionEventValueForVersion(tt.version, "Catalog", gb10DeviceID); got != tt.want {
+				t.Fatalf("Catalog Event = %q; want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCatalogSubscriptionInitialRenewCancel11(t *testing.T) {
 	api := &GB28181API{}
 	conn := newFlowConnection()

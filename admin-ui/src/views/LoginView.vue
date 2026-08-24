@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowRight, Eye, EyeOff, LoaderCircle, LockKeyhole, RefreshCw, ShieldCheck, UserRound } from '@lucide/vue'
+import { ArrowRight, Eye, EyeOff, LoaderCircle, LockKeyhole, UserRound } from '@lucide/vue'
 import brandMark from '../assets/brand-mark.svg'
 import { useSessionStore } from '../stores/session'
 
@@ -11,22 +11,8 @@ const session = useSessionStore()
 const username = ref('')
 const password = ref('')
 const showPassword = ref(false)
-const captchaInput = ref('')
-const captchaCode = ref('MZW9')
-const captchaInputElement = ref<HTMLInputElement | null>(null)
 const usernameError = ref('')
 const passwordError = ref('')
-const captchaError = ref('')
-
-const captchaChars = computed(() => captchaCode.value.split(''))
-
-function refreshCaptcha(clearError = true) {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-  captchaCode.value = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
-  captchaInput.value = ''
-  if (clearError) captchaError.value = ''
-  void nextTick(() => captchaInputElement.value?.focus())
-}
 
 function clearUsernameError() {
   usernameError.value = ''
@@ -37,30 +23,19 @@ function clearPasswordError() {
   session.error = ''
 }
 
-function clearCaptchaError() {
-  captchaError.value = ''
-}
-
 async function submit() {
   usernameError.value = username.value.trim() ? '' : '请输入登录账号'
   passwordError.value = password.value ? '' : '请输入登录密码'
-  captchaError.value = ''
   session.error = ''
 
   if (usernameError.value || passwordError.value) return
-  if (!captchaInput.value.trim()) {
-    captchaError.value = '请输入图形验证码'
-    captchaInputElement.value?.focus()
-    return
-  }
-  if (captchaInput.value.trim().toUpperCase() !== captchaCode.value) {
-    captchaError.value = '验证码不正确，请重新输入'
-    refreshCaptcha(false)
-    return
-  }
   try {
     await session.signIn(username.value.trim(), password.value)
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/overview'
+    const requested = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+    const resolved = requested.startsWith('/') ? router.resolve(requested) : null
+    const redirect = resolved?.matched.length && resolved.name !== 'login'
+      ? requested
+      : '/overview'
     await router.replace(redirect)
   } catch {
     // 错误信息由会话 store 统一处理。
@@ -154,40 +129,6 @@ async function submit() {
             {{ passwordError || session.error }}
           </p>
         </div>
-        <div class="captcha-head">
-          <label class="form-label" for="login-captcha">图形验证码</label>
-          <button type="button" class="captcha-refresh" aria-label="刷新图形验证码" @click="refreshCaptcha()">
-            <RefreshCw />换一张
-          </button>
-        </div>
-        <div class="captcha-row">
-          <div class="field captcha-input-field"
-            ><ShieldCheck /><input
-              id="login-captcha"
-              ref="captchaInputElement"
-              v-model="captchaInput"
-              name="captcha"
-              class="input w-full"
-              placeholder="请输入验证码"
-              autocomplete="off"
-              maxlength="4"
-              inputmode="text"
-              :aria-invalid="Boolean(captchaError)"
-              :aria-describedby="captchaError ? 'login-captcha-error' : 'login-captcha-help'"
-              @input="clearCaptchaError"
-          /></div>
-          <button type="button" class="captcha-visual" aria-label="刷新图形验证码" @click="refreshCaptcha()">
-            <span
-              v-for="(char, index) in captchaChars"
-              :key="`${char}-${index}`"
-              :style="{ transform: `rotate(${index % 2 ? 5 : -5}deg) translateY(${index % 2 ? 2 : -1}px)` }"
-              >{{ char }}</span
-            >
-            <i v-for="line in 3" :key="line" :class="`captcha-line line-${line}`" />
-          </button>
-        </div>
-        <p v-if="captchaError" id="login-captcha-error" class="field-error" role="alert" aria-live="polite">{{ captchaError }}</p>
-        <p v-else id="login-captcha-help" class="captcha-help">看不清时，可点击验证码或“换一张”刷新</p>
         <button
           class="btn btn-primary login-submit"
           :disabled="session.loading"

@@ -93,7 +93,11 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 		return
 	}
 	if eventValue == "" {
-		eventValue = buildSubscriptionEventValue(cmdType, deviceID)
+		version, ok := ParseGBProtocolVersion(ctx.XGBVer)
+		if !ok {
+			version = GBVersion10
+		}
+		eventValue = buildSubscriptionEventValueForVersion(version, cmdType, deviceID)
 	}
 	if eventID != "" && deviceID != "*" && eventID != deviceID {
 		ctx.String(400, "event id does not match DeviceID")
@@ -144,6 +148,18 @@ func buildSubscriptionEventValue(cmdType, deviceID string) string {
 		return "Catalog;id=" + deviceID
 	}
 	return cmdType
+}
+
+// buildSubscriptionEventValueForVersion 区分 2011 基础目录订阅与 2014 增加的 Event id 参数。
+func buildSubscriptionEventValueForVersion(version GBProtocolVersion, cmdType, deviceID string) string {
+	parsed, ok := ParseGBProtocolVersion(string(version))
+	if !ok {
+		parsed = GBVersion10
+	}
+	if parsed == GBVersion10 && strings.EqualFold(strings.TrimSpace(cmdType), "Catalog") {
+		return "Catalog"
+	}
+	return buildSubscriptionEventValue(cmdType, deviceID)
 }
 
 func parseSubscriptionEvent(value string) (eventValue, eventID string, err error) {
@@ -273,7 +289,11 @@ func (g *GB28181API) sendEventNotify(sub *eventSubscription, cmdType string, bod
 	tx, err := g.svr.wrapRequest(target, sip.MethodNotify, &sip.ContentTypeXML, body, func(r *sip.Request) {
 		eventValue := strings.TrimSpace(sub.Event)
 		if eventValue == "" {
-			eventValue = buildSubscriptionEventValue(cmdType, sub.DeviceID)
+			version, ok := ParseGBProtocolVersion(sub.GBVersion)
+			if !ok {
+				version = GBVersion10
+			}
+			eventValue = buildSubscriptionEventValueForVersion(version, cmdType, sub.DeviceID)
 		}
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: eventValue})
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: state})

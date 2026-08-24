@@ -6,7 +6,8 @@ import (
 )
 
 func TestCapabilityNamesByVersion(t *testing.T) {
-	if names := GBVersion10.CapabilityNames(); len(names) != 0 {
+	if names := GBVersion10.CapabilityNames(); !slices.Contains(names, "media_status") ||
+		!slices.Contains(names, "directory_notify") || slices.Contains(names, "config_query") {
 		t.Fatalf("1.0 capabilities = %v", names)
 	}
 	if names := GBVersion11.CapabilityNames(); !slices.Contains(names, "direct_tcp_download") || slices.Contains(names, "rtp_over_tcp") {

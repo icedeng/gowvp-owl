@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/gowvp/owl/internal/core/ipc"
@@ -47,7 +48,14 @@ func TestParseGBProtocolVersion(t *testing.T) {
 }
 
 func TestGBProtocolVersionCapabilities(t *testing.T) {
-	if GBVersion10.Capabilities().ConfigQuery {
+	gb10 := GBVersion10.Capabilities()
+	if !gb10.MediaStatus {
+		t.Fatal("1.0 must enable MediaStatus/121")
+	}
+	if !gb10.DirectoryNotify {
+		t.Fatal("1.0 must enable basic Catalog subscription notifications")
+	}
+	if gb10.ConfigQuery {
 		t.Fatal("1.0 must not enable ConfigDownload")
 	}
 	if !GBVersion11.Capabilities().DirectTCPDownload {
@@ -65,6 +73,37 @@ func TestGBProtocolVersionCapabilities(t *testing.T) {
 	if !GBVersion30.Capabilities().Snapshot || !GBVersion30.Capabilities().Upgrade {
 		t.Fatal("3.0 must enable 2022 snapshot and upgrade capabilities")
 	}
+}
+
+func TestDeviceGBVersionConcurrentReadWrite(t *testing.T) {
+	device := &Device{gbVersion: string(GBVersion10)}
+	channel := &Channel{device: device}
+	versions := []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func(offset int) {
+			defer wg.Done()
+			for n := 0; n < 1000; n++ {
+				device.setGBVersion(versions[(n+offset)%len(versions)])
+			}
+		}(i)
+		go func() {
+			defer wg.Done()
+			for n := 0; n < 1000; n++ {
+				if version, ok := ParseGBProtocolVersion(device.GBVersion()); !ok || version == "" {
+					t.Errorf("invalid device version %q", device.GBVersion())
+					return
+				}
+				if version, ok := ParseGBProtocolVersion(channel.GBVersion()); !ok || version == "" {
+					t.Errorf("invalid channel version %q", channel.GBVersion())
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestGBProtocolVersionOrdering(t *testing.T) {

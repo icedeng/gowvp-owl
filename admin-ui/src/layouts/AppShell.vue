@@ -95,7 +95,7 @@ function active(name: string) {
     route.name === name ||
     (route.name === "device-detail" && name === "devices") ||
     (route.name === "transport-device-detail" && name === "transport-devices") ||
-    (route.name === "channel-detail" && name === "channels")
+    (route.name === "channel-detail" && name === "devices")
   );
 }
 
@@ -133,15 +133,14 @@ onMounted(() => {
   window.addEventListener("keydown", onKeydown);
   document.addEventListener("pointerdown", onDocumentPointerDown);
   const now = Date.now();
-  Promise.all([
+  Promise.allSettled([
     api.health(),
     api.events({ page: 1, size: 1, start_ms: now - 24 * 3600000, end_ms: now }),
   ])
     .then(([healthResponse, eventResponse]) => {
-      health.value = healthResponse.data;
-      eventCount.value = eventResponse.data.total || 0;
+      if (healthResponse.status === "fulfilled") health.value = healthResponse.value.data || {};
+      if (eventResponse.status === "fulfilled") eventCount.value = eventResponse.value.data?.total || 0;
     })
-    .catch(() => undefined);
 });
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
