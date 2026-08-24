@@ -3,6 +3,7 @@ package gbs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs/sip"
+	"github.com/ixugo/goddd/pkg/orm"
 )
 
 const (
@@ -111,7 +113,7 @@ func TestPrepareCascadeInitialCatalogNotifyIncludesOnlyOffline(t *testing.T) {
 	if len(initial) != 1 || initial[0].DeviceID != "34020000001320000004" || initial[0].Event != "OFF" {
 		t.Fatalf("initial Catalog items = %+v", initial)
 	}
-	body, err := sip.XMLEncode(cascadeCatalogNotify{
+	body, err := encodeCascadeCatalogNotify(GBVersion11, cascadeCatalogNotify{
 		CmdType: "Catalog", SN: 1, DeviceID: gb10DeviceID, Status: "OK", SumNum: len(initial),
 		DeviceList: cascadeCatalogDeviceList{Num: len(initial), Items: initial},
 	})
@@ -162,6 +164,260 @@ func TestCascadeCatalogNotifyUsesVersionSpecificRootAndTarget(t *testing.T) {
 	filtered := filterCascadeCatalogNotifyItems(items, testExposedChannelID, gb10DeviceID)
 	if len(filtered) != 1 || filtered[0].DeviceID != testExposedChannelID {
 		t.Fatalf("partial Catalog notify items = %+v", filtered)
+	}
+}
+
+func TestDiffCascadeCatalogNotifyItems(t *testing.T) {
+	previous := catalogSnapshot([]cascadeCatalogItem{
+		{DeviceID: "34020000001320000001", Name: "camera-1", Status: "ON"},
+		{DeviceID: "34020000001320000002", Name: "camera-2", Status: "OFF"},
+	})
+	current := []cascadeCatalogItem{
+		{DeviceID: "34020000001320000001", Name: "camera-1", Status: "OFF"},
+		{DeviceID: "34020000001320000003", Name: "camera-3", Status: "ON"},
+	}
+	changes := diffCascadeCatalogNotifyItems(previous, current)
+	if len(changes) != 3 {
+		t.Fatalf("Catalog delta = %+v", changes)
+	}
+	events := make(map[string]string, len(changes))
+	for _, item := range changes {
+		events[item.DeviceID] = item.Event
+	}
+	if events["34020000001320000001"] != "OFF" || events["34020000001320000002"] != "DEL" || events["34020000001320000003"] != "ADD" {
+		t.Fatalf("Catalog delta events = %+v", events)
+	}
+	if unchanged := diffCascadeCatalogNotifyItems(catalogSnapshot(current), current); len(unchanged) != 0 {
+		t.Fatalf("unchanged Catalog produced delta = %+v", unchanged)
+	}
+
+	updated := append([]cascadeCatalogItem(nil), current...)
+	updated[0].Name = "renamed"
+	changes = diffCascadeCatalogNotifyItems(catalogSnapshot(current), updated)
+	if len(changes) != 1 || changes[0].Event != "UPDATE" || changes[0].DeviceID != updated[0].DeviceID {
+		t.Fatalf("Catalog metadata delta = %+v", changes)
+	}
+}
+
+func TestCascadeCatalogNotifyChunkCountsMatch(t *testing.T) {
+	items := make([]cascadeCatalogItem, 20)
+	for index := range items {
+		items[index].DeviceID = fmt.Sprintf("3402000000132%07d", index)
+	}
+	notify := newCascadeCatalogNotify("34020000002000000001", 8, "", items)
+	if notify.SumNum != len(items) || notify.DeviceList.Num != len(items) {
+		t.Fatalf("Catalog NOTIFY chunk counts = SumNum %d, Num %d", notify.SumNum, notify.DeviceList.Num)
+	}
+}
+
+func TestCascadeCatalogNotifyDeltaLifecycle(t *testing.T) {
+	adapter, device, _ := newCascadeMediaCore(t)
+	platform := testSharedCascadePlatform(t)
+	extraChannels := make([]*ipc.Channel, 0, 20)
+	for index := 0; index < 20; index++ {
+		localID := fmt.Sprintf("3402000000132%07d", index+100)
+		exposedID := fmt.Sprintf("3402000000139%07d", index+100)
+		channel := &ipc.Channel{
+			ID: fmt.Sprintf("GBC_catalog_%02d", index), DID: device.ID, DeviceID: device.DeviceID,
+			ChannelID: localID, Name: fmt.Sprintf("Camera %02d", index), Type: ipc.TypeGB28181,
+		}
+		if err := adapter.Store().Channel().Create(t.Context(), channel); err != nil {
+			t.Fatal(err)
+		}
+		extraChannels = append(extraChannels, channel)
+		platform.sharedChannels = append(platform.sharedChannels, localID)
+		platform.channelIDMap[localID] = exposedID
+		platform.exposedChannelMap[exposedID] = localID
+	}
+
+	worker := newCascadeWorker(nil, platform)
+	worker.mu.Lock()
+	worker.effective = GBVersion11
+	worker.mu.Unlock()
+	api := &GB28181API{core: adapter}
+	visibleChannels, err := api.loadCascadeChannels(t.Context(), worker.platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visibleItems := buildCascadeCatalogItems(visibleChannels, worker.platform, worker.protocolVersion())
+	previousItems := append([]cascadeCatalogItem(nil), visibleItems...)
+	for index := range previousItems {
+		if previousItems[index].Status == "ON" {
+			previousItems[index].Status = "OFF"
+		} else {
+			previousItems[index].Status = "ON"
+		}
+	}
+	sub := newCascadeCatalogTestSubscription(t, worker)
+	sub.CatalogSnapshot = catalogSnapshot(previousItems)
+
+	requests := make([]*sip.Request, 0, 4)
+	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+		requests = append(requests, request)
+		return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+	}
+	if err := api.sendCascadeCatalogNotify(t.Context(), sub); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("Catalog delta chunks = %d, want 2", len(requests))
+	}
+	for index, request := range requests {
+		body := string(request.Body())
+		wantCount := 20
+		if index == 1 {
+			wantCount = 1
+		}
+		for _, expected := range []string{
+			fmt.Sprintf("<SumNum>%d</SumNum>", wantCount),
+			fmt.Sprintf(`<DeviceList Num="%d">`, wantCount),
+		} {
+			if !strings.Contains(body, expected) {
+				t.Fatalf("Catalog delta chunk %d missing %q: %s", index, expected, body)
+			}
+		}
+	}
+	if events := strings.Count(string(requests[0].Body()), "<Event>") + strings.Count(string(requests[1].Body()), "<Event>"); events != 21 {
+		t.Fatalf("Catalog delta event count = %d, want 21", events)
+	}
+	if err := api.sendCascadeCatalogNotify(t.Context(), sub); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("unchanged Catalog sent %d extra chunks", len(requests)-2)
+	}
+
+	deleted := extraChannels[0]
+	deletedExposedID := worker.platform.channelIDMap[deleted.ChannelID]
+	if err := adapter.Store().Channel().Delete(t.Context(), deleted, orm.Where("id = ?", deleted.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.sendCascadeCatalogNotify(t.Context(), sub); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 3 {
+		t.Fatalf("Catalog delete chunks = %d, want 1", len(requests)-2)
+	}
+	deleteBody := string(requests[2].Body())
+	for _, expected := range []string{"<Event>DEL</Event>", "<DeviceID>" + deletedExposedID + "</DeviceID>", "<SumNum>1</SumNum>", `<DeviceList Num="1">`} {
+		if !strings.Contains(deleteBody, expected) {
+			t.Fatalf("Catalog delete missing %q: %s", expected, deleteBody)
+		}
+	}
+
+	addedLocalID := "34020000001320000888"
+	addedExposedID := "34020000001320009888"
+	added := &ipc.Channel{
+		ID: "GBC_catalog_added", DID: device.ID, DeviceID: device.DeviceID,
+		ChannelID: addedLocalID, Name: "Added camera", Type: ipc.TypeGB28181, IsOnline: true,
+	}
+	if err := adapter.Store().Channel().Create(t.Context(), added); err != nil {
+		t.Fatal(err)
+	}
+	worker.platform.sharedChannels = append(worker.platform.sharedChannels, addedLocalID)
+	worker.platform.channelIDMap[addedLocalID] = addedExposedID
+	worker.platform.exposedChannelMap[addedExposedID] = addedLocalID
+	worker.exchange = func(context.Context, *sip.Request) (*sip.Response, error) {
+		return nil, errors.New("upstream unavailable")
+	}
+	if err := api.sendCascadeCatalogNotify(t.Context(), sub); err == nil {
+		t.Fatal("failed Catalog NOTIFY unexpectedly succeeded")
+	}
+	sub.mu.Lock()
+	_, committedAfterFailure := sub.CatalogSnapshot[addedExposedID]
+	sub.mu.Unlock()
+	if committedAfterFailure {
+		t.Fatal("failed Catalog NOTIFY committed its snapshot")
+	}
+	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+		requests = append(requests, request)
+		return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+	}
+	if err := api.sendCascadeCatalogNotify(t.Context(), sub); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 4 || !strings.Contains(string(requests[3].Body()), "<Event>ADD</Event>") || !strings.Contains(string(requests[3].Body()), "<DeviceID>"+addedExposedID+"</DeviceID>") {
+		t.Fatalf("Catalog retry did not resend ADD: %+v", requests)
+	}
+}
+
+func TestCascadeCatalogNotifySerializesConcurrentSnapshotUpdates(t *testing.T) {
+	adapter, _, _ := newCascadeMediaCore(t)
+	worker := newCascadeWorker(nil, testSharedCascadePlatform(t))
+	worker.mu.Lock()
+	worker.effective = GBVersion11
+	worker.mu.Unlock()
+	api := &GB28181API{core: adapter}
+	sub := newCascadeCatalogTestSubscription(t, worker)
+	sub.CatalogSnapshot = catalogSnapshot([]cascadeCatalogItem{{DeviceID: testExposedChannelID, Status: "OFF"}})
+
+	firstRequest := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var requestMu sync.Mutex
+	requestCount := 0
+	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+		requestMu.Lock()
+		requestCount++
+		current := requestCount
+		requestMu.Unlock()
+		if current == 1 {
+			close(firstRequest)
+			<-releaseFirst
+		}
+		return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+	}
+
+	errs := make(chan error, 2)
+	go func() { errs <- api.sendCascadeCatalogNotify(t.Context(), sub) }()
+	<-firstRequest
+	secondStarted := make(chan struct{})
+	go func() {
+		close(secondStarted)
+		errs <- api.sendCascadeCatalogNotify(t.Context(), sub)
+	}()
+	<-secondStarted
+	close(releaseFirst)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	requestMu.Lock()
+	defer requestMu.Unlock()
+	if requestCount != 1 {
+		t.Fatalf("concurrent Catalog updates sent %d duplicate NOTIFY requests", requestCount)
+	}
+}
+
+func newCascadeCatalogTestSubscription(t *testing.T, worker *cascadeWorker) *eventSubscription {
+	t.Helper()
+	remoteURI, err := sip.ParseSipURI("sip:" + gb10PlatformID + "@remote.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localURI, err := sip.ParseSipURI("sip:" + gb10DeviceID + "@local.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteContactURI, err := sip.ParseSipURI("sip:" + gb10PlatformID + "@192.0.2.30:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	callID := sip.CallID("cascade-catalog-" + t.Name())
+	subscribe := sip.NewRequest("", sip.MethodSubscribe, &localURI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().
+			SetFrom(&sip.Address{URI: &remoteURI, Params: sip.NewParams().Add("tag", sip.String{Str: "remote-tag"})}).
+			SetTo(&sip.Address{URI: &localURI, Params: sip.NewParams()}).
+			SetContact(&sip.Address{URI: &remoteContactURI, Params: sip.NewParams()}).
+			SetMethod(sip.MethodSubscribe).
+			SetCallID(&callID).
+			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).
+			Build(), nil)
+	return &eventSubscription{
+		CmdType: "Catalog", DeviceID: gb10DeviceID, Event: "Catalog;id=" + gb10DeviceID,
+		ExpiresAt: time.Now().Add(time.Hour), To: &sip.Address{URI: &remoteContactURI, Params: sip.NewParams()},
+		GBVersion: string(GBVersion11), Response: sip.NewResponseFromRequest("", subscribe, http.StatusOK, "OK", nil),
+		Contact: worker.contactAddress(), Cascade: worker,
 	}
 }
 
@@ -579,18 +835,38 @@ func TestCascadeRecordInfoQueriesSharedChannelAndMapsResponse(t *testing.T) {
 func TestCascadeQueryTargetAllowsSupportedSharedQueries(t *testing.T) {
 	platform := testSharedCascadePlatform(t)
 	for _, cmdType := range []string{
-		"DeviceInfo", "DeviceStatus", "RecordInfo", "PresetQuery", "HomePositionQuery",
+		"Catalog", "DeviceInfo", "DeviceStatus", "RecordInfo", "PresetQuery", "HomePositionQuery",
 		"CruiseTrackListQuery", "CruiseTrackQuery", "MobilePosition", "PTZPosition", "SDCardStatus",
 	} {
 		if !cascadeQueryTargetAllowed(platform, cmdType, testExposedChannelID) {
 			t.Errorf("shared %s query was rejected", cmdType)
 		}
 	}
-	if cascadeQueryTargetAllowed(platform, "Catalog", testExposedChannelID) {
-		t.Fatal("channel-targeted Catalog query was accepted")
-	}
 	if cascadeQueryTargetAllowed(platform, "RecordInfo", "34020000001320000099") {
 		t.Fatal("unshared RecordInfo query was accepted")
+	}
+}
+
+func TestCascadeCatalogQuerySupportsSharedChannelTarget(t *testing.T) {
+	adapter, _, _ := newCascadeMediaCore(t)
+	platform := testSharedCascadePlatform(t)
+	worker := newCascadeWorker(nil, platform)
+	worker.mu.Lock()
+	worker.effective = GBVersion11
+	worker.mu.Unlock()
+	var body string
+	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+		body = string(request.Body())
+		return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+	}
+	api := &GB28181API{core: adapter}
+	if err := api.respondCascadeCatalog(t.Context(), worker, cascadeQueryEnvelope{
+		CmdType: "Catalog", SN: 44, DeviceID: testExposedChannelID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, "<DeviceID>"+testExposedChannelID+"</DeviceID>") || !strings.Contains(body, "<SumNum>1</SumNum>") {
+		t.Fatalf("shared channel Catalog response:\n%s", body)
 	}
 }
 
@@ -684,7 +960,7 @@ func TestCascadeCatalogNotifyUsesSubscribeDialog(t *testing.T) {
 		requests = append(requests, request)
 		return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
 	}
-	body, err := sip.XMLEncode(cascadeCatalogNotify{CmdType: "Catalog", SN: 9, DeviceID: gb10DeviceID})
+	body, err := encodeCascadeCatalogNotify(GBVersion11, cascadeCatalogNotify{CmdType: "Catalog", SN: 9, DeviceID: gb10DeviceID})
 	if err != nil {
 		t.Fatal(err)
 	}

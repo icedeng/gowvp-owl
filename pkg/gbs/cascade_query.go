@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -258,7 +260,7 @@ func cascadeQueryTargetAllowed(platform cascadePlatform, cmdType, deviceID strin
 		return false
 	}
 	switch strings.TrimSpace(cmdType) {
-	case "DeviceInfo", "DeviceStatus", "RecordInfo", "PresetQuery", "HomePositionQuery",
+	case "Catalog", "DeviceInfo", "DeviceStatus", "RecordInfo", "PresetQuery", "HomePositionQuery",
 		"CruiseTrackListQuery", "CruiseTrackQuery", "MobilePosition", "PTZPosition", "SDCardStatus":
 		return true
 	default:
@@ -445,16 +447,21 @@ func (g *GB28181API) respondCascadeCatalog(ctx context.Context, worker *cascadeW
 		return err
 	}
 	items := buildCascadeCatalogItems(channels, worker.platform, worker.protocolVersion())
+	responseDeviceID := strings.TrimSpace(query.DeviceID)
+	if responseDeviceID == "" || responseDeviceID == "*" {
+		responseDeviceID = worker.platform.localID
+	}
+	items = filterCascadeCatalogNotifyItems(items, responseDeviceID, worker.platform.localID)
 	if len(items) == 0 {
 		return sendCascadeXML(ctx, worker, cascadeCatalogResponse{
-			CmdType: "Catalog", SN: query.SN, DeviceID: worker.platform.localID,
+			CmdType: "Catalog", SN: query.SN, DeviceID: responseDeviceID,
 			DeviceList: cascadeCatalogDeviceList{},
 		})
 	}
 	for start := 0; start < len(items); start += cascadeCatalogChunkSize {
 		end := min(start+cascadeCatalogChunkSize, len(items))
 		if err := sendCascadeXML(ctx, worker, cascadeCatalogResponse{
-			CmdType: "Catalog", SN: query.SN, DeviceID: worker.platform.localID, SumNum: len(items),
+			CmdType: "Catalog", SN: query.SN, DeviceID: responseDeviceID, SumNum: len(items),
 			DeviceList: cascadeCatalogDeviceList{Num: end - start, Items: items[start:end]},
 		}); err != nil {
 			return err
@@ -512,6 +519,9 @@ func (g *GB28181API) sendCascadeCatalogNotifyMode(ctx context.Context, sub *even
 	if sub == nil {
 		return fmt.Errorf("cascade subscription is unavailable")
 	}
+	// 同一订阅的快照比较、分包发送和快照提交必须串行，避免并发目录变化重复发送同一批增量。
+	sub.catalogMu.Lock()
+	defer sub.catalogMu.Unlock()
 	sub.mu.Lock()
 	worker := sub.Cascade
 	expiresAt := sub.ExpiresAt
@@ -524,9 +534,21 @@ func (g *GB28181API) sendCascadeCatalogNotifyMode(ctx context.Context, sub *even
 	if err != nil {
 		return err
 	}
-	items := buildCascadeCatalogItems(channels, worker.platform, worker.protocolVersion())
-	items = filterCascadeCatalogNotifyItems(items, subscriptionDeviceID, worker.platform.localID)
-	items = prepareCascadeCatalogNotifyItems(items, initial)
+	visibleItems := buildCascadeCatalogItems(channels, worker.platform, worker.protocolVersion())
+	visibleItems = filterCascadeCatalogNotifyItems(visibleItems, subscriptionDeviceID, worker.platform.localID)
+	nextSnapshot := catalogSnapshot(visibleItems)
+	var items []cascadeCatalogItem
+	if initial {
+		items = prepareCascadeCatalogNotifyItems(visibleItems, true)
+	} else {
+		sub.mu.Lock()
+		previous := sub.CatalogSnapshot
+		sub.mu.Unlock()
+		items = diffCascadeCatalogNotifyItems(previous, visibleItems)
+		if len(items) == 0 {
+			return nil
+		}
+	}
 	notifyDeviceID := strings.TrimSpace(subscriptionDeviceID)
 	if notifyDeviceID == "" || notifyDeviceID == "*" {
 		notifyDeviceID = worker.platform.localID
@@ -537,21 +559,21 @@ func (g *GB28181API) sendCascadeCatalogNotifyMode(ctx context.Context, sub *even
 	}
 	sn := g.nextQuerySN()
 	if len(items) == 0 {
-		body, err := encodeCascadeCatalogNotify(worker.protocolVersion(), cascadeCatalogNotify{
-			CmdType: "Catalog", SN: sn, DeviceID: notifyDeviceID, Status: status,
-			DeviceList: cascadeCatalogDeviceList{},
-		})
+		body, err := encodeCascadeCatalogNotify(worker.protocolVersion(), newCascadeCatalogNotify(notifyDeviceID, sn, status, nil))
 		if err != nil {
 			return err
 		}
-		return g.sendEventNotify(sub, "Catalog", body)
+		if err := g.sendEventNotify(sub, "Catalog", body); err != nil {
+			return err
+		}
+		sub.mu.Lock()
+		sub.CatalogSnapshot = nextSnapshot
+		sub.mu.Unlock()
+		return nil
 	}
 	for start := 0; start < len(items); start += cascadeCatalogChunkSize {
 		end := min(start+cascadeCatalogChunkSize, len(items))
-		body, err := encodeCascadeCatalogNotify(worker.protocolVersion(), cascadeCatalogNotify{
-			CmdType: "Catalog", SN: sn, DeviceID: notifyDeviceID, Status: status, SumNum: len(items),
-			DeviceList: cascadeCatalogDeviceList{Num: end - start, Items: items[start:end]},
-		})
+		body, err := encodeCascadeCatalogNotify(worker.protocolVersion(), newCascadeCatalogNotify(notifyDeviceID, sn, status, items[start:end]))
 		if err != nil {
 			return err
 		}
@@ -559,6 +581,45 @@ func (g *GB28181API) sendCascadeCatalogNotifyMode(ctx context.Context, sub *even
 			return err
 		}
 	}
+	sub.mu.Lock()
+	sub.CatalogSnapshot = nextSnapshot
+	sub.mu.Unlock()
+	return nil
+}
+
+func newCascadeCatalogNotify(deviceID string, sn int, status string, items []cascadeCatalogItem) cascadeCatalogNotify {
+	return cascadeCatalogNotify{
+		CmdType: "Catalog", SN: sn, DeviceID: deviceID, Status: status, SumNum: len(items),
+		DeviceList: cascadeCatalogDeviceList{Num: len(items), Items: items},
+	}
+}
+
+func (g *GB28181API) seedCascadeCatalogSnapshot(ctx context.Context, sub *eventSubscription) error {
+	if sub == nil {
+		return nil
+	}
+	sub.catalogMu.Lock()
+	defer sub.catalogMu.Unlock()
+	sub.mu.Lock()
+	worker := sub.Cascade
+	deviceID := sub.DeviceID
+	alreadySeeded := sub.CatalogSnapshot != nil
+	sub.mu.Unlock()
+	if worker == nil || alreadySeeded {
+		return nil
+	}
+	channels, err := g.loadCascadeChannels(ctx, worker.platform)
+	if err != nil {
+		return err
+	}
+	items := buildCascadeCatalogItems(channels, worker.platform, worker.protocolVersion())
+	items = filterCascadeCatalogNotifyItems(items, deviceID, worker.platform.localID)
+	snapshot := catalogSnapshot(items)
+	sub.mu.Lock()
+	if sub.CatalogSnapshot == nil {
+		sub.CatalogSnapshot = snapshot
+	}
+	sub.mu.Unlock()
 	return nil
 }
 
@@ -599,6 +660,64 @@ func prepareCascadeCatalogNotifyItems(items []cascadeCatalogItem, initial bool) 
 		out = append(out, item)
 	}
 	return out
+}
+
+func catalogSnapshot(items []cascadeCatalogItem) map[string]cascadeCatalogItem {
+	snapshot := make(map[string]cascadeCatalogItem, len(items))
+	for _, item := range items {
+		deviceID := strings.TrimSpace(item.DeviceID)
+		if deviceID == "" {
+			continue
+		}
+		item.Event = ""
+		item.ExtraInfo = append([]string(nil), item.ExtraInfo...)
+		if item.Info != nil {
+			info := *item.Info
+			item.Info = &info
+		}
+		snapshot[deviceID] = item
+	}
+	return snapshot
+}
+
+func diffCascadeCatalogNotifyItems(previous map[string]cascadeCatalogItem, current []cascadeCatalogItem) []cascadeCatalogItem {
+	currentSnapshot := catalogSnapshot(current)
+	changes := make([]cascadeCatalogItem, 0, len(previous)+len(currentSnapshot))
+	for deviceID, item := range currentSnapshot {
+		old, existed := previous[deviceID]
+		if !existed {
+			item.Event = "ADD"
+			changes = append(changes, item)
+			continue
+		}
+		if reflect.DeepEqual(old, item) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(old.Status), strings.TrimSpace(item.Status)) {
+			switch strings.ToUpper(strings.TrimSpace(item.Status)) {
+			case "ON", "ONLINE":
+				item.Event = "ON"
+			case "OFF", "OFFLINE":
+				item.Event = "OFF"
+			default:
+				item.Event = "UPDATE"
+			}
+		} else {
+			item.Event = "UPDATE"
+		}
+		changes = append(changes, item)
+	}
+	for deviceID, item := range previous {
+		if _, exists := currentSnapshot[deviceID]; exists {
+			continue
+		}
+		item.Event = "DEL"
+		changes = append(changes, item)
+	}
+	sort.Slice(changes, func(i, j int) bool {
+		return strings.TrimSpace(changes[i].DeviceID) < strings.TrimSpace(changes[j].DeviceID)
+	})
+	return changes
 }
 
 func (g *GB28181API) loadCascadeChannels(ctx context.Context, platform cascadePlatform) ([]*ipc.Channel, error) {

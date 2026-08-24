@@ -333,6 +333,9 @@ func applyGBProtocolVersion(ext *ipc.DeviceExt, declared string) GBProtocolVersi
 
 // getDeviceGBProtocolVersion 获取设备的有效协议档案；未知设备保守按 1.0 处理。
 func (g *GB28181API) getDeviceGBProtocolVersion(deviceID string) GBProtocolVersion {
+	if g == nil || g.svr == nil || g.svr.memoryStorer == nil {
+		return GBVersion10
+	}
 	if d, ok := g.svr.memoryStorer.Load(deviceID); ok {
 		if version, valid := ParseGBProtocolVersion(d.GBVersion()); valid {
 			return version

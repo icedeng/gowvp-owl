@@ -26,6 +26,8 @@
 - 对固件缺失能力设置 `gb_disabled_capabilities` 后，对应命令应在发送 SIP 前被拒绝；清空列表后恢复版本默认能力。
 - `GET /gb28181/metrics` 中注册、目录、媒体、断流和下载计数与实际操作一致。
 - 真实上级按版本发起 Catalog/Alarm/MobilePosition/PTZPosition 订阅时，抓取 Owl 向真实下级发送的 SUBSCRIBE、续订和 Expires=0 退订；Catalog 应订阅承载共享通道的 NVR，新增共享通道或将通道迁移到另一 NVR 后应自动补订阅；两个上级订阅同一资源时，确认首个上级退订不会提前取消共享下级订阅；
+- 分别订阅平台根目录和单个共享通道：2011 Catalog 变化通知根节点应为 `Response`，2014/2016/2022 应为 `Notify`；新增、删除、上下线、元数据修改应分别收到 ADD、DEL、ON/OFF、UPDATE，且每包 `SumNum` 等于 `DeviceList Num`；下级发送空消息体 `Subscription-State: terminated` 后 Owl 应返回 200，并在上级订阅仍有效时重新建立下级订阅；
+- 2022 上级返回 REGISTER 301/302 和新的 Contact 后，确认 Owl 向新地址完成 Digest 注册，后续 Keepalive/NOTIFY/INVITE 使用新地址，旧地址不再具有上级身份；
 - Alarm 分别使用级别、方式、类型和时间过滤，确认不匹配报警不会发往上级；2011 厂商分别验证 `StartAlarmTime/EndAlarmTime` 和示例别名 `StartTime/EndTime`。
 
 ## 3. 版本专项

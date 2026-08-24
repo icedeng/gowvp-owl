@@ -44,6 +44,7 @@ go test ./... -count=1
 - 下载进度查询、取消接口、白名单、注册地址校验和原子落盘。
 - 注册、目录、媒体会话、异常断流和直接 TCP 下载灰度计数器。
 - 四版本级联 REGISTER、Catalog、UDP/TCP、下载倍速、订阅能力矩阵；
+- 2022 上级 REGISTER 301/302 重定向，校验 Contact 的 ServerID、SIPS/transport，重定向后重新 Digest 注册，后续心跳、通知、媒体请求和入向身份校验绑定新地址；
 - 共享通道 DeviceInfo、DeviceStatus 和 RecordInfo 查询，录像响应分包并映射为上级可见编码；NVR 代表已知子通道返回 DeviceInfo 时只更新子通道元数据；
 - 共享通道 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 PTZPosition/SDCardStatus 查询转发；上下级 SN 转换、DeviceID/ParentID 安全映射、未知编码拒绝、下级失败业务应答及多上级响应隔离；
 - 3.0 附录 A.4 扩展对象按 Catalog ExtraInfo、Alarm/MobilePosition 嵌套对象和 DeviceStatus 响应的真实承载路径级联；共享对象递归编码映射，未知 20 位对象编码整条拒绝，且 1.0/1.1/2.0 不输出 3.0 ExtraInfo；
@@ -54,7 +55,9 @@ go test ./... -count=1
 - 共享通道 PTZ、录像和版本化通道控制转发；设备级高影响控制不因共享单个通道而被级联放大；
 - 四版本历史级联 `INVITE→ACK→INFO→BYE` 完整对话、媒体启动/释放和 MANSRTSP/RTSP 转换；
 - 两个已注册上级之间的级联对话所有权隔离，非会话所属上级的 ACK/CANCEL/BYE 不得改变或终止会话；
-- 1.1+ 域间目录初始订阅只通知离线/异常目录，刷新订阅保留 NOTIFY CSeq；续订与过期清理并发时由续订保留有效会话，过期会话释放下级引用；Alarm/MobilePosition 和 1.0 目录订阅不误发初始 Catalog；Alarm 订阅按级别、方式、类型和时间过滤，兼容 2011 `StartTime/EndTime` 示例别名；
+- Catalog 查询和订阅均支持平台根或单个共享通道目标；1.0 变化通知使用 `Response` 根，1.1+ 使用 `Notify` 根；目录快照只产生 ADD/DEL/ON/OFF/UPDATE 增量，分包中 `SumNum` 与本包 `DeviceList Num` 一致；同一订阅并发触发不重复发送，任一分包失败时不提交快照并在下次重试；
+- 1.1+ 域间目录初始订阅只通知离线/异常目录，刷新订阅保留 NOTIFY CSeq；续订与过期清理并发时由续订保留有效会话，过期会话释放下级引用；空消息体 terminated NOTIFY 返回 200 并清理/按引用重建下级订阅；未重复携带 X-GB-Ver 的上级 SUBSCRIBE 复用注册协商版本；Alarm/MobilePosition 和 1.0 目录订阅不误发初始 Catalog；Alarm 订阅按级别、方式、类型和时间过滤，兼容 2011 `StartTime/EndTime` 示例别名；
+- 设备级关闭 `download_speed` 或 `h265` 后，运行时分别不再发送下载倍速或 H.265 SDP 声明，能力快照与实际发送门禁一致；
 - 1.1/2.0/3.0 级联 Broadcast 通知、上游语音源 Digest INVITE、ZLM 音频接收、下游接收方主动 INVITE 和 RTP 转发；1.1 PS/90000 与 2.0/3.0 PCMA/8000 版本矩阵；多通道 Subject 定位、CANCEL、双侧 BYE、错误应答、来源隔离和资源回收；
 
 ### 静态检查

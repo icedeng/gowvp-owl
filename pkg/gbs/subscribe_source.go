@@ -55,7 +55,8 @@ type cascadeDownstreamSubscription struct {
 
 // eventSubscription 保存事件源侧订阅会话。
 type eventSubscription struct {
-	mu sync.Mutex
+	mu        sync.Mutex
+	catalogMu sync.Mutex
 
 	Key      string
 	CmdType  string
@@ -77,7 +78,8 @@ type eventSubscription struct {
 	Interval  int
 
 	// DownstreamKeys 记录本级为该上级订阅自动建立的下级订阅，用于续订、退订和超时释放。
-	DownstreamKeys []string
+	DownstreamKeys  []string
+	CatalogSnapshot map[string]cascadeCatalogItem
 }
 
 type outgoingSubscriptionDialog struct {
@@ -307,6 +309,12 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 				slog.Warn("send initial cascade Catalog NOTIFY failed", "upstream", cascade.platform.name, "err", err)
 			}
 		}()
+	} else if initial && cascade != nil && strings.EqualFold(cmdType, "Catalog") {
+		seedCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := g.seedCascadeCatalogSnapshot(seedCtx, sub); err != nil {
+			slog.Warn("seed cascade Catalog subscription snapshot failed", "upstream", cascade.platform.name, "err", err)
+		}
+		cancel()
 	}
 }
 
