@@ -6,7 +6,7 @@
 
 代码建设、自动化测试和本地协议模拟器已完成到开发计划的 AI-502；AI-403 的 2014 附录 O 裸 TCP 下载已经实现，不再是代码阻断项。
 
-目标尚不能标记为生产完成，原因是 AI-503 真实设备矩阵和 AI-602 部署灰度/回滚必须在外部设备及目标环境执行。上下级平台级联的注册、查询、目录、事件订阅、直播、回放、下载和语音广播/对讲代码链路已经补齐；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅现在会自动建立、续订、复用和取消下级订阅，但仍需要真实上级平台及真实设备共同验证。
+目标尚不能标记为生产完成，原因是 AI-503 真实设备矩阵和 AI-602 部署灰度/回滚必须在外部设备及目标环境执行。上下级平台级联的注册、查询、目录、事件订阅、直播、回放、下载和语音广播/对讲代码链路已经补齐；2022 附录 H 指定路径级联已完成自动化闭环；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅现在会自动建立、续订、复用和取消下级订阅，但仍需要真实上级平台及真实设备共同验证。
 
 ## 2. 任务逐项证据
 
@@ -45,11 +45,11 @@
 | 查询与目录 | 完成（自动化） | 平台与共享通道 DeviceInfo/DeviceStatus、共享通道 RecordInfo 下级查询及响应编码映射；可信 NVR 可代表其已知子通道返回 DeviceInfo，通道元数据单独落库且不会覆盖父设备，非法跨设备编码仍拒绝；按上级版本安全转发 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 CruiseTrackListQuery/CruiseTrackQuery/PTZPosition/SDCardStatus；巡航轨迹编号、列表、预置位、停留时间和速度结构化解析；上下级 SN 独立、响应恢复上级 SN，DeviceID/ParentID 映射且未知下级编码不透传，多上级并发响应隔离；Catalog 支持平台根或单个共享通道目标、共享白名单、20 条查询分包和版本化 Info；录像列表 20 条分包且不泄露下级编码；`cascade_query_test.go`、`device_info_channel_test.go` |
 | 设备控制 | 完成（共享通道安全子集） | PTZ、录像控制及版本匹配的 IFrame/DragZoom/HomePosition/精准 PTZ 转发下级并映射业务响应；校验 PTZ 校验和、上下级版本与设备能力关闭项；重启、布撤防、报警复位、格式化等设备级操作不允许经仅共享通道越权执行；`cascade_control_test.go` |
 | 订阅通知 | 完成（自动化） | 1.1+ Catalog 初始通知仅发送离线/异常目录并携带 `Status=OK`，默认 Expires 600 秒；1.0、Alarm、MobilePosition、PTZPosition 不误发初始 Catalog；2011 Catalog 变化通知使用 `Response` 根，2014+ 使用 `Notify` 根；平台根和单个共享通道订阅分别维护可见目录快照，只发送 ADD/DEL/ON/OFF/UPDATE 增量，单包 `SumNum` 与 `DeviceList Num` 一致；同一订阅的增量计算、分包发送和快照提交串行执行，失败不提交快照且重试补发；刷新保留原对话与 NOTIFY CSeq，未重复携带 X-GB-Ver 时复用注册协商版本；空消息体 terminated NOTIFY 返回 200、清理出向对话，并在仍有级联引用时自动重订；上级 Catalog 订阅自动映射到承载共享通道的下级 NVR，目录快照变化后重新计算来源并为新增或迁移通道补订阅；Catalog/Alarm/MobilePosition/PTZPosition 下级订阅支持续订、退订、过期/上级移除清理和多上级引用计数，续订与过期清理串行收敛；Alarm 完整支持 Start/EndAlarmPriority、AlarmMethod、AlarmType、Start/EndAlarmTime 过滤，兼容 2011 示例的 StartTime/EndTime 别名；事件通知按平台级、指定共享通道和过滤条件二次筛选并映射编码；2.0 起支持 AlarmType，3.0 支持 PTZ 精准位置变化订阅/通知且 1.0/1.1/2.0 明确拒绝；非标准级联订阅明确拒绝；`cascade_subscribe_test.go`、`cascade_query_test.go`、`subscribe_11_test.go` |
-| 实时点播 | 完成（自动化） | 1.0/1.1 UDP，2.0/3.0 UDP/TCP；ZLM 转发、ACK/BYE/CANCEL 和引用计数；对话内请求绑定发起该会话的已注册上级，其他上级不能确认或终止会话；`cascade_media_test.go` |
-| 历史回放/下载 | 完成（自动化） | 独立时间段媒体源、Playback/Download SDP、下载倍速/文件大小；四版本 `INVITE→ACK→INFO→BYE` 串联回归；MANSRTSP/RTSP 版本转换；普通和级联控制 CSeq 原子递增；资源关闭；`cascade_media_test.go`、`history_control_test.go` |
+| 实时点播 | 完成（自动化） | 1.0/1.1 UDP，2.0/3.0 UDP/TCP；ZLM 转发、ACK/BYE/CANCEL 和引用计数；3.0 指定路径使用独立媒体源与 RTP 流并按同一路径会话释放；对话内请求绑定发起该会话的已注册上级，其他上级不能确认或终止会话；`cascade_media_test.go` |
+| 历史回放/下载 | 完成（自动化） | 独立时间段及指定路径媒体源、Playback/Download SDP、下载倍速/文件大小；四版本 `INVITE→ACK→INFO→BYE` 串联回归，3.0 下载覆盖指定路径转发与响应确认；MANSRTSP/RTSP 版本转换；普通和级联控制 CSeq 原子递增；资源关闭；`cascade_media_test.go`、`history_control_test.go` |
 | 语音广播/对讲级联 | 完成（自动化） | 按附录 Q/9.12 转发上级 Broadcast 通知，主动建立上游语音源 INVITE（支持 Digest）与 ZLM 接收流，再通知真实下级并处理接收方主动 INVITE；1.1 上游/下游使用 PS/90000，2.0/3.0 使用 PCMA/8000，跨版本由 ZLM 解封装/重封装；上下游 SN、SourceID/TargetID 隔离，多通道按 Subject 接收者定位；ACK/CANCEL/双侧 BYE、媒体注销和关闭均幂等释放。语音对讲按 2016 的“实时视音频点播上行 + 语音广播下行”组合实现；`cascade_voice_test.go`、`cascade_version_matrix_test.go` |
-| 2022 扩展级联 | 完成（自动化） | CruiseTrackListQuery、CruiseTrackQuery、PTZPosition、SDCardStatus 按 3.0 门禁安全转发并重写 SN/DeviceID/ParentID；3.0 PTZ 精准位置变化事件支持自动下级订阅和安全通知级联；ConfigDownload 使用标准 `SnapShotConfig`，同时接收旧厂商 `SnapShot` 别名；A.4 是扩展应用数据对象类型定义而非独立查询命令，已按真实承载路径支持 3.0 Catalog ExtraInfo、Alarm/MobilePosition 嵌套对象和 3.0 DeviceStatus 下级响应。共享对象编码递归映射、ParentID/下级父设备映射为本级平台编码，字符串及数值型 20 位对象编码均保留精度并执行映射，未知编码拒绝整条响应/通知；JSON 数字和数组不丢值；补正标准 `behavioralEventType` 并兼容旧厂商别名；`cascade_a4.go`、`cascade_query_test.go`、`cascade_subscribe_test.go` |
-| 真实平台互通 | 待外部执行 | 需要 1.0/1.1/2.0/3.0 上级平台分别验证注册、目录、直播、回放、下载和订阅 |
+| 2022 扩展级联 | 完成（自动化） | 附录 H `X-PreferredPath` 按首跳消费并向下转发剩余路径，`X-RoutePath` 前置本平台编码返回；路径平台编码严格校验为 20 位数字及类型码 `200`，拒绝重复、错误首跳、响应不匹配和路由环；指定路径媒体源按路径隔离，未使用路径时兼容历史非 `200` 本地编码。CruiseTrackListQuery、CruiseTrackQuery、PTZPosition、SDCardStatus 按 3.0 门禁安全转发并重写 SN/DeviceID/ParentID；3.0 PTZ 精准位置变化事件支持自动下级订阅和安全通知级联；ConfigDownload 使用标准 `SnapShotConfig`，同时接收旧厂商 `SnapShot` 别名；A.4 是扩展应用数据对象类型定义而非独立查询命令，已按真实承载路径支持 3.0 Catalog ExtraInfo、Alarm/MobilePosition 嵌套对象和 3.0 DeviceStatus 下级响应。共享对象编码递归映射、ParentID/下级父设备映射为本级平台编码，字符串及数值型 20 位对象编码均保留精度并执行映射，未知编码拒绝整条响应/通知；JSON 数字和数组不丢值；补正标准 `behavioralEventType` 并兼容旧厂商别名；`cascade_path.go`、`cascade_a4.go`、`cascade_path_test.go`、`cascade_query_test.go`、`cascade_subscribe_test.go` |
+| 真实平台互通 | 待外部执行 | 需要 1.0/1.1/2.0/3.0 上级平台分别验证注册、目录、直播、回放、下载和订阅；3.0 还需使用至少三层平台验证附录 H 指定路径 |
 
 四版本级联自动化矩阵由 `cascade_version_matrix_test.go` 固化，统一检查 REGISTER 版本、Catalog 字段、UDP/TCP 媒体、下载倍速、语音载荷、MANSRTSP/RTSP 控制和订阅能力。`cascade_media_test.go` 进一步使用四版本完整历史对话验证媒体启动、控制、终止和资源回收，并验证两个已注册上级之间的对话所有权隔离；`cascade_voice_test.go` 验证广播的上下游完整 B2BUA、Digest、编码映射、会话所有权及双侧清理。SIP 配置 Swagger 已包含上级平台完整字段；配置 API 的 Duration 同时接受历史纳秒整数和 `60s` 形式字符串。
 

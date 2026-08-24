@@ -185,6 +185,7 @@ func TestCascadeHistorySourcesAreIsolatedAndReferenceCounted(t *testing.T) {
 	offer := &cascadeVideoOffer{
 		Mode: historyModePlayback, URI: testExposedChannelID + ":0",
 		StartAt: time.Unix(1711929600, 0), EndAt: time.Unix(1711933200, 0),
+		PreferredPath: testCascadePathC + "-" + testCascadePathE,
 	}
 	first, err := api.acquireCascadeSource(t.Context(), server, device, channel, offer)
 	if err != nil {
@@ -194,7 +195,7 @@ func TestCascadeHistorySourcesAreIsolatedAndReferenceCounted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first != shared || first.refs != 2 || len(startInputs) != 1 {
+	if first != shared || first.refs != 2 || len(startInputs) != 1 || startInputs[0].preferredPath != offer.PreferredPath {
 		t.Fatalf("identical source reuse = first %p shared %p refs %d starts %d", first, shared, first.refs, len(startInputs))
 	}
 	otherOffer := *offer
@@ -207,13 +208,26 @@ func TestCascadeHistorySourcesAreIsolatedAndReferenceCounted(t *testing.T) {
 	if other == first || other.key == first.key || other.stream.StreamID == first.stream.StreamID || len(startInputs) != 2 {
 		t.Fatalf("different range was not isolated: first=%+v other=%+v starts=%d", first, other, len(startInputs))
 	}
+	otherPathOffer := *offer
+	otherPathOffer.PreferredPath = testCascadePathE
+	otherPath, err := api.acquireCascadeSource(t.Context(), server, device, channel, &otherPathOffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherPath == first || otherPath.key == first.key || otherPath.stream.StreamID == first.stream.StreamID || len(startInputs) != 3 {
+		t.Fatalf("different preferred path was not isolated: first=%+v other=%+v starts=%d", first, otherPath, len(startInputs))
+	}
+	if startInputs[2].preferredPath != otherPathOffer.PreferredPath {
+		t.Fatalf("playback preferred path = %q, want %q", startInputs[2].preferredPath, otherPathOffer.PreferredPath)
+	}
 	api.releaseCascadeSource(first, false)
 	if len(stopped) != 0 || first.refs != 1 {
 		t.Fatalf("shared source released early: refs=%d stopped=%v", first.refs, stopped)
 	}
 	api.releaseCascadeSource(shared, false)
 	api.releaseCascadeSource(other, false)
-	if len(stopped) != 2 || stopped[0] == stopped[1] {
+	api.releaseCascadeSource(otherPath, false)
+	if len(stopped) != 3 || stopped[0] == stopped[1] || stopped[0] == stopped[2] || stopped[1] == stopped[2] {
 		t.Fatalf("isolated source cleanup = %v", stopped)
 	}
 }
@@ -664,7 +678,7 @@ func TestCascadeRealtimeInviteEstablishesAndReleasesB2BUA(t *testing.T) {
 	connection := newFlowConnection()
 	connection.remote = &net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060}
 	runtimeDevice := &Device{
-		IsOnline: true, gbVersion: string(GBVersion20), conn: connection, source: connection.remote,
+		IsOnline: true, gbVersion: string(GBVersion30), conn: connection, source: connection.remote,
 		to: mustFlowAddress(t, "sip:"+gb10DeviceID+"@local.example"),
 	}
 	runtimeChannel := &Channel{ChannelID: testCascadeChannelID, device: runtimeDevice}
@@ -684,23 +698,34 @@ func TestCascadeRealtimeInviteEstablishesAndReleasesB2BUA(t *testing.T) {
 	server.gb = api
 	playCalls := 0
 	stopCalls := 0
+	createdStreamID := ""
 	api.cascadePlay = func(in *PlayInput) error {
 		playCalls++
-		key := "play:" + in.Channel.DeviceID + ":" + in.Channel.ChannelID
+		if in.preferredPath != testCascadePathC+"-"+testCascadePathE {
+			t.Fatalf("forwarded X-PreferredPath = %q", in.preferredPath)
+		}
+		key := resolvePlaySessionKey(in.Channel.DeviceID, in.Channel.ChannelID, in.sessionKey)
+		createdStreamID = in.streamID
+		downstreamResponse := sip.NewResponse("", sip.DefaultSipVersion, http.StatusOK, "OK", nil, nil)
+		downstreamResponse.AppendHeader(&sip.GenericHeader{HeaderName: cascadeRoutePathHeader, Contents: in.preferredPath})
 		api.streams.Store(key, &Streams{
-			DeviceID: in.Channel.DeviceID, ChannelID: in.Channel.ChannelID, StreamID: in.Channel.ID,
-			Resp: sip.NewResponse("", sip.DefaultSipVersion, http.StatusOK, "OK", nil, nil), mediaServer: mediaServer,
+			DeviceID: in.Channel.DeviceID, ChannelID: in.Channel.ChannelID, StreamID: createdStreamID,
+			Resp: downstreamResponse, mediaServer: mediaServer,
 		})
 		return nil
 	}
-	api.cascadeStop = func(context.Context, *StopPlayInput) error {
+	api.cascadeStop = func(_ context.Context, in *StopPlayInput) error {
 		stopCalls++
+		if in.sessionKey == "" {
+			t.Fatal("multi-path cascade stop lost isolated session key")
+		}
 		return nil
 	}
 
 	worker := newCascadeWorker(server, testSharedCascadePlatform(t))
 	worker.mu.Lock()
-	worker.effective = GBVersion20
+	worker.effective = GBVersion30
+	worker.platform.localID = testCascadePathB
 	worker.mu.Unlock()
 	worker.updateStatus(func(state *CascadePlatformStatus) { state.Registered = true })
 	remote := mustFlowAddress(t, "sip:"+gb10PlatformID+"@remote.example")
@@ -718,6 +743,10 @@ func TestCascadeRealtimeInviteEstablishesAndReleasesB2BUA(t *testing.T) {
 	request.SetConnection(connection)
 	request.SetSource(connection.remote)
 	request.SetDestination(connection.local)
+	request.AppendHeader(&sip.GenericHeader{
+		HeaderName: cascadePreferredPathHeader,
+		Contents:   worker.platform.localID + "-" + testCascadePathC + "-" + testCascadePathE,
+	})
 	api.sipInviteCascade(&sip.Context{
 		Request: request, Tx: sip.NewTransaction("cascade-live-invite", connection),
 		DeviceID: gb10PlatformID, Source: connection.remote, To: local, Log: slog.Default(),
@@ -726,7 +755,10 @@ func TestCascadeRealtimeInviteEstablishesAndReleasesB2BUA(t *testing.T) {
 	select {
 	case payload := <-connection.writes:
 		response := string(payload)
-		for _, expected := range []string{"SIP/2.0 200 OK", "m=video 40000 RTP/AVP 96", "a=sendonly", "y=0100000011"} {
+		for _, expected := range []string{
+			"SIP/2.0 200 OK", "m=video 40000 RTP/AVP 96", "a=sendonly", "y=0100000011",
+			"X-RoutePath: " + worker.platform.localID + "-" + testCascadePathC + "-" + testCascadePathE,
+		} {
 			if !strings.Contains(response, expected) {
 				t.Fatalf("cascade INVITE response missing %q:\n%s", expected, response)
 			}
@@ -734,7 +766,7 @@ func TestCascadeRealtimeInviteEstablishesAndReleasesB2BUA(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("cascade INVITE response timeout")
 	}
-	if playCalls != 1 || media.startCalls != 1 || media.started.Stream != persistentChannel.ID || media.started.DstURL != "192.0.2.30" || media.started.DstPort != 30000 {
+	if playCalls != 1 || media.startCalls != 1 || createdStreamID == "" || media.started.Stream != createdStreamID || media.started.DstURL != "192.0.2.30" || media.started.DstPort != 30000 {
 		t.Fatalf("cascade media start = play %d, request %+v", playCalls, media.started)
 	}
 
@@ -761,7 +793,7 @@ func TestCascadeRealtimeInviteEstablishesAndReleasesB2BUA(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("cascade BYE response timeout")
 	}
-	if stopCalls != 1 || media.stopped.SSRC != "0100000011" || media.closed.StreamID != persistentChannel.ID {
+	if stopCalls != 1 || media.stopped.SSRC != "0100000011" || media.closed.StreamID != createdStreamID {
 		t.Fatalf("cascade cleanup = stop %d, stopped %+v, closed %+v", stopCalls, media.stopped, media.closed)
 	}
 	if _, ok := api.inviteDialogs.Load(string(callID)); ok {
@@ -808,6 +840,9 @@ func TestCascadeHistoryDialogFourVersionEndToEnd(t *testing.T) {
 			platform := testSharedCascadePlatform(t)
 			platform.version = test.version
 			worker := newCascadeWorker(server, platform)
+			if test.version == GBVersion30 {
+				worker.platform.localID = testCascadePathB
+			}
 			worker.updateStatus(func(state *CascadePlatformStatus) { state.Registered = true })
 			manager := NewCascadeManager(server)
 			manager.items[platform.name] = worker
@@ -816,10 +851,18 @@ func TestCascadeHistoryDialogFourVersionEndToEnd(t *testing.T) {
 			var started *HistoryInput
 			api.cascadeHistory = func(_ context.Context, in *HistoryInput) error {
 				started = in
+				downstreamResponse := sip.NewResponse("", sip.DefaultSipVersion, http.StatusOK, "OK", nil, nil)
+				if test.version == GBVersion30 {
+					wantPath := testCascadePathC + "-" + testCascadePathE
+					if in.preferredPath != wantPath {
+						t.Fatalf("forwarded history X-PreferredPath = %q, want %q", in.preferredPath, wantPath)
+					}
+					downstreamResponse.AppendHeader(&sip.GenericHeader{HeaderName: cascadeRoutePathHeader, Contents: wantPath})
+				}
 				api.streams.Store(in.sessionKey, &Streams{
 					DeviceID: in.Channel.DeviceID, ChannelID: in.Channel.ChannelID, StreamID: "history-source",
 					sessionKey: in.sessionKey, FileSize: 1048576, FileSizeKnown: true, CseqNo: 10,
-					Resp: sip.NewResponse("", sip.DefaultSipVersion, http.StatusOK, "OK", nil, nil), mediaServer: mediaServer,
+					Resp: downstreamResponse, mediaServer: mediaServer,
 				})
 				return nil
 			}
@@ -846,6 +889,12 @@ func TestCascadeHistoryDialogFourVersionEndToEnd(t *testing.T) {
 			invite.SetConnection(connection)
 			invite.SetSource(connection.remote)
 			invite.SetDestination(connection.local)
+			if test.version == GBVersion30 {
+				invite.AppendHeader(&sip.GenericHeader{
+					HeaderName: cascadePreferredPathHeader,
+					Contents:   testCascadePathB + "-" + testCascadePathC + "-" + testCascadePathE,
+				})
+			}
 			api.sipInviteGeneric(&sip.Context{
 				Request: invite, Tx: sip.NewTransaction("cascade-history-invite-"+test.name, connection),
 				DeviceID: gb10PlatformID, Source: connection.remote, To: local, Log: slog.Default(),
@@ -853,10 +902,14 @@ func TestCascadeHistoryDialogFourVersionEndToEnd(t *testing.T) {
 			select {
 			case payload := <-connection.writes:
 				response := string(payload)
-				for _, expected := range []string{
+				expectedValues := []string{
 					"SIP/2.0 200 OK", "s=Download", "u=" + testExposedChannelID + ":0",
 					"a=filesize:1048576", "X-GB-Ver: " + string(test.version),
-				} {
+				}
+				if test.version == GBVersion30 {
+					expectedValues = append(expectedValues, "X-RoutePath: "+testCascadePathB+"-"+testCascadePathC+"-"+testCascadePathE)
+				}
+				for _, expected := range expectedValues {
 					if !strings.Contains(response, expected) {
 						t.Fatalf("history INVITE response missing %q:\n%s", expected, response)
 					}

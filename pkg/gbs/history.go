@@ -33,8 +33,9 @@ type HistoryInput struct {
 	// DownloadSpeed 是 2014 附录 F 定义的整数下载倍速，0 表示不携带、由设备按 1 倍速处理。
 	DownloadSpeed int
 	// sessionKey/streamID 仅供平台级联创建相互隔离的历史媒体会话；普通 API 保持原有按通道单会话行为。
-	sessionKey string
-	streamID   string
+	sessionKey    string
+	streamID      string
+	preferredPath string
 }
 
 type StopHistoryInput struct {
@@ -504,8 +505,12 @@ func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, s
 		return err
 	}
 	ssrc := g.getSSRC(1)
+	version := g.getDeviceGBProtocolVersion(in.Channel.DeviceID)
+	if in.preferredPath != "" && version != GBVersion30 {
+		return fmt.Errorf("X-PreferredPath requires downstream protocol 3.0, got %s", version)
+	}
 	body, err := buildGBSDP(gbSDPInput{
-		Version:       g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
+		Version:       version,
 		SessionName:   in.Mode,
 		ChannelID:     ch.ChannelID,
 		URI:           fmt.Sprintf("%s:0", ch.ChannelID),
@@ -523,6 +528,9 @@ func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, s
 	}
 	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, g.cfg.ID)})
+		if in.preferredPath != "" {
+			r.AppendHeader(&sip.GenericHeader{HeaderName: cascadePreferredPathHeader, Contents: in.preferredPath})
+		}
 	})
 	if err != nil {
 		return err

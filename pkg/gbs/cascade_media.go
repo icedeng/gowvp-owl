@@ -39,6 +39,7 @@ type cascadeVideoOffer struct {
 	DownloadSpeed int
 	FileSize      int64
 	FileSizeKnown bool
+	PreferredPath string
 }
 
 type cascadeMediaServerResolver interface {
@@ -240,28 +241,34 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 			}
 			return
 		}
-		ctx.String(491, "Call-ID already in use")
+		respondCascadeInviteStatus(ctx, worker, 491, "Call-ID already in use")
 		return
 	}
 
 	recipient := ctx.Request.Recipient()
 	if recipient == nil || recipient.User() == nil {
-		ctx.String(http.StatusBadRequest, "missing cascade channel id")
+		respondCascadeInviteStatus(ctx, worker, http.StatusBadRequest, "missing cascade channel id")
 		return
 	}
 	exposedID := strings.TrimSpace(recipient.User().String())
 	localChannelID := worker.platform.exposedChannelMap[exposedID]
 	if localChannelID == "" {
-		ctx.String(http.StatusNotFound, "cascade channel not shared")
+		respondCascadeInviteStatus(ctx, worker, http.StatusNotFound, "cascade channel not shared")
+		return
+	}
+	preferredPath, err := consumeCascadePreferredPath(ctx.Request, worker)
+	if err != nil {
+		respondCascadeInviteStatus(ctx, worker, http.StatusNotFound, err.Error())
 		return
 	}
 	offer, err := parseCascadeVideoOffer(ctx.Request.Body(), worker.protocolVersion(), worker.platform)
 	if err != nil {
-		ctx.String(http.StatusNotAcceptable, err.Error())
+		respondCascadeInviteStatus(ctx, worker, http.StatusNotAcceptable, err.Error())
 		return
 	}
+	offer.PreferredPath = preferredPath
 	if offer.Mode != historyModePlay && !cascadeHistoryURIMatches(offer.URI, exposedID) {
-		ctx.String(http.StatusNotAcceptable, "cascade history SDP URI does not match requested channel")
+		respondCascadeInviteStatus(ctx, worker, http.StatusNotAcceptable, "cascade history SDP URI does not match requested channel")
 		return
 	}
 	if offer.SSRC == "" {
@@ -292,7 +299,7 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 		if cancelled {
 			return
 		}
-		ctx.String(status, cause.Error())
+		respondCascadeInviteStatus(ctx, worker, status, cause.Error())
 	}
 
 	channel, device, err := g.resolveCascadeChannel(localChannelID)
@@ -345,6 +352,10 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 	}
 	version := sip.XGBVer(worker.protocolVersion())
 	response.AppendHeader(&version)
+	if err := appendCascadeRoutePath(response, worker, source.stream.Resp, offer.PreferredPath); err != nil {
+		fail(http.StatusBadGateway, err)
+		return
+	}
 	dialog.mu.Lock()
 	if dialog.Cancelled || sessionCtx.Err() != nil {
 		dialog.mu.Unlock()
@@ -408,7 +419,15 @@ func (g *GB28181API) acquireCascadeSource(ctx context.Context, server *sms.Media
 			if g.cascadePlay != nil {
 				play = g.cascadePlay
 			}
-			if err := play(&PlayInput{Channel: channel, SMS: server, StreamMode: device.StreamMode}); err != nil {
+			playInput := &PlayInput{
+				Channel: channel, SMS: server, StreamMode: device.StreamMode,
+				preferredPath: offer.PreferredPath,
+			}
+			if offer.PreferredPath != "" {
+				playInput.sessionKey = key
+				playInput.streamID = cascadeSourceStreamID(key)
+			}
+			if err := play(playInput); err != nil {
 				g.cascadeMediaMu.Unlock()
 				return nil, err
 			}
@@ -421,7 +440,7 @@ func (g *GB28181API) acquireCascadeSource(ctx context.Context, server *sms.Media
 				Channel: channel, SMS: server, StreamMode: device.StreamMode,
 				StartAt: offer.StartAt, EndAt: offer.EndAt, Mode: mode,
 				Transport: historyTransportRTP, DownloadSpeed: offer.DownloadSpeed,
-				sessionKey: key, streamID: cascadeSourceStreamID(key),
+				sessionKey: key, streamID: cascadeSourceStreamID(key), preferredPath: offer.PreferredPath,
 			}); err != nil {
 				g.cascadeMediaMu.Unlock()
 				return nil, err
@@ -493,9 +512,9 @@ func (g *GB28181API) releaseCascadeSource(source *cascadeSourceRef, sourceEnded 
 	if source.owned && !sourceEnded {
 		if source.mode == historyModePlay {
 			if g.cascadeStop != nil {
-				_ = g.cascadeStop(context.Background(), &StopPlayInput{Channel: source.channel})
+				_ = g.cascadeStop(context.Background(), &StopPlayInput{Channel: source.channel, sessionKey: source.key})
 			} else {
-				_ = g.StopPlay(context.Background(), &StopPlayInput{Channel: source.channel})
+				_ = g.StopPlay(context.Background(), &StopPlayInput{Channel: source.channel, sessionKey: source.key})
 			}
 		} else {
 			if g.cascadeStopHistory != nil {
@@ -524,10 +543,16 @@ func cascadeSourceKey(channel *ipc.Channel, offer *cascadeVideoOffer) string {
 		return ""
 	}
 	if offer.Mode == historyModePlay {
-		return "play:" + channel.DeviceID + ":" + channel.ChannelID
+		base := "play:" + channel.DeviceID + ":" + channel.ChannelID
+		if strings.TrimSpace(offer.PreferredPath) == "" {
+			return base
+		}
+		sum := sha256.Sum256([]byte(offer.PreferredPath))
+		return base + ":cascade:" + hex.EncodeToString(sum[:8])
 	}
-	identity := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d\x00%d\x00%s",
-		offer.Mode, channel.DeviceID, channel.ChannelID, offer.StartAt.Unix(), offer.EndAt.Unix(), offer.DownloadSpeed, strings.TrimSpace(offer.URI))
+	identity := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d\x00%d\x00%s\x00%s",
+		offer.Mode, channel.DeviceID, channel.ChannelID, offer.StartAt.Unix(), offer.EndAt.Unix(), offer.DownloadSpeed,
+		strings.TrimSpace(offer.URI), strings.TrimSpace(offer.PreferredPath))
 	sum := sha256.Sum256([]byte(identity))
 	return historyKey(offer.Mode, channel.DeviceID, channel.ChannelID) + ":cascade:" + hex.EncodeToString(sum[:8])
 }

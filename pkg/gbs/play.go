@@ -20,15 +20,28 @@ type PlayInput struct {
 	Channel    *ipc.Channel
 	SMS        *sms.MediaServer
 	StreamMode int8
+	// 下列字段仅供 2022 多路径级联创建相互隔离的下级媒体会话。
+	sessionKey    string
+	streamID      string
+	preferredPath string
 }
 
 type StopPlayInput struct {
 	Channel *ipc.Channel
+	// sessionKey 为空时使用普通实时点播兼容键。
+	sessionKey string
+}
+
+func resolvePlaySessionKey(deviceID, channelID, sessionKey string) string {
+	if key := strings.TrimSpace(sessionKey); key != "" {
+		return key
+	}
+	return "play:" + deviceID + ":" + channelID
 }
 
 // stopPlay 不加锁的
 func (g *GB28181API) stopPlay(ch *Channel, in *StopPlayInput) error {
-	key := "play:" + in.Channel.DeviceID + ":" + in.Channel.ChannelID
+	key := resolvePlaySessionKey(in.Channel.DeviceID, in.Channel.ChannelID, in.sessionKey)
 	stream, ok := g.streams.LoadAndDelete(key)
 	if !ok {
 		return nil
@@ -57,10 +70,11 @@ func (g *GB28181API) StopPlay(ctx context.Context, in *StopPlayInput) error {
 	ch.device.playMutex.Lock()
 	defer ch.device.playMutex.Unlock()
 
-	defer func() {
+	err := g.stopPlay(ch, in)
+	if !g.hasActiveChannelStream(in.Channel.DeviceID, in.Channel.ChannelID) {
 		g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, false)
-	}()
-	return g.stopPlay(ch, in)
+	}
+	return err
 }
 
 func (g *GB28181API) Play(in *PlayInput) error {
@@ -86,14 +100,14 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	}
 
 	// 播放中
-	key := "play:" + in.Channel.DeviceID + ":" + in.Channel.ChannelID
+	key := resolvePlaySessionKey(in.Channel.DeviceID, in.Channel.ChannelID, in.sessionKey)
 	stream, ok := g.streams.LoadOrStore(key, &Streams{})
 	if ok {
 		log.Debug("PLAY 已存在流")
 		// TODO: 临时解决方案，每次播放，先停止再播放
 		// https://github.com/gowvp/owl/issues/16
 		if err := g.stopPlay(ch, &StopPlayInput{
-			Channel: in.Channel,
+			Channel: in.Channel, sessionKey: in.sessionKey,
 		}); err != nil {
 			slog.Error("stop play failed", "err", err)
 		}
@@ -102,7 +116,11 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	}
 	stream.DeviceID = in.Channel.DeviceID
 	stream.ChannelID = in.Channel.ChannelID
-	stream.StreamID = in.Channel.ID
+	streamID := strings.TrimSpace(in.streamID)
+	if streamID == "" {
+		streamID = in.Channel.ID
+	}
+	stream.StreamID = streamID
 	stream.mediaServer = in.SMS
 
 	// SSRC 在打开 ZLM RTP 端口前生成并绑定，避免不同设备向同一端口串流。
@@ -113,17 +131,17 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	// 开启RTP服务器等待接收视频流
 	resp, err := g.sms.OpenRTPServer(in.SMS, zlm.OpenRTPServerRequest{
 		TCPMode:  in.StreamMode,
-		StreamID: in.Channel.ID,
+		StreamID: streamID,
 		SSRC:     ssrcValue,
 	})
 	if err != nil {
 		log.Debug("1.1. 开启RTP服务器失败", "err", err)
 		// 如果是因为流已存在，先关闭再重新打开
 		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "-300") {
-			log.Info("RTP服务器已存在，尝试关闭后重新打开", "stream_id", in.Channel.ID)
+			log.Info("RTP服务器已存在，尝试关闭后重新打开", "stream_id", streamID)
 			// 关闭旧的 RTP 服务器
 			_, closeErr := g.sms.CloseRTPServer(in.SMS, zlm.CloseRTPServerRequest{
-				StreamID: in.Channel.ID,
+				StreamID: streamID,
 			})
 			if closeErr != nil {
 				log.Warn("关闭旧的RTP服务器失败", "err", closeErr)
@@ -135,7 +153,7 @@ func (g *GB28181API) Play(in *PlayInput) error {
 			// 重新打开 RTP 服务器
 			resp, err = g.sms.OpenRTPServer(in.SMS, zlm.OpenRTPServerRequest{
 				TCPMode:  in.StreamMode,
-				StreamID: in.Channel.ID,
+				StreamID: streamID,
 				SSRC:     ssrcValue,
 			})
 			if err != nil {
@@ -152,7 +170,7 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	if err := g.sipPlayPush2(ch, in, resp.Port, stream); err != nil {
 		log.Debug("2.1. 发送SDP请求失败", "err", err)
 		g.streams.CompareAndDelete(key, stream)
-		_, _ = g.sms.CloseRTPServer(in.SMS, zlm.CloseRTPServerRequest{StreamID: in.Channel.ID})
+		_, _ = g.sms.CloseRTPServer(in.SMS, zlm.CloseRTPServerRequest{StreamID: streamID})
 		return err
 	}
 
@@ -220,8 +238,12 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 	slog.Info("域名解析成功", "原始域名", ipstr, "解析IP", ip4str)
 
 	ssrc := stream.ssrc
+	version := g.getDeviceGBProtocolVersion(in.Channel.DeviceID)
+	if in.preferredPath != "" && version != GBVersion30 {
+		return fmt.Errorf("X-PreferredPath requires downstream protocol 3.0, got %s", version)
+	}
 	body, err := buildGBSDP(gbSDPInput{
-		Version:      g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
+		Version:      version,
 		SessionName:  historyModePlay,
 		ChannelID:    ch.ChannelID,
 		IP:           ip4str,
@@ -241,6 +263,9 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 	// _serverDevices.addr.Params.Add("tag", sip.String{Str: sip.RandString(20)})
 	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, g.cfg.ID)})
+		if in.preferredPath != "" {
+			r.AppendHeader(&sip.GenericHeader{HeaderName: cascadePreferredPathHeader, Contents: in.preferredPath})
+		}
 	})
 	if err != nil {
 		slog.Error("INVITE 发送失败", "channelID", ch.ChannelID, "ssrc", ssrc, "err", err)
