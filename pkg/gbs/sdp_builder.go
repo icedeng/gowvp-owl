@@ -3,9 +3,9 @@ package gbs
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	sdp "github.com/panjjo/gosdp"
 )
@@ -25,6 +25,7 @@ type gbSDPInput struct {
 	EndAt            time.Time
 	SSRC             string
 	MediaDescription string
+	DownloadSpeed    int
 	DirectTCP        bool
 }
 
@@ -85,6 +86,15 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 	if err := validateGBMediaDescription(in.MediaDescription); err != nil {
 		return nil, err
 	}
+	if in.DownloadSpeed < 0 {
+		return nil, fmt.Errorf("download speed must not be negative")
+	}
+	if in.DownloadSpeed > 0 && in.SessionName != historyModeDownload {
+		return nil, fmt.Errorf("download speed is only valid for Download SDP")
+	}
+	if in.DownloadSpeed > 0 && !version.Capabilities().DownloadSpeed {
+		return nil, fmt.Errorf("download speed is not supported by protocol profile %s", version.StandardName())
+	}
 
 	formats := []string{"96", "97", "98"}
 	if version.Capabilities().H265 {
@@ -99,6 +109,9 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 		},
 	}
 	video.AddAttribute("recvonly")
+	if in.DownloadSpeed > 0 {
+		video.AddAttribute("downloadspeed", strconv.Itoa(in.DownloadSpeed))
+	}
 	if !in.DirectTCP {
 		switch in.StreamMode {
 		case 1:
@@ -157,8 +170,8 @@ func validGBSSRC(value string) bool {
 	if len(value) != 10 {
 		return false
 	}
-	for _, r := range value {
-		if !unicode.IsDigit(r) {
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
 			return false
 		}
 	}

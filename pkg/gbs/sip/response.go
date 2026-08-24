@@ -36,6 +36,9 @@ func NewResponseFromRequest(
 	CopyHeaders("From", req, res)
 	to, ok := req.To()
 	if ok {
+		if to.Params == nil {
+			to.Params = NewParams()
+		}
 		if _, ok := to.Params.Get("tag"); !ok {
 			to.Params.Add("tag", String{Str: RandString(32)})
 		}

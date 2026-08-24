@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -24,6 +25,17 @@ func (g *GB28181API) OnMediaStreamChanged(ctx context.Context, event MediaStream
 	if event.At.IsZero() {
 		event.At = time.Now()
 	}
+	var talkErr error
+	if event.Active {
+		talkErr = g.startTalkRTP(streamID)
+	} else if value, ok := g.talkSessions.Load(streamID); ok {
+		if session, ok := value.(*talkSession); ok {
+			_ = g.stopTalkSession(session, fmt.Errorf("Talk media stream stopped: %s", strings.TrimSpace(event.Reason)))
+		}
+	}
+	if !event.Active {
+		g.terminateCascadeVoiceSource(streamID)
+	}
 	g.streams.Range(func(key string, stream *Streams) bool {
 		if stream == nil || stream.StreamID != streamID {
 			return true
@@ -32,6 +44,16 @@ func (g *GB28181API) OnMediaStreamChanged(ctx context.Context, event MediaStream
 			stream.Stream = true
 			stream.LastMediaAt = event.At
 			stream.Status = 0
+			if strings.HasPrefix(key, "history:"+historyModeDownload+":") {
+				if value, ok := g.rtpDownloads.Load(key); ok {
+					if session, ok := value.(*rtpDownloadSession); ok {
+						session.mu.Lock()
+						session.state.Status = rtpDownloadReceiving
+						session.state.UpdatedAt = event.At
+						session.mu.Unlock()
+					}
+				}
+			}
 			return true
 		}
 		g.metrics.mediaDisconnects.Add(1)
@@ -46,12 +68,24 @@ func (g *GB28181API) OnMediaStreamChanged(ctx context.Context, event MediaStream
 		if stream.EndReason == "" {
 			stream.EndReason = "stream_unregistered"
 		}
-		if g.core.Store() != nil {
-			_ = g.core.EditPlaying(ctx, stream.DeviceID, stream.ChannelID, false)
+		if strings.HasPrefix(key, "history:"+historyModeDownload+":") && !stream.DirectTCP {
+			status := rtpDownloadStopped
+			if stream.FileSizeKnown {
+				if state, ok := g.RTPDownloadByChannel(stream.DeviceID, stream.ChannelID); ok && state.Received >= stream.FileSize {
+					status = rtpDownloadCompleted
+				}
+			}
+			g.finishRTPDownload(stream, status, stream.EndReason)
 		}
+		if g.core.Store() != nil {
+			if !g.hasActiveChannelStream(stream.DeviceID, stream.ChannelID) {
+				_ = g.core.EditPlaying(ctx, stream.DeviceID, stream.ChannelID, false)
+			}
+		}
+		g.terminateCascadeSessionsForStream(stream)
 		return true
 	})
-	return nil
+	return talkErr
 }
 
 func (s *Server) OnMediaStreamChanged(ctx context.Context, streamID string, active bool, reason string) error {

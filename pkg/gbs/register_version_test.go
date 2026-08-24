@@ -35,3 +35,29 @@ func TestRegisterResponseIncludesPlatformVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestParseRegisterExpires(t *testing.T) {
+	conn := newFlowConnection()
+	request := newFlowRequest(t, conn, sip.MethodRegister, "register-expires", nil)
+	ctx := &sip.Context{Request: request}
+	if got, err := parseRegisterExpires(ctx); err != nil || got != defaultRegisterExpires {
+		t.Fatalf("default expires = %d, %v", got, err)
+	}
+
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "3600"})
+	if got, err := parseRegisterExpires(ctx); err != nil || got != 3600 {
+		t.Fatalf("header expires = %d, %v", got, err)
+	}
+	request.RemoveHeader("Expires")
+	contact := mustFlowAddress(t, "sip:"+gb10DeviceID+"@192.0.2.10:5060")
+	contact.Params.Add("expires", sip.String{Str: "7200"})
+	request.AppendHeader(&sip.ContactHeader{Address: contact.URI, Params: contact.Params})
+	if got, err := parseRegisterExpires(ctx); err != nil || got != 7200 {
+		t.Fatalf("Contact expires = %d, %v", got, err)
+	}
+
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "invalid"})
+	if _, err := parseRegisterExpires(ctx); err == nil {
+		t.Fatal("invalid expires accepted")
+	}
+}

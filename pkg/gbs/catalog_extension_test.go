@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
@@ -79,5 +80,51 @@ func TestCatalog11TreeItemKinds(t *testing.T) {
 	if response.Item[3].ParentID != response.Item[1].ChannelID ||
 		response.Item[4].ParentID != response.Item[3].ChannelID {
 		t.Fatal("Catalog parent relationships were not decoded")
+	}
+}
+
+func TestCatalogNotify11AcceptsNotifyRootAndEvent(t *testing.T) {
+	body := []byte(`<?xml version="1.0"?><Notify><CmdType>Catalog</CmdType><SN>62</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>1</SumNum><DeviceList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Event>OFF</Event></Item></DeviceList></Notify>`)
+	var notify MessageDeviceListResponse
+	if err := sip.XMLDecode(body, &notify); err != nil {
+		t.Fatalf("decode Catalog NOTIFY: %v", err)
+	}
+	if notify.XMLName.Local != "Notify" || len(notify.Item) != 1 || notify.Item[0].Event != "OFF" {
+		t.Fatalf("Catalog NOTIFY = %+v", notify)
+	}
+
+	api := &GB28181API{}
+	conn := newFlowConnection()
+	response := runFlowHandler(t, conn, api, sip.MethodNotify, "catalog-notify-1", body, api.sipNotifyCatalog)
+	assertFlowOK(t, response)
+}
+
+func TestCatalogPartialResultDoesNotReplaceSnapshot(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.Channels.Store("existing-channel", &Channel{ChannelID: "existing-channel", device: memory.runtime})
+	api := &GB28181API{cfg: &conf.SIP{Domain: "3402000000"}, svr: &Server{memoryStorer: memory}}
+
+	api.persistCatalogResult(gb10DeviceID, multiResponseResult[Channels]{
+		Items:    []Channels{{ChannelID: "partial-channel", Status: "ON"}},
+		Expected: 2,
+		Complete: false,
+	})
+	if _, ok := memory.runtime.Channels.Load("existing-channel"); !ok {
+		t.Fatal("partial Catalog removed existing channel")
+	}
+	if _, ok := memory.runtime.Channels.Load("partial-channel"); ok {
+		t.Fatal("partial Catalog replaced snapshot")
+	}
+
+	api.persistCatalogResult(gb10DeviceID, multiResponseResult[Channels]{
+		Items:    []Channels{{ChannelID: "complete-channel", Status: "ON"}},
+		Expected: 1,
+		Complete: true,
+	})
+	if _, ok := memory.runtime.Channels.Load("existing-channel"); ok {
+		t.Fatal("complete Catalog kept missing channel in runtime snapshot")
+	}
+	if _, ok := memory.runtime.Channels.Load("complete-channel"); !ok {
+		t.Fatal("complete Catalog did not replace runtime snapshot")
 	}
 }

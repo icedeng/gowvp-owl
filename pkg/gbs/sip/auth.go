@@ -102,6 +102,14 @@ func (auth *Authorization) SetPassword(password string) *Authorization {
 	return auth
 }
 
+// SetClientNonce 设置客户端 Digest qop=auth 所需的 nonce-count 和 cnonce。
+// 无 qop 的旧设备/平台不需要调用，保持 RFC 2069 兼容计算方式。
+func (auth *Authorization) SetClientNonce(nc, cnonce string) *Authorization {
+	auth.nc = nc
+	auth.cnonce = cnonce
+	return auth
+}
+
 // CalcResponse CalcResponse
 func (auth *Authorization) CalcResponse() string {
 	auth.response = CalcResponse(
@@ -135,6 +143,9 @@ func (auth *Authorization) String() string {
 	)
 	if auth.qop == "auth" {
 		str += fmt.Sprintf(`,qop=%s,nc=%s,cnonce="%s"`, auth.qop, auth.nc, auth.cnonce)
+	}
+	if opaque := auth.Get("opaque"); opaque != "" {
+		str += fmt.Sprintf(`,opaque="%s"`, opaque)
 	}
 
 	return str

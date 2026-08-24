@@ -55,7 +55,31 @@ func TestGBVersionXMLAndSDPFixtures(t *testing.T) {
 			if gotTCP := strings.Contains(sdpText, "TCP/RTP/AVP"); gotTCP != wantTCP {
 				t.Fatalf("TCP SDP = %v; want %v", gotTCP, wantTCP)
 			}
+
+			sdpFiles, err := filepath.Glob(filepath.Join(dir, "*.sdp"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range sdpFiles {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertSDPFixtureFraming(t, data)
+			}
 		})
+	}
+}
+
+func TestKeepalive11FaultDeviceList(t *testing.T) {
+	body := []byte(`<Notify><CmdType>Keepalive</CmdType><SN>8</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Status>ERROR</Status><Info><DeviceID>34020000001320000002</DeviceID><DeviceID>34020000001320000003</DeviceID></Info></Notify>`)
+	var keepalive MessageNotify
+	if err := sip.XMLDecode(body, &keepalive); err != nil {
+		t.Fatal(err)
+	}
+	got := normalizeGBIDList(append(keepalive.Info.DeviceIDs, keepalive.Info.DeviceIDs[0]))
+	if len(got) != 2 || got[0] != "34020000001320000002" || got[1] != "34020000001320000003" {
+		t.Fatalf("fault device IDs = %v", got)
 	}
 }
 

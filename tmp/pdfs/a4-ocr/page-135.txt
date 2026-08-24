@@ -1,0 +1,52 @@
+GB/T 28181—2022
+Cid G ABS FY O~ num_tile_rows_minusl) #JK-F MAF 64;
+i) ZERRHT coding_tree_unit( ) (JL ITU H.265(2019) HAY 9.3.4.3.3 Al 9.3.4.3.4) PUT read_bits
+CD ASU BAR KF 5X RawCtuBits / 35
+
+k)  general_level_ide il sub_layer_level_ideli JAM 4¥-F 255;
+
+1) ERG (Main Profile) 16 F7K-F (Level) fy Bie iil iz Hi AL ITU-T -H.265(2019) BO A4 BY ALE
+
+ERY (Main Profile) HY Le $F HF general_profile_ide=1 & general_profile_compatibility_flag
+[1J=1. LL TemporalD i tri AY FIR LORE sub_layer_profile_ideli]=1 #% sub_layer_profile_com-
+patibility_flagli] [1J=1.
+F.9.6 H.265 — Bete Mit
+F.9.6.1 bee — BE Mit
+
+LORE HE —BCPE ANB WL ITU-T H.265(2019) Bit at C A C.4 AHL.
+
+H.265 AY — Bee Ee (Conformance bitstream) Ji ij A An F UM isk «4 tt FF BE 265 aT
+ECR Bik EA PR WS IRL «AS rE BE AT ee ER Di | oR 9 Re AS — Bi
+
+SES Mat A 1 ch 1 TE A AR
+
+LORE Tat — Bi HE (19 DE — AG id GS GR ME AL BS A CRD AY — BC HE sk CE FP ITU-T HH. 265
+(2019) 4. WL ITU-T H.265(2018).
+
+LR STE HO it — CE FA 3 9 SRS AE BT FA) TTU-TH.265.2( 2016) 98 2 BY KE.
+F.9.6.2 fF — Sit Mit
+
+AREAS AB — BYE HG WL ITU-T H.265(2019) Bit ae C HA C.5 ALE
+
+H.265 ff 14-85 HY — BCE MU ik WL ITU-T 265 Fy Pye « 9 TE fe SA 2 FB ETF ITU
+T H.265.2(2019) #48 az AY KE.
+
+WE LAR ce PAU AAR YH. 265 POU SE Sa EE PE OP AKO BY 265 — CHE EO a
+F.10 AAC #3
+F.10.1 AAC HUTRRVMIA
+
+AAC bi ifh 1 TF ST BK HY (Audio Object Type) RAL HF AY THAT BY ISO/TEC 14496-3;2019
+# 1.1.08 > RHE AAC LC, ED ObjectTypelD % 2.
+F.10.2 AAC HMR MKF
+
+AAC br HS EAU AUK SE BY ISO/TEC 14496-32019 2é 1.14. RA AAC bye 9 2 Sai Sp BS pie
+> FHF HY High Quality Audio Profile fy7k> L3(SDP ‘1 profile-level-id y 16), JH] AAC
+aE BUY PE SL APE AY OE SHR PS AN AS AER FP 2 TY SY A TES PUA AC
+F.10.3 AAC AN HIB
+
+Oy SERIE WO A EP EG TAL AY BORA AAC ba fb 9 2 SS Tie HI MFT A ISO/TEC 14496-32019.
+F.10.4 AAC H— Bete Mit
+
+AAC fife 85 5 30 4) TE 6 HE AAG HE IE FF ISO/TEC 14496-4 FEL 2 UM ik FE) AY SE BER
+
+128

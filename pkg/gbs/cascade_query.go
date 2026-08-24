@@ -1,0 +1,842 @@
+package gbs
+
+import (
+	"bytes"
+	"context"
+	"encoding/xml"
+	"fmt"
+	"io"
+	"log/slog"
+	"strconv"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/gowvp/owl/internal/core/ipc"
+	"github.com/gowvp/owl/pkg/gbs/sip"
+	"github.com/ixugo/goddd/pkg/orm"
+	"github.com/ixugo/goddd/pkg/web"
+	"golang.org/x/text/encoding/simplifiedchinese"
+)
+
+const cascadeCatalogChunkSize = 20
+
+type cascadeQueryEnvelope struct {
+	XMLName   xml.Name
+	CmdType   string `xml:"CmdType"`
+	SN        int    `xml:"SN"`
+	DeviceID  string `xml:"DeviceID"`
+	SourceID  string `xml:"SourceID"`
+	TargetID  string `xml:"TargetID"`
+	StartTime string `xml:"StartTime"`
+	EndTime   string `xml:"EndTime"`
+	Interval  int    `xml:"Interval"`
+	Number    int    `xml:"Number"`
+}
+
+type cascadeCatalogResponse struct {
+	XMLName    xml.Name                 `xml:"Response"`
+	CmdType    string                   `xml:"CmdType"`
+	SN         int                      `xml:"SN"`
+	DeviceID   string                   `xml:"DeviceID"`
+	SumNum     int                      `xml:"SumNum"`
+	DeviceList cascadeCatalogDeviceList `xml:"DeviceList"`
+}
+
+type cascadeCatalogNotify struct {
+	XMLName    xml.Name
+	CmdType    string                   `xml:"CmdType"`
+	SN         int                      `xml:"SN"`
+	DeviceID   string                   `xml:"DeviceID"`
+	Status     string                   `xml:"Status,omitempty"`
+	SumNum     int                      `xml:"SumNum"`
+	DeviceList cascadeCatalogDeviceList `xml:"DeviceList"`
+}
+
+type cascadeCatalogDeviceList struct {
+	Num   int                  `xml:"Num,attr"`
+	Items []cascadeCatalogItem `xml:"Item"`
+}
+
+type cascadeCatalogItem struct {
+	DeviceID     string              `xml:"DeviceID"`
+	Name         string              `xml:"Name"`
+	Manufacturer string              `xml:"Manufacturer"`
+	Model        string              `xml:"Model"`
+	Owner        string              `xml:"Owner"`
+	CivilCode    string              `xml:"CivilCode"`
+	Block        string              `xml:"Block"`
+	Address      string              `xml:"Address"`
+	Parental     int                 `xml:"Parental"`
+	ParentID     string              `xml:"ParentID"`
+	SafetyWay    int                 `xml:"SafetyWay"`
+	RegisterWay  int                 `xml:"RegisterWay"`
+	CertNum      string              `xml:"CertNum"`
+	Certifiable  int                 `xml:"Certifiable"`
+	ErrCode      int                 `xml:"ErrCode"`
+	EndTime      string              `xml:"EndTime"`
+	Secrecy      int                 `xml:"Secrecy"`
+	IPAddress    string              `xml:"IPAddress"`
+	Port         int                 `xml:"Port"`
+	Status       string              `xml:"Status"`
+	Event        string              `xml:"Event,omitempty"`
+	Longitude    float64             `xml:"Longitude"`
+	Latitude     float64             `xml:"Latitude"`
+	Info         *cascadeCatalogInfo `xml:"Info,omitempty"`
+	ExtraInfo    []string            `xml:"ExtraInfo,omitempty"`
+}
+
+type cascadeCatalogInfo struct {
+	PTZType         int    `xml:"PTZType"`
+	PositionType    int    `xml:"PositionType"`
+	RoomType        int    `xml:"RoomType"`
+	UseType         int    `xml:"UseType"`
+	SupplyLightType int    `xml:"SupplyLightType"`
+	DirectionType   int    `xml:"DirectionType"`
+	Resolution      string `xml:"Resolution,omitempty"`
+	BusinessGroupID string `xml:"BusinessGroupID,omitempty"`
+}
+
+type cascadeDeviceInfoResponse struct {
+	XMLName      xml.Name `xml:"Response"`
+	CmdType      string   `xml:"CmdType"`
+	SN           int      `xml:"SN"`
+	DeviceID     string   `xml:"DeviceID"`
+	Result       string   `xml:"Result"`
+	DeviceName   string   `xml:"DeviceName"`
+	DeviceType   string   `xml:"DeviceType"`
+	Manufacturer string   `xml:"Manufacturer"`
+	Model        string   `xml:"Model"`
+	Firmware     string   `xml:"Firmware"`
+	Channel      int      `xml:"Channel"`
+	MaxCamera    int      `xml:"MaxCamera"`
+	MaxAlarm     int      `xml:"MaxAlarm"`
+}
+
+type cascadeDeviceStatusResponse struct {
+	XMLName    xml.Name           `xml:"Response"`
+	CmdType    string             `xml:"CmdType"`
+	SN         int                `xml:"SN"`
+	DeviceID   string             `xml:"DeviceID"`
+	Result     string             `xml:"Result"`
+	Online     string             `xml:"Online"`
+	Status     string             `xml:"Status"`
+	Encode     string             `xml:"Encode"`
+	Record     string             `xml:"Record"`
+	DeviceTime string             `xml:"DeviceTime"`
+	Alarm      cascadeAlarmStatus `xml:"Alarmstatus"`
+}
+
+type cascadeAlarmStatus struct {
+	Num int `xml:"Num,attr"`
+}
+
+type cascadeQueryErrorResponse struct {
+	XMLName  xml.Name `xml:"Response"`
+	CmdType  string   `xml:"CmdType"`
+	SN       int      `xml:"SN"`
+	DeviceID string   `xml:"DeviceID"`
+	Result   string   `xml:"Result"`
+}
+
+type cascadeRecordInfoResponse struct {
+	XMLName    xml.Name              `xml:"Response"`
+	CmdType    string                `xml:"CmdType"`
+	SN         int                   `xml:"SN"`
+	DeviceID   string                `xml:"DeviceID"`
+	Name       string                `xml:"Name"`
+	SumNum     int                   `xml:"SumNum"`
+	RecordList cascadeRecordInfoList `xml:"RecordList"`
+}
+
+type cascadeRecordInfoList struct {
+	Num   int          `xml:"Num,attr"`
+	Items []RecordItem `xml:"Item"`
+}
+
+func (g *GB28181API) sipCascadeMessageMiddleware(ctx *sip.Context) {
+	value, ok := ctx.Get(cascadeWorkerContextKey)
+	if !ok {
+		ctx.Next()
+		return
+	}
+	worker, ok := value.(*cascadeWorker)
+	if !ok || worker == nil {
+		ctx.AbortString(403, "invalid cascade peer")
+		return
+	}
+	var query cascadeQueryEnvelope
+	if err := sip.XMLDecode(ctx.Request.Body(), &query); err != nil {
+		ctx.AbortString(400, ErrXMLDecode.Error())
+		return
+	}
+	if query.SN <= 0 {
+		ctx.AbortString(400, "invalid cascade query")
+		return
+	}
+	query.CmdType = canonicalGBQueryCmdType(query.CmdType)
+	if query.XMLName.Local == "Notify" && query.CmdType == "Broadcast" {
+		if filterUnknowDevices(strings.TrimSpace(query.SourceID)) != nil || !cascadeBroadcastTargetAllowed(worker.platform, query.TargetID) {
+			ctx.AbortString(404, "cascade Broadcast target not found")
+			return
+		}
+		if recipient := ctx.Request.Recipient(); recipient != nil && recipient.User() != nil {
+			requestedID := strings.TrimSpace(recipient.User().String())
+			if requestedID != "" && requestedID != strings.TrimSpace(query.TargetID) && requestedID != worker.platform.localID {
+				ctx.AbortString(400, "cascade Broadcast target mismatch")
+				return
+			}
+		}
+		ctx.String(200, "OK")
+		ctx.Abort()
+		body := query
+		go func() {
+			if err := g.forwardCascadeBroadcast(context.Background(), worker, body); err != nil {
+				slog.Error("forward cascade Broadcast failed", "upstream", worker.platform.name, "sn", body.SN, "err", err)
+			}
+		}()
+		return
+	}
+	if strings.TrimSpace(query.DeviceID) == "" {
+		ctx.AbortString(400, "invalid cascade query")
+		return
+	}
+	if query.XMLName.Local == "Control" {
+		if query.CmdType != ptzCmdTypeDeviceControl || worker.platform.exposedChannelMap[query.DeviceID] == "" {
+			ctx.AbortString(404, "cascade control target not found")
+			return
+		}
+		ctx.String(200, "OK")
+		ctx.Abort()
+		body := append([]byte(nil), ctx.Request.Body()...)
+		go g.forwardCascadeDeviceControl(worker, body)
+		return
+	}
+	if query.XMLName.Local != "Query" {
+		ctx.AbortString(400, "invalid cascade query")
+		return
+	}
+	if !cascadeQueryTargetAllowed(worker.platform, query.CmdType, query.DeviceID) {
+		ctx.AbortString(404, "cascade target not found")
+		return
+	}
+
+	ctx.String(200, "OK")
+	ctx.Abort()
+	go g.respondCascadeQuery(worker, query)
+}
+
+func (g *GB28181API) respondCascadeQuery(worker *cascadeWorker, query cascadeQueryEnvelope) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var err error
+	switch query.CmdType {
+	case "Catalog":
+		err = g.respondCascadeCatalog(ctx, worker, query)
+	case "DeviceInfo":
+		err = g.respondCascadeDeviceInfo(ctx, worker, query)
+	case "DeviceStatus":
+		err = g.respondCascadeDeviceStatus(ctx, worker, query)
+	case "RecordInfo":
+		err = g.respondCascadeRecordInfo(ctx, worker, query)
+	case "PresetQuery", "HomePositionQuery", "CruiseTrackListQuery", "CruiseTrackQuery", "MobilePosition", "PTZPosition", "SDCardStatus":
+		err = g.respondCascadeExtendedQuery(ctx, worker, query)
+	default:
+		err = sendCascadeQueryError(ctx, worker, query)
+	}
+	if err != nil {
+		slog.Error("respond cascade query failed", "upstream", worker.platform.name, "cmd_type", query.CmdType, "sn", query.SN, "err", err)
+	}
+}
+
+func cascadeQueryTargetAllowed(platform cascadePlatform, cmdType, deviceID string) bool {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == platform.localID {
+		return true
+	}
+	if platform.exposedChannelMap[deviceID] == "" {
+		return false
+	}
+	switch strings.TrimSpace(cmdType) {
+	case "DeviceInfo", "DeviceStatus", "RecordInfo", "PresetQuery", "HomePositionQuery",
+		"CruiseTrackListQuery", "CruiseTrackQuery", "MobilePosition", "PTZPosition", "SDCardStatus":
+		return true
+	default:
+		return false
+	}
+}
+
+func cascadeExtendedQueryAction(cmdType string, version GBProtocolVersion) (string, bool) {
+	switch canonicalGBQueryCmdType(cmdType) {
+	case "PresetQuery":
+		return deviceQueryActionPresetQuery, version.AtLeast(GBVersion11)
+	case "HomePositionQuery":
+		return deviceQueryActionHomePositionQuery, version.AtLeast(GBVersion20)
+	case "MobilePosition":
+		return deviceQueryActionMobilePosition, version.AtLeast(GBVersion20)
+	case "CruiseTrackListQuery":
+		return deviceQueryActionCruiseTrackList, version.AtLeast(GBVersion30)
+	case "CruiseTrackQuery":
+		return deviceQueryActionCruiseTrack, version.AtLeast(GBVersion30)
+	case "PTZPosition":
+		return deviceQueryActionPTZPosition, version.AtLeast(GBVersion30)
+	case "SDCardStatus":
+		return deviceQueryActionSDCardStatus, version.AtLeast(GBVersion30)
+	default:
+		return "", false
+	}
+}
+
+func (g *GB28181API) respondCascadeExtendedQuery(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope) error {
+	action, allowed := cascadeExtendedQueryAction(query.CmdType, worker.protocolVersion())
+	if !allowed {
+		return sendCascadeQueryError(ctx, worker, query)
+	}
+	return g.respondCascadeForwardedQuery(ctx, worker, query, action)
+}
+
+func (g *GB28181API) respondCascadeForwardedQuery(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope, action string) error {
+	channel, err := g.loadCascadeExposedChannel(ctx, worker.platform, query.DeviceID)
+	if err != nil {
+		slog.Warn("load shared channel for cascade query failed", "upstream", worker.platform.name, "cmd_type", query.CmdType, "channel", query.DeviceID, "err", err)
+		return sendCascadeQueryError(ctx, worker, query)
+	}
+	queryDevice := g.DeviceQuery
+	if g.cascadeDeviceQuery != nil {
+		queryDevice = g.cascadeDeviceQuery
+	}
+	out, err := queryDevice(ctx, &DeviceQueryInput{
+		DeviceID: channel.DeviceID, TargetID: channel.ChannelID, Action: action,
+		Timeout: 25 * time.Second, Interval: query.Interval, Number: query.Number,
+	})
+	if err != nil || out == nil || strings.TrimSpace(out.XML) == "" ||
+		!strings.EqualFold(canonicalGBQueryCmdType(out.CmdType), query.CmdType) {
+		if err != nil {
+			slog.Warn("forward cascade query failed", "upstream", worker.platform.name, "cmd_type", query.CmdType, "channel", query.DeviceID, "err", err)
+		}
+		return sendCascadeQueryError(ctx, worker, query)
+	}
+	body, err := rewriteCascadeQueryResponse([]byte(out.XML), query, worker.platform, channel)
+	if err != nil {
+		slog.Warn("rewrite cascade query response failed", "upstream", worker.platform.name, "cmd_type", query.CmdType, "channel", query.DeviceID, "err", err)
+		return sendCascadeQueryError(ctx, worker, query)
+	}
+	return worker.sendMessage(ctx, body)
+}
+
+func sendCascadeQueryError(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope) error {
+	deviceID := strings.TrimSpace(query.DeviceID)
+	if deviceID == "" {
+		deviceID = worker.platform.localID
+	}
+	return sendCascadeXML(ctx, worker, cascadeQueryErrorResponse{
+		CmdType: query.CmdType, SN: query.SN, DeviceID: deviceID, Result: "ERROR",
+	})
+}
+
+func rewriteCascadeQueryResponse(body []byte, query cascadeQueryEnvelope, platform cascadePlatform, channel *ipc.Channel) ([]byte, error) {
+	if len(body) == 0 || channel == nil {
+		return nil, fmt.Errorf("empty cascade query response")
+	}
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	decoder.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) {
+		if utf8.Valid(body) {
+			return input, nil
+		}
+		return simplifiedchinese.GB18030.NewDecoder().Reader(input), nil
+	}
+
+	var output bytes.Buffer
+	output.WriteString("<?xml version=\"1.0\" encoding=\"GB2312\"?>\n")
+	encoder := xml.NewEncoder(&output)
+	depth := 0
+	rootSeen := false
+	mappingPlatform := withCascadeIdentifierMapping(platform, channel.DeviceID, platform.localID)
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("decode downstream response: %w", err)
+		}
+		switch value := token.(type) {
+		case xml.ProcInst:
+			if strings.EqualFold(value.Target, "xml") {
+				continue
+			}
+		case xml.StartElement:
+			depth++
+			if depth == 1 {
+				if value.Name.Local != "Response" {
+					return nil, fmt.Errorf("unexpected downstream root element: %s", value.Name.Local)
+				}
+				rootSeen = true
+			}
+			for index := range value.Attr {
+				rewritten, rewriteErr := rewriteCascadeIdentifierValue(value.Attr[index].Value, value.Attr[index].Name.Local, mappingPlatform, channel.ChannelID, query.DeviceID)
+				if rewriteErr != nil {
+					return nil, rewriteErr
+				}
+				value.Attr[index].Value = rewritten
+			}
+			name := value.Name.Local
+			identifierField := strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), "id")
+			if identifierField || strings.EqualFold(name, "ExtraInfo") || strings.EqualFold(name, "ExtralInfo") || (depth == 2 && (name == "CmdType" || name == "SN")) {
+				var original string
+				if err := decoder.DecodeElement(&original, &value); err != nil {
+					return nil, fmt.Errorf("decode downstream %s: %w", name, err)
+				}
+				rewritten := original
+				switch name {
+				case "CmdType":
+					rewritten = query.CmdType
+				case "SN":
+					rewritten = strconv.Itoa(query.SN)
+				case "ParentID":
+					rewritten = platform.localID
+				default:
+					if strings.EqualFold(name, "ExtraInfo") || strings.EqualFold(name, "ExtralInfo") {
+						rewritten, err = rewriteCascadeOpaqueIdentifiers(original, name, mappingPlatform, channel.ChannelID, query.DeviceID)
+					} else if depth == 2 && strings.EqualFold(name, "DeviceID") {
+						rewritten = query.DeviceID
+					} else {
+						rewritten, err = rewriteCascadeIdentifierValue(original, name, mappingPlatform, channel.ChannelID, query.DeviceID)
+					}
+					if err != nil {
+						return nil, err
+					}
+				}
+				if err := encoder.EncodeToken(value); err != nil {
+					return nil, err
+				}
+				if err := encoder.EncodeToken(xml.CharData(rewritten)); err != nil {
+					return nil, err
+				}
+				if err := encoder.EncodeToken(value.End()); err != nil {
+					return nil, err
+				}
+				depth--
+				continue
+			}
+		case xml.EndElement:
+			depth--
+		}
+		if err := encoder.EncodeToken(token); err != nil {
+			return nil, err
+		}
+	}
+	if !rootSeen || depth != 0 {
+		return nil, fmt.Errorf("invalid downstream response document")
+	}
+	if err := encoder.Flush(); err != nil {
+		return nil, err
+	}
+	encoded, err := sip.Utf8ToGbk(output.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("encode cascade response: %w", err)
+	}
+	return encoded, nil
+}
+
+func (g *GB28181API) respondCascadeCatalog(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope) error {
+	channels, err := g.loadCascadeChannels(ctx, worker.platform)
+	if err != nil {
+		return err
+	}
+	items := buildCascadeCatalogItems(channels, worker.platform, worker.protocolVersion())
+	if len(items) == 0 {
+		return sendCascadeXML(ctx, worker, cascadeCatalogResponse{
+			CmdType: "Catalog", SN: query.SN, DeviceID: worker.platform.localID,
+			DeviceList: cascadeCatalogDeviceList{},
+		})
+	}
+	for start := 0; start < len(items); start += cascadeCatalogChunkSize {
+		end := min(start+cascadeCatalogChunkSize, len(items))
+		if err := sendCascadeXML(ctx, worker, cascadeCatalogResponse{
+			CmdType: "Catalog", SN: query.SN, DeviceID: worker.platform.localID, SumNum: len(items),
+			DeviceList: cascadeCatalogDeviceList{Num: end - start, Items: items[start:end]},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (g *GB28181API) notifyCascadeCatalog() {
+	if g == nil {
+		return
+	}
+	reconcileCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	g.reconcileCascadeDownstreamSubscriptions(reconcileCtx)
+	cancel()
+	now := time.Now()
+	g.eventSubscribers.Range(func(key, value any) bool {
+		sub, ok := value.(*eventSubscription)
+		if !ok || sub == nil {
+			g.eventSubscribers.Delete(key)
+			return true
+		}
+		sub.mu.Lock()
+		expiresAt := sub.ExpiresAt
+		cascade := sub.Cascade
+		cmdType := sub.CmdType
+		sub.mu.Unlock()
+		if now.After(expiresAt) {
+			// 统一由订阅清理器删除并释放下级引用，避免和续订并发互相覆盖。
+			return true
+		}
+		if cascade == nil || !strings.EqualFold(cmdType, "Catalog") {
+			return true
+		}
+		go func(subscription *eventSubscription, upstream string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := g.sendCascadeCatalogNotify(ctx, subscription); err != nil {
+				slog.Warn("send cascade Catalog NOTIFY failed", "upstream", upstream, "err", err)
+			}
+		}(sub, cascade.platform.name)
+		return true
+	})
+}
+
+func (g *GB28181API) sendCascadeCatalogNotify(ctx context.Context, sub *eventSubscription) error {
+	return g.sendCascadeCatalogNotifyMode(ctx, sub, false)
+}
+
+func (g *GB28181API) sendCascadeInitialCatalogNotify(ctx context.Context, sub *eventSubscription) error {
+	return g.sendCascadeCatalogNotifyMode(ctx, sub, true)
+}
+
+func (g *GB28181API) sendCascadeCatalogNotifyMode(ctx context.Context, sub *eventSubscription, initial bool) error {
+	if sub == nil {
+		return fmt.Errorf("cascade subscription is unavailable")
+	}
+	sub.mu.Lock()
+	worker := sub.Cascade
+	expiresAt := sub.ExpiresAt
+	subscriptionDeviceID := sub.DeviceID
+	sub.mu.Unlock()
+	if worker == nil || !time.Now().Before(expiresAt) {
+		return fmt.Errorf("cascade subscription is unavailable")
+	}
+	channels, err := g.loadCascadeChannels(ctx, worker.platform)
+	if err != nil {
+		return err
+	}
+	items := buildCascadeCatalogItems(channels, worker.platform, worker.protocolVersion())
+	items = filterCascadeCatalogNotifyItems(items, subscriptionDeviceID, worker.platform.localID)
+	items = prepareCascadeCatalogNotifyItems(items, initial)
+	notifyDeviceID := strings.TrimSpace(subscriptionDeviceID)
+	if notifyDeviceID == "" || notifyDeviceID == "*" {
+		notifyDeviceID = worker.platform.localID
+	}
+	status := ""
+	if initial {
+		status = "OK"
+	}
+	sn := g.nextQuerySN()
+	if len(items) == 0 {
+		body, err := encodeCascadeCatalogNotify(worker.protocolVersion(), cascadeCatalogNotify{
+			CmdType: "Catalog", SN: sn, DeviceID: notifyDeviceID, Status: status,
+			DeviceList: cascadeCatalogDeviceList{},
+		})
+		if err != nil {
+			return err
+		}
+		return g.sendEventNotify(sub, "Catalog", body)
+	}
+	for start := 0; start < len(items); start += cascadeCatalogChunkSize {
+		end := min(start+cascadeCatalogChunkSize, len(items))
+		body, err := encodeCascadeCatalogNotify(worker.protocolVersion(), cascadeCatalogNotify{
+			CmdType: "Catalog", SN: sn, DeviceID: notifyDeviceID, Status: status, SumNum: len(items),
+			DeviceList: cascadeCatalogDeviceList{Num: end - start, Items: items[start:end]},
+		})
+		if err != nil {
+			return err
+		}
+		if err := g.sendEventNotify(sub, "Catalog", body); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func encodeCascadeCatalogNotify(version GBProtocolVersion, notify cascadeCatalogNotify) ([]byte, error) {
+	root := "Notify"
+	if version == GBVersion10 {
+		root = "Response"
+	}
+	notify.XMLName = xml.Name{Local: root}
+	return sip.XMLEncode(notify)
+}
+
+func filterCascadeCatalogNotifyItems(items []cascadeCatalogItem, subscriptionDeviceID, localID string) []cascadeCatalogItem {
+	targetID := strings.TrimSpace(subscriptionDeviceID)
+	if targetID == "" || targetID == "*" || targetID == strings.TrimSpace(localID) {
+		return items
+	}
+	filtered := make([]cascadeCatalogItem, 0, 1)
+	for _, item := range items {
+		if strings.TrimSpace(item.DeviceID) == targetID {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+func prepareCascadeCatalogNotifyItems(items []cascadeCatalogItem, initial bool) []cascadeCatalogItem {
+	out := make([]cascadeCatalogItem, 0, len(items))
+	for _, item := range items {
+		if initial {
+			if strings.EqualFold(strings.TrimSpace(item.Status), "ON") {
+				continue
+			}
+			item.Event = "OFF"
+		} else {
+			item.Event = "UPDATE"
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func (g *GB28181API) loadCascadeChannels(ctx context.Context, platform cascadePlatform) ([]*ipc.Channel, error) {
+	if len(platform.sharedChannels) == 0 {
+		return []*ipc.Channel{}, nil
+	}
+	if g == nil || g.core.Store() == nil {
+		return nil, fmt.Errorf("channel store is unavailable")
+	}
+	var rows []*ipc.Channel
+	if _, err := g.core.Store().Channel().List(ctx, &rows, web.NewPagerFilterMaxSize(), orm.Where("channel_id IN ?", platform.sharedChannels)); err != nil {
+		return nil, fmt.Errorf("list shared cascade channels: %w", err)
+	}
+	byID := make(map[string]*ipc.Channel, len(rows))
+	for _, channel := range rows {
+		if channel != nil {
+			byID[channel.ChannelID] = channel
+		}
+	}
+	ordered := make([]*ipc.Channel, 0, len(platform.sharedChannels))
+	for _, channelID := range platform.sharedChannels {
+		if channel := byID[channelID]; channel != nil {
+			ordered = append(ordered, channel)
+		}
+	}
+	return ordered, nil
+}
+
+func buildCascadeCatalogItems(channels []*ipc.Channel, platform cascadePlatform, version GBProtocolVersion) []cascadeCatalogItem {
+	items := make([]cascadeCatalogItem, 0, len(channels))
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		exposedID := platform.channelIDMap[channel.ChannelID]
+		if exposedID == "" {
+			continue
+		}
+		ext := channel.Ext.GBCatalog
+		item := cascadeCatalogItem{
+			DeviceID: exposedID, Name: strings.TrimSpace(channel.Name),
+			Manufacturer: strings.TrimSpace(channel.Ext.Manufacturer), Model: strings.TrimSpace(channel.Ext.Model),
+			CivilCode: platform.localDomain, ParentID: platform.localID,
+			RegisterWay: 1, Status: "OFF",
+		}
+		if item.Name == "" {
+			item.Name = exposedID
+		}
+		if channel.IsOnline {
+			item.Status = "ON"
+		}
+		if ext != nil {
+			item.Owner = ext.Owner
+			item.CivilCode = firstNonEmpty(ext.CivilCode, item.CivilCode)
+			item.Block = ext.Block
+			item.Address = ext.Address
+			item.SafetyWay = ext.SafetyWay
+			if ext.RegisterWay > 0 {
+				item.RegisterWay = ext.RegisterWay
+			}
+			item.CertNum = ext.CertNum
+			item.Certifiable = ext.Certifiable
+			item.ErrCode = ext.ErrCode
+			item.EndTime = ext.EndTime
+			item.Secrecy = ext.Secrecy
+			item.IPAddress = ext.IPAddress
+			item.Port = ext.Port
+			item.Longitude = ext.Longitude
+			item.Latitude = ext.Latitude
+		}
+		if version.AtLeast(GBVersion11) {
+			item.Info = &cascadeCatalogInfo{PTZType: channel.PTZType}
+			if ext != nil {
+				item.Info.PositionType = ext.PositionType
+				item.Info.RoomType = ext.RoomType
+				item.Info.UseType = ext.UseType
+				item.Info.SupplyLightType = ext.SupplyLightType
+				item.Info.DirectionType = ext.DirectionType
+				item.Info.Resolution = ext.Resolution
+				item.Info.BusinessGroupID = ext.BusinessGroupID
+			}
+		}
+		if version.AtLeast(GBVersion30) && ext != nil {
+			mappingPlatform := withCascadeIdentifierMapping(platform, channel.DeviceID, platform.localID)
+			item.ExtraInfo = extractCascadeCatalogExtraInfo(ext, mappingPlatform, channel.ChannelID, exposedID)
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func (g *GB28181API) respondCascadeDeviceInfo(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope) error {
+	if query.DeviceID != worker.platform.localID {
+		channel, err := g.loadCascadeExposedChannel(ctx, worker.platform, query.DeviceID)
+		if err != nil {
+			return err
+		}
+		return sendCascadeXML(ctx, worker, cascadeDeviceInfoResponse{
+			CmdType: "DeviceInfo", SN: query.SN, DeviceID: query.DeviceID, Result: "OK",
+			DeviceName: firstNonEmpty(channel.Name, channel.Ext.Name, query.DeviceID), DeviceType: "IPC",
+			Manufacturer: channel.Ext.Manufacturer, Model: channel.Ext.Model, Firmware: channel.Ext.Firmware,
+			Channel: 1, MaxCamera: 1,
+		})
+	}
+	channels, err := g.loadCascadeChannels(ctx, worker.platform)
+	if err != nil {
+		return err
+	}
+	count := len(channels)
+	firmware := ""
+	if g.boot != nil {
+		firmware = strings.TrimSpace(g.boot.BuildVersion)
+	}
+	return sendCascadeXML(ctx, worker, cascadeDeviceInfoResponse{
+		CmdType: "DeviceInfo", SN: query.SN, DeviceID: worker.platform.localID, Result: "OK",
+		DeviceName: "GoWVP OWL", DeviceType: "NVR", Manufacturer: "GoWVP", Model: "OWL",
+		Firmware: firmware, Channel: count, MaxCamera: count,
+	})
+}
+
+func (g *GB28181API) respondCascadeDeviceStatus(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope) error {
+	if query.DeviceID != worker.platform.localID {
+		if worker.protocolVersion().AtLeast(GBVersion30) {
+			return g.respondCascadeForwardedQuery(ctx, worker, query, deviceQueryActionDeviceStatus)
+		}
+		channel, err := g.loadCascadeExposedChannel(ctx, worker.platform, query.DeviceID)
+		if err != nil {
+			return err
+		}
+		online := "OFFLINE"
+		encode := "OFF"
+		status := "ERROR"
+		if channel.IsOnline {
+			online = "ONLINE"
+			encode = "ON"
+			status = "OK"
+		}
+		return sendCascadeXML(ctx, worker, cascadeDeviceStatusResponse{
+			CmdType: "DeviceStatus", SN: query.SN, DeviceID: query.DeviceID,
+			Result: "OK", Online: online, Status: status, Encode: encode, Record: "OFF",
+			DeviceTime: time.Now().Format("2006-01-02T15:04:05"), Alarm: cascadeAlarmStatus{},
+		})
+	}
+	return sendCascadeXML(ctx, worker, cascadeDeviceStatusResponse{
+		CmdType: "DeviceStatus", SN: query.SN, DeviceID: worker.platform.localID,
+		Result: "OK", Online: "ONLINE", Status: "OK", Encode: "ON", Record: "OFF",
+		DeviceTime: time.Now().Format("2006-01-02T15:04:05"), Alarm: cascadeAlarmStatus{},
+	})
+}
+
+func (g *GB28181API) respondCascadeRecordInfo(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope) error {
+	localChannelID := worker.platform.exposedChannelMap[query.DeviceID]
+	if localChannelID == "" {
+		return g.sendCascadeRecordItems(ctx, worker, query, nil, "")
+	}
+	channel, err := g.loadCascadeExposedChannel(ctx, worker.platform, query.DeviceID)
+	if err != nil {
+		return err
+	}
+	startAt, startErr := time.ParseInLocation("2006-01-02T15:04:05", strings.TrimSpace(query.StartTime), time.Local)
+	endAt, endErr := time.ParseInLocation("2006-01-02T15:04:05", strings.TrimSpace(query.EndTime), time.Local)
+	if startErr != nil || endErr != nil || !endAt.After(startAt) {
+		return g.sendCascadeRecordItems(ctx, worker, query, nil, channel.Name)
+	}
+	queryRecords := g.queryRecordItems
+	if g.cascadeQueryRecords != nil {
+		queryRecords = g.cascadeQueryRecords
+	}
+	items, err := queryRecords(ctx, &RecordQueryInput{
+		DeviceID: channel.DeviceID, ChannelID: localChannelID,
+		Start: startAt.Unix(), End: endAt.Unix(), Timeout: 25 * time.Second,
+	})
+	if err != nil {
+		slog.Warn("query cascade RecordInfo failed", "upstream", worker.platform.name, "channel", localChannelID, "err", err)
+		items = nil
+	}
+	for index := range items {
+		items[index].DeviceID = query.DeviceID
+		if exposedRecorderID := worker.platform.channelIDMap[items[index].RecorderID]; exposedRecorderID != "" {
+			items[index].RecorderID = exposedRecorderID
+		} else if items[index].RecorderID == localChannelID || items[index].RecorderID == channel.DeviceID {
+			items[index].RecorderID = query.DeviceID
+		} else {
+			items[index].RecorderID = ""
+		}
+	}
+	return g.sendCascadeRecordItems(ctx, worker, query, items, firstNonEmpty(channel.Name, query.DeviceID))
+}
+
+func (g *GB28181API) sendCascadeRecordItems(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope, items []RecordItem, name string) error {
+	if len(items) == 0 {
+		return sendCascadeXML(ctx, worker, cascadeRecordInfoResponse{
+			CmdType: "RecordInfo", SN: query.SN, DeviceID: query.DeviceID, Name: name,
+			RecordList: cascadeRecordInfoList{},
+		})
+	}
+	for start := 0; start < len(items); start += cascadeCatalogChunkSize {
+		end := min(start+cascadeCatalogChunkSize, len(items))
+		if err := sendCascadeXML(ctx, worker, cascadeRecordInfoResponse{
+			CmdType: "RecordInfo", SN: query.SN, DeviceID: query.DeviceID, Name: name, SumNum: len(items),
+			RecordList: cascadeRecordInfoList{Num: end - start, Items: items[start:end]},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (g *GB28181API) loadCascadeExposedChannel(ctx context.Context, platform cascadePlatform, exposedID string) (*ipc.Channel, error) {
+	localID := platform.exposedChannelMap[strings.TrimSpace(exposedID)]
+	if localID == "" {
+		return nil, fmt.Errorf("cascade channel not shared")
+	}
+	channels, err := g.loadCascadeChannels(ctx, platform)
+	if err != nil {
+		return nil, err
+	}
+	for _, channel := range channels {
+		if channel != nil && channel.ChannelID == localID {
+			return channel, nil
+		}
+	}
+	return nil, fmt.Errorf("shared cascade channel not found")
+}
+
+func sendCascadeXML(ctx context.Context, worker *cascadeWorker, value any) error {
+	body, err := sip.XMLEncode(value)
+	if err != nil {
+		return err
+	}
+	return worker.sendMessage(ctx, body)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}

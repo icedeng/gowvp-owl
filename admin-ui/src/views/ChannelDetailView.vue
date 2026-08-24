@@ -72,6 +72,13 @@ const zoneForm = reactive({
   color: "#38bdf8",
   labels: "person,car",
 });
+const voiceForm = reactive({
+  mode: "talk" as "talk" | "broadcast",
+  mediaServerId: "local",
+  sourceVhost: "__defaultVhost__",
+  sourceApp: "live",
+  sourceStream: "",
+});
 
 const protocol = computed(() =>
   typeLabel(
@@ -82,6 +89,22 @@ const protocol = computed(() =>
 const isGb = computed(() => protocol.value === "GB28181");
 const supportsPtz = computed(() => Boolean(channel.value?.ptz_capable));
 const canUseRealtime = computed(() => Boolean(channel.value?.is_online) && !actionLoading.value);
+const gbCapabilities = computed(() =>
+  device.value?.ext?.gb_version_capabilities || channel.value?.ext?.gb_version_capabilities || []
+);
+const effectiveGbVersion = computed(() =>
+  device.value?.ext?.gb_effective_version || channel.value?.ext?.gb_effective_version || ""
+);
+const supportsVoiceTalk = computed(() =>
+  gbCapabilities.value.length
+    ? gbCapabilities.value.includes("voice_intercom")
+    : ["2.0", "3.0", "2016", "2022"].includes(effectiveGbVersion.value)
+);
+const supportsVoiceBroadcast = computed(() =>
+  gbCapabilities.value.length
+    ? gbCapabilities.value.includes("voice_broadcast")
+    : ["1.1", "2.0", "3.0", "2014", "2016", "2022"].includes(effectiveGbVersion.value)
+);
 const ptzDisabledReason = computed(() => {
   if (!channel.value?.is_online) return "通道离线，无法发送控制指令";
   if (!supportsPtz.value) return "当前设备未声明 PTZ 能力";
@@ -90,6 +113,14 @@ const ptzDisabledReason = computed(() => {
 const voiceDisabledReason = computed(() => {
   if (!isGb.value) return "语音对讲仅支持 GB28181 通道";
   if (!channel.value?.is_online) return "通道离线，无法建立语音会话";
+  if (voiceForm.mode === "talk" && !supportsVoiceTalk.value) return "当前协议版本不支持语音对讲";
+  if (voiceForm.mode === "broadcast" && !supportsVoiceBroadcast.value) return "当前协议版本不支持语音广播";
+  if (!voiceForm.sourceStream.trim()) return "请填写已就绪的 ZLMediaKit G.711 A-law 音频源流 ID";
+  return "";
+});
+const voiceStopDisabledReason = computed(() => {
+  if (!isGb.value) return "语音会话仅支持 GB28181 通道";
+  if (!channel.value?.is_online) return "通道离线，无法停止语音会话";
   return "";
 });
 const streamConfigRoute = computed(() => {
@@ -332,6 +363,10 @@ async function queryRemoteRecords() {
 }
 
 watch(() => route.params.id, load, { immediate: true });
+watch([supportsVoiceTalk, supportsVoiceBroadcast], ([talk, broadcast]) => {
+  if (voiceForm.mode === "talk" && !talk && broadcast) voiceForm.mode = "broadcast";
+  else if (voiceForm.mode === "broadcast" && !broadcast && talk) voiceForm.mode = "talk";
+});
 </script>
 
 <template>
@@ -454,12 +489,16 @@ watch(() => route.params.id, load, { immediate: true });
 
             <article class="card control-panel">
               <div class="card-head"><div><h3 class="card-title">快捷操作</h3><p class="card-sub">保持当前画面持续可见</p></div><Mic /></div>
+              <div class="form-grid">
+                <label class="form-group"><span class="form-label">语音模式</span><select v-model="voiceForm.mode" class="input plain w-full"><option value="talk" :disabled="!supportsVoiceTalk">语音对讲（2016+）</option><option value="broadcast" :disabled="!supportsVoiceBroadcast">语音广播（2014+）</option></select></label>
+                <label class="form-group"><span class="form-label">G.711 音频源流</span><input v-model.trim="voiceForm.sourceStream" class="input plain w-full" placeholder="例如 voice-microphone-1" /></label>
+              </div>
               <div class="channel-quick-actions">
                 <button class="btn" type="button" :disabled="!canUseRealtime" @click="refreshSnapshot"><Aperture />刷新快照</button>
-                <button class="btn" type="button" :disabled="Boolean(voiceDisabledReason) || Boolean(actionLoading)" @click="runAction('开始对讲', () => api.voiceStart(channel!.id, { mode: 'talk' }))"><Volume2 />开始对讲</button>
-                <button class="btn" type="button" :disabled="Boolean(voiceDisabledReason) || Boolean(actionLoading)" @click="runAction('停止对讲', () => api.voiceStop(channel!.id, { mode: 'talk' }))"><VolumeX />停止对讲</button>
+                <button class="btn" type="button" :disabled="Boolean(voiceDisabledReason) || Boolean(actionLoading)" @click="runAction(voiceForm.mode === 'talk' ? '开始对讲' : '开始广播', () => api.voiceStart(channel!.id, { mode: voiceForm.mode, media_server_id: voiceForm.mediaServerId, source_vhost: voiceForm.sourceVhost, source_app: voiceForm.sourceApp, source_stream: voiceForm.sourceStream }))"><Volume2 />{{ voiceForm.mode === "talk" ? "开始对讲" : "开始广播" }}</button>
+                <button class="btn" type="button" :disabled="Boolean(voiceStopDisabledReason) || Boolean(actionLoading)" @click="runAction(voiceForm.mode === 'talk' ? '停止对讲' : '停止广播', () => api.voiceStop(channel!.id, { mode: voiceForm.mode }))"><VolumeX />{{ voiceForm.mode === "talk" ? "停止对讲" : "停止广播" }}</button>
               </div>
-              <p class="capability-reason">{{ voiceDisabledReason || "当前通道支持 GB28181 语音会话" }}</p>
+              <p class="capability-reason">{{ voiceDisabledReason || "音频源将通过 ZLMediaKit 转为国标 RTP 发送" }}</p>
             </article>
           </aside>
         </div>

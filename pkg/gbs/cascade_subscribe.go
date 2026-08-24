@@ -1,0 +1,423 @@
+package gbs
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gowvp/owl/pkg/gbs/sip"
+)
+
+func subscriptionFilterFromRequest(req subscribeEventRequest) eventSubscriptionFilter {
+	return eventSubscriptionFilter{
+		StartAlarmPriority: strings.TrimSpace(req.StartAlarmPriority),
+		EndAlarmPriority:   strings.TrimSpace(req.EndAlarmPriority),
+		AlarmMethod:        strings.TrimSpace(req.AlarmMethod),
+		AlarmType:          strings.TrimSpace(req.AlarmType),
+		StartAlarmTime:     strings.TrimSpace(req.StartAlarmTime),
+		EndAlarmTime:       strings.TrimSpace(req.EndAlarmTime),
+	}
+}
+
+func validateSubscribeEventRequest(req subscribeEventRequest, cmdType string, version GBProtocolVersion) error {
+	if req.SN <= 0 {
+		return fmt.Errorf("invalid subscription SN")
+	}
+	if req.Interval != nil && *req.Interval <= 0 {
+		return fmt.Errorf("subscription interval must be positive")
+	}
+	switch cmdType {
+	case "MobilePosition":
+		if !version.Capabilities().MobilePosition {
+			return fmt.Errorf("MobilePosition subscription requires GB/T 28181-2016 or later")
+		}
+	case "PTZPosition":
+		if !version.Capabilities().PTZPosition {
+			return fmt.Errorf("PTZPosition subscription requires GB/T 28181-2022")
+		}
+	}
+	if !strings.EqualFold(cmdType, "Alarm") {
+		return nil
+	}
+	start, err := parseAlarmPriorityFilter(req.StartAlarmPriority)
+	if err != nil {
+		return fmt.Errorf("invalid StartAlarmPriority: %w", err)
+	}
+	end, err := parseAlarmPriorityFilter(req.EndAlarmPriority)
+	if err != nil {
+		return fmt.Errorf("invalid EndAlarmPriority: %w", err)
+	}
+	if start > 0 && end > 0 && start > end {
+		return fmt.Errorf("StartAlarmPriority must not exceed EndAlarmPriority")
+	}
+	method := strings.TrimSpace(req.AlarmMethod)
+	for _, value := range method {
+		if value < '0' || value > '7' {
+			return fmt.Errorf("invalid AlarmMethod")
+		}
+	}
+	if len(method) > 1 && strings.Contains(method, "0") {
+		return fmt.Errorf("AlarmMethod 0 cannot be combined with other values")
+	}
+	if strings.TrimSpace(req.AlarmType) != "" && !version.AtLeast(GBVersion20) {
+		return fmt.Errorf("AlarmType subscription requires GB/T 28181-2016 or later")
+	}
+	startTime, hasStart, err := parseSubscriptionTime(req.StartAlarmTime)
+	if err != nil {
+		return fmt.Errorf("invalid StartAlarmTime: %w", err)
+	}
+	endTime, hasEnd, err := parseSubscriptionTime(req.EndAlarmTime)
+	if err != nil {
+		return fmt.Errorf("invalid EndAlarmTime: %w", err)
+	}
+	if hasStart && hasEnd && endTime.Before(startTime) {
+		return fmt.Errorf("StartAlarmTime must not be after EndAlarmTime")
+	}
+	return nil
+}
+
+func parseAlarmPriorityFilter(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	priority, err := strconv.Atoi(value)
+	if err != nil || priority < 0 || priority > 4 {
+		return 0, fmt.Errorf("must be between 0 and 4")
+	}
+	return priority, nil
+}
+
+func parseSubscriptionTime(value string) (time.Time, bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false, nil
+	}
+	for _, layout := range []string{"2006-01-02T15:04:05", time.RFC3339, time.DateTime} {
+		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return parsed, true, nil
+		}
+	}
+	return time.Time{}, false, fmt.Errorf("unsupported time format")
+}
+
+func alarmMatchesSubscription(filter eventSubscriptionFilter, body []byte) bool {
+	if filter == (eventSubscriptionFilter{}) {
+		return true
+	}
+	var alarm messageAlarm
+	if err := sip.XMLDecode(body, &alarm); err != nil {
+		return false
+	}
+	start, _ := parseAlarmPriorityFilter(filter.StartAlarmPriority)
+	end, _ := parseAlarmPriorityFilter(filter.EndAlarmPriority)
+	priority, err := strconv.Atoi(strings.TrimSpace(alarm.AlarmPriority))
+	if err != nil && (start > 0 || end > 0) {
+		return false
+	}
+	if start > 0 && priority < start {
+		return false
+	}
+	if end > 0 && priority > end {
+		return false
+	}
+	method := strings.TrimSpace(alarm.AlarmMethod)
+	if method == "" {
+		method = strings.TrimSpace(alarm.Info.AlarmMethod)
+	}
+	if wanted := strings.TrimSpace(filter.AlarmMethod); wanted != "" && wanted != "0" && !alarmMethodIntersects(wanted, method) {
+		return false
+	}
+	alarmType := strings.TrimSpace(alarm.AlarmType)
+	if alarmType == "" {
+		alarmType = strings.TrimSpace(alarm.Info.AlarmType)
+	}
+	if wanted := strings.TrimSpace(filter.AlarmType); wanted != "" && wanted != alarmType {
+		return false
+	}
+	if filter.StartAlarmTime != "" || filter.EndAlarmTime != "" {
+		alarmTime, ok := (&AlarmEvent{AlarmTime: alarm.AlarmTime}).ParseTime()
+		if !ok {
+			return false
+		}
+		startTime, hasStart, _ := parseSubscriptionTime(filter.StartAlarmTime)
+		endTime, hasEnd, _ := parseSubscriptionTime(filter.EndAlarmTime)
+		if hasStart && alarmTime.Before(startTime) {
+			return false
+		}
+		if hasEnd && alarmTime.After(endTime) {
+			return false
+		}
+	}
+	return true
+}
+
+func alarmMethodIntersects(wanted, actual string) bool {
+	for _, value := range actual {
+		if value >= '1' && value <= '7' && strings.ContainsRune(wanted, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func copyCascadeSubscribeInput(req subscribeEventRequest, deviceID, targetID, cmdType string, expires int) SubscribeInput {
+	return SubscribeInput{
+		DeviceID: deviceID, TargetID: targetID, Event: cmdType, Expires: expires,
+		StartAlarmPriority: strings.TrimSpace(req.StartAlarmPriority),
+		EndAlarmPriority:   strings.TrimSpace(req.EndAlarmPriority),
+		AlarmMethod:        strings.TrimSpace(req.AlarmMethod),
+		AlarmType:          strings.TrimSpace(req.AlarmType),
+		StartAlarmTime:     strings.TrimSpace(req.StartAlarmTime),
+		EndAlarmTime:       strings.TrimSpace(req.EndAlarmTime),
+		Interval:           subscribeRequestInterval(req),
+	}
+}
+
+func subscribeRequestInterval(req subscribeEventRequest) int {
+	if req.Interval == nil {
+		return 0
+	}
+	return *req.Interval
+}
+
+// desiredCascadeDownstreamSubscriptions 把上级可见编码转换为本地设备/通道订阅。
+// 平台级订阅按父设备聚合，避免共享通道较多时产生订阅风暴；指定共享通道的位置类事件按通道订阅。
+func (g *GB28181API) desiredCascadeDownstreamSubscriptions(ctx context.Context, cascade *cascadeWorker, req subscribeEventRequest, cmdType, deviceID string, expires int) (map[string]SubscribeInput, error) {
+	if cascade == nil {
+		return nil, nil
+	}
+	if !strings.EqualFold(cmdType, "Catalog") && !strings.EqualFold(cmdType, "Alarm") && !strings.EqualFold(cmdType, "MobilePosition") && !strings.EqualFold(cmdType, "PTZPosition") {
+		return nil, nil
+	}
+	// 单元测试或嵌入模式可能只使用事件源能力，没有设备存储；生产 Server 始终同时具备二者。
+	if g == nil || g.core.Store() == nil || g.svr == nil || g.svr.memoryStorer == nil {
+		return nil, nil
+	}
+	channels, err := g.loadCascadeChannels(ctx, cascade.platform)
+	if err != nil {
+		return nil, err
+	}
+	localTarget := cascade.platform.exposedChannelMap[strings.TrimSpace(deviceID)]
+	desired := make(map[string]SubscribeInput)
+	for _, channel := range channels {
+		if channel == nil || strings.TrimSpace(channel.DeviceID) == "" || strings.TrimSpace(channel.ChannelID) == "" {
+			continue
+		}
+		if localTarget != "" && channel.ChannelID != localTarget {
+			continue
+		}
+		targetID := channel.DeviceID
+		if localTarget != "" && !strings.EqualFold(cmdType, "Alarm") {
+			// MobilePosition/PTZPosition 的指定通道订阅保持精确目标；平台级订阅则由父设备聚合。
+			targetID = channel.ChannelID
+		}
+		input := copyCascadeSubscribeInput(req, channel.DeviceID, targetID, cmdType, expires)
+		key := buildOutgoingSubscriptionKey(input.DeviceID, input.TargetID, cmdType, &input)
+		desired[key] = input
+	}
+	if localTarget != "" && len(desired) == 0 {
+		return nil, fmt.Errorf("shared cascade channel is unavailable")
+	}
+	return desired, nil
+}
+
+func (g *GB28181API) invokeCascadeSubscribe(ctx context.Context, input *SubscribeInput) error {
+	if g.cascadeSubscribe != nil {
+		return g.cascadeSubscribe(ctx, input)
+	}
+	return g.Subscribe(ctx, input)
+}
+
+func (g *GB28181API) syncCascadeDownstreamSubscriptions(ctx context.Context, previous []string, desired map[string]SubscribeInput) ([]string, error) {
+	return g.syncCascadeDownstreamSubscriptionsMode(ctx, previous, desired, true)
+}
+
+func (g *GB28181API) syncCascadeDownstreamSubscriptionsMode(ctx context.Context, previous []string, desired map[string]SubscribeInput, refreshOwned bool) ([]string, error) {
+	if len(previous) == 0 && len(desired) == 0 {
+		return nil, nil
+	}
+	g.cascadeSubscriptionMu.Lock()
+	defer g.cascadeSubscriptionMu.Unlock()
+	if g.cascadeSubscriptions == nil {
+		g.cascadeSubscriptions = make(map[string]*cascadeDownstreamSubscription)
+	}
+	previousSet := make(map[string]struct{}, len(previous))
+	for _, key := range previous {
+		previousSet[key] = struct{}{}
+	}
+	keys := make([]string, 0, len(desired))
+	for key := range desired {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	acquired := make([]string, 0, len(keys))
+	for _, key := range keys {
+		input := desired[key]
+		state := g.cascadeSubscriptions[key]
+		_, alreadyOwned := previousSet[key]
+		if state != nil {
+			if input.Expires > state.Input.Expires {
+				state.Input.Expires = input.Expires
+			}
+			if alreadyOwned {
+				if !refreshOwned {
+					continue
+				}
+				refresh := state.Input
+				if err := g.invokeCascadeSubscribe(ctx, &refresh); err != nil {
+					return nil, fmt.Errorf("renew downstream %s subscription: %w", input.Event, err)
+				}
+				continue
+			}
+			state.Refs++
+			acquired = append(acquired, key)
+			continue
+		}
+		if err := g.invokeCascadeSubscribe(ctx, &input); err != nil {
+			for index := len(acquired) - 1; index >= 0; index-- {
+				g.releaseCascadeDownstreamSubscriptionLocked(ctx, acquired[index])
+			}
+			return nil, fmt.Errorf("create downstream %s subscription: %w", input.Event, err)
+		}
+		g.cascadeSubscriptions[key] = &cascadeDownstreamSubscription{Input: input, Refs: 1}
+		acquired = append(acquired, key)
+	}
+	for _, key := range previous {
+		if _, keep := desired[key]; !keep {
+			g.releaseCascadeDownstreamSubscriptionLocked(ctx, key)
+		}
+	}
+	return keys, nil
+}
+
+func (g *GB28181API) reconcileCascadeDownstreamSubscriptions(ctx context.Context) {
+	if g == nil {
+		return
+	}
+	g.eventSubscriptionMu.Lock()
+	defer g.eventSubscriptionMu.Unlock()
+	now := time.Now()
+	g.eventSubscribers.Range(func(_, value any) bool {
+		sub, ok := value.(*eventSubscription)
+		if !ok || sub == nil {
+			return true
+		}
+		sub.mu.Lock()
+		worker := sub.Cascade
+		cmdType := sub.CmdType
+		deviceID := sub.DeviceID
+		expiresAt := sub.ExpiresAt
+		filter := sub.Filter
+		interval := sub.Interval
+		previous := append([]string(nil), sub.DownstreamKeys...)
+		sub.mu.Unlock()
+		if worker == nil || !now.Before(expiresAt) {
+			return true
+		}
+		expires := max(1, int(time.Until(expiresAt).Seconds()))
+		request := subscribeEventRequest{
+			CmdType: cmdType, SN: 1, DeviceID: deviceID,
+			StartAlarmPriority: filter.StartAlarmPriority,
+			EndAlarmPriority:   filter.EndAlarmPriority,
+			AlarmMethod:        filter.AlarmMethod,
+			AlarmType:          filter.AlarmType,
+			StartAlarmTime:     filter.StartAlarmTime,
+			EndAlarmTime:       filter.EndAlarmTime,
+		}
+		if interval > 0 {
+			request.Interval = &interval
+		}
+		desired, err := g.desiredCascadeDownstreamSubscriptions(ctx, worker, request, cmdType, deviceID, expires)
+		if err != nil {
+			slog.Warn("reconcile cascade downstream subscriptions failed", "upstream", worker.platform.name, "event", cmdType, "err", err)
+			return true
+		}
+		keys, err := g.syncCascadeDownstreamSubscriptionsMode(ctx, previous, desired, false)
+		if err != nil {
+			slog.Warn("reconcile cascade downstream subscriptions failed", "upstream", worker.platform.name, "event", cmdType, "err", err)
+			return true
+		}
+		sub.mu.Lock()
+		sub.DownstreamKeys = append(sub.DownstreamKeys[:0], keys...)
+		sub.mu.Unlock()
+		return true
+	})
+}
+
+func (g *GB28181API) releaseCascadeDownstreamSubscriptions(ctx context.Context, keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	g.cascadeSubscriptionMu.Lock()
+	defer g.cascadeSubscriptionMu.Unlock()
+	for _, key := range keys {
+		g.releaseCascadeDownstreamSubscriptionLocked(ctx, key)
+	}
+}
+
+func (g *GB28181API) releaseCascadeDownstreamSubscriptionLocked(ctx context.Context, key string) {
+	state := g.cascadeSubscriptions[key]
+	if state == nil {
+		return
+	}
+	state.Refs--
+	if state.Refs > 0 {
+		return
+	}
+	delete(g.cascadeSubscriptions, key)
+	cancel := state.Input
+	cancel.Cancel = true
+	cancel.Expires = 0
+	if err := g.invokeCascadeSubscribe(ctx, &cancel); err != nil {
+		slog.Warn("cancel downstream cascade subscription failed", "device_id", cancel.DeviceID, "target_id", cancel.TargetID, "event", cancel.Event, "err", err)
+	}
+}
+
+func (g *GB28181API) closeCascadeDownstreamSubscriptions() {
+	if g == nil {
+		return
+	}
+	g.cascadeSubscriptionMu.Lock()
+	states := make([]SubscribeInput, 0, len(g.cascadeSubscriptions))
+	for key, state := range g.cascadeSubscriptions {
+		if state != nil {
+			states = append(states, state.Input)
+		}
+		delete(g.cascadeSubscriptions, key)
+	}
+	g.cascadeSubscriptionMu.Unlock()
+	for _, input := range states {
+		input.Cancel = true
+		input.Expires = 0
+		if err := g.invokeCascadeSubscribe(context.Background(), &input); err != nil {
+			slog.Warn("cancel downstream cascade subscription during close failed", "device_id", input.DeviceID, "target_id", input.TargetID, "event", input.Event, "err", err)
+		}
+	}
+}
+
+func (g *GB28181API) removeCascadeEventSubscriptions(worker *cascadeWorker) {
+	if g == nil || worker == nil {
+		return
+	}
+	g.eventSubscriptionMu.Lock()
+	defer g.eventSubscriptionMu.Unlock()
+	g.eventSubscribers.Range(func(key, value any) bool {
+		subscription, ok := value.(*eventSubscription)
+		if !ok || subscription == nil {
+			return true
+		}
+		subscription.mu.Lock()
+		matches := subscription.Cascade == worker
+		keys := append([]string(nil), subscription.DownstreamKeys...)
+		subscription.mu.Unlock()
+		if matches && g.eventSubscribers.CompareAndDelete(key, subscription) {
+			g.releaseCascadeDownstreamSubscriptions(context.Background(), keys)
+		}
+		return true
+	})
+}

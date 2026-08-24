@@ -103,6 +103,35 @@ func TestBuildGBSDPVersionTransport(t *testing.T) {
 	}
 }
 
+func TestBuildGBSDP11DownloadSpeed(t *testing.T) {
+	in := gbSDPInput{
+		Version: GBVersion11, SessionName: historyModeDownload,
+		ChannelID: gb10ChannelID, URI: gb10ChannelID + ":0",
+		IP: "192.0.2.20", Port: 30000,
+		StartAt: time.Unix(1711929600, 0), EndAt: time.Unix(1711933200, 0),
+		SSRC: "1100000001", DownloadSpeed: 4,
+	}
+	body, err := buildGBSDP(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "a=downloadspeed:4\r\n") {
+		t.Fatalf("Download SDP missing speed attribute:\n%s", body)
+	}
+	in.Version = GBVersion10
+	if _, err := buildGBSDP(in); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("1.0 Download speed error = %v", err)
+	}
+	in.Version = GBVersion11
+	in.SessionName = historyModePlay
+	in.URI = ""
+	in.StartAt = time.Time{}
+	in.EndAt = time.Time{}
+	if _, err := buildGBSDP(in); err == nil || !strings.Contains(err.Error(), "only valid for Download") {
+		t.Fatalf("Play download speed validation error = %v", err)
+	}
+}
+
 func TestBuildGBSDPValidation(t *testing.T) {
 	base := gbSDPInput{
 		Version:     GBVersion10,

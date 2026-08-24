@@ -32,6 +32,8 @@ type Device struct {
 	Password    string
 	gbVersionMu sync.RWMutex
 	gbVersion   string
+	// gbDisabledCapabilities 保存设备固件级能力关闭项，与版本档案共同决定运行时门禁。
+	gbDisabledCapabilities map[string]struct{}
 
 	conn   sip.Connection
 	source net.Addr
@@ -65,12 +67,13 @@ func NewDevice(conn sip.Connection, d *ipc.Device) *Device {
 			URI:    uri,
 			Params: sip.NewParams(),
 		},
-		Address:         d.Address,
-		LastKeepaliveAt: d.KeepaliveAt.Time,
-		LastRegisterAt:  d.RegisteredAt.Time,
-		IsOnline:        d.IsOnline,
-		Password:        d.Password,
-		gbVersion:       string(deviceProtocolVersion(d.Ext)),
+		Address:                d.Address,
+		LastKeepaliveAt:        d.KeepaliveAt.Time,
+		LastRegisterAt:         d.RegisteredAt.Time,
+		IsOnline:               d.IsOnline,
+		Password:               d.Password,
+		gbVersion:              string(deviceProtocolVersion(d.Ext)),
+		gbDisabledCapabilities: gbDisabledCapabilitySet(d.Ext.GBDisabledCapabilities),
 	}
 
 	return &c
@@ -89,6 +92,23 @@ func (d *Device) setGBVersion(version GBProtocolVersion) {
 		defer d.gbVersionMu.Unlock()
 		d.gbVersion = string(version)
 	}
+}
+
+func (d *Device) setGBProfile(version GBProtocolVersion, disabled []string) {
+	if !version.Valid() {
+		return
+	}
+	d.gbVersionMu.Lock()
+	d.gbVersion = string(version)
+	d.gbDisabledCapabilities = gbDisabledCapabilitySet(disabled)
+	d.gbVersionMu.Unlock()
+}
+
+func (d *Device) isCapabilityDisabled(name string) bool {
+	d.gbVersionMu.RLock()
+	_, disabled := d.gbDisabledCapabilities[name]
+	d.gbVersionMu.RUnlock()
+	return disabled
 }
 
 func deviceProtocolVersion(ext ipc.DeviceExt) GBProtocolVersion {
@@ -308,6 +328,7 @@ type Channels struct {
 	Password    string `xml:"Password" json:"-"`
 	// Status 状态  on 在线
 	Status    string          `xml:"Status"  json:"status"  gorm:"column:status"`
+	Event     string          `xml:"Event" json:"event,omitempty" gorm:"-"`
 	Longitude float64         `xml:"Longitude" json:"longitude"`
 	Latitude  float64         `xml:"Latitude" json:"latitude"`
 	Info      CatalogItemInfo `xml:"Info" json:"info"`

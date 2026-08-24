@@ -1,0 +1,18 @@
+GB/T 28181—2022
+(1) SIP INVITE (X-PreferredPath=B-C-E), ef i. 4
+ie ¥ 77 (8) 200 OK (X-RouteRath=B-C-E)
+oe o io) 200 OK (X-RoutePath=C-E)
+(2) SIP INVITE (X-PreferredPath=C-E) | 4
+: '(6) 200 OK (X-RoutePath=E)
+(3) SIP INVITE (X-PreferredPath=E )! 1
+y
+(4) SIP INVITE !
+1 (5) 2000K (JEX-RoutePath)
+—> £rinRAkeena Y 1
+ano eRe RINE Cision >
+AH4 QAR KH SLA T ARERERE
+SL ch SH eh Li (2). EIDE B F8 2OK AR ff A AY SIP INVITE if2k 44-8 f C IY. A X-Pre-
+ferredPath FE SLE AC AY 4S AR Ji RE Ab. RO a A RAE A BOY SIP
+INVITE + X-PreferredPath= B-C( Bll AB 52 fit ai — SF), SIP INVITE 19 48 2 6 £2 HB], ek
+FE G C48 RAE GE Wt APA HEA a X-PreferredPath 3k FB.
+137

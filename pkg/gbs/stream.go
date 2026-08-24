@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
@@ -50,12 +51,23 @@ type Streams struct {
 	// DirectTCP 标识 2014 附录 O 裸 TCP 下载会话，不能按 RTP 流处理。
 	DirectTCP       bool   `json:"direct_tcp" gorm:"-"`
 	DirectSessionID string `json:"direct_session_id,omitempty" gorm:"-"`
+	FileSize        int64  `json:"file_size,omitempty" gorm:"-"`
+	FileSizeKnown   bool   `json:"file_size_known" gorm:"-"`
 
 	// ---
-	S, E time.Time     `json:"-" gorm:"-"`
-	ssrc string        // 国标ssrc 10进制字符串
-	Ext  int64         `json:"-" gorm:"-"` // 流等待过期时间
-	Resp *sip.Response `json:"-" gorm:"-"`
+	S, E        time.Time        `json:"-" gorm:"-"`
+	ssrc        string           // 国标ssrc 10进制字符串
+	mediaServer *sms.MediaServer `json:"-" gorm:"-"`
+	sessionKey  string           // 内部会话键；级联历史会话用于隔离同通道的不同时间范围
+	Ext         int64            `json:"-" gorm:"-"` // 流等待过期时间
+	Resp        *sip.Response    `json:"-" gorm:"-"`
+}
+
+func (s *Streams) nextCSeq() uint32 {
+	if s == nil {
+		return 0
+	}
+	return atomic.AddUint32(&s.CseqNo, 1)
 }
 
 // 当前系统中存在的流列表

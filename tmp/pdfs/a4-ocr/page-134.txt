@@ -1,0 +1,34 @@
+GB/T 28181—2022
+#F.7 EK (Main Profile) 4) A (Tier) #1 2k F (Level) AY BRB (BE)
+Hes HONE
+SE
+i
+ae ee
+I
+2
+OO
+Ps [owas [eo [a0
+[eee see [oe [oe
+[ere [ate [eee
+F.9.5 H.265 ES RAG HIB
+1.265 Wb iit Wi FF EY UK (Main Profile) A964 iit «Wind i 2 made ITU-T H.265(2019) fy MLE.
+H.265 ERY UR AY 1 ii HK aM FE :
+a) SAB RAE (Video parameter sets) ff) vps_base_layer_internal_flag #fl vps_base_layer_a-
+vailable_flag 49% F 1;
+b) FRR) BRE (Sequence parameter sets) fl) chroma_format_ide “¥ 1;
+co) FFA BRA PAY bit_depth_luma_minus8 4 F 0;
+d) FERS RAE AY bit_depth_chroma_minus8 4 0;
+ec) #4 BS AEP th WL transform_skip_rotation_enabled_flag,transform_skip_context_enabled_
+flag.implicit _rdpem _ enabled _ flag, explicit _ rdpem _ enabled _ flag, extended _ precision _
+processing flag, intra_ smoothing _ disabled _ flag, high _ precision _ offsets _ enabled _ flag,
+persistent_rice_adaptation_enabled_flag, cabac_bypass_alignment_enabled_flag, sps_curr_
+pic_ref_enabled_ flag, palette_mode_enabled_ flag, motion _vector_resolution_control_ide
+Ail intra_boundary_filtering_disabled_flag It} 94 F 0;
+1) SAMIR BRE PALA CtbLog2SizeY AICI HY 4~6s
+g) FAI@S BE (Picture parameter sets) tH Hl log2_max_tra nsform_skip_block_size_minus2,
+chroma_qp_offset_list_enabled_flag #fl residual_adaptive_colour_transform_enabled_flag
+Wt SYS 0;
+h)  “4AMGB BSE HB tiles_enabled_flag “°F 1 If .entropy_coding_sync_enabled_flag Jii4#F 0;
+i) “4G BBE Hh HW tiles_enabled_flag equal 4 1 MY} .ColumnWidthInLumaSamples[i] (i
+AY JBC (F 3G FA O~num_tile_columns_minus]) £4) KF a4 F 256, RowHeightInLumaSamples
+127

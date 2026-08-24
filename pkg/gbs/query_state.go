@@ -22,6 +22,8 @@ type QueryState struct {
 	DeviceStatus   *DeviceStatusData    `json:"device_status,omitempty"`
 	Presets        []PresetItemData     `json:"presets,omitempty"`
 	HomePosition   *HomePositionData    `json:"home_position,omitempty"`
+	CruiseTracks   []CruiseTrackData    `json:"cruise_tracks,omitempty"`
+	CruiseTrack    *CruiseTrackData     `json:"cruise_track,omitempty"`
 	PTZPosition    *PTZPositionData     `json:"ptz_position,omitempty"`
 	SDCards        []SDCardItemData     `json:"sd_cards,omitempty"`
 	MobilePosition *MobilePositionData  `json:"mobile_position,omitempty"`
@@ -33,15 +35,16 @@ type QueryState struct {
 
 // DeviceStatusData 对应 DeviceStatus 查询结果。
 type DeviceStatusData struct {
-	CmdType    string `json:"cmd_type"`
-	SN         int    `json:"sn"`
-	DeviceID   string `json:"device_id"`
-	Result     string `json:"result,omitempty"`
-	Online     string `json:"online,omitempty"`
-	Status     string `json:"status,omitempty"`
-	DeviceTime string `json:"device_time,omitempty"`
-	Encode     string `json:"encode,omitempty"`
-	Record     string `json:"record,omitempty"`
+	CmdType        string   `json:"cmd_type"`
+	SN             int      `json:"sn"`
+	DeviceID       string   `json:"device_id"`
+	Result         string   `json:"result,omitempty"`
+	Online         string   `json:"online,omitempty"`
+	Status         string   `json:"status,omitempty"`
+	DeviceTime     string   `json:"device_time,omitempty"`
+	Encode         string   `json:"encode,omitempty"`
+	Record         string   `json:"record,omitempty"`
+	FaultDeviceIDs []string `json:"fault_device_ids,omitempty"`
 }
 
 // PresetItemData 是预置位查询条目。
@@ -55,6 +58,20 @@ type HomePositionData struct {
 	Enabled     *int `json:"enabled,omitempty"`
 	ResetTime   *int `json:"reset_time,omitempty"`
 	PresetIndex *int `json:"preset_index,omitempty"`
+}
+
+// CruiseTrackData 是巡航轨迹列表或详情。
+type CruiseTrackData struct {
+	Number int               `json:"number"`
+	Name   string            `json:"name,omitempty"`
+	Points []CruisePointData `json:"points,omitempty"`
+}
+
+// CruisePointData 是巡航轨迹中的预置位、停留时间和速度。
+type CruisePointData struct {
+	PresetIndex int `json:"preset_index"`
+	StayTime    int `json:"stay_time"`
+	Speed       int `json:"speed"`
 }
 
 // PTZPositionData 是 PTZ 精准状态结果。
@@ -95,6 +112,9 @@ type ConfigDownloadState struct {
 	Result              string               `json:"result,omitempty"`
 	BasicParam          *BasicParam          `json:"basic_param,omitempty"`
 	VideoParamOpt       *VideoParamOpt       `json:"video_param_opt,omitempty"`
+	VideoParamConfig    *VideoParamConfig    `json:"video_param_config,omitempty"`
+	AudioParamOpt       *AudioParamOpt       `json:"audio_param_opt,omitempty"`
+	AudioParamConfig    *AudioParamConfig    `json:"audio_param_config,omitempty"`
 	SVACEncodeConfig    *SVACEncodeConfig    `json:"svac_encode_config,omitempty"`
 	SVACDecodeConfig    *SVACDecodeConfig    `json:"svac_decode_config,omitempty"`
 	VideoParamAttribute *VideoParamAttribute `json:"video_param_attribute,omitempty"`
@@ -120,6 +140,8 @@ type DeviceConfigState struct {
 
 // GetQueryState 获取设备最新结构化状态。
 func (g *GB28181API) GetQueryState(deviceID string) (*QueryState, bool) {
+	g.queryStateMu.RLock()
+	defer g.queryStateMu.RUnlock()
 	v, ok := g.queryStates.Load(strings.TrimSpace(deviceID))
 	if !ok {
 		return nil, false
@@ -146,6 +168,10 @@ func (g *GB28181API) decodeAndStoreQueryData(deviceID, cmdType string, body []by
 		data = decodePresetQueryData(body)
 	case "HomePositionQuery":
 		data = decodeHomePositionData(body)
+	case "CruiseTrackListQuery":
+		data = decodeCruiseTrackListData(body)
+	case "CruiseTrackQuery":
+		data = decodeCruiseTrackData(body)
 	case "PTZPosition":
 		data = decodePTZPositionData(body)
 	case "SDCardStatus":
@@ -169,6 +195,8 @@ func (g *GB28181API) storeQueryState(deviceID, cmdType string, data any) {
 	if deviceID == "" || data == nil {
 		return
 	}
+	g.queryStateMu.Lock()
+	defer g.queryStateMu.Unlock()
 	state := &QueryState{}
 	if v, ok := g.queryStates.Load(deviceID); ok {
 		if old, ok := v.(*QueryState); ok && old != nil {
@@ -190,6 +218,14 @@ func (g *GB28181API) storeQueryState(deviceID, cmdType string, data any) {
 		if s, ok := data.(*HomePositionData); ok {
 			state.HomePosition = s
 		}
+	case "CruiseTrackListQuery":
+		if items, ok := data.([]CruiseTrackData); ok {
+			state.CruiseTracks = items
+		}
+	case "CruiseTrackQuery":
+		if item, ok := data.(*CruiseTrackData); ok {
+			state.CruiseTrack = item
+		}
 	case "PTZPosition":
 		if s, ok := data.(*PTZPositionData); ok {
 			state.PTZPosition = s
@@ -204,7 +240,12 @@ func (g *GB28181API) storeQueryState(deviceID, cmdType string, data any) {
 		}
 	case "ConfigDownload":
 		if s, ok := data.(*ConfigDownloadState); ok {
-			state.ConfigDownload = s
+			merged := &ConfigDownloadState{}
+			if state.ConfigDownload != nil {
+				*merged = *state.ConfigDownload
+			}
+			mergeConfigDownloadState(merged, s)
+			state.ConfigDownload = merged
 		}
 	}
 	g.queryStates.Store(deviceID, state)
@@ -215,6 +256,8 @@ func (g *GB28181API) storeDeviceConfigState(deviceID string, state *DeviceConfig
 	if deviceID == "" || state == nil {
 		return
 	}
+	g.queryStateMu.Lock()
+	defer g.queryStateMu.Unlock()
 	curr := &QueryState{}
 	if v, ok := g.queryStates.Load(deviceID); ok {
 		if old, ok := v.(*QueryState); ok && old != nil {
@@ -231,6 +274,8 @@ func (g *GB28181API) storeAppendixA4State(deviceID string, objs []AppendixA4Obje
 	if deviceID == "" || len(objs) == 0 {
 		return
 	}
+	g.queryStateMu.Lock()
+	defer g.queryStateMu.Unlock()
 	state := &QueryState{}
 	if v, ok := g.queryStates.Load(deviceID); ok {
 		if old, ok := v.(*QueryState); ok && old != nil {
@@ -420,6 +465,51 @@ func decodeHomePositionData(body []byte) *HomePositionData {
 	}
 }
 
+type cruiseTrackListQueryXML struct {
+	Items []struct {
+		Number int    `xml:"Number"`
+		Name   string `xml:"Name"`
+	} `xml:"CruiseTrackList>CruiseTrack"`
+}
+
+func decodeCruiseTrackListData(body []byte) []CruiseTrackData {
+	var msg cruiseTrackListQueryXML
+	if err := sip.XMLDecode(body, &msg); err != nil {
+		return nil
+	}
+	out := make([]CruiseTrackData, 0, len(msg.Items))
+	for _, item := range msg.Items {
+		out = append(out, CruiseTrackData{Number: item.Number, Name: strings.TrimSpace(item.Name)})
+	}
+	return out
+}
+
+type cruiseTrackQueryXML struct {
+	Number int    `xml:"Number"`
+	Name   string `xml:"Name"`
+	Points []struct {
+		PresetIndex int `xml:"PresetIndex"`
+		StayTime    int `xml:"StayTime"`
+		Speed       int `xml:"Speed"`
+	} `xml:"CruisePointList>CruisePoint"`
+}
+
+func decodeCruiseTrackData(body []byte) *CruiseTrackData {
+	var msg cruiseTrackQueryXML
+	if err := sip.XMLDecode(body, &msg); err != nil {
+		return nil
+	}
+	out := &CruiseTrackData{Number: msg.Number, Name: strings.TrimSpace(msg.Name)}
+	for _, point := range msg.Points {
+		out.Points = append(out.Points, CruisePointData{
+			PresetIndex: point.PresetIndex,
+			StayTime:    point.StayTime,
+			Speed:       point.Speed,
+		})
+	}
+	return out
+}
+
 type ptzPositionQueryXML struct {
 	Pan                  *float64 `xml:"Pan"`
 	Tilt                 *float64 `xml:"Tilt"`
@@ -509,6 +599,10 @@ func decodeConfigDownloadState(body []byte) *ConfigDownloadState {
 	if err := sip.XMLDecode(body, &msg); err != nil {
 		return nil
 	}
+	snapshot := msg.SnapShotConfig
+	if snapshot == nil {
+		snapshot = msg.SnapShot
+	}
 	return &ConfigDownloadState{
 		CmdType:             strings.TrimSpace(msg.CmdType),
 		SN:                  msg.SN,
@@ -516,6 +610,9 @@ func decodeConfigDownloadState(body []byte) *ConfigDownloadState {
 		Result:              strings.TrimSpace(msg.Result),
 		BasicParam:          msg.BasicParam,
 		VideoParamOpt:       msg.VideoParamOpt,
+		VideoParamConfig:    msg.VideoParamConfig,
+		AudioParamOpt:       msg.AudioParamOpt,
+		AudioParamConfig:    msg.AudioParamConfig,
 		SVACEncodeConfig:    msg.SVACEncodeConfig,
 		SVACDecodeConfig:    msg.SVACDecodeConfig,
 		VideoParamAttribute: msg.VideoParamAttribute,
@@ -525,7 +622,7 @@ func decodeConfigDownloadState(body []byte) *ConfigDownloadState {
 		FrameMirror:         msg.FrameMirror,
 		AlarmReport:         msg.AlarmReport,
 		OSDConfig:           msg.OSDConfig,
-		SnapShot:            msg.SnapShot,
+		SnapShot:            snapshot,
 		RawXML:              string(body),
 	}
 }

@@ -16,6 +16,7 @@ type GBDiagnostics struct {
 	VersionSource          string   `json:"version_source,omitempty"`
 	VersionUpdatedAt       int64    `json:"version_updated_at,omitempty"`
 	Capabilities           []string `json:"capabilities"`
+	DisabledCapabilities   []string `json:"disabled_capabilities,omitempty"`
 	LastUnsupportedCommand string   `json:"last_unsupported_command,omitempty"`
 	LastUnsupportedVersion string   `json:"last_unsupported_version,omitempty"`
 	LastUnsupportedAt      int64    `json:"last_unsupported_at,omitempty"`
@@ -45,7 +46,8 @@ func (g *GB28181API) GetDiagnostics(ctx context.Context, deviceID string) (*GBDi
 		ManualVersion:          ext.GBManualVersion,
 		VersionSource:          ext.GBVersionSource,
 		VersionUpdatedAt:       ext.GBVersionUpdatedAt,
-		Capabilities:           version.CapabilityNames(),
+		Capabilities:           effectiveCapabilityNames(version, ext.GBDisabledCapabilities),
+		DisabledCapabilities:   append([]string(nil), ext.GBDisabledCapabilities...),
 		LastUnsupportedCommand: ext.GBLastUnsupportedCommand,
 		LastUnsupportedVersion: ext.GBLastUnsupportedVersion,
 		LastUnsupportedAt:      ext.GBLastUnsupportedUpdatedAt,

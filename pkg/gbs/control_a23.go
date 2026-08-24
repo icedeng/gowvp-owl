@@ -323,14 +323,14 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 			}
 		}
 	case deviceControlActionIFrameSend:
-		if err := g.requireGBFeature(deviceID, "强制关键帧", func(c GBCapabilities) bool {
+		if err := g.requireGBFeature(deviceID, "iframe_control", "强制关键帧", func(c GBCapabilities) bool {
 			return c.IFrameControl
 		}); err != nil {
 			return err
 		}
 		req.IFrameCmd = "Send"
 	case deviceControlActionDragZoomIn:
-		if err := g.requireGBFeature(deviceID, "拉框放大", func(c GBCapabilities) bool {
+		if err := g.requireGBFeature(deviceID, "drag_zoom_control", "拉框放大", func(c GBCapabilities) bool {
 			return c.DragZoomControl
 		}); err != nil {
 			return err
@@ -347,7 +347,7 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 			LengthY:   in.DragZoom.LengthY,
 		}
 	case deviceControlActionDragZoomOut:
-		if err := g.requireGBFeature(deviceID, "拉框缩小", func(c GBCapabilities) bool {
+		if err := g.requireGBFeature(deviceID, "drag_zoom_control", "拉框缩小", func(c GBCapabilities) bool {
 			return c.DragZoomControl
 		}); err != nil {
 			return err
@@ -364,7 +364,9 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 			LengthY:   in.DragZoom.LengthY,
 		}
 	case deviceControlActionHomePosition:
-		if err := g.requireGBVersionAtLeast(deviceID, gbVersion2016, "看守位控制(HomePosition)"); err != nil {
+		if err := g.requireGBFeature(deviceID, "home_position", "看守位控制(HomePosition)", func(c GBCapabilities) bool {
+			return c.HomePosition
+		}); err != nil {
 			return err
 		}
 		home := &deviceControlA23HomePosition{}
@@ -383,7 +385,9 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		}
 		req.HomePosition = home
 	case deviceControlActionPTZPrecise:
-		if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "PTZ精准控制"); err != nil {
+		if err := g.requireGBFeature(deviceID, "ptz_position", "PTZ精准控制", func(c GBCapabilities) bool {
+			return c.PTZPosition
+		}); err != nil {
 			return err
 		}
 		if in.PTZPrecise == nil {
@@ -398,7 +402,9 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 			Zoom: in.PTZPrecise.Zoom,
 		}
 	case deviceControlActionFormatSDCard:
-		if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "存储卡格式化控制"); err != nil {
+		if err := g.requireGBFeature(deviceID, "sdcard", "存储卡格式化控制", func(c GBCapabilities) bool {
+			return c.SDCard
+		}); err != nil {
 			return err
 		}
 		if in.SDCardID < 0 {

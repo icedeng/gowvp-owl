@@ -103,6 +103,7 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	stream.DeviceID = in.Channel.DeviceID
 	stream.ChannelID = in.Channel.ChannelID
 	stream.StreamID = in.Channel.ID
+	stream.mediaServer = in.SMS
 
 	// SSRC 在打开 ZLM RTP 端口前生成并绑定，避免不同设备向同一端口串流。
 	ssrc := g.getSSRC(0)
@@ -150,6 +151,8 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	log.Debug("2. 发送SDP请求", "port", resp.Port)
 	if err := g.sipPlayPush2(ch, in, resp.Port, stream); err != nil {
 		log.Debug("2.1. 发送SDP请求失败", "err", err)
+		g.streams.CompareAndDelete(key, stream)
+		_, _ = g.sms.CloseRTPServer(in.SMS, zlm.CloseRTPServerRequest{StreamID: in.Channel.ID})
 		return err
 	}
 

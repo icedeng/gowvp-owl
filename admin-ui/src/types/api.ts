@@ -15,6 +15,7 @@ export interface DeviceExt {
   gb_version_source?: string
   gb_version_updated_at?: number
   gb_version_capabilities?: string[]
+  gb_disabled_capabilities?: string[]
   gb_last_unsupported_command?: string
   gb_last_unsupported_version?: string
   gb_last_unsupported_updated_at?: number
@@ -197,6 +198,40 @@ export interface SipConfig {
   ptz_weak_confirm?: boolean
   device_history?: { max_records?: number; max_days?: number }
   direct_tcp_download?: Record<string, unknown>
+  upstreams?: SipUpstream[]
+}
+
+export interface SipUpstream {
+  name: string
+  enabled: boolean
+  server_id: string
+  domain?: string
+  host: string
+  port: number
+  local_id?: string
+  local_domain?: string
+  local_host?: string
+  password?: string
+  version: "1.0" | "1.1" | "2.0" | "3.0"
+  expires: number
+  keepalive_interval: number
+  shared_channels?: string[]
+  channel_id_map?: Record<string, string>
+  media_allowed_cidrs?: string[]
+}
+
+export interface CascadePlatformStatus {
+  name: string
+  server_id: string
+  address: string
+  configured_version: string
+  negotiated_version?: string
+  state: string
+  registered: boolean
+  last_register_at?: string
+  last_keepalive_at?: string
+  expires_at?: string
+  last_error?: string
 }
 
 export interface SipAccessInfo {

@@ -43,6 +43,25 @@ func TestCopyHeadersSkipsNilClone(t *testing.T) {
 	}
 }
 
+func TestNewRequestFromResponseFallsBackToToWithoutContact(t *testing.T) {
+	toURI, err := ParseURI("sip:34020000001320000001@192.0.2.10:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := NewRequest("", MethodInvite, toURI, DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodInvite).
+		SetFrom(&Address{URI: toURI.Clone(), Params: NewParams()}).
+		SetTo(&Address{URI: toURI.Clone(), Params: NewParams()}).
+		AddVia(&ViaHop{Host: "192.0.2.20", Port: NewPort(5060), Params: NewParams()}).
+		Build(), nil)
+	response := NewResponseFromRequest("", request, 200, "OK", nil)
+
+	ack := NewRequestFromResponse(MethodACK, response)
+	if ack.Recipient() == nil || ack.Recipient().String() != toURI.String() {
+		t.Fatalf("ACK recipient = %v; want %s", ack.Recipient(), toURI)
+	}
+}
+
 func TestServerRunContextSafelyRecoversPanic(t *testing.T) {
 	srv := NewServer(&Address{})
 	ctx := &Context{
@@ -56,4 +75,13 @@ func TestServerRunContextSafelyRecoversPanic(t *testing.T) {
 	}
 
 	srv.runContextSafely(ctx)
+}
+
+func TestZeroContextSetInitializesCache(t *testing.T) {
+	ctx := &Context{}
+	ctx.Set("worker", "cascade")
+	value, ok := ctx.Get("worker")
+	if !ok || value != "cascade" {
+		t.Fatalf("zero Context cache value = %v, %v", value, ok)
+	}
 }

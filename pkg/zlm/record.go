@@ -112,6 +112,8 @@ type MediaItem struct {
 	ReaderCount      int          `json:"readerCount"`
 	TotalReaderCount int          `json:"totalReaderCount"`
 	AliveSecond      int          `json:"aliveSecond"`
+	BytesSpeed       uint64       `json:"bytesSpeed"`
+	TotalBytes       uint64       `json:"totalBytes"`
 	Tracks           []MediaTrack `json:"tracks"`
 }
 

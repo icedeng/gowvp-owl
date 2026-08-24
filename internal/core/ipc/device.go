@@ -170,6 +170,12 @@ func (c Core) EditDevice(ctx context.Context, in *EditDeviceInput, id string) (*
 		if in.GBVersion != nil {
 			applyManualGBVersion(&b.Ext, manualVersion)
 		}
+		if in.GBDisabledCapabilities != nil {
+			if b.GetType() != TypeGB28181 {
+				return reason.ErrBadRequest.SetMsg("gb_disabled_capabilities 仅适用于 GB28181 设备")
+			}
+			b.Ext.GBDisabledCapabilities = append([]string(nil), (*in.GBDisabledCapabilities)...)
+		}
 
 		protocol, ok := c.protocols[b.GetType()]
 		if ok {

@@ -1,0 +1,52 @@
+GB/T 28181—2022
+Faia eA A RL ParentID HES-F Ala ParentID WEA.
+b) Fl eH Fe AY AR OL TT SL HA ARTI AEB BER
+1D) Fa Ae AY ParentID BEE We ONS LB BL TOP BY A BE aS» TR
+BB Sa Fe] AE Wp ARIS AF UU TAD Sk J PK HL HB BR So A] 2 Be i a A Sei EY
+IB Bea LF IIT FR CS EE Ba Ak SAB LT OO a A aD
+2) WSR AS De) Fe sak De] oe HT ha SREB BL es BASE Et UH HE HE AR BL A EO —
+AHEAQBL A RSH IE ParentID HE AY Be iS YI HE HER OLIN I FS HE
+3) TF AHI iS AYER BL A SEIS. BE EE fs — 4S RAS “TEAR CON)” SW FE
+HUBER BLAR AS “TERR CON)”. AM" FA COFP)”. CER ARAS EME Gt ae AY,
+ASE FA Status BAC AY MLE
+SAE AEE A Ga al LH...
+H.2.2 QATAR REE ARRER
+
+LCF GRE STP INVITE i828 SF FOF AE USL 2S i SF OP 6 FE I PA RD Be A STP. iz
+Ft TELEA SK AB LATE X-RoutePath Be. HAT ict ak ALI 2 i EE oe EP OF EE. X-Route-
+Path # Bowe MUL H.3.1.
+
+We EG EA ATR 20 iB Jak Fe BO De TEL A NE AS OP Sia 1S YS JM AE X-RoutePath F
+Bees A THT TT CF" 0 BR) STE a Bae eG BLE AS a X-RoutePath FBS. MASP A Wt FE He
+Oe] J TA 3) RF I BE X-RoutePath F Be. F Bel AS ak ANB Be SE FY Bi SA OO ASE BS
+
+PLAT Fd kT BE SA Go| L422.
+
+H.2.3 QAR AMBEREBRARER
+
+LBP ERIK SIP INVITE #8 5 2 97 OR at F BOP a Uf 5 HY Gi et YR IN X-PreferredPath 3 #bF
+Be FE I RA OF AE. X-PreferredPath # Bie ML H.3.2.
+
+°F HENS) SIP INVITE if oR I. WR AE 4E X-PreferredPath LF PE. AACE A TERRE Z AY UDG
+ACE 84'S MA X-PreferredPath "iil BR. 98 ia 48 2 i428 H) X-PreferredPath 4 a2 HY B —PF 6 s AU
+ERD VARI A ae SCA RE SH 2 ERS 7 RT Be SE
+
+WRF Gc BY AY STP INVITE ik 2 HF X-PreferredPath 3 F BE, WU FLEE BR UG eH Pe Ae. YE
+ATH IE AE EI HE EL SLAB OP BE PE — OF BG ATER. PRR 7 RR
+SIP INVITE iff if . AS E48 F X-PreferredPath KF PL.
+
+PLL Td FE EBA EAE P| L438.
+
+H.3 SS SIP Li REL
+H.3.1 X-RoutePath sje %
+
+SIP INVITE #0 Sil 2o ih GE 9e a OE ir AY we ke Fe TE, AT 4) STP "RK SE BE X-
+RoutePath. A F#m Sik EA AF AE. AGG IETF RFC 3261 fy BNF if 2&8. KI
+
+X-RoutePath = "X-RoutePath:" platform-id-list
+
+platform-id-list = platform-id * ("-" platform-id-list )
+
+J£f platform-id J2 58 11.12.13 P29 200 MY 20 fee A aS (SB WLS ED.
+
+134

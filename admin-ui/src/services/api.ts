@@ -2,7 +2,7 @@ import { http } from './http'
 import type {
   ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord,
   ApiChannel as Channel, DeviceExt, GbMetrics, HealthInfo, MediaServer, MonthlyStats,
-  PlayResult, SipAccessInfo, SipConfig, TimelineRange, VersionCheck, Zone,
+  CascadePlatformStatus, PlayResult, SipAccessInfo, SipConfig, TimelineRange, VersionCheck, Zone,
   ResourceStats,
 } from '../types/api'
 
@@ -120,6 +120,7 @@ export const api = {
   historyStart: (id: string, body: Record<string, unknown>) => http.post(`/channels/${encodeURIComponent(id)}/history/start`, body),
   historyStop: (id: string, body: Record<string, unknown>) => http.post(`/channels/${encodeURIComponent(id)}/history/stop`, body),
   historyControl: (id: string, body: Record<string, unknown>) => http.post(`/channels/${encodeURIComponent(id)}/history/control`, body),
+  historyStatus: (id: string) => http.get(`/channels/${encodeURIComponent(id)}/history/status`),
   queryDeviceRecords: (id: string, body: Record<string, unknown>) => http.post<Record<string, unknown>>(`/channels/${encodeURIComponent(id)}/records/query`, body),
 
   events: (params?: ListParams) => http.get<ApiPage<ApiEvent>>('/events', { params }),
@@ -139,6 +140,7 @@ export const api = {
   editMediaServer: (id: string, body: Record<string, unknown>) => http.put<MediaServer>(`/media_servers/${encodeURIComponent(id)}`, body),
   configInfo: () => http.get<{ sip?: SipConfig; access_info?: SipAccessInfo }>('/configs/info'),
   updateSip: (body: SipConfig) => http.put('/configs/info/sip', body),
+  cascadeStatuses: () => http.get<{ items?: CascadePlatformStatus[] }>('/gb28181/cascade/status'),
 }
 
 export function apiUrl(path: string) {

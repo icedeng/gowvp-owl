@@ -30,11 +30,18 @@ type HistoryInput struct {
 	EndAt      time.Time
 	Mode       string // Playback 或 Download
 	Transport  string // rtp 或 direct_tcp；空值保持原 RTP 行为
+	// DownloadSpeed 是 2014 附录 F 定义的整数下载倍速，0 表示不携带、由设备按 1 倍速处理。
+	DownloadSpeed int
+	// sessionKey/streamID 仅供平台级联创建相互隔离的历史媒体会话；普通 API 保持原有按通道单会话行为。
+	sessionKey string
+	streamID   string
 }
 
 type StopHistoryInput struct {
 	Channel *ipc.Channel
 	Mode    string
+	// sessionKey 为空时使用历史兼容键。
+	sessionKey string
 }
 
 type ControlHistoryInput struct {
@@ -44,10 +51,19 @@ type ControlHistoryInput struct {
 	Action  string  // 结构化控制动作：play/pause/speed/seek
 	Scale   float64 // speed 动作速度倍率
 	SeekAt  int64   // seek 动作目标时间（unix 秒）
+	// sessionKey 为空时使用历史兼容键。
+	sessionKey string
 }
 
 func historyKey(mode, deviceID, channelID string) string {
 	return "history:" + mode + ":" + deviceID + ":" + channelID
+}
+
+func resolveHistorySessionKey(mode, deviceID, channelID, sessionKey string) string {
+	if key := strings.TrimSpace(sessionKey); key != "" {
+		return key
+	}
+	return historyKey(mode, deviceID, channelID)
 }
 
 // StartHistory 启动历史回放或文件下载会话（9.8/9.9）。
@@ -86,27 +102,40 @@ func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
 	ch.device.playMutex.Lock()
 	defer ch.device.playMutex.Unlock()
 
-	key := historyKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID)
+	key := resolveHistorySessionKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID, in.sessionKey)
 	stream, existed := g.streams.LoadOrStore(key, &Streams{})
 	if existed {
-		_ = g.stopHistoryNoLock(ch, &StopHistoryInput{Channel: in.Channel, Mode: in.Mode})
+		_ = g.stopHistoryNoLock(ch, &StopHistoryInput{Channel: in.Channel, Mode: in.Mode, sessionKey: key})
 		stream = &Streams{}
 		g.streams.Store(key, stream)
 	}
+	streamID := strings.TrimSpace(in.streamID)
+	if streamID == "" {
+		streamID = in.Channel.ID
+	}
 	stream.DeviceID = in.Channel.DeviceID
 	stream.ChannelID = in.Channel.ChannelID
-	stream.StreamID = in.Channel.ID
+	stream.StreamID = streamID
+	stream.mediaServer = in.SMS
+	stream.sessionKey = key
+	stream.S = in.StartAt
+	stream.E = in.EndAt
 
 	resp, err := g.sms.OpenRTPServer(in.SMS, zlm.OpenRTPServerRequest{
 		TCPMode:  in.StreamMode,
-		StreamID: in.Channel.ID,
+		StreamID: streamID,
 	})
 	if err != nil {
 		return err
 	}
 
 	if err := g.sipInviteHistory(ch, in, resp.Port, stream); err != nil {
+		_, _ = g.sms.CloseRTPServer(in.SMS, zlm.CloseRTPServerRequest{StreamID: streamID})
+		g.streams.CompareAndDelete(key, stream)
 		return err
+	}
+	if in.Mode == historyModeDownload {
+		g.registerRTPDownload(stream)
 	}
 	// 历史播放/下载属于播放态，复用播放状态字段。
 	_ = g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, true)
@@ -124,10 +153,11 @@ func (g *GB28181API) StopHistory(ctx context.Context, in *StopHistoryInput) erro
 	}
 	ch.device.playMutex.Lock()
 	defer ch.device.playMutex.Unlock()
-	defer func() {
+	err := g.stopHistoryNoLock(ch, in)
+	if !g.hasActiveChannelStream(in.Channel.DeviceID, in.Channel.ChannelID) {
 		_ = g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, false)
-	}()
-	return g.stopHistoryNoLock(ch, in)
+	}
+	return err
 }
 
 // ControlHistory 通过 INFO 下发历史会话控制命令（9.8/9.9）。
@@ -142,7 +172,7 @@ func (g *GB28181API) ControlHistory(_ context.Context, in *ControlHistoryInput) 
 	if !ok {
 		return ErrChannelNotExist
 	}
-	key := historyKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID)
+	key := resolveHistorySessionKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID, in.sessionKey)
 	stream, ok := g.streams.Load(key)
 	if !ok || stream.Resp == nil {
 		return fmt.Errorf("history session not found")
@@ -169,35 +199,65 @@ func (g *GB28181API) buildHistoryControlCmd(stream *Streams, in *ControlHistoryI
 	if strings.TrimSpace(in.Cmd) != "" {
 		return in.Cmd, nil
 	}
+	version := GBVersion10
+	if g != nil && g.svr != nil && g.svr.memoryStorer != nil && in != nil && in.Channel != nil {
+		version = g.getDeviceGBProtocolVersion(in.Channel.DeviceID)
+	}
+	return buildHistoryControlCmdForVersion(stream, in, version)
+}
+
+func buildHistoryControlCmdForVersion(stream *Streams, in *ControlHistoryInput, version GBProtocolVersion) (string, error) {
+	if stream == nil || in == nil {
+		return "", fmt.Errorf("invalid history control input")
+	}
 	action := strings.ToLower(strings.TrimSpace(in.Action))
 	if action == "" {
 		return "", fmt.Errorf("history control requires cmd or action")
 	}
-	stream.CseqNo++
-	cseq := stream.CseqNo
+	cseq := stream.nextCSeq()
+	protocol := historyControlProtocolVersion(version)
 	switch action {
 	case "play", "resume":
-		return fmt.Sprintf("PLAY MANSRTSP/1.0\r\nCSeq: %d\r\n\r\n", cseq), nil
+		if version.AtLeast(GBVersion11) {
+			return fmt.Sprintf("PLAY %s\r\nCSeq: %d\r\nRange: npt=now-\r\n\r\n", protocol, cseq), nil
+		}
+		return fmt.Sprintf("PLAY %s\r\nCSeq: %d\r\n\r\n", protocol, cseq), nil
 	case "pause":
-		return fmt.Sprintf("PAUSE MANSRTSP/1.0\r\nCSeq: %d\r\n\r\n", cseq), nil
+		if version.AtLeast(GBVersion11) {
+			return fmt.Sprintf("PAUSE %s\r\nCSeq: %d\r\nPauseTime: now\r\n\r\n", protocol, cseq), nil
+		}
+		return fmt.Sprintf("PAUSE %s\r\nCSeq: %d\r\n\r\n", protocol, cseq), nil
 	case "speed":
 		if in.Scale == 0 {
 			return "", fmt.Errorf("history speed action requires scale")
 		}
-		return fmt.Sprintf("PLAY MANSRTSP/1.0\r\nCSeq: %d\r\nScale: %.2f\r\n\r\n", cseq, in.Scale), nil
+		return fmt.Sprintf("PLAY %s\r\nCSeq: %d\r\nScale: %.2f\r\n\r\n", protocol, cseq, in.Scale), nil
 	case "seek":
 		if in.SeekAt <= 0 {
 			return "", fmt.Errorf("history seek action requires seek_at")
 		}
-		seek := time.Unix(in.SeekAt, 0).In(time.Local).Format("20060102T150405")
-		return fmt.Sprintf("PLAY MANSRTSP/1.0\r\nCSeq: %d\r\nRange: clock=%s-\r\n\r\n", cseq, seek), nil
+		if stream.S.IsZero() || stream.E.IsZero() {
+			return "", fmt.Errorf("history seek requires session time range")
+		}
+		offset := in.SeekAt - stream.S.Unix()
+		if offset < 0 || in.SeekAt > stream.E.Unix() {
+			return "", fmt.Errorf("history seek_at is outside session range")
+		}
+		return fmt.Sprintf("PLAY %s\r\nCSeq: %d\r\nRange: npt=%d-\r\n\r\n", protocol, cseq, offset), nil
 	default:
 		return "", fmt.Errorf("unsupported history action: %s", action)
 	}
 }
 
+func historyControlProtocolVersion(version GBProtocolVersion) string {
+	if version.AtLeast(GBVersion11) {
+		return "RTSP/1.0"
+	}
+	return "MANSRTSP/1.0"
+}
+
 func (g *GB28181API) stopHistoryNoLock(ch *Channel, in *StopHistoryInput) error {
-	key := historyKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID)
+	key := resolveHistorySessionKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID, in.sessionKey)
 	stream, ok := g.streams.Load(key)
 	if !ok || stream.Resp == nil {
 		return nil
@@ -207,6 +267,9 @@ func (g *GB28181API) stopHistoryNoLock(ch *Channel, in *StopHistoryInput) error 
 	}
 	if !g.streams.CompareAndDelete(key, stream) {
 		return nil
+	}
+	if in.Mode == historyModeDownload && !stream.DirectTCP {
+		g.finishRTPDownload(stream, rtpDownloadStopped, "stopped_by_user")
 	}
 	return g.sendHistoryBYE(ch, stream)
 }
@@ -222,15 +285,36 @@ func (g *GB28181API) sendHistoryBYE(ch *Channel, stream *Streams) error {
 	if err != nil {
 		return err
 	}
-	_, err = sipResponse(tx)
-	return err
+	_, responseErr := sipResponse(tx)
+	if stream.mediaServer != nil && g.sms != nil {
+		_, closeErr := g.sms.CloseRTPServer(stream.mediaServer, zlm.CloseRTPServerRequest{StreamID: stream.StreamID})
+		if responseErr == nil {
+			responseErr = closeErr
+		}
+	}
+	return responseErr
+}
+
+func (g *GB28181API) hasActiveChannelStream(deviceID, channelID string) bool {
+	if g == nil || g.streams == nil {
+		return false
+	}
+	active := false
+	g.streams.Range(func(_ string, stream *Streams) bool {
+		if stream != nil && !stream.Stop && stream.DeviceID == deviceID && stream.ChannelID == channelID {
+			active = true
+			return false
+		}
+		return true
+	})
+	return active
 }
 
 func (g *GB28181API) startDirectTCPHistory(ctx context.Context, ch *Channel, in *HistoryInput) error {
 	if in.Mode != historyModeDownload {
 		return fmt.Errorf("direct TCP transport is only valid for Download")
 	}
-	if err := g.requireGBFeature(in.Channel.DeviceID, "2014 直接 TCP 文件下载", func(c GBCapabilities) bool {
+	if err := g.requireGBFeature(in.Channel.DeviceID, "direct_tcp_download", "2014 直接 TCP 文件下载", func(c GBCapabilities) bool {
 		return c.DirectTCPDownload
 	}); err != nil {
 		return err
@@ -307,16 +391,17 @@ func (g *GB28181API) sipInviteDirectTCPHistory(ch *Channel, in *HistoryInput, st
 	}
 	ssrc := g.getSSRC(1)
 	body, err := buildGBSDP(gbSDPInput{
-		Version:     g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
-		SessionName: historyModeDownload,
-		ChannelID:   ch.ChannelID,
-		URI:         fmt.Sprintf("%s:3", ch.ChannelID),
-		IP:          ip4str,
-		Port:        port,
-		StartAt:     in.StartAt,
-		EndAt:       in.EndAt,
-		SSRC:        ssrc,
-		DirectTCP:   true,
+		Version:       g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
+		SessionName:   historyModeDownload,
+		ChannelID:     ch.ChannelID,
+		URI:           fmt.Sprintf("%s:3", ch.ChannelID),
+		IP:            ip4str,
+		Port:          port,
+		StartAt:       in.StartAt,
+		EndAt:         in.EndAt,
+		SSRC:          ssrc,
+		DirectTCP:     true,
+		DownloadSpeed: in.DownloadSpeed,
 	})
 	if err != nil {
 		return directTCPDownloadOffer{}, err
@@ -407,16 +492,17 @@ func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, s
 	}
 	ssrc := g.getSSRC(1)
 	body, err := buildGBSDP(gbSDPInput{
-		Version:     g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
-		SessionName: in.Mode,
-		ChannelID:   ch.ChannelID,
-		URI:         fmt.Sprintf("%s:0", ch.ChannelID),
-		IP:          ip4str,
-		Port:        port,
-		StreamMode:  in.StreamMode,
-		StartAt:     in.StartAt,
-		EndAt:       in.EndAt,
-		SSRC:        ssrc,
+		Version:       g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
+		SessionName:   in.Mode,
+		ChannelID:     ch.ChannelID,
+		URI:           fmt.Sprintf("%s:0", ch.ChannelID),
+		IP:            ip4str,
+		Port:          port,
+		StreamMode:    in.StreamMode,
+		StartAt:       in.StartAt,
+		EndAt:         in.EndAt,
+		SSRC:          ssrc,
+		DownloadSpeed: in.DownloadSpeed,
 	})
 	if err != nil {
 		return err
@@ -442,12 +528,25 @@ func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, s
 	stream.T = 1
 	stream.DeviceID = in.Channel.DeviceID
 	stream.ChannelID = in.Channel.ChannelID
-	stream.StreamID = in.Channel.ID
+	if stream.StreamID == "" {
+		stream.StreamID = in.Channel.ID
+	}
+	stream.mediaServer = in.SMS
 	stream.Status = 0
 	stream.Stop = false
 	stream.ssrc = ssrc
 	if callID, ok := resp.CallID(); ok {
 		stream.CallID = normalizeCallID(callID)
+	}
+	if in.Mode == historyModeDownload {
+		size, known, parseErr := parseRTPDownloadFileSize(resp.Body())
+		if parseErr != nil {
+			_ = tx.Request(sip.NewRequestFromResponse(sip.MethodACK, resp))
+			_ = g.sendHistoryBYE(ch, stream)
+			return parseErr
+		}
+		stream.FileSize = size
+		stream.FileSizeKnown = known
 	}
 	return tx.Request(sip.NewRequestFromResponse(sip.MethodACK, resp))
 }

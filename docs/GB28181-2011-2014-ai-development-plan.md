@@ -6,7 +6,7 @@
 
 目标是把总体方案拆成可独立开发、测试、审查和回滚的任务包。第一阶段只覆盖平台作为 SIP 服务端接入下级 IPC/NVR/网关，不包含完整上下级平台级联。
 
-当前执行状态（2026-08-10）：P0～P4、AI-501、AI-502 和 AI-601 已完成代码与自动化/模拟器验证，全仓 test/vet/race 已通过；AI-503 真实设备矩阵和 AI-602 部署灰度/回滚仍需按 [四版本联调执行手册](testing/gb28181-interoperability-runbook.md) 在目标环境执行。AI-403 采用 Owl 内置 TCP 客户端方案，保持默认关闭并按设备白名单启用。
+当前执行状态（2026-08-25）：P0～P4、AI-501 和 AI-502 已完成代码与自动化/模拟器验证；AI-401 已按附录 Q 修正为接收者主动 INVITE，并补齐 ZLMediaKit RTP 发送媒体闭环。设备编辑接口支持 `gb_disabled_capabilities`，可对厂商固件缺失的单项能力做关闭覆盖。AI-503 真实设备矩阵和 AI-602 部署灰度/回滚仍需按 [四版本联调执行手册](testing/gb28181-interoperability-runbook.md) 在目标环境执行。AI-403 采用 Owl 内置 TCP 客户端方案，保持默认关闭并按设备白名单启用。每次代码更新后必须重新执行 AI-601，历史通过记录不能替代当前工作树验证。
 
 ## 2. 团队和职责
 
@@ -307,7 +307,7 @@ pkg/gbs/testdata/gb28181/3.0/
 
 实现原则：以宽松解析兼容厂商缺失可选字段；下行 XML 只发送 1.0 定义字段。
 
-完成标准：SIP 模拟流程完成 REGISTER → Keepalive → Catalog → INVITE → ACK → BYE，并覆盖录像和报警。
+完成标准：SIP 模拟流程完成 REGISTER → Keepalive → Catalog，并覆盖平台主动点播使用的 1.0 UDP SDP、录像和报警。非广播入向 INVITE 属于完整级联被叫流程，不得用回显 SDP 代替 B2BUA 和媒体转发实现。
 
 估算：AI 2 天，人工复核 0.5 天。
 
@@ -384,9 +384,9 @@ pkg/gbs/testdata/gb28181/3.0/
 - `pkg/gbs/subscribe_source.go`
 - `pkg/gbs/server.go`
 
-实现：生成和解析 `Event: Catalog;id=...`；支持初始订阅、续订、取消、Expires、NOTIFY 和确认；保留 Alarm/MobilePosition 现有行为。
+实现：生成和解析 `Event: Catalog;id=...`；支持初始订阅、续订、取消、Expires、NOTIFY 和确认；Alarm/MobilePosition/PTZPosition 上级订阅应自动映射到下级设备/通道，按引用计数复用并在退订、过期或上级移除时释放；Alarm 复用 A.2.4 的级别、方式、类型和时间过滤参数。
 
-测试：订阅状态机、过期清理、重复订阅和不同事件并存。
+测试：订阅状态机、过期清理、重复订阅、不同事件并存、上下级续订/退订桥接、多个上级复用同一下级订阅以及 Alarm 过滤。
 
 估算：AI 2～3 天，人工复核 0.75 天。
 
@@ -404,9 +404,9 @@ pkg/gbs/testdata/gb28181/3.0/
 - `pkg/gbs/server.go`
 - Broadcast 请求/应答模型
 
-实现：MESSAGE Broadcast 通知 → 200 → Broadcast Response → 200 → INVITE → 200 → ACK；1.1 只启用广播，2.0/3.0 保留对讲。
+实现：MESSAGE Broadcast 通知 → 200 → Broadcast Response → 200 → 语音接收者主动 INVITE 语音发送者 → 平台启动 ZLM RTP 发送 → 200 SDP → ACK；BYE、断流、超时和主动停止均回收 SIP/RTP 资源。`1.1` 使用 `PT 96/PS/90000`，`2.0/3.0` 使用 `PT 8/PCMA/8000`。语音源必须是 ZLMediaKit 中已就绪的 G.711 A-law 流；LALMAX 不支持时返回明确错误，不允许静默成功。
 
-测试：完整状态机、拒绝、超时、重复 Response 和中途停止。
+测试：完整状态机、版本化 SDP、RTP 启停、拒绝、超时、重复 Response、ACK/BYE 和中途停止。
 
 估算：AI 2～3 天，人工复核 0.75 天。
 
@@ -460,7 +460,7 @@ ADR 必须说明：
 
 依赖：G4。
 
-检查：注册协商、RTP over TCP、语音对讲、2022 升级/抓拍/精确 PTZ/存储卡/A.4。对 golden 变化逐项解释，禁止直接批量更新快照掩盖回归。
+检查：注册协商、RTP over TCP、语音对讲、2022 升级/抓拍/精确 PTZ/巡航轨迹/存储卡/A.4，以及 ConfigDownload 的标准 `SnapShotConfig` 节点。对 golden 变化逐项解释，禁止直接批量更新快照掩盖回归。
 
 验证：
 

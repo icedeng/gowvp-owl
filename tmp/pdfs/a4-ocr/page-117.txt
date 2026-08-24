@@ -1,0 +1,39 @@
+GB/T 28181—2022
+C2 HF RIP HMSREARH
+C.2.1 MPEG-4 Wanita) RIP #}38
+MPEG-~4 PUSHES RTP S38 Ht sti 7-4 IETF RFC 3016 pri iy AG MLE
+MPEG-4 PLE RTP (49 th HK HY (Payload Type) LS HER: M IETF RFC 3551 fit de 5 AY
+BASHA (96 ~ 127) PEER BEM GEN 97.
+C.2.2 4.264 MsATTAY RTP He
+H.264 HY RTP #e fap Ht FF IETF RFC 3984 AY ASE RUE
+H.264 PLE RTP 19 BAH (Payload Type) iS Uk EM TETF RFC 3551 Pie 5 WIA
+WEB (96 ~127) FP HEF EI EY 98,
+C.2.3 SVAC MAHA RIP B35
+SVAC PULA RTP ak forts st Se IETF RFC 3984 fy HIIC ALE
+SVAC HUME RTP £219 ht ARIE MY (Payload Type) frif 4s HEE KM TETF RFC 3551 pide 5 ah
+ASHE FE (96 ~ 127) PEPE EDGE 99,
+C.2.4 AeA RTP Be
+TEE LOBE Tit PR A pe MEY RTP PRUETT HT fl.
+FE RTP £0 Pr SBE BAR WL EST SL AS WL. ELI Te] 1S EE 20 ms~180 ms ZI.
+a) G.711 ERB. G.711 A HIB HTS RTP HN HMA (Payload Type) i BBA MF
+(JU IETF RFC 3551 # 4):
+1) AAEM CPT) 8;
+2) 4i%4% PK Cencoding name) :PCMA;
+3) INBHSIK clock rate):8 kHz:
+4) WHR. 1;
+5) SDP #fiia ft'm”¢ BEA media” Hi : audio.
+b) SVAC #5 EBM, SVAC iF HiT RTP f2 HY 1 HAS HY (Payload Type) fy B BM ee
+an :
+1) RBA CPT) 20;
+2) Hats % Bk Cencoding name) :SVACA;
+3) IN #RBILRR Clock rate) :8 kHz;
+4) jie. 1;
+5) SDP 4fis tm” BEA“ media” Hi: audio.
+c) G.723.1 WEBB. G.723.1 EAS RTP (49 fh IE (Payload Type) HY B Mw we S He
+IETF RFC 3551 # 4 FAY G.723, SMF
+1) ABA CPT) 24;
+2) 4iS% Bs (encoding name) :G723;
+3) INBRSTFE Clock rate):8 kHzs
+4) iM. 1;
+5) SDP 4fii ft'm”¢ BEA“ media” Hi : audio.
+110

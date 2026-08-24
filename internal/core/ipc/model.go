@@ -63,8 +63,10 @@ type DeviceExt struct {
 	// GBVersionSource 记录 effective version 的来源：manual/header/legacy/default。
 	GBVersionSource string `json:"gb_version_source,omitempty"`
 	// GBVersionUpdatedAt 是最近一次版本协商时间（Unix 秒）。
-	GBVersionUpdatedAt         int64    `json:"gb_version_updated_at,omitempty"`
-	GBVersionCapabilities      []string `json:"gb_version_capabilities,omitempty"`
+	GBVersionUpdatedAt    int64    `json:"gb_version_updated_at,omitempty"`
+	GBVersionCapabilities []string `json:"gb_version_capabilities,omitempty"`
+	// GBDisabledCapabilities 按设备关闭已知但设备固件未实现的国标扩展能力。
+	GBDisabledCapabilities     []string `json:"gb_disabled_capabilities,omitempty"`
 	GBLastUnsupportedCommand   string   `json:"gb_last_unsupported_command,omitempty"`
 	GBLastUnsupportedVersion   string   `json:"gb_last_unsupported_version,omitempty"`
 	GBLastUnsupportedUpdatedAt int64    `json:"gb_last_unsupported_updated_at,omitempty"`

@@ -269,6 +269,21 @@ func (d *ZLMDriver) CloseRTPServer(ctx context.Context, ms *MediaServer, req *zl
 	return engine.CloseRTPServer(*req)
 }
 
+func (d *ZLMDriver) StartSendRTP(ctx context.Context, ms *MediaServer, req *zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error) {
+	engine := d.withConfig(ms)
+	return engine.StartSendRTP(*req)
+}
+
+func (d *ZLMDriver) StartSendRTPTalk(ctx context.Context, ms *MediaServer, req *zlm.StartSendRTPTalkRequest) (*zlm.StartSendRTPResponse, error) {
+	engine := d.withConfig(ms)
+	return engine.StartSendRTPTalk(*req)
+}
+
+func (d *ZLMDriver) StopSendRTP(ctx context.Context, ms *MediaServer, req *zlm.StopSendRTPRequest) (*zlm.StopSendRTPResponse, error) {
+	engine := d.withConfig(ms)
+	return engine.StopSendRTP(*req)
+}
+
 func (d *ZLMDriver) CloseStreams(ctx context.Context, ms *MediaServer, req *zlm.CloseStreamsRequest) (*zlm.CloseStreamsResponse, error) {
 	engine := d.withConfig(ms)
 	return engine.CloseStreams(*req)

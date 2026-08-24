@@ -1,0 +1,38 @@
+GB/T 28181—2022
+aA Pi: X-RoutePath: 65010000002000000001-65010200002000000001-65010205002000000001
+H.3.2  X-PreferredPath 4a EZ
+SIP INVITE (058 23 i 2 97 HFK HA HT 2G AY SIP PJ SF BE X-PreferredPath , fi] F248 ay HM aE
+SASF AE. AG IETF RFC 3261 8 BNP ite SK BH ROW
+X-PreferredPath = "X-PreferredPath:" platform-id-list
+platform-id-list = platform-id * ( "-" platform-id-list )
+Str platform-id #38 11.12.13 fz 200 fy 20 Lae A Has (SB WBE ED
+AP: X-PreferredPath: 65010000002000000001-65010200002000000001-65010205002000000001
+H4 B@RRRMERIE
+H4.1 BRUNKE ARERR RSE
+Avan (ile LH Bit as Soa Ry EA OA ak lel ae an i] . an AL .2 ors.
+6) cae.
+Ef IHC (ParentID=B) 4 rl
+‘Eft AD (ParentID=B) (4) tone
+4 Hae = 4 ASIC ¥ fF ATIE (ParentID=C)
+tei Gene PYM” S45 SRE CParentID-O\ _HEIRHLM (ParentID-E)
+#84@101M (ParentID=E)
+(3)
+6A ASD a) ay ,
+‘ff ASGHE (ParentID=D) Ve ASE FG Fl vse
+HUGHLM (ParentID=E) BUGHIM (ParentID-E) (ALM (ParentID-E)
+——> RFRA tte >
+SEs PA RT aR OF A es ER OL RL
+AH.2 HRUNRERRERARETB
+SHO A EL Sak De 2 Ah 6) DE GB HERE AR PDE A A AY ESR Le 1.
+KRU. BEERS RO) BRM
+Ya A at B ALY A BACH Afi. HK Parenld FE
+JE ECD PRUE A C 094 MLE ParentID=B 22a OE BD Aire
+34) ESRI C(ParentID=B) ad FF A067 SLE ParentID=B 2278 OE BASE BYP
+Fa We a BUTE aC
+NAb PE 3) PSE A D A EA HL. ParentID=B 2 an IF AF ain Fy
+324 ESRI D(ParentID=B) J sii PHURAE A D 1917 BE ParendD=B 278 OF AACE BY FR
+ea HAE A BPE a D
+KE 98 (3) ALCL) POE OE Wa. OF ParentID  & 3% @ C MD Hyd
+5¢ HH ECParentID=C/D) SABRES) ACD PE A E A fi. GIR ParentID fy &F A C Al D fi S85
+3 dep RDF a OC ak DPR A E
+135

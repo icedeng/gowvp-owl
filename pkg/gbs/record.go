@@ -18,7 +18,16 @@ type RecordQueryInput struct {
 }
 
 // QueryRecordList 查询设备录像目录（RecordInfo）
-func (g *GB28181API) QueryRecordList(_ context.Context, in *RecordQueryInput) (*Records, error) {
+func (g *GB28181API) QueryRecordList(ctx context.Context, in *RecordQueryInput) (*Records, error) {
+	items, err := g.queryRecordItems(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	records := transRecordItems(items, in.Start, in.End)
+	return &records, nil
+}
+
+func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput) ([]RecordItem, error) {
 	if in == nil || in.DeviceID == "" || in.ChannelID == "" {
 		return nil, errors.New("invalid record query input")
 	}
@@ -56,11 +65,13 @@ func (g *GB28181API) QueryRecordList(_ context.Context, in *RecordQueryInput) (*
 		g.recordResponses.Cancel(recordKey)
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), in.Timeout)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, in.Timeout)
 	defer cancel()
-	result := g.recordResponses.Wait(ctx, recordKey)
-	records := transRecordItems(result.Items, in.Start, in.End)
-	return &records, nil
+	result := g.recordResponses.Wait(waitCtx, recordKey)
+	return result.Items, nil
 }
 
 // MessageRecordInfoResponse 目录列表
@@ -77,13 +88,15 @@ type RecordItem struct {
 	// DeviceID 设备编号
 	DeviceID string `xml:"DeviceID" bson:"DeviceID" json:"DeviceID"`
 	// Name 设备名称
-	Name      string `xml:"Name" bson:"Name" json:"Name"`
-	FilePath  string `xml:"FilePath" bson:"FilePath" json:"FilePath"`
-	Address   string `xml:"Address" bson:"Address" json:"Address"`
-	StartTime string `xml:"StartTime" bson:"StartTime" json:"StartTime"`
-	EndTime   string `xml:"EndTime" bson:"EndTime" json:"EndTime"`
-	Secrecy   int    `xml:"Secrecy" bson:"Secrecy" json:"Secrecy"`
-	Type      string `xml:"Type" bson:"Type" json:"Type"`
+	Name       string `xml:"Name" bson:"Name" json:"Name"`
+	FilePath   string `xml:"FilePath" bson:"FilePath" json:"FilePath"`
+	Address    string `xml:"Address" bson:"Address" json:"Address"`
+	StartTime  string `xml:"StartTime" bson:"StartTime" json:"StartTime"`
+	EndTime    string `xml:"EndTime" bson:"EndTime" json:"EndTime"`
+	Secrecy    int    `xml:"Secrecy" bson:"Secrecy" json:"Secrecy"`
+	Type       string `xml:"Type" bson:"Type" json:"Type"`
+	RecorderID string `xml:"RecorderID" bson:"RecorderID" json:"RecorderID,omitempty"`
+	FileSize   string `xml:"FileSize" bson:"FileSize" json:"FileSize,omitempty"`
 }
 
 func (g *GB28181API) sipMessageRecordInfo(ctx *sip.Context) {

@@ -1,158 +1,5 @@
 basePath: /
 definitions:
-  api.AIBoundingBox:
-    properties:
-      x_max:
-        example: 360
-        type: integer
-      x_min:
-        example: 120
-        type: integer
-      y_max:
-        example: 500
-        type: integer
-      y_min:
-        example: 80
-        type: integer
-    type: object
-  api.AIDetection:
-    properties:
-      area:
-        description: 边界框像素面积
-        example: 35800
-        type: integer
-      box:
-        allOf:
-        - $ref: '#/definitions/api.AIBoundingBox'
-        description: 像素坐标边界框
-      confidence:
-        description: 置信度（0.0-1.0）
-        example: 0.92
-        type: number
-      label:
-        description: 物体类别
-        example: person
-        type: string
-      norm_box:
-        allOf:
-        - $ref: '#/definitions/api.AINormBox'
-        description: 归一化边界框
-    type: object
-  api.AIDetectionInput:
-    properties:
-      camera_id:
-        description: 摄像头 ID
-        example: GB_34020000001320000001
-        type: string
-      detections:
-        description: 检测结果列表
-        items:
-          $ref: '#/definitions/api.AIDetection'
-        type: array
-      snapshot:
-        description: Base64 编码的快照（JPEG）
-        type: string
-      snapshot_height:
-        description: 快照高度
-        example: 1080
-        type: integer
-      snapshot_width:
-        description: 快照宽度
-        example: 1920
-        type: integer
-      timestamp:
-        description: Unix 时间戳 (毫秒)
-        type: string
-    type: object
-  api.AIGlobalStats:
-    properties:
-      active_streams:
-        description: 活跃流数量
-        example: 8
-        type: integer
-      total_detections:
-        description: 总检测次数
-        example: 1234
-        type: integer
-      uptime_seconds:
-        description: 运行时间（秒）
-        example: 3600
-        type: integer
-    type: object
-  api.AIKeepaliveInput:
-    properties:
-      message:
-        description: 附加消息
-        example: alive
-        type: string
-      stats:
-        allOf:
-        - $ref: '#/definitions/api.AIGlobalStats'
-        description: 全局统计信息
-      timestamp:
-        description: Unix 时间戳（毫秒）
-        example: 1710931200000
-        type: integer
-    type: object
-  api.AINormBox:
-    properties:
-      h:
-        description: 高度
-        example: 0.32
-        type: number
-      w:
-        description: 宽度
-        example: 0.18
-        type: number
-      x:
-        description: 中心点 X 坐标
-        example: 0.42
-        type: number
-      "y":
-        description: 中心点 Y 坐标
-        example: 0.51
-        type: number
-    type: object
-  api.AIStartedInput:
-    properties:
-      message:
-        description: 启动消息
-        example: service started
-        type: string
-      timestamp:
-        description: Unix 时间戳（毫秒）
-        example: 1710931200000
-        type: integer
-    type: object
-  api.AIStoppedInput:
-    properties:
-      camera_id:
-        description: 摄像头 ID
-        example: GB_34020000001320000001
-        type: string
-      message:
-        description: 详细信息
-        example: manual stop
-        type: string
-      reason:
-        description: 停止原因（user_requested/error）
-        example: user_requested
-        type: string
-      timestamp:
-        description: Unix 时间戳 (毫秒)
-        type: string
-    type: object
-  api.AIWebhookOutput:
-    properties:
-      code:
-        description: 错误代码，0 表示成功
-        example: 0
-        type: integer
-      msg:
-        description: 消息
-        example: success
-        type: string
-    type: object
   api.Data:
     properties:
       Buffer:
@@ -230,6 +77,19 @@ definitions:
         example: 50155
         type: integer
     type: object
+  api.SIPAccessInfo:
+    properties:
+      domain:
+        type: string
+      id:
+        type: string
+      password:
+        type: string
+      port:
+        type: integer
+      server_ip:
+        type: string
+    type: object
   api.SwaggerAIDisableOutput:
     properties:
       enabled:
@@ -264,6 +124,13 @@ definitions:
         example: 1920
         type: integer
     type: object
+  api.SwaggerCascadeStatusesResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/gbs.CascadePlatformStatus'
+        type: array
+    type: object
   api.SwaggerChannelsResponse:
     properties:
       items:
@@ -275,10 +142,23 @@ definitions:
     type: object
   api.SwaggerConfigInfoOutput:
     properties:
+      access_info:
+        allOf:
+        - $ref: '#/definitions/api.SIPAccessInfo'
+        description: 设备接入所需的精简地址信息
       sip:
         allOf:
         - $ref: '#/definitions/api.SwaggerSIPConfig'
         description: 当前系统使用的 SIP 配置
+    type: object
+  api.SwaggerDeviceHistoryConfig:
+    properties:
+      max_days:
+        example: 30
+        type: integer
+      max_records:
+        example: 1000
+        type: integer
     type: object
   api.SwaggerDevicesResponse:
     properties:
@@ -289,23 +169,107 @@ definitions:
       total:
         type: integer
     type: object
+  api.SwaggerDirectTCPDownloadConfig:
+    properties:
+      allow_address_mismatch:
+        example: false
+        type: boolean
+      allowed_address_cidrs:
+        items:
+          type: string
+        type: array
+      device_allowlist:
+        items:
+          type: string
+        type: array
+      device_concurrency:
+        example: 1
+        type: integer
+      dial_timeout:
+        description: 纳秒
+        example: 5000000000
+        type: integer
+      enabled:
+        example: false
+        type: boolean
+      first_byte_timeout:
+        description: 纳秒
+        example: 15000000000
+        type: integer
+      global_concurrency:
+        example: 4
+        type: integer
+      idle_timeout:
+        description: 纳秒
+        example: 30000000000
+        type: integer
+      max_file_size:
+        example: 10737418240
+        type: integer
+      offer_port:
+        example: 9
+        type: integer
+      retain_days:
+        example: 7
+        type: integer
+      storage_dir:
+        example: ./configs/downloads/gb28181
+        type: string
+      total_timeout:
+        description: 纳秒
+        example: 7200000000000
+        type: integer
+    type: object
+  api.SwaggerDirectTCPDownloadState:
+    properties:
+      channel_id:
+        example: "34020000001320000002"
+        type: string
+      completed_at:
+        type: string
+      device_id:
+        example: "34020000001320000001"
+        type: string
+      end_reason:
+        example: size_reached
+        type: string
+      error:
+        type: string
+      file_size:
+        example: 2097152
+        type: integer
+      file_size_known:
+        example: true
+        type: boolean
+      output:
+        type: string
+      received:
+        example: 1048576
+        type: integer
+      session_id:
+        example: call-id@example
+        type: string
+      sha256:
+        type: string
+      size_verified:
+        example: false
+        type: boolean
+      started_at:
+        example: "2026-08-10T19:30:00+08:00"
+        type: string
+      status:
+        example: receiving
+        type: string
+      updated_at:
+        example: "2026-08-10T19:30:05+08:00"
+        type: string
+    type: object
   api.SwaggerErrorResponse:
     properties:
       msg:
         description: 错误信息
         example: 参数错误
         type: string
-    type: object
-  api.SwaggerEventsResponse:
-    properties:
-      items:
-        description: 事件列表
-        items:
-          $ref: '#/definitions/event.Event'
-        type: array
-      total:
-        description: 总记录数
-        type: integer
     type: object
   api.SwaggerGBAppendixA4Output:
     properties:
@@ -423,6 +387,10 @@ definitions:
         description: 订阅或统计类查询的时间间隔
         example: 60
         type: integer
+      number:
+        description: 巡航轨迹编号（0 或 1）
+        example: 0
+        type: integer
       start:
         description: 起始时间，Unix 秒
         example: 1710864000
@@ -507,6 +475,41 @@ definitions:
         example: 60
         type: integer
     type: object
+  api.SwaggerGBMetricsSnapshot:
+    properties:
+      catalog_partial:
+        type: integer
+      catalog_requests:
+        type: integer
+      catalog_success:
+        type: integer
+      catalog_timeouts:
+        type: integer
+      direct_tcp_bytes:
+        type: integer
+      direct_tcp_cancelled:
+        type: integer
+      direct_tcp_completed:
+        type: integer
+      direct_tcp_failed:
+        type: integer
+      direct_tcp_started:
+        type: integer
+      media_disconnects:
+        type: integer
+      media_failures:
+        type: integer
+      media_requests:
+        type: integer
+      media_success:
+        type: integer
+      register_failures:
+        type: integer
+      register_requests:
+        type: integer
+      register_success:
+        type: integer
+    type: object
   api.SwaggerGBPTZCmdParamInput:
     properties:
       cruise_track_name:
@@ -532,23 +535,6 @@ definitions:
         description: 精确变倍值
         example: 2
         type: number
-    type: object
-  api.SwaggerLoginKeyOutput:
-    properties:
-      key:
-        description: Base64 编码的 PEM 公钥，用于前端加密登录数据
-        type: string
-    type: object
-  api.SwaggerMediaServersResponse:
-    properties:
-      items:
-        description: 流媒体服务器列表
-        items:
-          $ref: '#/definitions/sms.MediaServer'
-        type: array
-      total:
-        description: 总记录数
-        type: integer
     type: object
   api.SwaggerMessageResponse:
     properties:
@@ -676,19 +662,16 @@ definitions:
         example: 6
         type: integer
     type: object
-  api.SwaggerRecordingsResponse:
-    properties:
-      items:
-        description: 录像列表
-        items:
-          $ref: '#/definitions/recording.Recording'
-        type: array
-      total:
-        description: 总记录数
-        type: integer
-    type: object
   api.SwaggerSIPConfig:
     properties:
+      device_history:
+        allOf:
+        - $ref: '#/definitions/api.SwaggerDeviceHistoryConfig'
+        description: 设备注册与心跳历史保留策略
+      direct_tcp_download:
+        allOf:
+        - $ref: '#/definitions/api.SwaggerDirectTCPDownloadConfig'
+        description: 2014 附录 O 裸 TCP 下载配置
       domain:
         description: SIP 域
         example: "3402000000"
@@ -697,10 +680,18 @@ definitions:
         description: 是否启用 SIP-TLS
         example: false
         type: boolean
+      host:
+        description: 对设备和上级宣告的 SIP 地址
+        example: 192.0.2.20
+        type: string
       id:
         description: 平台 20 位国标编码
         example: "34020000002000000001"
         type: string
+      log:
+        allOf:
+        - $ref: '#/definitions/api.SwaggerSIPLog'
+        description: SIP 报文日志配置；更新时可省略以保留当前值
       password:
         description: 注册鉴权密码
         example: "123456"
@@ -733,21 +724,104 @@ definitions:
         description: SIP-TLS 监听端口
         example: 5061
         type: integer
+      upstreams:
+        description: 上级 GB/T 28181 平台配置
+        items:
+          $ref: '#/definitions/api.SwaggerSIPUpstream'
+        type: array
+    type: object
+  api.SwaggerSIPLog:
+    properties:
+      dir:
+        example: ./logs/sip
+        type: string
+      enabled:
+        example: false
+        type: boolean
+      max_age:
+        description: 纳秒
+        example: 604800000000000
+        type: integer
+      rotation_size:
+        example: 50
+        type: integer
+      rotation_time:
+        description: 纳秒
+        example: 43200000000000
+        type: integer
+    type: object
+  api.SwaggerSIPUpstream:
+    properties:
+      channel_id_map:
+        additionalProperties:
+          type: string
+        type: object
+      domain:
+        example: "3402000000"
+        type: string
+      enabled:
+        example: true
+        type: boolean
+      expires:
+        example: 3600
+        type: integer
+      host:
+        example: 192.0.2.30
+        type: string
+      keepalive_interval:
+        description: 纳秒，与配置 API 的 Duration 数值一致
+        example: 60000000000
+        type: integer
+      local_domain:
+        example: "3402000000"
+        type: string
+      local_host:
+        example: 192.0.2.20
+        type: string
+      local_id:
+        example: "34020000002000000002"
+        type: string
+      media_allowed_cidrs:
+        example:
+        - 198.51.100.0/24
+        items:
+          type: string
+        type: array
+      name:
+        example: provincial
+        type: string
+      password:
+        example: "123456"
+        type: string
+      port:
+        example: 5060
+        type: integer
+      server_id:
+        example: "34020000002000000001"
+        type: string
+      shared_channels:
+        items:
+          type: string
+        type: array
+      version:
+        example: "1.1"
+        type: string
     type: object
   api.SwaggerSnapshotLinkOutput:
     properties:
+      attempts:
+        description: 抓拍尝试过程，成功走 fallback 时会包含前序失败原因
+        items:
+          type: string
+        type: array
       link:
         description: 可直接访问的快照地址
         example: http://127.0.0.1:9900/channels/xxx/snapshot?token=xxx
         type: string
-    type: object
-  api.SwaggerTimelineResponse:
-    properties:
-      items:
-        description: 时间轴片段列表
-        items:
-          $ref: '#/definitions/recording.TimeRange'
-        type: array
+      method:
+        description: 本次快照来源：cache/gb28181_device_upload/ffmpeg/zlm_get_snap/url/none
+        example: ffmpeg
+        type: string
     type: object
   api.SwaggerZonesResponse:
     properties:
@@ -865,6 +939,10 @@ definitions:
         description: 原始控制命令透传值
         example: PLAY
         type: string
+      download_speed:
+        description: 下载整数倍速；仅 mode=download，0 表示默认 1 倍速
+        example: 4
+        type: integer
       end_at:
         description: 结束时间，Unix 秒；start 时必填
         example: 1710950400
@@ -885,25 +963,9 @@ definitions:
         description: 开始时间，Unix 秒；start 时必填
         example: 1710864000
         type: integer
-    type: object
-  api.loginInput:
-    properties:
-      data:
-        description: |-
-          Username string `json:"username" binding:"required"`
-          Password string `json:"password" binding:"required"`
-        example: Base64(RSA-OAEP(username/password JSON))
-        type: string
-    required:
-    - data
-    type: object
-  api.loginOutput:
-    properties:
-      token:
-        description: 登录成功后返回的 JWT
-        type: string
-      user:
-        description: 当前登录用户名
+      transport:
+        description: rtp 或 direct_tcp；direct_tcp 仅支持 1.1 下载
+        example: rtp
         type: string
     type: object
   api.onPublishInput:
@@ -1290,28 +1352,50 @@ definitions:
     type: object
   api.subscribeInput:
     properties:
+      alarm_method:
+        description: Alarm 方式组合，0 为全部
+        example: "25"
+        type: string
+      alarm_type:
+        description: Alarm 类型，仅 2016/2022（2.0/3.0）
+        example: "2"
+        type: string
+      cancel:
+        description: 是否取消已有订阅
+        example: false
+        type: boolean
+      end_alarm_priority:
+        description: Alarm 终止级别，0 为全部
+        example: "4"
+        type: string
+      end_alarm_time:
+        description: Alarm 终止时间
+        example: 2026-08-25T09:00:00
+        type: string
       event:
-        description: 订阅事件类型，如 alarm/mobile_position/catalog/device_position
+        description: 订阅事件类型，如 alarm/mobile_position/catalog/device_position/ptz_position
         example: alarm
         type: string
       expires:
         description: 订阅有效期，单位秒
         example: 3600
         type: integer
-    type: object
-  api.updateCredentialsInput:
-    properties:
-      password:
-        description: 新密码
-        example: admin
+      interval:
+        description: MobilePosition 上报间隔，单位秒
+        example: 5
+        type: integer
+      start_alarm_priority:
+        description: Alarm 起始级别，0 为全部
+        example: "1"
         type: string
-      username:
-        description: 新用户名
-        example: admin
+      start_alarm_time:
+        description: Alarm 起始时间
+        example: 2026-08-25T08:00:00
         type: string
-    required:
-    - password
-    - username
+      target_id:
+        description: 可选目标通道国标编码；空值订阅设备本身
+        example: "34020000001320000001"
+        type: string
     type: object
   api.upgradeDeviceInput:
     properties:
@@ -1338,54 +1422,87 @@ definitions:
     type: object
   api.voiceControlInput:
     properties:
+      media_server_id:
+        description: 音频源所在媒体服务器；空值使用默认节点
+        example: local
+        type: string
       mode:
         description: 语音模式：talk 对讲，broadcast 广播
         example: talk
         type: string
-    type: object
-  event.EditEventInput:
-    properties:
-      ended_at:
-        description: 事件结束时间 (毫秒时间戳)
+      source_app:
+        description: ZLM 音频源应用名
+        example: live
+        type: string
+      source_id:
+        description: 语音流发送者国标 ID；空值使用本平台 ID
+        example: "34020000002000000001"
+        type: string
+      source_stream:
+        description: ZLM G.711 A-law 音频源流 ID；启动语音时必填
+        example: voice-microphone-1
+        type: string
+      source_vhost:
+        description: ZLM 音频源虚拟主机
+        example: __defaultVhost__
         type: string
     type: object
-  event.Event:
+  gbs.CascadePlatformStatus:
     properties:
-      cid:
-        description: 通道 ID (channel 表的 id)
+      address:
         type: string
-      created_at:
-        description: 创建时间
+      configured_version:
         type: string
-      did:
-        description: 设备 ID (device 表的 id)
+      expires_at:
         type: string
-      ended_at:
-        description: 事件结束时间
+      last_error:
         type: string
-      id:
-        description: 事件 ID
+      last_keepalive_at:
+        type: string
+      last_register_at:
+        type: string
+      name:
+        type: string
+      negotiated_version:
+        type: string
+      registered:
+        type: boolean
+      server_id:
+        type: string
+      state:
+        type: string
+    type: object
+  gbs.RTPDownloadState:
+    properties:
+      approximate:
+        type: boolean
+      bytes_speed:
         type: integer
-      image_path:
-        description: 图片相对路径 (cid/年月日时分秒_随机6位.jpg)
+      channel_id:
         type: string
-      label:
-        description: 检测标签 (person, car 等)
+      completed_at:
         type: string
-      model:
-        description: 分析模型名称
+      device_id:
         type: string
-      score:
-        description: 置信度 (0.0-1.0)
+      end_reason:
+        type: string
+      file_size:
+        type: integer
+      file_size_known:
+        type: boolean
+      progress_known:
+        type: boolean
+      progress_percent:
         type: number
+      received:
+        type: integer
+      session_id:
+        type: string
       started_at:
-        description: 事件开始时间
+        type: string
+      status:
         type: string
       updated_at:
-        description: 更新时间
-        type: string
-      zones:
-        description: 检测区域，JSON 格式存储边界框信息
         type: string
     type: object
   ipc.AddChannelInput:
@@ -1429,6 +1546,9 @@ definitions:
         type: string
       port:
         description: port
+        type: integer
+      stream_mode:
+        description: 'StreamMode 指定国标设备的 RTP 收流模式（0: UDP，1: TCP 被动，2: TCP 主动）。'
         type: integer
       type:
         description: 设备类型(ONVIF/GB28181)
@@ -1552,7 +1672,7 @@ definitions:
         description: 心跳间隔
         type: integer
       name:
-        description: 设备名称
+        description: 自定义名称
         type: string
       password:
         type: string
@@ -1586,6 +1706,9 @@ definitions:
     type: object
   ipc.DeviceExt:
     properties:
+      analysis_interval:
+        description: AI 分析间隔（秒），0 表示使用默认值
+        type: number
       enabled_ai:
         description: 是否启用 AI
         type: boolean
@@ -1597,9 +1720,43 @@ definitions:
         items:
           $ref: '#/definitions/ipc.GBAppendixA4Object'
         type: array
-      gb_version:
-        description: GB版本
+      gb_catalog:
+        allOf:
+        - $ref: '#/definitions/ipc.GBCatalogExt'
+        description: GBCatalog 保存 GB/T 28181 目录项扩展和原始 XML，兼容 2014 及厂商私有字段。
+      gb_declared_version:
+        description: GBDeclaredVersion 是设备通过 X-GB-Ver 声明的版本号。
         type: string
+      gb_disabled_capabilities:
+        description: GBDisabledCapabilities 按设备关闭已知但设备固件未实现的国标扩展能力。
+        items:
+          type: string
+        type: array
+      gb_effective_version:
+        description: GBEffectiveVersion 是平台下行实际使用的版本号。
+        type: string
+      gb_last_unsupported_command:
+        type: string
+      gb_last_unsupported_updated_at:
+        type: integer
+      gb_last_unsupported_version:
+        type: string
+      gb_manual_version:
+        description: GBManualVersion 非空时覆盖自动协商；值为空表示恢复自动协商。
+        type: string
+      gb_version:
+        description: GB版本（兼容历史年份值）
+        type: string
+      gb_version_capabilities:
+        items:
+          type: string
+        type: array
+      gb_version_source:
+        description: GBVersionSource 记录 effective version 的来源：manual/header/legacy/default。
+        type: string
+      gb_version_updated_at:
+        description: GBVersionUpdatedAt 是最近一次版本协商时间（Unix 秒）。
+        type: integer
       manufacturer:
         description: 生产厂商
         type: string
@@ -1653,6 +1810,16 @@ definitions:
       device_id:
         description: 20 位国标编号
         type: string
+      gb_disabled_capabilities:
+        description: GBDisabledCapabilities 按设备关闭部分国标能力；nil 表示不修改，空数组表示全部恢复。
+        items:
+          type: string
+        type: array
+      gb_version:
+        description: |-
+          GBVersion 手动指定 GB/T 28181 协议版本；支持 1.0/1.1/2.0/3.0 和历史年份值。
+          nil 表示不修改，空字符串表示清除手动覆盖并恢复自动协商。
+        type: string
       ip:
         description: ip
         type: string
@@ -1693,6 +1860,69 @@ definitions:
         type: string
       updated_at:
         description: 最近更新时间（unix 秒）
+        type: integer
+    type: object
+  ipc.GBCatalogExt:
+    properties:
+      address:
+        type: string
+      block:
+        type: string
+      business_group_id:
+        type: string
+      cert_num:
+        type: string
+      certifiable:
+        type: integer
+      civil_code:
+        type: string
+      direction_type:
+        type: integer
+      end_time:
+        type: string
+      err_code:
+        type: integer
+      info_raw_xml:
+        type: string
+      ip_address:
+        type: string
+      kind:
+        type: string
+      latitude:
+        type: number
+      longitude:
+        type: number
+      owner:
+        type: string
+      parent_id:
+        type: string
+      parental:
+        type: integer
+      password:
+        type: string
+      port:
+        type: integer
+      position_type:
+        type: integer
+      ptz_type:
+        type: integer
+      raw_xml:
+        type: string
+      register_way:
+        type: integer
+      resolution:
+        type: string
+      room_type:
+        type: integer
+      safety_way:
+        type: integer
+      secrecy:
+        type: integer
+      status:
+        type: string
+      supply_light_type:
+        type: integer
+      use_type:
         type: integer
     type: object
   ipc.GBDeviceControlOutput:
@@ -1786,180 +2016,9 @@ definitions:
         description: 区域名称
         type: string
     type: object
-  recording.EditRecordingInput:
-    properties:
-      object_count:
-        description: AI检测对象数量（从event表统计）
-        type: integer
-    type: object
-  recording.MonthlyStatsOutput:
-    properties:
-      days:
-        description: 该月总天数
-        type: integer
-      has_video:
-        description: 位图字符串，如 "10101010..." 第 1 天有录像则第 1 位为 1
-        type: string
-      month:
-        description: 月份
-        type: integer
-      year:
-        description: 年份
-        type: integer
-    type: object
-  recording.Recording:
-    properties:
-      app:
-        description: ZLM 应用名
-        type: string
-      cid:
-        description: 通道 ID (channel.ID)
-        type: string
-      created_at:
-        type: string
-      delete_flag:
-        description: 待删除标记（即将被清理）
-        type: boolean
-      duration:
-        description: 持续时长（秒）
-        type: number
-      ended_at:
-        description: 录像结束时间
-        type: string
-      id:
-        type: integer
-      object_count:
-        description: AI检测对象数量（从event表统计）
-        type: integer
-      path:
-        description: 文件相对路径
-        type: string
-      size:
-        description: 文件大小（字节）
-        type: integer
-      started_at:
-        description: 录像开始时间
-        type: string
-      stream:
-        description: ZLM 流 ID
-        type: string
-      updated_at:
-        type: string
-    type: object
-  recording.TimeRange:
-    properties:
-      delete_flag:
-        description: 待删除标记（已被标记即将清理）
-        type: boolean
-      duration:
-        description: 时长（秒）
-        type: number
-      end_ms:
-        description: 结束时间（毫秒时间戳）
-        type: integer
-      id:
-        description: 录像记录 ID
-        type: integer
-      object_count:
-        description: AI检测对象数量
-        type: integer
-      start_ms:
-        description: 开始时间（毫秒时间戳）
-        type: integer
-    type: object
-  sms.EditMediaServerInput:
-    properties:
-      hook_ip:
-        type: string
-      ip:
-        type: string
-      sdp_ip:
-        type: string
-      secret:
-        description: |-
-          StreamIP          string           `json:"stream_ip"`
-          Ports MediaServerPorts `json:"ports"`
-          AutoConfig        bool             `json:"auto_config"`
-        type: string
-      type:
-        description: lalmax/zlm
-        type: string
-    type: object
-  sms.MediaServer:
-    properties:
-      auto_config:
-        type: boolean
-      created_at:
-        type: string
-      hook_alive_interval:
-        type: integer
-      hook_ip:
-        type: string
-      id:
-        type: string
-      ip:
-        type: string
-      last_keepalive_at:
-        type: string
-      ports:
-        $ref: '#/definitions/sms.MediaServerPorts'
-      record_assist_port:
-        type: integer
-      record_day:
-        type: integer
-      record_path:
-        type: string
-      rtpenable:
-        type: boolean
-      rtpport_range:
-        type: string
-      sdp_ip:
-        type: string
-      secret:
-        type: string
-      send_rtpport_range:
-        type: string
-      status:
-        type: boolean
-      stream_ip:
-        type: string
-      transcode_suffix:
-        type: string
-      type:
-        type: string
-      updated_at:
-        type: string
-    type: object
-  sms.MediaServerPorts:
-    properties:
-      flv:
-        type: integer
-      flvs:
-        type: integer
-      http:
-        type: integer
-      https:
-        type: integer
-      rtmp:
-        type: integer
-      rtmps:
-        type: integer
-      rtpporxy:
-        type: integer
-      rtsp:
-        type: integer
-      rtsps:
-        type: integer
-      ws_flv:
-        type: integer
-      ws_flvs:
-        type: integer
-    type: object
   sms.StreamLiveAddr:
     properties:
       hls:
-        type: string
-      http_flv:
         type: string
       label:
         type: string
@@ -1968,8 +2027,6 @@ definitions:
       rtsp:
         type: string
       webrtc:
-        type: string
-      ws_flv:
         type: string
     type: object
 info:
@@ -1988,119 +2045,6 @@ info:
   title: GoWVP Owl API
   version: 0.0.1
 paths:
-  /ai/events:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        AI 服务上报检测结果。平台会按 `detections` 中每个对象分别落事件记录，并保存快照图片。
-        请求示例：`{ "camera_id":"GB_34020000001320000001", "timestamp":1710931200000, "detections":[{"label":"person","confidence":0.92,"box":{"x_min":120,"y_min":80,"x_max":360,"y_max":500},"area":35800}], "snapshot_width":1920, "snapshot_height":1080 }`
-        成功响应示例：`{ "code": 0, "msg": "success" }`
-      parameters:
-      - description: AI 检测结果
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/api.AIDetectionInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.AIWebhookOutput'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      summary: AI 检测事件回调
-      tags:
-      - AIWebhook
-  /ai/keepalive:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        AI 服务定时上报自身存活状态、运行时长、活跃流数量等统计信息。
-        成功响应示例：`{ "code": 0, "msg": "success" }`
-      parameters:
-      - description: AI 心跳数据
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/api.AIKeepaliveInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.AIWebhookOutput'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      summary: AI 服务心跳回调
-      tags:
-      - AIWebhook
-  /ai/started:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        AI 服务启动完成后回调平台，用于记录 AI 服务已就绪。
-        成功响应示例：`{ "code": 0, "msg": "success" }`
-      parameters:
-      - description: AI 启动数据
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/api.AIStartedInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.AIWebhookOutput'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      summary: AI 服务启动回调
-      tags:
-      - AIWebhook
-  /ai/stopped:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        AI 服务停止某个摄像头分析任务时回调平台，平台据此清理内存状态。
-        成功响应示例：`{ "code": 0, "msg": "success" }`
-      parameters:
-      - description: AI 停止数据
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/api.AIStoppedInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.AIWebhookOutput'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      summary: AI 任务停止回调
-      tags:
-      - AIWebhook
   /app/metrics/api:
     get:
       produces:
@@ -2370,6 +2314,7 @@ paths:
       description: |-
         启动历史回放或历史下载会话。
         `mode` 可选：`playback` 表示回放，`download` 表示下载。
+        `transport=direct_tcp` 仅用于有效版本 1.1 且已加入白名单的附录 O 下载；空值或 `rtp` 保持原链路。
         调用前置条件：1. 通道必须存在；2. 设备在线；3. 目标时间段内存在可用录像；4. 设备支持历史回放或下载。
         失败场景：1. 通道不存在；2. 设备离线；3. 无录像可回放；4. 设备返回协议不支持；5. 会话建立超时。
         请求示例：`{ "mode": "playback", "start_at": 1710864000, "end_at": 1710950400 }`
@@ -2400,6 +2345,32 @@ paths:
       security:
       - BearerAuth: []
       summary: 启动历史会话
+      tags:
+      - Channel
+  /channels/{id}/history/status:
+    get:
+      description: 返回设备在 200 OK SDP 中声明的 filesize，以及 ZLMediaKit 媒体源接收字节统计。由于 RTP/PS
+        封装开销，progress_percent 为近似值。
+      parameters:
+      - description: 通道ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/gbs.RTPDownloadState'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 查询普通 RTP 下载状态
       tags:
       - Channel
   /channels/{id}/history/stop:
@@ -2712,8 +2683,8 @@ paths:
       - application/json
       description: |-
         启动对讲或广播会话
-        调用前置条件：1. 通道存在；2. 设备在线；3. 设备支持语音对讲或广播。
-        失败场景：1. 设备不支持语音能力；2. 会话建立失败；3. 设备离线。
+        调用前置条件：1. 通道存在；2. 设备在线；3. 设备支持语音对讲或广播；4. source_stream 是 ZLMediaKit 中已就绪的 G.711 A-law 音频流。
+        失败场景：1. 设备不支持语音能力；2. 音频源不存在或编码不兼容；3. 会话建立失败；4. 设备离线。
       parameters:
       - description: 通道ID
         in: path
@@ -3002,6 +2973,35 @@ paths:
       security:
       - BearerAuth: []
       summary: 启动历史会话
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/history/status:
+    get:
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/gbs.RTPDownloadState'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 查询普通 RTP 下载状态
       tags:
       - Channel
   /channels/gb28181/{device_id}/{channel_id}/history/stop:
@@ -3742,7 +3742,7 @@ paths:
       - application/json
       description: |-
         执行 GB/T 28181 附录 A.2.4 统一设备查询命令。
-        常见 `action`：`device_status`、`catalog`、`config_download`、`preset_query`、`record_info`、`mobile_position`。
+        常见 `action`：`device_status`、`catalog`、`config_download`、`preset_query`、`record_info`、`mobile_position`、`cruise_track_list`、`cruise_track`、`ptz_position`、`sdcard_status`。
         调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 查询动作被设备支持。
         失败场景：1. `action` 不支持；2. 设备离线；3. 查询超时；4. 2016 协议设备不支持 2022 扩展查询。
         请求示例：`{ "action": "device_status", "target_id": "34020000001320000001", "timeout": 5 }`
@@ -3940,153 +3940,89 @@ paths:
       summary: 查询设备及其通道列表
       tags:
       - Device
-  /events:
+  /gb28181/cascade/status:
     get:
-      parameters:
-      - description: 页码
-        in: query
-        name: page
-        type: integer
-      - description: 每页数量
-        in: query
-        name: size
-        type: integer
-      - description: 设备ID
-        in: query
-        name: did
-        type: string
-      - description: 通道ID
-        in: query
-        name: cid
-        type: string
-      - description: 标签
-        in: query
-        name: label
-        type: string
-      - description: 开始毫秒时间戳
-        in: query
-        name: start_ms
-        type: integer
-      - description: 结束毫秒时间戳
-        in: query
-        name: end_ms
-        type: integer
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/api.SwaggerEventsResponse'
+            $ref: '#/definitions/api.SwaggerCascadeStatusesResponse'
         "400":
           description: Bad Request
           schema:
             $ref: '#/definitions/api.SwaggerErrorResponse'
       security:
       - BearerAuth: []
-      summary: 查询事件列表
+      summary: 查询 GB28181 上级平台级联注册状态
       tags:
-      - Event
-  /events/{id}:
+      - Device
+  /gb28181/downloads/{session_id}:
     delete:
       parameters:
-      - description: 事件ID
+      - description: SIP Call-ID 下载会话 ID
         in: path
-        name: id
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/event.Event'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 删除事件
-      tags:
-      - Event
-    get:
-      parameters:
-      - description: 事件ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/event.Event'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 获取事件详情
-      tags:
-      - Event
-    put:
-      consumes:
-      - application/json
-      parameters:
-      - description: 事件ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      - description: 事件更新参数
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/event.EditEventInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/event.Event'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 修改事件
-      tags:
-      - Event
-  /events/image/{path}:
-    get:
-      parameters:
-      - description: 图片相对路径
-        in: path
-        name: path
+        name: session_id
         required: true
         type: string
       produces:
-      - image/jpeg
+      - application/json
       responses:
         "200":
-          description: JPEG 图片
+          description: OK
           schema:
-            type: file
-        "404":
-          description: Not Found
+            $ref: '#/definitions/api.SwaggerMessageResponse'
+        "400":
+          description: Bad Request
           schema:
             $ref: '#/definitions/api.SwaggerErrorResponse'
-      summary: 获取事件快照图片
+      security:
+      - BearerAuth: []
+      summary: 取消 2014 裸 TCP 下载
       tags:
-      - Event
+      - Channel
+    get:
+      parameters:
+      - description: SIP Call-ID 下载会话 ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerDirectTCPDownloadState'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 查询 2014 裸 TCP 下载状态
+      tags:
+      - Channel
+  /gb28181/metrics:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerGBMetricsSnapshot'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 查询 GB28181 灰度指标
+      tags:
+      - Device
   /gb28181/snapshot:
     post:
       consumes:
@@ -4153,116 +4089,6 @@ paths:
       summary: 健康检查
       tags:
       - System
-  /login:
-    post:
-      consumes:
-      - application/json
-      description: 使用前端 RSA 公钥加密后的用户名密码进行登录，返回 JWT
-      parameters:
-      - description: 登录参数
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/api.loginInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.loginOutput'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      summary: 用户登录
-      tags:
-      - Auth
-  /login/key:
-    get:
-      description: 获取用于登录前端加密的 RSA 公钥，返回 Base64 编码的 PEM 文本
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.SwaggerLoginKeyOutput'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      summary: 获取登录公钥
-      tags:
-      - Auth
-  /media_servers:
-    get:
-      parameters:
-      - description: 页码
-        in: query
-        name: page
-        type: integer
-      - description: 每页数量
-        in: query
-        name: size
-        type: integer
-      - description: IP
-        in: query
-        name: ip
-        type: string
-      - description: 类型
-        in: query
-        name: type
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.SwaggerMediaServersResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 查询流媒体服务器列表
-      tags:
-      - MediaServer
-  /media_servers/{id}:
-    put:
-      consumes:
-      - application/json
-      parameters:
-      - description: 流媒体服务器ID
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: 流媒体服务器参数
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/sms.EditMediaServerInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/sms.MediaServer'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 修改流媒体服务器
-      tags:
-      - MediaServer
   /onvif/discover:
     get:
       description: 使用 SSE 持续输出发现到的 ONVIF 设备事件
@@ -4303,310 +4129,6 @@ paths:
       summary: 反向代理流媒体 HTTP 请求
       tags:
       - MediaServer
-  /recordings:
-    get:
-      description: |-
-        查询本地录像列表，可按通道、应用名、流 ID、时间范围分页筛选。
-        常见场景：录像管理页列表展示、按通道检索录像、按日期范围检索录像。
-        响应中 `items` 为录像记录列表，`total` 为符合条件的总条数。
-        筛选条件说明：`cid` 为通道 ID；`app` 为流应用名；`stream` 为流 ID；`start_ms/end_ms` 为录像开始时间范围过滤。
-        调用前置条件：本地已启用录像并存在录像记录。
-        失败场景：1. 分页参数非法；2. 时间范围非法；3. 数据库查询失败。
-      parameters:
-      - description: 页码
-        in: query
-        name: page
-        type: integer
-      - description: 每页数量
-        in: query
-        name: size
-        type: integer
-      - description: 通道ID
-        in: query
-        name: cid
-        type: string
-      - description: 应用名
-        in: query
-        name: app
-        type: string
-      - description: 流ID
-        in: query
-        name: stream
-        type: string
-      - description: 开始毫秒时间戳
-        in: query
-        name: start_ms
-        type: integer
-      - description: 结束毫秒时间戳
-        in: query
-        name: end_ms
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.SwaggerRecordingsResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 查询录像列表
-      tags:
-      - Recording
-  /recordings/{id}:
-    delete:
-      parameters:
-      - description: 录像ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/recording.Recording'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 删除录像
-      tags:
-      - Recording
-    get:
-      parameters:
-      - description: 录像ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/recording.Recording'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 获取录像详情
-      tags:
-      - Recording
-    put:
-      consumes:
-      - application/json
-      parameters:
-      - description: 录像ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      - description: 录像更新参数
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/recording.EditRecordingInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/recording.Recording'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 修改录像
-      tags:
-      - Recording
-  /recordings/{id}/download:
-    get:
-      parameters:
-      - description: 录像ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      produces:
-      - application/octet-stream
-      responses:
-        "200":
-          description: 录像文件
-          schema:
-            type: file
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 下载录像文件
-      tags:
-      - Recording
-  /recordings/channels/{cid}/index.m3u8:
-    get:
-      description: |-
-        根据通道 ID 和时间范围动态生成 HLS m3u8 播放列表，便于浏览器直接回放录像。
-        请求示例：`/recordings/channels/GB_34020000001320000001/index.m3u8?start_ms=1710864000000&end_ms=1710950400000&token=xxx`
-        返回内容为标准 m3u8 文本，不是 JSON。
-        调用前置条件：指定时间范围内存在录像文件，且录像文件仍在磁盘中。
-        失败场景：1. `cid` 缺失；2. `start_ms/end_ms` 缺失；3. 范围内无录像；4. 录像文件已被清理。
-      parameters:
-      - description: 通道ID
-        in: path
-        name: cid
-        required: true
-        type: string
-      - description: 开始毫秒时间戳
-        in: query
-        name: start_ms
-        required: true
-        type: integer
-      - description: 结束毫秒时间戳
-        in: query
-        name: end_ms
-        required: true
-        type: integer
-      - description: 访问令牌
-        in: query
-        name: token
-        type: string
-      produces:
-      - application/vnd.apple.mpegurl
-      responses:
-        "200":
-          description: M3U8 内容
-          schema:
-            type: string
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 生成录像 HLS 播放列表
-      tags:
-      - Recording
-  /recordings/monthly:
-    get:
-      description: |-
-        返回指定月份每天是否存在录像的位图字符串，适合月历视图快速渲染。
-        请求示例：`/recordings/monthly?cid=GB_34020000001320000001&year=2024&month=3`
-        响应示例：`{ "year": 2024, "month": 3, "days": 31, "has_video": "1110010000000000000000000000000" }`
-        调用前置条件：已存在录像数据。
-        失败场景：1. 年月参数非法；2. 查询失败。
-      parameters:
-      - description: 通道ID
-        in: query
-        name: cid
-        type: string
-      - description: 年份
-        in: query
-        name: year
-        required: true
-        type: integer
-      - description: 月份
-        in: query
-        name: month
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/recording.MonthlyStatsOutput'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 获取月度录像统计
-      tags:
-      - Recording
-  /recordings/timeline:
-    get:
-      description: |-
-        返回某个通道在指定时间范围内的录像时间轴片段，适合前端时间轴控件直接使用。
-        请求示例：`/recordings/timeline?cid=GB_34020000001320000001&start_ms=1710864000000&end_ms=1710950400000`
-        响应示例：`{ "items": [ { "id": 1, "start_ms": 1710864000000, "end_ms": 1710867600000, "duration": 3600 } ] }`
-        调用前置条件：指定通道已有录像记录。
-        失败场景：1. `cid` 缺失；2. 时间范围非法；3. 查询失败。
-      parameters:
-      - description: 通道ID
-        in: query
-        name: cid
-        required: true
-        type: string
-      - description: 开始毫秒时间戳
-        in: query
-        name: start_ms
-        type: integer
-      - description: 结束毫秒时间戳
-        in: query
-        name: end_ms
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.SwaggerTimelineResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 获取录像时间轴
-      tags:
-      - Recording
-  /users:
-    put:
-      consumes:
-      - application/json
-      parameters:
-      - description: 新用户名和密码
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/api.updateCredentialsInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.SwaggerMessageResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.SwaggerErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: 修改登录凭据
-      tags:
-      - Auth
   /webhook/on_play:
     post:
       consumes:

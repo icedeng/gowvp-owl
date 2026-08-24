@@ -1,0 +1,34 @@
+GB/T 28181—2022
+d) G.729 WEBB KR, C.729 HAY RTP Gh Hy MASH (Payload Type) 19 BS BML a MF CHL
+IETF RFC 3551 #4):
+1) HALIM CPT) 2185
+2) ANS % Fk (encoding name) :G729;
+3) INAS Cclock rate) :8kHz;
+4) WI Me.1;
+5) SDP #24“ m” $F Be hy“ media” Ii :audio,
+e) G.722.1 MEBSBM, G.722.1 HAA RTP Hy fh KW (Payload Type) ty B MM SM
+IETF RFC 3551 # 4 "Py G.722. LOK UNF
+1) RRZAEMCPT) 29;
+2) 4i%4% BK Cencoding name) :G722;
+3) INBHSIRK Clock rate):8 kHz:
+4) WHR. 1,
+5) SDP 4fii fem”. BE HY" media” Hi audio.
+f) AAC Hy EBB. AAC FSi RE AY RTP ak tor He SC FF IETF RFC 3640 HY HIG HL AE. BB
+BLE UF
+1) ff IE CPT): KK TETF RFC 3551; 2003 4 5 AY SHAS WEA (96 ~ 127) HEHE, We
+4 102;
+2) 4a%4% Be Cencodingname): AAC;
+3) i BP HL BK (clock rate); BY ISO/IEC 14496-3; 2019 # 1.18 “Sampling Frequency
+Index”. FRA 8kHz5
+4) ii Be: BY ISO/TEC 14496-32019 # 1.17*Channel Configuration” . AHH 1;
+5) SDP 4fi3 41m” BE AY" media” Iii audios
+6) SDP fia” F Bee MAAC Tr Site SUI aE rtpmap Fil fmtp BR. AY AEA AR LE
+IETF RFC 3640, ai) Mi:
+a=rtpmap:102 AAC/8000/1
+a=fmtp: 102 streamtype=5; profile-level-id= 16 ; mode = AAC-hbr; config = 1588; size-
+Length=13;indexLength=3;indexDeltalength=3;constantDuration= 1024,
+C.2.5 H.265 Ma AY RTP He
+H.265 fY RTP 4X fig este FF IETF RFC 7798 HY ISEHL EE
+1.265 MLSE RTP 0.19 4 BAW (Payload Type) fi we : M TETF RFC 3551 Paige 5 BIAS
+WEB (96 ~ 127) PEPE AEM Ey 100. HEHE SE bara BEBE
+11

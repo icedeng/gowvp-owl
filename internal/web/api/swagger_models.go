@@ -5,6 +5,7 @@ import (
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/recording"
 	"github.com/gowvp/owl/internal/core/sms"
+	"github.com/gowvp/owl/pkg/gbs"
 )
 
 // SwaggerMessageResponse 是通用成功响应。
@@ -15,6 +16,11 @@ type SwaggerMessageResponse struct {
 // SwaggerErrorResponse 是通用错误响应。
 type SwaggerErrorResponse struct {
 	Msg string `json:"msg" example:"参数错误"` // 错误信息
+}
+
+// SwaggerCascadeStatusesResponse 是上级平台级联注册状态列表。
+type SwaggerCascadeStatusesResponse struct {
+	Items []gbs.CascadePlatformStatus `json:"items"`
 }
 
 // SwaggerDevicesResponse 是设备列表响应。
@@ -61,11 +67,13 @@ type SwaggerPlayResponse struct {
 
 // SwaggerConfigInfoOutput 是系统配置摘要响应。
 type SwaggerConfigInfoOutput struct {
-	SIP SwaggerSIPConfig `json:"sip"` // 当前系统使用的 SIP 配置
+	SIP        SwaggerSIPConfig `json:"sip"`         // 当前系统使用的 SIP 配置
+	AccessInfo SIPAccessInfo    `json:"access_info"` // 设备接入所需的精简地址信息
 }
 
 // SwaggerSIPConfig 是 Swagger 友好的 SIP 配置模型。
 type SwaggerSIPConfig struct {
+	Host               string                         `json:"host" example:"192.0.2.20"`                // 对设备和上级宣告的 SIP 地址
 	Port               int                            `json:"port" example:"5060"`                      // SIP TCP/UDP 监听端口
 	ID                 string                         `json:"id" example:"34020000002000000001"`        // 平台 20 位国标编码
 	Domain             string                         `json:"domain" example:"3402000000"`              // SIP 域
@@ -77,7 +85,42 @@ type SwaggerSIPConfig struct {
 	StrictSourceCheck  bool                           `json:"strict_source_check" example:"true"`       // 是否严格校验源 IP
 	RequireMessageAuth bool                           `json:"require_message_auth" example:"false"`     // 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
 	PTZWeakConfirm     bool                           `json:"ptz_weak_confirm" example:"false"`         // 是否启用 PTZ 弱确认模式
+	DeviceHistory      SwaggerDeviceHistoryConfig     `json:"device_history"`                           // 设备注册与心跳历史保留策略
 	DirectTCPDownload  SwaggerDirectTCPDownloadConfig `json:"direct_tcp_download"`                      // 2014 附录 O 裸 TCP 下载配置
+	Upstreams          []SwaggerSIPUpstream           `json:"upstreams"`                                // 上级 GB/T 28181 平台配置
+	Log                SwaggerSIPLog                  `json:"log"`                                      // SIP 报文日志配置；更新时可省略以保留当前值
+}
+
+type SwaggerDeviceHistoryConfig struct {
+	MaxRecords int `json:"max_records" example:"1000"`
+	MaxDays    int `json:"max_days" example:"30"`
+}
+
+type SwaggerSIPUpstream struct {
+	Name              string            `json:"name" example:"provincial"`
+	Enabled           bool              `json:"enabled" example:"true"`
+	ServerID          string            `json:"server_id" example:"34020000002000000001"`
+	Domain            string            `json:"domain" example:"3402000000"`
+	Host              string            `json:"host" example:"192.0.2.30"`
+	Port              int               `json:"port" example:"5060"`
+	LocalID           string            `json:"local_id" example:"34020000002000000002"`
+	LocalDomain       string            `json:"local_domain" example:"3402000000"`
+	LocalHost         string            `json:"local_host" example:"192.0.2.20"`
+	Password          string            `json:"password" example:"123456"`
+	Version           string            `json:"version" example:"1.1"`
+	Expires           int               `json:"expires" example:"3600"`
+	KeepaliveInterval int64             `json:"keepalive_interval" example:"60000000000"` // 纳秒，与配置 API 的 Duration 数值一致
+	SharedChannels    []string          `json:"shared_channels"`
+	ChannelIDMap      map[string]string `json:"channel_id_map"`
+	MediaAllowedCIDRs []string          `json:"media_allowed_cidrs" example:"198.51.100.0/24"`
+}
+
+type SwaggerSIPLog struct {
+	Enabled      bool   `json:"enabled" example:"false"`
+	Dir          string `json:"dir" example:"./logs/sip"`
+	MaxAge       int64  `json:"max_age" example:"604800000000000"`      // 纳秒
+	RotationTime int64  `json:"rotation_time" example:"43200000000000"` // 纳秒
+	RotationSize int64  `json:"rotation_size" example:"50"`
 }
 
 // SwaggerDirectTCPDownloadConfig 是 2014 裸 TCP 下载配置。
@@ -90,10 +133,10 @@ type SwaggerDirectTCPDownloadConfig struct {
 	MaxFileSize          int64    `json:"max_file_size" example:"10737418240"`
 	GlobalConcurrency    int      `json:"global_concurrency" example:"4"`
 	DeviceConcurrency    int      `json:"device_concurrency" example:"1"`
-	DialTimeout          string   `json:"dial_timeout" example:"5s"`
-	FirstByteTimeout     string   `json:"first_byte_timeout" example:"15s"`
-	IdleTimeout          string   `json:"idle_timeout" example:"30s"`
-	TotalTimeout         string   `json:"total_timeout" example:"2h"`
+	DialTimeout          int64    `json:"dial_timeout" example:"5000000000"`        // 纳秒
+	FirstByteTimeout     int64    `json:"first_byte_timeout" example:"15000000000"` // 纳秒
+	IdleTimeout          int64    `json:"idle_timeout" example:"30000000000"`       // 纳秒
+	TotalTimeout         int64    `json:"total_timeout" example:"7200000000000"`    // 纳秒
 	AllowAddressMismatch bool     `json:"allow_address_mismatch" example:"false"`
 	AllowedAddressCIDRs  []string `json:"allowed_address_cidrs"`
 }
@@ -271,6 +314,7 @@ type SwaggerGBDeviceQueryInput struct {
 	Timeout    int    `json:"timeout" example:"5"`                      // 等待查询应答超时时间，单位秒
 	ConfigType string `json:"config_type" example:"basic_param"`        // 配置查询时的配置类型
 	Interval   int    `json:"interval" example:"60"`                    // 订阅或统计类查询的时间间隔
+	Number     int    `json:"number" example:"0"`                       // 巡航轨迹编号（0 或 1）
 	Start      int64  `json:"start" example:"1710864000"`               // 起始时间，Unix 秒
 	End        int64  `json:"end" example:"1710950400"`                 // 结束时间，Unix 秒
 }

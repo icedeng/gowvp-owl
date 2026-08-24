@@ -38,7 +38,8 @@ type MemoryStorer interface {
 type Server struct {
 	*sip.Server
 	gb           *GB28181API
-	mediaService sms.Core
+	mediaService cascadeMediaServerResolver
+	cascade      *CascadeManager
 
 	fromAddress  sip.Address
 	memoryStorer MemoryStorer
@@ -51,12 +52,12 @@ func (s *Server) RefreshDeviceVersion(device *ipc.Device) {
 		return
 	}
 	version := deviceProtocolVersion(device.Ext)
-	device.Ext.GBVersionCapabilities = version.CapabilityNames()
+	device.Ext.GBVersionCapabilities = effectiveCapabilityNames(version, device.Ext.GBDisabledCapabilities)
 	if s.memoryStorer == nil {
 		return
 	}
 	if current, ok := s.memoryStorer.Load(device.GetGB28181DeviceID()); ok {
-		current.setGBVersion(version)
+		current.setGBProfile(version, device.Ext.GBDisabledCapabilities)
 	}
 }
 
@@ -105,7 +106,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 		}
 	}
 	svr.Register(api.handlerRegister)
-	msg := svr.Message(api.sipAccessControlMiddleware)
+	msg := svr.Message(api.sipAccessControlMiddleware, api.sipCascadeMessageMiddleware)
 	msg.Handle("Keepalive", api.sipMessageKeepalive)
 	msg.Handle("Catalog", api.sipMessageCatalog)
 	msg.Handle("DeviceInfo", api.sipMessageDeviceInfo)
@@ -116,31 +117,39 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	msg.Handle("MediaStatus", api.sipMessageMediaStatus)
 
 	// 报警既可能由 MESSAGE 上报，也可能由 NOTIFY 上报，二者均接入。
-	notify := svr.Notify(api.sipAccessControlMiddleware)
+	notify := svr.Notify(api.sipAccessControlMiddleware, api.sipNotifySubscriptionState)
 	notify.Handle("Alarm", api.sipNotifyAlarm)
 	notify.Handle("Catalog", api.sipNotifyCatalog)
 	notify.Handle("MobilePosition", api.sipNotifyMobilePosition)
 	notify.Handle("PTZPosition", api.sipMessageQueryGeneric)
 	notify.Handle("DeviceStatus", api.sipMessageQueryGeneric)
 	notify.Handle("PresetQuery", api.sipMessageQueryGeneric)
+	notify.Handle("PersetQuery", api.sipMessageQueryGeneric)
 	notify.Handle("HomePositionQuery", api.sipMessageQueryGeneric)
+	notify.Handle("CruiseTrackListQuery", api.sipMessageQueryGeneric)
+	notify.Handle("CruiseTrackQuery", api.sipMessageQueryGeneric)
 	notify.Handle("SDCardStatus", api.sipMessageQueryGeneric)
 	notify.Handle("ConfigDownload", api.sipMessageQueryGeneric)
 	msg.Handle("Alarm", api.sipMessageAlarm)
 
 	// 9.11 事件源侧：接收上级订阅请求（SUBSCRIBE）。
-	svr.Subscribe(api.sipSubscribeEvent)
+	svr.Subscribe(api.sipAccessControlMiddleware, api.sipSubscribeEvent)
 	// 9.2 被叫侧会话兼容：接收入向 INVITE/BYE/ACK。
 	svr.Handle(sip.MethodInvite, api.sipInviteGeneric)
+	svr.Handle(sip.MethodCancel, api.sipCancelGeneric)
 	svr.Handle(sip.MethodBYE, api.sipByeGeneric)
 	svr.Handle(sip.MethodACK, api.sipAckGeneric)
+	svr.Handle(sip.MethodInfo, api.sipInfoGeneric)
 	// OPTIONS 探测（入向）兼容。
 	svr.Handle(sip.MethodOptions, api.sipOptionsGeneric)
 
 	// A.2.4 查询响应补齐：注册缺失查询命令响应处理。
 	msg.Handle("DeviceStatus", api.sipMessageQueryGeneric)
 	msg.Handle("PresetQuery", api.sipMessageQueryGeneric)
+	msg.Handle("PersetQuery", api.sipMessageQueryGeneric)
 	msg.Handle("HomePositionQuery", api.sipMessageQueryGeneric)
+	msg.Handle("CruiseTrackListQuery", api.sipMessageQueryGeneric)
+	msg.Handle("CruiseTrackQuery", api.sipMessageQueryGeneric)
 	msg.Handle("PTZPosition", api.sipMessageQueryGeneric)
 	msg.Handle("SDCardStatus", api.sipMessageQueryGeneric)
 	msg.Handle("MobilePosition", api.sipMessageQueryGeneric)
@@ -155,16 +164,15 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	}
 	api.svr = &c
 
+	listenPlan := buildSIPListenPlan(cfg.Sip)
 	go svr.ListenUDPServer(fmt.Sprintf(":%d", cfg.Sip.Port))
-	go svr.ListenTCPServer(fmt.Sprintf(":%d", cfg.Sip.Port))
-	if cfg.Sip.EnableTLS {
-		tlsPort := cfg.Sip.TLSPort
-		if tlsPort <= 0 {
-			tlsPort = cfg.Sip.Port
-		}
+	if listenPlan.PlainTCP {
+		go svr.ListenTCPServer(fmt.Sprintf(":%d", cfg.Sip.Port))
+	}
+	if listenPlan.TLS {
 		go func() {
-			if err := svr.ListenTLSServer(fmt.Sprintf(":%d", tlsPort), cfg.Sip.TLSCert, cfg.Sip.TLSKey); err != nil {
-				slog.Error("listen tls server failed", "port", tlsPort, "err", err)
+			if err := svr.ListenTLSServer(fmt.Sprintf(":%d", listenPlan.TLSPort), cfg.Sip.TLSCert, cfg.Sip.TLSKey); err != nil {
+				slog.Error("listen tls server failed", "port", listenPlan.TLSPort, "err", err)
 			}
 		}()
 	}
@@ -177,12 +185,53 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 			break
 		}
 	}
+	c.cascade = NewCascadeManager(&c)
+	if err := c.cascade.Apply(cfg.Sip, cfg.Sip.Upstreams); err != nil {
+		slog.Error("init GB28181 cascade upstreams failed", "err", err)
+	}
 	return &c, func() {
 		c.Close()
 		if previous := sip.SetTrafficLogger(nil); previous != nil {
 			_ = previous.Close()
 		}
 	}
+}
+
+// Close 先注销并停止上级级联，再关闭底层 SIP 监听器。
+func (s *Server) Close() {
+	if s == nil {
+		return
+	}
+	if s.gb != nil {
+		s.gb.close()
+	}
+	if s.cascade != nil {
+		s.cascade.Close()
+	}
+	if s.Server != nil {
+		s.Server.Close()
+	}
+}
+
+type sipListenPlan struct {
+	PlainTCP bool
+	TLS      bool
+	TLSPort  int
+}
+
+func buildSIPListenPlan(cfg conf.SIP) sipListenPlan {
+	plan := sipListenPlan{PlainTCP: true}
+	if !cfg.EnableTLS {
+		return plan
+	}
+	plan.TLS = true
+	plan.TLSPort = cfg.TLSPort
+	if plan.TLSPort <= 0 {
+		plan.TLSPort = cfg.Port
+	}
+	// 同一 TCP 端口不能同时监听明文 SIP 和 TLS；TLS 占用主端口时保留 UDP、关闭明文 TCP。
+	plan.PlainTCP = plan.TLSPort != cfg.Port
+	return plan
 }
 
 // SetConfig 热更新 SIP 配置，用于配置变更时更新 from 地址而无需重启服务
@@ -200,6 +249,29 @@ func (s *Server) SetConfig() {
 	if s.gb.boot != nil {
 		s.gb.applyDirectTCPConfig(s.gb.boot.Sip.DirectTCPDownload)
 	}
+	if s.cascade != nil {
+		if err := s.cascade.Apply(*cfg, cfg.Upstreams); err != nil {
+			slog.Error("reload GB28181 cascade upstreams failed", "err", err)
+		}
+	}
+}
+
+// CascadeStatuses 返回本平台向所有已启用上级平台注册的运行状态。
+func (s *Server) CascadeStatuses() []CascadePlatformStatus {
+	if s == nil || s.cascade == nil {
+		return []CascadePlatformStatus{}
+	}
+	return s.cascade.Statuses()
+}
+
+// ValidateCascadeConfig 在写入配置前校验所有已启用的上级平台参数。
+func (s *Server) ValidateCascadeConfig(cfg conf.SIP) error {
+	fallbackHost := ""
+	if s != nil && s.fromAddress.URI != nil {
+		fallbackHost = s.fromAddress.URI.Host()
+	}
+	_, err := normalizeCascadePlatforms(cfg, cfg.Upstreams, fallbackHost)
+	return err
 }
 
 // startTickerCheck 定时检查离线，通过心跳超时判断设备是否离线
@@ -445,6 +517,13 @@ func (s *Server) DirectTCPDownloadByChannel(deviceID, channelID string) (DirectT
 		return DirectTCPDownloadState{}, false
 	}
 	return s.gb.directDownloads.FindByChannel(deviceID, channelID)
+}
+
+func (s *Server) RTPDownloadByChannel(deviceID, channelID string) (RTPDownloadState, bool) {
+	if s == nil || s.gb == nil {
+		return RTPDownloadState{}, false
+	}
+	return s.gb.RTPDownloadByChannel(deviceID, channelID)
 }
 
 func (s *Server) CancelDirectTCPDownload(sessionID string) bool {

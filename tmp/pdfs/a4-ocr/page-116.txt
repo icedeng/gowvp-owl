@@ -1,0 +1,64 @@
+GB/T 28181—2022
+Wt oR C
+GEE
+EF RIP HMB MABH
+C.1 EF RIP HMB AMA PS HE
+
+JEF RTP fy PS Be CHE ISO/TEC 13818-12019 45 OL #4 Si Tite MW PS HIG PS LA Hh
+PLAY Ty CH He wk RTP fa.
+
+HEAT PS Bye If. WL KE AE AR ST Be — PS fl. ARE PR EIN PS fh nie fl ABE
+(System Header) il PSM(Program Stream Map), ®4é3k All PSM BHF PS 156 2a B—* PES
+Zi.
+
+SHY A HN ST OE HE WT PS fai ky Wn A C.1 tas. FL PESV 2b ALS PES {1.PESA 778i PES £2. HL
+SLAB KREWE PS L2G HP — MRA ABE A PSM, PS 4% AB AF AY As BH BH B WL ISO/TEC
+13818-1 :2019 FP AY AH SCHHIA
+
+[ow [T= T= [om
+header
+AC.1 RBM MAKw PS AA
+
+KAKI LR RE PS GL WS ihe ASS BY TS SL Ae SLAY Ht, TDC stream_id) HUAN F
+
+a) #UM TE TD:0xE0;
+
+b) #8 ID:0xCo.
+
+BEE AS SC PE HNL Fe BLA Lr Sa A SK. PSM PLE MY (stream_type) AY IC{AL AN F :
+
+a) MPEG-4 $i 20x10;
+
+b) H.264 #8 :0x1Bs
+
+oc) SVAC USiE 0x80;
+
+d)  H.265 Bi PE 0x24;
+
+©) G.711 A FREEBIE 10x905
+
+1) G.711 U te SUE 0x91;
+
+g) G.722.1 HH 0x925
+
+h)  G.723.1 #75 10x93;
+
+i) G.729 PF IR HE 10x99 5
+
+3) SVAC #807 :0x9B;
+
+k) AAC #3 :0x0F.
+
+PS fads He 9 FE fh As be RAL EEL TSO/TEC 13818-12019,
+
+PS {49 RTP AERIS Me IETF RFC 2250, RTP HERS MIL OF
+
+a) f #LIEH (payload type) :965
+
+b) 484% Fk (encoding name) : PS;
+
+co) IS BI Cclock rate) :90kHz3
+
+d) SDP fia fm" BE Ay “media” Iii : video,
+
+109

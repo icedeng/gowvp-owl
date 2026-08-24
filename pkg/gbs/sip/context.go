@@ -134,6 +134,9 @@ func (c *Context) String(status int, msg string) {
 }
 
 func (c *Context) Set(k string, v any) {
+	if c.cache == nil {
+		c.cache = make(map[string]any)
+	}
 	c.cache[k] = v
 }
 

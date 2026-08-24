@@ -8,10 +8,10 @@ import (
 	"net"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs/sip"
+	"github.com/ixugo/goddd/pkg/orm"
 )
 
 type GBCatalogItemKind = string
@@ -27,7 +27,7 @@ const (
 
 // MessageDeviceListResponse 设备明细列表返回结构
 type MessageDeviceListResponse struct {
-	XMLName  xml.Name   `xml:"Response"`
+	XMLName  xml.Name
 	CmdType  string     `xml:"CmdType"`
 	SN       int        `xml:"SN"`
 	DeviceID string     `xml:"DeviceID"`
@@ -64,8 +64,8 @@ func allDecimalDigits(value string) bool {
 	if value == "" {
 		return false
 	}
-	for _, r := range value {
-		if !unicode.IsDigit(r) {
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
 			return false
 		}
 	}
@@ -135,8 +135,6 @@ func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 
 	// 命中通用查询等待队列（A.2.4 Catalog 查询等待）。
 	g.resolvePendingDeviceQuery(ctx.DeviceID, msg.CmdType, msg.SN, "", ctx.Request.Body(), msg.DeviceID)
-	// 9.11 事件源侧：目录变化事件推送给订阅方。
-	g.publishEventNotify("Catalog", ctx.DeviceID, ctx.Request.Body())
 
 	ctx.String(200, "OK")
 }
@@ -189,16 +187,23 @@ func (g *GB28181API) QueryCatalog(deviceID string) (err error) {
 		g.metrics.catalogPartial.Add(1)
 		slog.Warn("Catalog response incomplete", "device_id", deviceID, "received", len(result.Items), "expected", result.Expected)
 	}
-	g.saveCatalogChannels(deviceID, result.Items)
+	g.persistCatalogResult(deviceID, result)
 	return nil
 }
 
-func (g *GB28181API) saveCatalogChannels(deviceID string, items []Channels) {
-	if len(items) == 0 {
+// persistCatalogResult 只使用完整目录替换本地快照，避免丢包时把未收到的通道错误标记为离线。
+func (g *GB28181API) persistCatalogResult(deviceID string, result multiResponseResult[Channels]) {
+	if !result.Complete {
 		return
 	}
+	g.saveCatalogChannels(deviceID, result.Items)
+}
+
+func (g *GB28181API) saveCatalogChannels(deviceID string, items []Channels) {
 	if device, ok := g.svr.memoryStorer.Load(deviceID); ok {
+		seen := make(map[string]struct{}, len(items))
 		for _, item := range items {
+			seen[item.ChannelID] = struct{}{}
 			channel := &Channel{ChannelID: item.ChannelID, device: device}
 			domain := g.cfg.GetDomain()
 			if device.To() != nil && device.To().URI != nil && device.To().URI.Host() != "" {
@@ -207,6 +212,28 @@ func (g *GB28181API) saveCatalogChannels(deviceID string, items []Channels) {
 			channel.init(domain)
 			device.Channels.Store(channel.ChannelID, channel)
 		}
+		device.Channels.Range(func(channelID string, _ *Channel) bool {
+			if _, ok := seen[channelID]; !ok {
+				device.Channels.Delete(channelID)
+			}
+			return true
+		})
+	}
+	if len(items) == 0 {
+		if g.core.Store() != nil {
+			if err := g.core.Store().Channel().BatchEdit(context.Background(), "is_online", false, orm.Where("device_id = ?", deviceID)); err != nil {
+				slog.Error("mark Catalog channels offline", "device_id", deviceID, "err", err)
+			}
+			var device ipc.Device
+			if err := g.core.Store().Device().Update(context.Background(), &device, func(current *ipc.Device) error {
+				current.Channels = 0
+				return nil
+			}, orm.Where("device_id = ?", deviceID)); err != nil {
+				slog.Error("reset Catalog channel count", "device_id", deviceID, "err", err)
+			}
+		}
+		go g.notifyCascadeCatalog()
+		return
 	}
 	out := make([]*ipc.Channel, 0, len(items))
 	for _, item := range items {
@@ -225,6 +252,7 @@ func (g *GB28181API) saveCatalogChannels(deviceID string, items []Channels) {
 			slog.Error("SaveChannels", "err", err)
 		}
 	}
+	go g.notifyCascadeCatalog()
 }
 
 type Targeter interface {

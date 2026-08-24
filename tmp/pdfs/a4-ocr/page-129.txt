@@ -1,0 +1,39 @@
+GB/T 28181—2022
+ec) ARBRE (Picture parameter sets) Hf) weighted_pred_flag #l weighted_bipred _ide #j4F
+FO;
+f) AGB eee WY entropy_coding_mode_flag 4 0;
+g) ARS 84E HP num_slice_groups_minus] (YUH O~7;
+h) EQS BE HH AR pie LK 9 4 HK FEF : transform _8x8_mode_flag. pic_scaling_ matrix _
+present_flag, second_chroma_qp_index_offset;
+i) 3K TEF level_prefix AMAF 15.
+BEAR AY UKE — A we al 9 FE SD 4 IT Aa HAL proofile_idc=66 a constraint_set0_flag=1 fi
+HORE DE FEAF level_ide Wi, 9 — 4h sy -F RAE FH cE IH A I.
+F.2.7 0.264 H—-Bete Mit
+F.2.7.1 bee — BEM it
+LORE HE BCPE AHR WL ITU-T H.264( 2019) Bit at C A C.3 AO MLE.
+H.264 AY —BCUE EEE Ht (Conformance bitstream) Ji ij AL ANF UM isk <4 At FF BE 264 LT
+ECR Bik EA PR WS IRL «AS rE BE AT ee ER Di | oR 9 Re AS — Bi
+SE. Ma AS rh 1 TE A AR
+Eee att — BRE AY DE — Ae MR GE GS ME Se RS RD 9 — BE Wk [SEF ITU-T H. 264
+(2019) 4.9L ITU-T H.264.1(2016)
+LSA STE EO Dit — BCE FH BE 9 HK ET FE] ITU-T H.264.2(2016) 48 2 AD RE
+F.2.7.2 fee — Stik
+98 1-28 — BCVEAA VR ML ITU-T H.264(2019) pRRSe CHP C.4 HOME.
+264 fF 6S 25 A — BE HM kL TT U-T 1. 264.1 (2016) HP BY Dy 2 « BoE A AY a — BE FB BA
+FA ITU-T H.264.2(2016) "P48 a2 AY CCE
+TA LA FE PY ABH YL. 26.4 PE AS i ETE SA AH. 26.4 — BE a
+F.3 3 MPEG-4 i BRAKE K
+F.3.1 MPEG-4 ME RAMA
+FAL MPEG-4 by tf fy Oa Si 4 ir 8 “34 ISO/TEC 14496-22004 *H fij 4 XK (Simple Profile) fy
+AH) LSCSO/TEC 14496-2;2004/AMD 2;2005).B| MPEG-4 SP@L5, JH MPEG-4 baie 9 #00 Si ek
+FI SCH SY Vk A AS I AER FB TS SR Ae Tes A) ER SC MPEG -4 6 E fal YK CAd-
+vanced Simple Profile) Aye 77 444i #l B TAL.
+F.3.2 MPEG-4 §#AKHTA
+MPEG-~4 fai RK AY TOE
+a) FERTIL. MEHR PLATA:
+1) EVOP : tit Py 2 FS ES SA JEG OL Oh AE TT « EAT AH A Sn ZK
+2) P-VOP «hig le] 25 BS (19 EG TE AOL ad ok A TT ZETA BY A Zk
+3) AC/DC Prediction: AC/DC fi ;
+4) MV: SERA WA 4 PBR
+5) Unrestricted MV; BEER fil (938 Bh KE
+122

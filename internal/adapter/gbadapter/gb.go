@@ -2,6 +2,7 @@ package gbadapter
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/gowvp/owl/internal/core/ipc"
@@ -98,6 +99,11 @@ func (a *Adapter) StopPlay(ctx context.Context, device *ipc.Device, channel *ipc
 
 // ValidateDevice implements ipc.Protocoler.
 func (a *Adapter) ValidateDevice(ctx context.Context, device *ipc.Device) error {
+	disabled, err := gbs.NormalizeGBDisabledCapabilities(device.Ext.GBDisabledCapabilities)
+	if err != nil {
+		return err
+	}
+	device.Ext.GBDisabledCapabilities = disabled
 	a.gbs.RefreshDeviceVersion(device)
 	return nil
 }
@@ -179,13 +185,14 @@ func (a *Adapter) StartHistory(ctx context.Context, device *ipc.Device, channel 
 		mode = "Download"
 	}
 	return a.gbs.StartHistory(ctx, &gbs.HistoryInput{
-		Channel:    channel,
-		SMS:        svr,
-		StreamMode: device.StreamMode,
-		StartAt:    time.Unix(in.StartAt, 0),
-		EndAt:      time.Unix(in.EndAt, 0),
-		Mode:       mode,
-		Transport:  in.Transport,
+		Channel:       channel,
+		SMS:           svr,
+		StreamMode:    device.StreamMode,
+		StartAt:       time.Unix(in.StartAt, 0),
+		EndAt:         time.Unix(in.EndAt, 0),
+		Mode:          mode,
+		Transport:     in.Transport,
+		DownloadSpeed: in.DownloadSpeed,
 	})
 }
 
@@ -221,10 +228,18 @@ func (a *Adapter) SyncTime(ctx context.Context, device *ipc.Device) error {
 
 func (a *Adapter) Subscribe(ctx context.Context, device *ipc.Device, in *ipc.SubscribeInput) error {
 	return a.gbs.Subscribe(ctx, &gbs.SubscribeInput{
-		DeviceID: device.DeviceID,
-		Event:    in.Event,
-		Expires:  in.Expires,
-		Cancel:   in.Cancel,
+		DeviceID:           device.DeviceID,
+		TargetID:           in.TargetID,
+		Event:              in.Event,
+		Expires:            in.Expires,
+		Cancel:             in.Cancel,
+		StartAlarmPriority: in.StartAlarmPriority,
+		EndAlarmPriority:   in.EndAlarmPriority,
+		AlarmMethod:        in.AlarmMethod,
+		AlarmType:          in.AlarmType,
+		StartAlarmTime:     in.StartAlarmTime,
+		EndAlarmTime:       in.EndAlarmTime,
+		Interval:           in.Interval,
 	})
 }
 
@@ -236,7 +251,11 @@ func (a *Adapter) ProbeOptions(ctx context.Context, device *ipc.Device, in *ipc.
 }
 
 func (a *Adapter) StartVoice(ctx context.Context, device *ipc.Device, channel *ipc.Channel, in *ipc.VoiceControlInput) error {
-	svr, err := a.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
+	mediaServerID := strings.TrimSpace(in.MediaServerID)
+	if mediaServerID == "" {
+		mediaServerID = sms.DefaultMediaServerID
+	}
+	svr, err := a.smsCore.GetMediaServer(ctx, mediaServerID)
 	if err != nil {
 		return err
 	}
@@ -245,10 +264,14 @@ func (a *Adapter) StartVoice(ctx context.Context, device *ipc.Device, channel *i
 		mode = "Broadcast"
 	}
 	return a.gbs.StartVoice(ctx, &gbs.VoiceInput{
-		Channel:    channel,
-		SMS:        svr,
-		StreamMode: device.StreamMode,
-		Mode:       mode,
+		Channel:      channel,
+		SMS:          svr,
+		StreamMode:   device.StreamMode,
+		Mode:         mode,
+		SourceID:     in.SourceID,
+		SourceVHost:  in.SourceVHost,
+		SourceApp:    in.SourceApp,
+		SourceStream: in.SourceStream,
 	})
 }
 
@@ -298,6 +321,7 @@ func (a *Adapter) DeviceQuery(ctx context.Context, device *ipc.Device, in *ipc.G
 		Timeout:    time.Duration(in.Timeout) * time.Second,
 		ConfigType: in.ConfigType,
 		Interval:   in.Interval,
+		Number:     in.Number,
 		Start:      in.Start,
 		End:        in.End,
 	})

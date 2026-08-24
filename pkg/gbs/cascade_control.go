@@ -1,0 +1,195 @@
+package gbs
+
+import (
+	"context"
+	"encoding/hex"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/gowvp/owl/internal/core/ipc"
+	"github.com/gowvp/owl/pkg/gbs/sip"
+)
+
+const cascadeDeviceControlTimeout = 6 * time.Second
+
+func (g *GB28181API) forwardCascadeDeviceControl(worker *cascadeWorker, body []byte) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var request deviceControlA23Request
+	if err := sip.XMLDecode(body, &request); err != nil {
+		return
+	}
+	result := "ERROR"
+	channel, err := g.loadCascadeExposedChannel(ctx, worker.platform, request.DeviceID)
+	if err == nil {
+		downstreamVersion := GBVersion10
+		if g.svr != nil && g.svr.memoryStorer != nil {
+			downstreamVersion = g.getDeviceGBProtocolVersion(channel.DeviceID)
+		}
+		err = validateCascadeDeviceControl(&request, worker.protocolVersion(), downstreamVersion)
+		if err == nil {
+			err = g.validateCascadeDeviceControlOverrides(channel.DeviceID, &request)
+		}
+		if err == nil {
+			control := g.sendCascadeDeviceControlDownstream
+			if g.cascadeDeviceControl != nil {
+				control = g.cascadeDeviceControl
+			}
+			result, err = control(ctx, channel, &request)
+		}
+	}
+	if err != nil {
+		slog.Warn("forward cascade DeviceControl failed", "upstream", worker.platform.name, "device_id", request.DeviceID, "sn", request.SN, "err", err)
+		result = "ERROR"
+	}
+	if !strings.EqualFold(strings.TrimSpace(result), ptzResultOK) {
+		result = "ERROR"
+	} else {
+		result = ptzResultOK
+	}
+	if err := sendCascadeXML(ctx, worker, deviceControlResponse{
+		CmdType: ptzCmdTypeDeviceControl, SN: request.SN, DeviceID: request.DeviceID, Result: result,
+	}); err != nil {
+		slog.Warn("send cascade DeviceControl response failed", "upstream", worker.platform.name, "device_id", request.DeviceID, "sn", request.SN, "err", err)
+	}
+}
+
+func (g *GB28181API) validateCascadeDeviceControlOverrides(deviceID string, request *deviceControlA23Request) error {
+	checks := []struct {
+		name string
+		on   bool
+	}{
+		{name: "iframe_control", on: strings.TrimSpace(request.IFrameCmd) != ""},
+		{name: "drag_zoom_control", on: request.DragZoomIn != nil || request.DragZoomOut != nil},
+		{name: "home_position", on: request.HomePosition != nil},
+		{name: "ptz_position", on: request.PTZPreciseCtrl != nil},
+	}
+	for _, check := range checks {
+		if check.on && g.isDeviceCapabilityDisabled(deviceID, check.name) {
+			return fmt.Errorf("cascade DeviceControl capability %s is disabled for device", check.name)
+		}
+	}
+	return nil
+}
+
+func (g *GB28181API) sendCascadeDeviceControlDownstream(ctx context.Context, channel *ipc.Channel, request *deviceControlA23Request) (string, error) {
+	if g == nil || g.svr == nil || g.svr.memoryStorer == nil || channel == nil || request == nil {
+		return "ERROR", fmt.Errorf("cascade DeviceControl target is unavailable")
+	}
+	target, ok := g.svr.memoryStorer.GetChannel(channel.DeviceID, channel.ChannelID)
+	if !ok || target == nil || target.device == nil || !target.device.IsOnline {
+		return "ERROR", ErrDeviceOffline
+	}
+	downstreamSN := g.nextControlSN()
+	downstream := *request
+	downstream.SN = downstreamSN
+	downstream.DeviceID = channel.ChannelID
+	body, err := sip.XMLEncode(downstream)
+	if err != nil {
+		return "ERROR", err
+	}
+	waitKey := fmt.Sprintf("%s:%d", channel.DeviceID, downstreamSN)
+	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1)}
+	if _, loaded := g.pendingDeviceControl.LoadOrStore(waitKey, pending); loaded {
+		return "ERROR", fmt.Errorf("cascade DeviceControl sequence collision")
+	}
+	defer g.pendingDeviceControl.Delete(waitKey)
+	tx, err := g.svr.wrapRequest(target, sip.MethodMessage, &sip.ContentTypeXML, body)
+	if err != nil {
+		return "ERROR", err
+	}
+	if _, err = sipResponse(tx); err != nil {
+		return "ERROR", err
+	}
+	timer := time.NewTimer(cascadeDeviceControlTimeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return "ERROR", ctx.Err()
+	case response := <-pending.wait:
+		result := strings.ToUpper(strings.TrimSpace(response.Result))
+		if result == "" {
+			result = ptzResultOK
+		}
+		return result, nil
+	case <-timer.C:
+		if g.cfg != nil && g.cfg.PTZWeakConfirm {
+			return ptzResultOK, nil
+		}
+		return "ERROR", fmt.Errorf("%s", ptzTimeoutErrorMessage)
+	}
+}
+
+func validateCascadeDeviceControl(request *deviceControlA23Request, upstream, downstream GBProtocolVersion) error {
+	if request == nil || request.XMLName.Local != "Control" || request.CmdType != ptzCmdTypeDeviceControl || request.SN <= 0 || strings.TrimSpace(request.DeviceID) == "" {
+		return fmt.Errorf("invalid cascade DeviceControl")
+	}
+	actions := 0
+	if strings.TrimSpace(request.PTZCmd) != "" {
+		actions++
+		if err := validateCascadePTZCmd(request.PTZCmd); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(request.RecordCmd) != "" {
+		actions++
+		command := strings.ToLower(strings.TrimSpace(request.RecordCmd))
+		if command != "record" && command != "stoprecord" {
+			return fmt.Errorf("unsupported cascade RecordCmd")
+		}
+		if request.StreamNumber != nil && (!upstream.AtLeast(GBVersion20) || !downstream.AtLeast(GBVersion20)) {
+			return fmt.Errorf("StreamNumber requires protocol 2.0")
+		}
+	}
+	if strings.TrimSpace(request.IFrameCmd) != "" {
+		actions++
+		if !upstream.Capabilities().IFrameControl || !downstream.Capabilities().IFrameControl {
+			return fmt.Errorf("IFrameCmd is not supported by negotiated protocol")
+		}
+	}
+	if request.DragZoomIn != nil || request.DragZoomOut != nil {
+		actions++
+		if request.DragZoomIn != nil && request.DragZoomOut != nil {
+			return fmt.Errorf("DeviceControl must contain one DragZoom action")
+		}
+		if !upstream.Capabilities().DragZoomControl || !downstream.Capabilities().DragZoomControl {
+			return fmt.Errorf("DragZoom is not supported by negotiated protocol")
+		}
+	}
+	if request.HomePosition != nil {
+		actions++
+		if !upstream.Capabilities().HomePosition || !downstream.Capabilities().HomePosition {
+			return fmt.Errorf("HomePosition is not supported by negotiated protocol")
+		}
+	}
+	if request.PTZPreciseCtrl != nil {
+		actions++
+		if !upstream.AtLeast(GBVersion30) || !downstream.AtLeast(GBVersion30) {
+			return fmt.Errorf("PTZPreciseCtrl requires protocol 3.0")
+		}
+	}
+	if strings.TrimSpace(request.TeleBoot) != "" || strings.TrimSpace(request.GuardCmd) != "" || strings.TrimSpace(request.AlarmCmd) != "" || request.FormatSDCard != nil {
+		return fmt.Errorf("device-scoped cascade control is not allowed for a shared channel")
+	}
+	if actions != 1 {
+		return fmt.Errorf("cascade DeviceControl must contain exactly one channel action")
+	}
+	return nil
+}
+
+func validateCascadePTZCmd(value string) error {
+	command, err := hex.DecodeString(strings.TrimSpace(value))
+	if err != nil || len(command) != 8 || command[0] != 0xA5 {
+		return fmt.Errorf("invalid cascade PTZCmd")
+	}
+	var checksum byte
+	for _, item := range command[:7] {
+		checksum += item
+	}
+	if checksum != command[7] {
+		return fmt.Errorf("invalid cascade PTZCmd checksum")
+	}
+	return nil
+}

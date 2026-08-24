@@ -108,8 +108,18 @@ func sipAccessInfo(cfg *conf.Bootstrap) SIPAccessInfo {
 type updateSIPInput struct {
 	conf.SIP
 	DeviceHistory *conf.DeviceHistoryConfig `json:"device_history"`
+	Upstreams     *[]conf.SIPUpstream       `json:"upstreams"`
+	Log           *conf.SIPLog              `json:"log"`
 }
 
+// getConfigInfo godoc
+// @Summary 获取系统配置摘要
+// @Tags Config
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} SwaggerConfigInfoOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /configs/info [get]
 func (a ConfigAPI) getConfigInfo(c *gin.Context, _ *struct{}) (*getConfigInfoOutput, error) {
 	return &getConfigInfoOutput{
 		SIP:        a.conf.Sip,
@@ -117,18 +127,28 @@ func (a ConfigAPI) getConfigInfo(c *gin.Context, _ *struct{}) (*getConfigInfoOut
 	}, nil
 }
 
+// updateSIP godoc
+// @Summary 修改 SIP 配置
+// @Tags Config
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body SwaggerSIPConfig true "SIP 配置"
+// @Success 200 {object} SwaggerMessageResponse
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /configs/info/sip [put]
 func (a ConfigAPI) updateSIP(_ *gin.Context, in *updateSIPInput) (gin.H, error) {
-	next := in.SIP
-	if in.DeviceHistory == nil {
-		next.DeviceHistory = a.conf.Sip.DeviceHistory
-	} else {
-		next.DeviceHistory = *in.DeviceHistory
-	}
+	next := mergeSIPUpdate(a.conf.Sip, in)
 	if next.DeviceHistory.MaxRecords < 0 || next.DeviceHistory.MaxRecords > 100000 {
 		return nil, reason.ErrBadRequest.WithMsg("设备历史最大记录数应在 0–100000 之间")
 	}
 	if next.DeviceHistory.MaxDays < 0 || next.DeviceHistory.MaxDays > 3650 {
 		return nil, reason.ErrBadRequest.WithMsg("设备历史保留天数应在 0–3650 之间")
+	}
+	if a.uc != nil && a.uc.SipServer != nil {
+		if err := a.uc.SipServer.ValidateCascadeConfig(next); err != nil {
+			return nil, reason.ErrBadRequest.WithMsg(err.Error())
+		}
 	}
 	if err := copier.Copy(&a.conf.Sip, &next); err != nil {
 		return nil, reason.ErrServer.WithMsg(err.Error())
@@ -143,7 +163,32 @@ func (a ConfigAPI) updateSIP(_ *gin.Context, in *updateSIPInput) (gin.H, error) 
 			MaxDays:    a.conf.Sip.DeviceHistory.MaxDays,
 		})
 	}
-	a.uc.SipServer.SetConfig()
+	if a.uc != nil && a.uc.SipServer != nil {
+		a.uc.SipServer.SetConfig()
+	}
 
 	return gin.H{"msg": "ok"}, nil
+}
+
+func mergeSIPUpdate(current conf.SIP, in *updateSIPInput) conf.SIP {
+	if in == nil {
+		return current
+	}
+	next := in.SIP
+	if in.DeviceHistory == nil {
+		next.DeviceHistory = current.DeviceHistory
+	} else {
+		next.DeviceHistory = *in.DeviceHistory
+	}
+	if in.Upstreams == nil {
+		next.Upstreams = append([]conf.SIPUpstream(nil), current.Upstreams...)
+	} else {
+		next.Upstreams = append([]conf.SIPUpstream(nil), (*in.Upstreams)...)
+	}
+	if in.Log == nil {
+		next.Log = current.Log
+	} else {
+		next.Log = *in.Log
+	}
+	return next
 }

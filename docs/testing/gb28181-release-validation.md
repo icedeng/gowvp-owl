@@ -1,13 +1,13 @@
 # GB/T 28181 1.0/1.1 开发验证报告
 
-记录时间：2026-08-10（Asia/Shanghai）
+记录时间：2026-08-25（Asia/Shanghai）
 
 ## 1. 当前结论
 
 - 1.0：代码与模拟器核心流程已完成，尚未完成真实设备矩阵验收；
-- 1.1：Catalog 扩展、BasicParam、MediaStatus、多响应、目录订阅、广播和附录 O 直接 TCP 文件下载已完成自动化/模拟器验证；
-- 2.0/3.0：相关包回归通过，RTP over TCP 与 2022 能力门禁未被 1.0/1.1 打开或降级；
-- 上下级平台完整级联：仍不在本阶段范围内；
+- 1.1：Catalog 扩展、BasicParam、MediaStatus、多响应、目录订阅、接收者主动 INVITE 广播和附录 O 直接 TCP 文件下载已完成自动化/模拟器验证；
+- 2.0/3.0：相关包回归通过，广播使用 `PCMA/8000`，对讲具备 RTP 双向媒体闭环；RTP over TCP 与 2022 能力门禁未被 1.0/1.1 打开或降级；
+- 上下级平台级联：多上级注册、核心及版本化扩展查询、目录、订阅通知、直播、回放、下载和语音广播/对讲已完成自动化验证；仍需四版本真实上级平台互通；
 - 全仓 test/vet/race 已通过；对外状态仍不得标记为“生产完整支持”，真实设备矩阵和目标环境灰度/回滚仍是阶段门。
 
 ## 2. 已执行验证
@@ -25,14 +25,17 @@ go test ./... -count=1
 - 四版本 REGISTER、SIP/XML/SDP 夹具；
 - 版本解析、协商、持久化、手动覆盖和下行版本；
 - 1.0 功能门禁、直播/回放/下载 SDP golden；
-- 1.0 REGISTER、Keepalive、Catalog、RecordInfo、Alarm、INVITE、ACK、BYE 模拟流程；
+- 1.0 REGISTER、Keepalive、Catalog、RecordInfo、Alarm 模拟流程，以及平台主动点播使用的 UDP SDP golden；
+- 已注册上级的入向 INVITE 进入级联 B2BUA；其他未知非广播入向 INVITE 明确返回 501；
+- 设备级 `gb_disabled_capabilities` 会同步影响持久化能力快照、诊断输出和发送前能力门禁；
 - 1.1 Keepalive、Catalog、DeviceConfig、MediaStatus/121、Broadcast Response 串联模拟流程；
 - 1.1 Catalog 扩展与目录节点、未知 XML 保留；
 - BasicParam 查询与写入报文、原始响应保存；
 - MediaStatus/121 幂等收敛；
 - Catalog/RecordInfo 多响应乱序、重复、总数冲突、超时部分结果和同设备并发；
 - `Event: Catalog;id=...` 初始订阅、续订、取消；
-- Broadcast 通知与业务应答；
+- Broadcast 通知与业务应答、接收者主动 INVITE、版本化 SDP、ZLM RTP 启停和 ACK/BYE 清理；
+- 2016/2022 对讲在设备音频流建立后复用 RTP 连接反向发送 G.711 A-law 音频；
 - 媒体注册、注销、RTP 超时状态竞争；
 - 1.1/2.0/3.0 能力矩阵和诊断字段。
 - 附录 O `m=video ... tcp` SDP 构建/解析，与 `TCP/RTP/AVP` 严格隔离；
@@ -40,6 +43,19 @@ go test ./... -count=1
 - 连接/首字节/空闲/总超时、取消、MediaStatus、单设备/全局并发和终态竞争；
 - 下载进度查询、取消接口、白名单、注册地址校验和原子落盘。
 - 注册、目录、媒体会话、异常断流和直接 TCP 下载灰度计数器。
+- 四版本级联 REGISTER、Catalog、UDP/TCP、下载倍速、订阅能力矩阵；
+- 共享通道 DeviceInfo、DeviceStatus 和 RecordInfo 查询，录像响应分包并映射为上级可见编码；NVR 代表已知子通道返回 DeviceInfo 时只更新子通道元数据；
+- 共享通道 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 PTZPosition/SDCardStatus 查询转发；上下级 SN 转换、DeviceID/ParentID 安全映射、未知编码拒绝、下级失败业务应答及多上级响应隔离；
+- 3.0 附录 A.4 扩展对象按 Catalog ExtraInfo、Alarm/MobilePosition 嵌套对象和 DeviceStatus 响应的真实承载路径级联；共享对象递归编码映射，未知 20 位对象编码整条拒绝，且 1.0/1.1/2.0 不输出 3.0 ExtraInfo；
+- 3.0 PTZ 精准位置变化事件订阅/通知及级联；1.0/1.1/2.0 版本门禁，通知通道编码映射和非共享通道隔离；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅自动建立下级订阅并覆盖续订、退订、引用计数、过期和上级移除清理；Catalog 会订阅承载共享通道的下级 NVR，并在目录快照变化后为新增或迁移通道补订阅；
+- 3.0 CruiseTrackListQuery/CruiseTrackQuery 的请求、结构化响应、轨迹编号参数和安全级联；
+- 3.0 ConfigDownload 使用标准 `SnapShotConfig`，响应解析兼容厂商旧节点 `SnapShot`；
+- A.4 ExtraInfo JSON 的整数、零值、数组和 20 位数值型编码保持原始精度；未知数值型对象编码同样拒绝转发；
+- 共享通道 PTZ、录像和版本化通道控制转发；设备级高影响控制不因共享单个通道而被级联放大；
+- 四版本历史级联 `INVITE→ACK→INFO→BYE` 完整对话、媒体启动/释放和 MANSRTSP/RTSP 转换；
+- 两个已注册上级之间的级联对话所有权隔离，非会话所属上级的 ACK/CANCEL/BYE 不得改变或终止会话；
+- 1.1+ 域间目录初始订阅只通知离线/异常目录，刷新订阅保留 NOTIFY CSeq；续订与过期清理并发时由续订保留有效会话，过期会话释放下级引用；Alarm/MobilePosition 和 1.0 目录订阅不误发初始 Catalog；Alarm 订阅按级别、方式、类型和时间过滤，兼容 2011 `StartTime/EndTime` 示例别名；
+- 1.1/2.0/3.0 级联 Broadcast 通知、上游语音源 Digest INVITE、ZLM 音频接收、下游接收方主动 INVITE 和 RTP 转发；1.1 PS/90000 与 2.0/3.0 PCMA/8000 版本矩阵；多通道 Subject 定位、CANCEL、双侧 BYE、错误应答、来源隔离和资源回收；
 
 ### 静态检查
 
@@ -63,6 +79,8 @@ go test -race -vet=off ./... -count=1
 
 - SIP parser 停止标记竞争，改为 `done channel + sync.Once`；
 - 媒体节点 `LastUpdatedAt/IsOnline` 在心跳更新和定时检查间的竞争，改为包装对象内加锁访问。
+- 历史播放控制 `CSeq` 并发自增竞争，改为统一原子分配，避免重复序号。
+- 订阅刷新改为在原订阅对象上加锁更新，保留 NOTIFY CSeq，并避免刷新/事件通知并发读写状态。
 
 ### 补丁检查
 
@@ -91,6 +109,16 @@ git diff --check
 
 ADR：`docs/adr/gb28181-2014-direct-tcp-download.md`。AI-403 已按 Owl 内置 TCP 客户端方案实现并通过本地发送端模拟器验证；尚无真实 1.1 设备证明不同厂商对占位 SDP 端口、`filesize/fileszie` 和 MediaStatus 时序的兼容性。
 
+### 语音真实设备验证
+
+自动化已证明 SIP/SDP 状态机和 ZLMediaKit RTP API 调用，但尚无真实设备证明扬声器实际出声、设备主动 INVITE 的厂商差异、NAT 下 RTP 地址以及长时间广播/对讲稳定性。语音发送当前要求 ZLMediaKit 中存在已就绪的 G.711 A-law 音频源；LALMAX 明确返回不支持。
+
+### 四版本真实上级平台级联验证
+
+自动化已经覆盖注册、目录、核心及版本化扩展查询、订阅、直播、回放、下载、语音广播/对讲、INFO 控制和资源释放；尚无 1.0/1.1/2.0/3.0 真实上级平台分别执行完整链路的脱敏 SIP 报文和媒体结果，不能据此宣称生产互通完成。
+
+语音广播/对讲 B2BUA 与 2022 A.4 嵌入对象的安全级联均已完成自动化闭环，但尚无真实上级语音源与真实下级扬声器证明跨域音频可听、长时间稳定及厂商 SDP 差异兼容，也尚无真实 3.0 平台验证各厂商 A.4 ExtraInfo 结构。自动化能力不能替代真实平台和设备验收。
+
 ### 真实设备联调
 
 尚未提供以下真实设备与脱敏报文：
@@ -108,7 +136,7 @@ ADR：`docs/adr/gb28181-2014-direct-tcp-download.md`。AI-403 已按 Owl 内置 
 
 ## 5. 发布前必须完成
 
-1. 使用至少两个厂商的 1.1 设备验证直接 TCP 下载并归档抓包与文件哈希；
+1. 使用至少两个厂商的 1.1 设备验证直接 TCP 下载和语音广播，并归档抓包、RTP 统计与文件哈希；
 2. 完成真实设备矩阵与抓包归档；
 3. 在最终发布候选提交上重新执行全量 test/vet/race；
 4. 执行按设备版本回退演练；

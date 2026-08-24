@@ -49,6 +49,11 @@ func (g *GB28181API) Upgrade(_ context.Context, in *UpgradeInput) (*UpgradeOutpu
 	if err := g.requireGBVersionAtLeast(in.DeviceID, gbVersion2022, "设备软件升级(9.13)"); err != nil {
 		return nil, err
 	}
+	if err := g.requireGBFeature(in.DeviceID, "upgrade", "设备软件升级(9.13)", func(c GBCapabilities) bool {
+		return c.Upgrade
+	}); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(in.Firmware) == "" || strings.TrimSpace(in.FileURL) == "" || strings.TrimSpace(in.Manufacturer) == "" {
 		return nil, errors.New("firmware/file_url/manufacturer are required")
 	}

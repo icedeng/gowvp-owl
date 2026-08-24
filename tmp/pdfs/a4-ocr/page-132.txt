@@ -1,0 +1,56 @@
+GB/T 28181—2022
+
+F.6 G.723.1 st
+
+my Z4% ITU-T G.723.1(2006) HE CAN 5.3kbit Al 6. 3kbit i ee M/F AY BES. A KR ITU-
+T G.723.1(2006) Mifak A HAY VAD/CNG fist.
+
+G.723.1 SF HS SE AY TE Wh HE AE HE DO FE ITU-T G.723.1(2006 ) $A Wi Hd isk FF 3 9 BE BE ORS
+F.7 G.729 #3t
+
+Wi SHE TTU-T G.729( 2012) HP ae CYTE EE id RS SE LTR SCHR ITU-T G.729(2012) tak BE
+
+G.729 fe SE BL BY TE HE AU PRE WL FFT TU-T G.729( 2012) AA Se Hd ke BY BE BER
+F.8 SVAC {3H Fl SVAC FIR MBRRERK
+
+BEF SVAC fs LS Ar Sil i FR SR BOR AE A GB/T 25724 A GRRE
+F.9 H.265 (ois fA BRA ERK
+F.9.1  H.265 BURR AN 2k
+
+OR HL. 265. a 2 BY iL Bal ia HS ni AE > 3 RR OITU-T H. 265 (2019) ie Sit tas FE AY FE PY kK (Main
+Profile) .7k-F (Level) Iii 38 > 344 # Level 2. pr i RH PLD JR CHF BI Level 3. eb YF ZN ER He Bl
+Level 4 5 #2 fF 15 Ft SCF SEM CAM ACF 1, AS AER Si BS SCS te PU A OF, FE i EB). 265
+WR HE ERY Level 4, PUsil ie TS FYE He .265 EP CMain Profile) PAY B Wi TA. ASE PY
+P Wil AY BMT BAKE 2.
+
+F265 AY Ue AI Si 1 a AE A AL AS HHA SR EL ITU-T 1.265 (2019) fy AHA HE
+F.9.2 1.265 EM ROA RALR
+
+F265 SE PAU SC YE AT EE:
+
+a) HERFPRBEDR tilly 8 bits
+
+b) RFR 42 220;
+
+o) CTBASKANM 16X16 HI 64X64;
+
+d) FEAF (Level) X43 HY 5 KA} HERE F «APRA PAR BY FE ZH BR lO 6 OR COR (Level) F
+
+DY BEE AR Ny «AGRA PEARY EAE A ET A 6 IR LAN DRL 16 LAR
+
+e) SUPE RE PEE TT A Jr Sa 4) Ay Sh ELIE A HE Ded IP HE.
+
+ORAL 265 Sa tb ba HE 9 A Tak Ine 265 SEY Ta 2h PSS DS SE TTS
+BBS) Be EBs H. 265. By APY FS > ae SE RB ET ATL
+
+BEG WAS NS «PH AY BS WARS AF. ELAS E15.
+
+aN RE Ws Hk FE TB OR «EAE Ta he 4 STL Ze TT A BA WY AHL ST SWAB Video Param-
+eter Set, VPS) , FF 3] & WH (Sequence Parameter Set, SPS) Ail 4 {XS MAE (Picture Parameter Set,
+PPS).
+F.9.3 H.265 2k F (Level) 89 BR fil
+
+H.265 BHT 1.2.2.1,3,3.1,4,4.1,5,5.1,5.2,6,6.1,6.2 de 13 SR. — POR SE nL BEE — 28
+Re a TY ECAR Ti I — FB hk WS SB AOR ER AB GIR OF ABT HOE ED ARR il RAR
+
+125

@@ -64,7 +64,19 @@ func (l *LalmaxDriver) AddStreamProxy(ctx context.Context, ms *MediaServer, req 
 
 // CloseRTPServer implements Driver.
 func (l *LalmaxDriver) CloseRTPServer(ctx context.Context, ms *MediaServer, req *zlm.CloseRTPServerRequest) (*zlm.CloseRTPServerResponse, error) {
-	panic("unimplemented")
+	return nil, fmt.Errorf("lalmax 暂不支持关闭 RTP 接收端口")
+}
+
+func (l *LalmaxDriver) StartSendRTP(context.Context, *MediaServer, *zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error) {
+	return nil, fmt.Errorf("lalmax 暂不支持 RTP 发送")
+}
+
+func (l *LalmaxDriver) StartSendRTPTalk(context.Context, *MediaServer, *zlm.StartSendRTPTalkRequest) (*zlm.StartSendRTPResponse, error) {
+	return nil, fmt.Errorf("lalmax 暂不支持 RTP 语音对讲")
+}
+
+func (l *LalmaxDriver) StopSendRTP(context.Context, *MediaServer, *zlm.StopSendRTPRequest) (*zlm.StopSendRTPResponse, error) {
+	return nil, fmt.Errorf("lalmax 暂不支持 RTP 发送")
 }
 
 // CloseStreams lalmax 暂不支持关闭流功能

@@ -39,11 +39,15 @@ type GBCapabilities struct {
 	VoiceIntercom     bool
 	RTPOverTCP        bool
 	DirectTCPDownload bool
+	DownloadSpeed     bool
 	IFrameControl     bool
 	DragZoomControl   bool
 	PresetQuery       bool
 	MobilePosition    bool
+	PTZPosition       bool
 	HomePosition      bool
+	CruiseTrackQuery  bool
+	SDCard            bool
 	H265              bool
 	Snapshot          bool
 	Upgrade           bool
@@ -136,8 +140,9 @@ func (v GBProtocolVersion) Capabilities() GBCapabilities {
 			MediaStatus:       true,
 			VoiceBroadcast:    true,
 			DirectTCPDownload: true,
-			IFrameControl:     true,
+			DownloadSpeed:     true,
 			DragZoomControl:   true,
+			PresetQuery:       true,
 		}
 	case GBVersion20:
 		return GBCapabilities{
@@ -150,6 +155,7 @@ func (v GBProtocolVersion) Capabilities() GBCapabilities {
 			VoiceBroadcast:   true,
 			VoiceIntercom:    true,
 			RTPOverTCP:       true,
+			DownloadSpeed:    true,
 			IFrameControl:    true,
 			DragZoomControl:  true,
 			PresetQuery:      true,
@@ -167,11 +173,15 @@ func (v GBProtocolVersion) Capabilities() GBCapabilities {
 			VoiceBroadcast:   true,
 			VoiceIntercom:    true,
 			RTPOverTCP:       true,
+			DownloadSpeed:    true,
 			IFrameControl:    true,
 			DragZoomControl:  true,
 			PresetQuery:      true,
 			MobilePosition:   true,
+			PTZPosition:      true,
 			HomePosition:     true,
+			CruiseTrackQuery: true,
+			SDCard:           true,
 			H265:             true,
 			Snapshot:         true,
 			Upgrade:          true,
@@ -197,11 +207,15 @@ func (v GBProtocolVersion) CapabilityNames() []string {
 		{"voice_intercom", c.VoiceIntercom},
 		{"rtp_over_tcp", c.RTPOverTCP},
 		{"direct_tcp_download", c.DirectTCPDownload},
+		{"download_speed", c.DownloadSpeed},
 		{"iframe_control", c.IFrameControl},
 		{"drag_zoom_control", c.DragZoomControl},
 		{"preset_query", c.PresetQuery},
 		{"mobile_position", c.MobilePosition},
+		{"ptz_position", c.PTZPosition},
 		{"home_position", c.HomePosition},
+		{"cruise_track_query", c.CruiseTrackQuery},
+		{"sdcard", c.SDCard},
 		{"h265", c.H265},
 		{"snapshot", c.Snapshot},
 		{"upgrade", c.Upgrade},
@@ -213,6 +227,61 @@ func (v GBProtocolVersion) CapabilityNames() []string {
 		}
 	}
 	return out
+}
+
+var knownGBCapabilityNames = map[string]struct{}{
+	"config_query": {}, "config_write": {}, "directory_notify": {},
+	"voice_broadcast": {}, "voice_intercom": {},
+	"rtp_over_tcp": {}, "direct_tcp_download": {}, "download_speed": {}, "iframe_control": {}, "drag_zoom_control": {},
+	"preset_query": {}, "mobile_position": {}, "ptz_position": {}, "home_position": {}, "cruise_track_query": {}, "sdcard": {}, "snapshot": {}, "upgrade": {},
+}
+
+// NormalizeGBDisabledCapabilities 校验并规范化设备级能力关闭列表。
+// 仅接受平台已知的稳定能力名，避免配置拼写错误被静默忽略。
+func NormalizeGBDisabledCapabilities(values []string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		name := strings.ToLower(strings.TrimSpace(value))
+		if name == "" {
+			continue
+		}
+		if _, ok := knownGBCapabilityNames[name]; !ok {
+			return nil, fmt.Errorf("未知的 GB/T 28181 能力: %s", value)
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
+func effectiveCapabilityNames(version GBProtocolVersion, disabled []string) []string {
+	blocked := gbDisabledCapabilitySet(disabled)
+	if len(blocked) == 0 {
+		return version.CapabilityNames()
+	}
+	names := version.CapabilityNames()
+	out := names[:0]
+	for _, name := range names {
+		if _, ok := blocked[name]; !ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func gbDisabledCapabilitySet(values []string) map[string]struct{} {
+	blocked := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		name := strings.ToLower(strings.TrimSpace(value))
+		if _, ok := knownGBCapabilityNames[name]; ok {
+			blocked[name] = struct{}{}
+		}
+	}
+	return blocked
 }
 
 func protocolVersionForMinimum(value string) (GBProtocolVersion, bool) {
@@ -255,7 +324,7 @@ func applyGBProtocolVersion(ext *ipc.DeviceExt, declared string) GBProtocolVersi
 	ext.GBEffectiveVersion = string(version)
 	ext.GBVersion = version.StandardYear()
 	ext.GBVersionSource = source
-	ext.GBVersionCapabilities = version.CapabilityNames()
+	ext.GBVersionCapabilities = effectiveCapabilityNames(version, ext.GBDisabledCapabilities)
 	if previousDeclared != ext.GBDeclaredVersion || previousEffective != ext.GBEffectiveVersion || previousSource != ext.GBVersionSource {
 		ext.GBVersionUpdatedAt = time.Now().Unix()
 	}
@@ -277,9 +346,17 @@ func (g *GB28181API) getDeviceGBVersion(deviceID string) string {
 	return g.getDeviceGBProtocolVersion(deviceID).StandardYear()
 }
 
-func (g *GB28181API) requireGBFeature(deviceID, feature string, supported func(GBCapabilities) bool) error {
+func (g *GB28181API) isDeviceCapabilityDisabled(deviceID, capability string) bool {
+	if capability == "" || g == nil || g.svr == nil || g.svr.memoryStorer == nil {
+		return false
+	}
+	device, ok := g.svr.memoryStorer.Load(deviceID)
+	return ok && device != nil && device.isCapabilityDisabled(capability)
+}
+
+func (g *GB28181API) requireGBFeature(deviceID, capability, feature string, supported func(GBCapabilities) bool) error {
 	version := g.getDeviceGBProtocolVersion(deviceID)
-	if !supported(version.Capabilities()) {
+	if !supported(version.Capabilities()) || g.isDeviceCapabilityDisabled(deviceID, capability) {
 		g.recordUnsupportedGBFeature(deviceID, feature, version)
 		return fmt.Errorf("%s 不受当前协议档案 %s 支持", feature, version.StandardName())
 	}
@@ -302,7 +379,7 @@ func (g *GB28181API) requireMediaTransport(deviceID string, streamMode int8, fea
 	if streamMode == 0 {
 		return nil
 	}
-	return g.requireGBFeature(deviceID, feature+" RTP over TCP", func(c GBCapabilities) bool {
+	return g.requireGBFeature(deviceID, "rtp_over_tcp", feature+" RTP over TCP", func(c GBCapabilities) bool {
 		return c.RTPOverTCP
 	})
 }

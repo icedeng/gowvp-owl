@@ -53,6 +53,9 @@ const matrix = computed(() =>
     ["语音对讲", "2016+", "voice_intercom"],
     ["强制关键帧", "2016+", "iframe_control"],
     ["移动位置订阅", "2016+", "mobile_position"],
+    ["PTZ 精准位置订阅", "2022", "ptz_position"],
+    ["巡航轨迹查询", "2022", "cruise_track_query"],
+    ["存储卡管理", "2022", "sdcard"],
     ["设备抓拍", "2022", "snapshot"],
     ["设备升级", "2022", "upgrade"],
   ].map(([name, version, key]) => ({

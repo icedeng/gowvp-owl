@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
@@ -18,6 +19,8 @@ const (
 	deviceQueryActionRecordInfo        = "record_info"
 	deviceQueryActionPresetQuery       = "preset_query"
 	deviceQueryActionHomePositionQuery = "home_position_query"
+	deviceQueryActionCruiseTrackList   = "cruise_track_list"
+	deviceQueryActionCruiseTrack       = "cruise_track"
 	deviceQueryActionPTZPosition       = "ptz_position"
 	deviceQueryActionSDCardStatus      = "sdcard_status"
 	deviceQueryActionConfigDownload    = "config_download"
@@ -40,6 +43,8 @@ type DeviceQueryInput struct {
 	ConfigType string
 	// MobilePosition 查询参数（秒）。
 	Interval int
+	// CruiseTrackQuery 轨迹编号；标准当前定义 0、1 两条轨迹。
+	Number int
 	// RecordInfo 查询参数（unix 秒）。
 	Start int64
 	End   int64
@@ -59,7 +64,10 @@ type DeviceQueryOutput struct {
 }
 
 type pendingQueryWait struct {
-	wait chan *DeviceQueryOutput
+	wait           chan *DeviceQueryOutput
+	mu             sync.Mutex
+	expectedConfig map[string]struct{}
+	config         *ConfigDownloadState
 }
 
 type genericDeviceQueryResponse struct {
@@ -76,6 +84,7 @@ type genericDeviceQueryRequest struct {
 	DeviceID   string   `xml:"DeviceID"`
 	ConfigType string   `xml:"ConfigType,omitempty"`
 	Interval   *int     `xml:"Interval,omitempty"`
+	Number     *int     `xml:"Number,omitempty"`
 }
 
 // DeviceQuery 执行附录 A.2.4 查询命令，并等待设备响应。
@@ -136,12 +145,19 @@ func (g *GB28181API) DeviceQuery(_ context.Context, in *DeviceQueryInput) (*Devi
 		DeviceID: targetID,
 	}
 	if cmdType == "ConfigDownload" {
-		canonical, _ := normalizeConfigType(configType)
+		canonical, _ := normalizeConfigTypes(configType)
 		req.ConfigType = canonical
 	}
 	if cmdType == "MobilePosition" && in.Interval > 0 {
 		interval := in.Interval
 		req.Interval = &interval
+	}
+	if cmdType == "CruiseTrackQuery" {
+		if in.Number < 0 || in.Number > 1 {
+			return nil, fmt.Errorf("cruise track number must be 0 or 1")
+		}
+		number := in.Number
+		req.Number = &number
 	}
 
 	body, err := sip.XMLEncode(req)
@@ -160,6 +176,12 @@ func (g *GB28181API) DeviceQuery(_ context.Context, in *DeviceQueryInput) (*Devi
 
 	waitKey := buildPendingQueryKey(deviceID, cmdType, sn)
 	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}
+	if cmdType == "ConfigDownload" {
+		pending.expectedConfig = make(map[string]struct{})
+		for _, item := range strings.Split(req.ConfigType, "/") {
+			pending.expectedConfig[item] = struct{}{}
+		}
+	}
 	g.pendingDeviceQuery.Store(waitKey, pending)
 	defer g.pendingDeviceQuery.Delete(waitKey)
 
@@ -194,6 +216,10 @@ func normalizeDeviceQueryAction(action string) string {
 		return deviceQueryActionPTZPosition
 	case "sd_card_status":
 		return deviceQueryActionSDCardStatus
+	case "cruise_track_list_query", "cruise_list", "cruise_track_listquery":
+		return deviceQueryActionCruiseTrackList
+	case "cruise_track_query", "cruise_query", "cruise_trackquery":
+		return deviceQueryActionCruiseTrack
 	default:
 		return a
 	}
@@ -204,7 +230,7 @@ func (g *GB28181API) resolveDeviceQueryCmdType(deviceID, action, configType stri
 	case deviceQueryActionCatalog:
 		return "Catalog", nil
 	case deviceQueryActionBroadcast:
-		if err := g.requireGBFeature(deviceID, "语音广播查询", func(c GBCapabilities) bool {
+		if err := g.requireGBFeature(deviceID, "voice_broadcast", "语音广播查询", func(c GBCapabilities) bool {
 			return c.VoiceBroadcast
 		}); err != nil {
 			return "", err
@@ -217,24 +243,44 @@ func (g *GB28181API) resolveDeviceQueryCmdType(deviceID, action, configType stri
 	case deviceQueryActionRecordInfo:
 		return "RecordInfo", nil
 	case deviceQueryActionPresetQuery:
-		if err := g.requireGBFeature(deviceID, "预置位查询", func(c GBCapabilities) bool {
+		if err := g.requireGBFeature(deviceID, "preset_query", "预置位查询", func(c GBCapabilities) bool {
 			return c.PresetQuery
 		}); err != nil {
 			return "", err
 		}
 		return "PresetQuery", nil
 	case deviceQueryActionHomePositionQuery:
-		if err := g.requireGBVersionAtLeast(deviceID, gbVersion2016, "看守位查询(HomePositionQuery)"); err != nil {
+		if err := g.requireGBFeature(deviceID, "home_position", "看守位查询(HomePositionQuery)", func(c GBCapabilities) bool {
+			return c.HomePosition
+		}); err != nil {
 			return "", err
 		}
 		return "HomePositionQuery", nil
+	case deviceQueryActionCruiseTrackList:
+		if err := g.requireGBFeature(deviceID, "cruise_track_query", "巡航轨迹列表查询", func(c GBCapabilities) bool {
+			return c.CruiseTrackQuery
+		}); err != nil {
+			return "", err
+		}
+		return "CruiseTrackListQuery", nil
+	case deviceQueryActionCruiseTrack:
+		if err := g.requireGBFeature(deviceID, "cruise_track_query", "巡航轨迹查询", func(c GBCapabilities) bool {
+			return c.CruiseTrackQuery
+		}); err != nil {
+			return "", err
+		}
+		return "CruiseTrackQuery", nil
 	case deviceQueryActionPTZPosition:
-		if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "PTZ精准状态查询"); err != nil {
+		if err := g.requireGBFeature(deviceID, "ptz_position", "PTZ精准状态查询", func(c GBCapabilities) bool {
+			return c.PTZPosition
+		}); err != nil {
 			return "", err
 		}
 		return "PTZPosition", nil
 	case deviceQueryActionSDCardStatus:
-		if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "存储卡状态查询"); err != nil {
+		if err := g.requireGBFeature(deviceID, "sdcard", "存储卡状态查询", func(c GBCapabilities) bool {
+			return c.SDCard
+		}); err != nil {
 			return "", err
 		}
 		return "SDCardStatus", nil
@@ -242,16 +288,18 @@ func (g *GB28181API) resolveDeviceQueryCmdType(deviceID, action, configType stri
 		if configType == "" {
 			return "", fmt.Errorf("config_type is required for config_download")
 		}
-		canonical, ok := normalizeConfigType(configType)
+		canonical, ok := normalizeConfigTypes(configType)
 		if !ok {
 			return "", fmt.Errorf("unsupported config_type: %s", configType)
 		}
-		if err := g.requireConfigTypeVersion(deviceID, canonical); err != nil {
-			return "", err
+		for _, item := range strings.Split(canonical, "/") {
+			if err := g.requireConfigTypeVersion(deviceID, item); err != nil {
+				return "", err
+			}
 		}
 		return "ConfigDownload", nil
 	case deviceQueryActionMobilePosition:
-		if err := g.requireGBFeature(deviceID, "移动位置查询", func(c GBCapabilities) bool {
+		if err := g.requireGBFeature(deviceID, "mobile_position", "移动位置查询", func(c GBCapabilities) bool {
 			return c.MobilePosition
 		}); err != nil {
 			return "", err
@@ -265,12 +313,25 @@ func (g *GB28181API) resolveDeviceQueryCmdType(deviceID, action, configType stri
 func (g *GB28181API) requireConfigTypeVersion(deviceID, configType string) error {
 	name := strings.TrimSpace(configType)
 	switch name {
-	case "BasicParam":
-		return g.requireGBFeature(deviceID, "配置查询(BasicParam)", func(c GBCapabilities) bool {
+	case "BasicParam", "VideoParamOpt", "VideoParamConfig", "AudioParamOpt", "AudioParamConfig",
+		"SVACEncodeConfig", "SVACDecodeConfig":
+		return g.requireGBFeature(deviceID, "config_query", "配置查询("+name+")", func(c GBCapabilities) bool {
 			return c.ConfigQuery
 		})
-	case "VideoParamOpt", "SVACEncodeConfig", "SVACDecodeConfig", "VideoParamAttribute", "VideoRecordPlan",
-		"VideoAlarmRecord", "PictureMask", "FrameMirror", "AlarmReport", "OSDConfig", "SnapShot":
+	case "VideoParamAttribute", "VideoRecordPlan",
+		"VideoAlarmRecord", "PictureMask", "FrameMirror", "AlarmReport", "OSDConfig", "SnapShotConfig":
+		if err := g.requireGBFeature(deviceID, "config_query", "配置查询("+name+")", func(c GBCapabilities) bool {
+			return c.ConfigQuery
+		}); err != nil {
+			return err
+		}
+		if name == "SnapShotConfig" {
+			if err := g.requireGBFeature(deviceID, "snapshot", "配置查询(SnapShot)", func(c GBCapabilities) bool {
+				return c.Snapshot
+			}); err != nil {
+				return err
+			}
+		}
 		return g.requireGBVersionAtLeast(deviceID, gbVersion2022, "配置查询("+name+")")
 	default:
 		return fmt.Errorf("unsupported config_type: %s", name)
@@ -278,11 +339,19 @@ func (g *GB28181API) requireConfigTypeVersion(deviceID, configType string) error
 }
 
 func normalizeConfigType(configType string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(configType)) {
+	key := strings.ToLower(strings.TrimSpace(configType))
+	key = strings.NewReplacer("_", "", "-", "", " ", "").Replace(key)
+	switch key {
 	case "basicparam":
 		return "BasicParam", true
 	case "videoparamopt":
 		return "VideoParamOpt", true
+	case "videoparamconfig":
+		return "VideoParamConfig", true
+	case "audioparamopt":
+		return "AudioParamOpt", true
+	case "audioparamconfig":
+		return "AudioParamConfig", true
 	case "svacencodeconfig":
 		return "SVACEncodeConfig", true
 	case "svacdecodeconfig":
@@ -301,19 +370,48 @@ func normalizeConfigType(configType string) (string, bool) {
 		return "AlarmReport", true
 	case "osdconfig":
 		return "OSDConfig", true
-	case "snapshot":
-		return "SnapShot", true
+	case "snapshot", "snapshotconfig":
+		return "SnapShotConfig", true
 	default:
 		return "", false
 	}
+}
+
+func normalizeConfigTypes(value string) (string, bool) {
+	parts := strings.Split(value, "/")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		canonical, ok := normalizeConfigType(part)
+		if !ok {
+			return "", false
+		}
+		if _, ok := seen[canonical]; ok {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		out = append(out, canonical)
+	}
+	if len(out) == 0 {
+		return "", false
+	}
+	return strings.Join(out, "/"), true
 }
 
 func buildPendingQueryKey(deviceID, cmdType string, sn int) string {
 	return fmt.Sprintf("%s:%s:%d", strings.TrimSpace(deviceID), strings.ToUpper(strings.TrimSpace(cmdType)), sn)
 }
 
+func canonicalGBQueryCmdType(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "PersetQuery") {
+		return "PresetQuery"
+	}
+	return value
+}
+
 func (g *GB28181API) resolvePendingDeviceQuery(deviceID, cmdType string, sn int, result string, body []byte, targetID string) {
-	cmdType = strings.TrimSpace(cmdType)
+	cmdType = canonicalGBQueryCmdType(cmdType)
 	if sn <= 0 || cmdType == "" {
 		return
 	}
@@ -338,11 +436,120 @@ func (g *GB28181API) resolvePendingDeviceQuery(deviceID, cmdType string, sn int,
 		}
 		out.Data = g.decodeAndStoreQueryData(out.DeviceID, out.CmdType, body)
 		out.AppendixA4 = g.decodeAppendixA4Objects(out.CmdType, body)
+		pending := v.(*pendingQueryWait)
+		if out.CmdType == "ConfigDownload" && (out.Result == "" || strings.EqualFold(out.Result, "OK")) {
+			state, _ := out.Data.(*ConfigDownloadState)
+			pending.mu.Lock()
+			tracking := len(pending.expectedConfig) > 0
+			if tracking && pending.config == nil {
+				pending.config = &ConfigDownloadState{}
+			}
+			if tracking {
+				mergeConfigDownloadState(pending.config, state)
+				for _, configType := range configDownloadStateTypes(state) {
+					delete(pending.expectedConfig, configType)
+				}
+				out.Data = pending.config
+			}
+			complete := len(pending.expectedConfig) == 0
+			pending.mu.Unlock()
+			if tracking && !complete {
+				return
+			}
+		}
 		select {
-		case v.(*pendingQueryWait).wait <- out:
+		case pending.wait <- out:
 		default:
 		}
 		return
+	}
+}
+
+func configDownloadStateTypes(state *ConfigDownloadState) []string {
+	if state == nil {
+		return nil
+	}
+	types := make([]string, 0, 16)
+	checks := []struct {
+		name string
+		on   bool
+	}{
+		{"BasicParam", state.BasicParam != nil},
+		{"VideoParamOpt", state.VideoParamOpt != nil},
+		{"VideoParamConfig", state.VideoParamConfig != nil},
+		{"AudioParamOpt", state.AudioParamOpt != nil},
+		{"AudioParamConfig", state.AudioParamConfig != nil},
+		{"SVACEncodeConfig", state.SVACEncodeConfig != nil},
+		{"SVACDecodeConfig", state.SVACDecodeConfig != nil},
+		{"VideoParamAttribute", state.VideoParamAttribute != nil},
+		{"VideoRecordPlan", state.VideoRecordPlan != nil},
+		{"VideoAlarmRecord", state.VideoAlarmRecord != nil},
+		{"PictureMask", state.PictureMask != nil},
+		{"FrameMirror", state.FrameMirror != nil},
+		{"AlarmReport", state.AlarmReport != nil},
+		{"OSDConfig", state.OSDConfig != nil},
+		{"SnapShotConfig", state.SnapShot != nil},
+	}
+	for _, check := range checks {
+		if check.on {
+			types = append(types, check.name)
+		}
+	}
+	return types
+}
+
+func mergeConfigDownloadState(dst, src *ConfigDownloadState) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.CmdType, dst.SN, dst.DeviceID, dst.Result = src.CmdType, src.SN, src.DeviceID, src.Result
+	if src.BasicParam != nil {
+		dst.BasicParam = src.BasicParam
+	}
+	if src.VideoParamOpt != nil {
+		dst.VideoParamOpt = src.VideoParamOpt
+	}
+	if src.VideoParamConfig != nil {
+		dst.VideoParamConfig = src.VideoParamConfig
+	}
+	if src.AudioParamOpt != nil {
+		dst.AudioParamOpt = src.AudioParamOpt
+	}
+	if src.AudioParamConfig != nil {
+		dst.AudioParamConfig = src.AudioParamConfig
+	}
+	if src.SVACEncodeConfig != nil {
+		dst.SVACEncodeConfig = src.SVACEncodeConfig
+	}
+	if src.SVACDecodeConfig != nil {
+		dst.SVACDecodeConfig = src.SVACDecodeConfig
+	}
+	if src.VideoParamAttribute != nil {
+		dst.VideoParamAttribute = src.VideoParamAttribute
+	}
+	if src.VideoRecordPlan != nil {
+		dst.VideoRecordPlan = src.VideoRecordPlan
+	}
+	if src.VideoAlarmRecord != nil {
+		dst.VideoAlarmRecord = src.VideoAlarmRecord
+	}
+	if src.PictureMask != nil {
+		dst.PictureMask = src.PictureMask
+	}
+	if src.FrameMirror != nil {
+		dst.FrameMirror = src.FrameMirror
+	}
+	if src.AlarmReport != nil {
+		dst.AlarmReport = src.AlarmReport
+	}
+	if src.OSDConfig != nil {
+		dst.OSDConfig = src.OSDConfig
+	}
+	if src.SnapShot != nil {
+		dst.SnapShot = src.SnapShot
+	}
+	if src.RawXML != "" {
+		dst.RawXML = src.RawXML
 	}
 }
 
@@ -353,6 +560,7 @@ func (g *GB28181API) sipMessageQueryGeneric(ctx *sip.Context) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
+	msg.CmdType = canonicalGBQueryCmdType(msg.CmdType)
 	g.resolvePendingDeviceQuery(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID)
 	deviceID := strings.TrimSpace(ctx.DeviceID)
 	if deviceID == "" {

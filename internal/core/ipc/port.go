@@ -140,6 +140,7 @@ type GBDeviceQueryInput struct {
 
 	ConfigType string
 	Interval   int
+	Number     int   // cruise_track 轨迹编号（0 或 1）
 	Start      int64 // record_info start unix seconds
 	End        int64 // record_info end unix seconds
 }
@@ -254,6 +255,8 @@ type HistoryControlInput struct {
 	SeekAt  int64 // unix seconds
 	// Transport 为空或 rtp 时保持现有媒体服务器链路；direct_tcp 仅用于 1.1 文件下载。
 	Transport string
+	// DownloadSpeed 是 Download INVITE 的整数倍速；0 表示使用协议默认 1 倍速。
+	DownloadSpeed int
 }
 
 const (
@@ -272,9 +275,18 @@ type TimeSyncCapable interface {
 }
 
 type SubscribeInput struct {
-	Event   string
-	Expires int
-	Cancel  bool
+	TargetID string
+	Event    string
+	Expires  int
+	Cancel   bool
+
+	StartAlarmPriority string
+	EndAlarmPriority   string
+	AlarmMethod        string
+	AlarmType          string
+	StartAlarmTime     string
+	EndAlarmTime       string
+	Interval           int
 }
 
 type SubscribeCapable interface {
@@ -290,7 +302,12 @@ type OptionsProbeCapable interface {
 }
 
 type VoiceControlInput struct {
-	Mode string // talk/broadcast
+	Mode          string // talk/broadcast
+	MediaServerID string
+	SourceID      string
+	SourceVHost   string
+	SourceApp     string
+	SourceStream  string
 }
 
 type VoiceCapable interface {

@@ -341,20 +341,10 @@ func (s *Server) handlerRequest(msg *Request) {
 	tx := s.mustTX(msg)
 	// logrus.Traceln("receive request from:", msg.Source(), ",method:", msg.Method(), "txKey:", tx.key, "message: \n", msg.String())
 
-	key := msg.Method()
-	if key == MethodMessage || key == MethodNotify {
-
-		if l, ok := msg.ContentLength(); !ok || l.Equals(0) {
-			_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusBadRequest, "empty body", nil))
-			return
-		}
-		body := msg.Body()
-		var parsed MessageReceive
-		if err := XMLDecode(body, &parsed); err != nil {
-			_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusBadRequest, "invalid xml", nil))
-			return
-		}
-		key += "-" + parsed.CmdType
+	key, err := requestRouteKey(msg)
+	if err != nil {
+		_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusBadRequest, err.Error(), nil))
+		return
 	}
 	routeHandlers, ok := s.route.Load(strings.ToUpper(key))
 	if !ok {
@@ -374,6 +364,41 @@ func (s *Server) handlerRequest(msg *Request) {
 	ctx.From = s.from
 	ctx.svr = s
 	go s.runContextSafely(ctx)
+}
+
+func requestRouteKey(msg *Request) (string, error) {
+	key := msg.Method()
+	if key != MethodMessage && key != MethodNotify {
+		return key, nil
+	}
+	if length, ok := msg.ContentLength(); !ok || length == nil || *length == 0 {
+		if key == MethodNotify && isTerminatedSubscriptionNotify(msg) {
+			return key, nil
+		}
+		return "", fmt.Errorf("empty body")
+	}
+	var parsed MessageReceive
+	if err := XMLDecode(msg.Body(), &parsed); err != nil {
+		return "", fmt.Errorf("invalid xml")
+	}
+	return key + "-" + parsed.CmdType, nil
+}
+
+func isTerminatedSubscriptionNotify(msg *Request) bool {
+	if msg == nil {
+		return false
+	}
+	for _, header := range msg.GetHeaders("Subscription-State") {
+		value := header.String()
+		if _, after, ok := strings.Cut(value, ":"); ok {
+			value = after
+		}
+		state, _, _ := strings.Cut(strings.TrimSpace(value), ";")
+		if strings.EqualFold(strings.TrimSpace(state), "terminated") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handlerResponse(msg *Response) {

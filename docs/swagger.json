@@ -8,166 +8,6 @@
     },
     "basePath": "/",
     "paths": {
-        "/ai/events": {
-            "post": {
-                "description": "AI 服务上报检测结果。平台会按 `detections` 中每个对象分别落事件记录，并保存快照图片。\n请求示例：`{ \"camera_id\":\"GB_34020000001320000001\", \"timestamp\":1710931200000, \"detections\":[{\"label\":\"person\",\"confidence\":0.92,\"box\":{\"x_min\":120,\"y_min\":80,\"x_max\":360,\"y_max\":500},\"area\":35800}], \"snapshot_width\":1920, \"snapshot_height\":1080 }`\n成功响应示例：`{ \"code\": 0, \"msg\": \"success\" }`",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "AIWebhook"
-                ],
-                "summary": "AI 检测事件回调",
-                "parameters": [
-                    {
-                        "description": "AI 检测结果",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.AIDetectionInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.AIWebhookOutput"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/ai/keepalive": {
-            "post": {
-                "description": "AI 服务定时上报自身存活状态、运行时长、活跃流数量等统计信息。\n成功响应示例：`{ \"code\": 0, \"msg\": \"success\" }`",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "AIWebhook"
-                ],
-                "summary": "AI 服务心跳回调",
-                "parameters": [
-                    {
-                        "description": "AI 心跳数据",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.AIKeepaliveInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.AIWebhookOutput"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/ai/started": {
-            "post": {
-                "description": "AI 服务启动完成后回调平台，用于记录 AI 服务已就绪。\n成功响应示例：`{ \"code\": 0, \"msg\": \"success\" }`",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "AIWebhook"
-                ],
-                "summary": "AI 服务启动回调",
-                "parameters": [
-                    {
-                        "description": "AI 启动数据",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.AIStartedInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.AIWebhookOutput"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/ai/stopped": {
-            "post": {
-                "description": "AI 服务停止某个摄像头分析任务时回调平台，平台据此清理内存状态。\n成功响应示例：`{ \"code\": 0, \"msg\": \"success\" }`",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "AIWebhook"
-                ],
-                "summary": "AI 任务停止回调",
-                "parameters": [
-                    {
-                        "description": "AI 停止数据",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.AIStoppedInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.AIWebhookOutput"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/app/metrics/api": {
             "get": {
                 "produces": [
@@ -609,6 +449,52 @@
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/api.SwaggerMessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/channels/gb28181/{device_id}/{channel_id}/history/status": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Channel"
+                ],
+                "summary": "查询普通 RTP 下载状态",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备编号(device_id)",
+                        "name": "device_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "通道编号(channel_id)",
+                        "name": "channel_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/gbs.RTPDownloadState"
                         }
                     },
                     "400": {
@@ -1557,7 +1443,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "启动历史回放或历史下载会话。\n`mode` 可选：`playback` 表示回放，`download` 表示下载。\n调用前置条件：1. 通道必须存在；2. 设备在线；3. 目标时间段内存在可用录像；4. 设备支持历史回放或下载。\n失败场景：1. 通道不存在；2. 设备离线；3. 无录像可回放；4. 设备返回协议不支持；5. 会话建立超时。\n请求示例：`{ \"mode\": \"playback\", \"start_at\": 1710864000, \"end_at\": 1710950400 }`\n成功响应示例：`{ \"msg\": \"ok\" }`",
+                "description": "启动历史回放或历史下载会话。\n`mode` 可选：`playback` 表示回放，`download` 表示下载。\n`transport=direct_tcp` 仅用于有效版本 1.1 且已加入白名单的附录 O 下载；空值或 `rtp` 保持原链路。\n调用前置条件：1. 通道必须存在；2. 设备在线；3. 目标时间段内存在可用录像；4. 设备支持历史回放或下载。\n失败场景：1. 通道不存在；2. 设备离线；3. 无录像可回放；4. 设备返回协议不支持；5. 会话建立超时。\n请求示例：`{ \"mode\": \"playback\", \"start_at\": 1710864000, \"end_at\": 1710950400 }`\n成功响应示例：`{ \"msg\": \"ok\" }`",
                 "consumes": [
                     "application/json"
                 ],
@@ -1591,6 +1477,46 @@
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/api.SwaggerMessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/channels/{id}/history/status": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "返回设备在 200 OK SDP 中声明的 filesize，以及 ZLMediaKit 媒体源接收字节统计。由于 RTP/PS 封装开销，progress_percent 为近似值。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Channel"
+                ],
+                "summary": "查询普通 RTP 下载状态",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "通道ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/gbs.RTPDownloadState"
                         }
                     },
                     "400": {
@@ -2040,7 +1966,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "启动对讲或广播会话\n调用前置条件：1. 通道存在；2. 设备在线；3. 设备支持语音对讲或广播。\n失败场景：1. 设备不支持语音能力；2. 会话建立失败；3. 设备离线。",
+                "description": "启动对讲或广播会话\n调用前置条件：1. 通道存在；2. 设备在线；3. 设备支持语音对讲或广播；4. source_stream 是 ZLMediaKit 中已就绪的 G.711 A-law 音频流。\n失败场景：1. 设备不支持语音能力；2. 音频源不存在或编码不兼容；3. 会话建立失败；4. 设备离线。",
                 "consumes": [
                     "application/json"
                 ],
@@ -2719,7 +2645,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "执行 GB/T 28181 附录 A.2.4 统一设备查询命令。\n常见 `action`：`device_status`、`catalog`、`config_download`、`preset_query`、`record_info`、`mobile_position`。\n调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 查询动作被设备支持。\n失败场景：1. `action` 不支持；2. 设备离线；3. 查询超时；4. 2016 协议设备不支持 2022 扩展查询。\n请求示例：`{ \"action\": \"device_status\", \"target_id\": \"34020000001320000001\", \"timeout\": 5 }`\n录像查询示例：`{ \"action\": \"record_info\", \"target_id\": \"34020000001320000001\", \"start\": 1710864000, \"end\": 1710950400, \"timeout\": 10 }`\n响应中 `xml` 为原始 XML，`data` 为解析后的主体数据，`appendix_a4` 为 2022 版附录 A.4 扩展对象。",
+                "description": "执行 GB/T 28181 附录 A.2.4 统一设备查询命令。\n常见 `action`：`device_status`、`catalog`、`config_download`、`preset_query`、`record_info`、`mobile_position`、`cruise_track_list`、`cruise_track`、`ptz_position`、`sdcard_status`。\n调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 查询动作被设备支持。\n失败场景：1. `action` 不支持；2. 设备离线；3. 查询超时；4. 2016 协议设备不支持 2022 扩展查询。\n请求示例：`{ \"action\": \"device_status\", \"target_id\": \"34020000001320000001\", \"timeout\": 5 }`\n录像查询示例：`{ \"action\": \"record_info\", \"target_id\": \"34020000001320000001\", \"start\": 1710864000, \"end\": 1710950400, \"timeout\": 10 }`\n响应中 `xml` 为原始 XML，`data` 为解析后的主体数据，`appendix_a4` 为 2022 版附录 A.4 扩展对象。",
                 "consumes": [
                     "application/json"
                 ],
@@ -2958,7 +2884,7 @@
                 }
             }
         },
-        "/events": {
+        "/gb28181/cascade/status": {
             "get": {
                 "security": [
                     {
@@ -2969,58 +2895,14 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Event"
+                    "Device"
                 ],
-                "summary": "查询事件列表",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "页码",
-                        "name": "page",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "每页数量",
-                        "name": "size",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "设备ID",
-                        "name": "did",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "通道ID",
-                        "name": "cid",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "标签",
-                        "name": "label",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "开始毫秒时间戳",
-                        "name": "start_ms",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "结束毫秒时间戳",
-                        "name": "end_ms",
-                        "in": "query"
-                    }
-                ],
+                "summary": "查询 GB28181 上级平台级联注册状态",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/api.SwaggerEventsResponse"
+                            "$ref": "#/definitions/api.SwaggerCascadeStatusesResponse"
                         }
                     },
                     "400": {
@@ -3032,59 +2914,25 @@
                 }
             }
         },
-        "/events/image/{path}": {
+        "/gb28181/downloads/{session_id}": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "produces": [
-                    "image/jpeg"
+                    "application/json"
                 ],
                 "tags": [
-                    "Event"
+                    "Channel"
                 ],
-                "summary": "获取事件快照图片",
+                "summary": "查询 2014 裸 TCP 下载状态",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "图片相对路径",
-                        "name": "path",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "JPEG 图片",
-                        "schema": {
-                            "type": "file"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/events/{id}": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Event"
-                ],
-                "summary": "获取事件详情",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "事件ID",
-                        "name": "id",
+                        "description": "SIP Call-ID 下载会话 ID",
+                        "name": "session_id",
                         "in": "path",
                         "required": true
                     }
@@ -3093,56 +2941,7 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/event.Event"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            },
-            "put": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Event"
-                ],
-                "summary": "修改事件",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "事件ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "事件更新参数",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/event.EditEventInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/event.Event"
+                            "$ref": "#/definitions/api.SwaggerDirectTCPDownloadState"
                         }
                     },
                     "400": {
@@ -3163,14 +2962,14 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Event"
+                    "Channel"
                 ],
-                "summary": "删除事件",
+                "summary": "取消 2014 裸 TCP 下载",
                 "parameters": [
                     {
-                        "type": "integer",
-                        "description": "事件ID",
-                        "name": "id",
+                        "type": "string",
+                        "description": "SIP Call-ID 下载会话 ID",
+                        "name": "session_id",
                         "in": "path",
                         "required": true
                     }
@@ -3179,7 +2978,37 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/event.Event"
+                            "$ref": "#/definitions/api.SwaggerMessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/gb28181/metrics": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Device"
+                ],
+                "summary": "查询 GB28181 灰度指标",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerGBMetricsSnapshot"
                         }
                     },
                     "400": {
@@ -3291,179 +3120,6 @@
                 }
             }
         },
-        "/login": {
-            "post": {
-                "description": "使用前端 RSA 公钥加密后的用户名密码进行登录，返回 JWT",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Auth"
-                ],
-                "summary": "用户登录",
-                "parameters": [
-                    {
-                        "description": "登录参数",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.loginInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.loginOutput"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/login/key": {
-            "get": {
-                "description": "获取用于登录前端加密的 RSA 公钥，返回 Base64 编码的 PEM 文本",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Auth"
-                ],
-                "summary": "获取登录公钥",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerLoginKeyOutput"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/media_servers": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "MediaServer"
-                ],
-                "summary": "查询流媒体服务器列表",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "页码",
-                        "name": "page",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "每页数量",
-                        "name": "size",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "IP",
-                        "name": "ip",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "类型",
-                        "name": "type",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerMediaServersResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/media_servers/{id}": {
-            "put": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "MediaServer"
-                ],
-                "summary": "修改流媒体服务器",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "流媒体服务器ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "流媒体服务器参数",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/sms.EditMediaServerInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/sms.MediaServer"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/onvif/discover": {
             "get": {
                 "description": "使用 SSE 持续输出发现到的 ONVIF 设备事件",
@@ -3514,454 +3170,6 @@
                         "description": "代理响应",
                         "schema": {
                             "type": "string"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/recordings": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "查询本地录像列表，可按通道、应用名、流 ID、时间范围分页筛选。\n常见场景：录像管理页列表展示、按通道检索录像、按日期范围检索录像。\n响应中 `items` 为录像记录列表，`total` 为符合条件的总条数。\n筛选条件说明：`cid` 为通道 ID；`app` 为流应用名；`stream` 为流 ID；`start_ms/end_ms` 为录像开始时间范围过滤。\n调用前置条件：本地已启用录像并存在录像记录。\n失败场景：1. 分页参数非法；2. 时间范围非法；3. 数据库查询失败。",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Recording"
-                ],
-                "summary": "查询录像列表",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "页码",
-                        "name": "page",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "每页数量",
-                        "name": "size",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "通道ID",
-                        "name": "cid",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "应用名",
-                        "name": "app",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "流ID",
-                        "name": "stream",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "开始毫秒时间戳",
-                        "name": "start_ms",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "结束毫秒时间戳",
-                        "name": "end_ms",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerRecordingsResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/recordings/channels/{cid}/index.m3u8": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "根据通道 ID 和时间范围动态生成 HLS m3u8 播放列表，便于浏览器直接回放录像。\n请求示例：`/recordings/channels/GB_34020000001320000001/index.m3u8?start_ms=1710864000000\u0026end_ms=1710950400000\u0026token=xxx`\n返回内容为标准 m3u8 文本，不是 JSON。\n调用前置条件：指定时间范围内存在录像文件，且录像文件仍在磁盘中。\n失败场景：1. `cid` 缺失；2. `start_ms/end_ms` 缺失；3. 范围内无录像；4. 录像文件已被清理。",
-                "produces": [
-                    "application/vnd.apple.mpegurl"
-                ],
-                "tags": [
-                    "Recording"
-                ],
-                "summary": "生成录像 HLS 播放列表",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "通道ID",
-                        "name": "cid",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "description": "开始毫秒时间戳",
-                        "name": "start_ms",
-                        "in": "query",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "description": "结束毫秒时间戳",
-                        "name": "end_ms",
-                        "in": "query",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "访问令牌",
-                        "name": "token",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "M3U8 内容",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/recordings/monthly": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "返回指定月份每天是否存在录像的位图字符串，适合月历视图快速渲染。\n请求示例：`/recordings/monthly?cid=GB_34020000001320000001\u0026year=2024\u0026month=3`\n响应示例：`{ \"year\": 2024, \"month\": 3, \"days\": 31, \"has_video\": \"1110010000000000000000000000000\" }`\n调用前置条件：已存在录像数据。\n失败场景：1. 年月参数非法；2. 查询失败。",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Recording"
-                ],
-                "summary": "获取月度录像统计",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "通道ID",
-                        "name": "cid",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "年份",
-                        "name": "year",
-                        "in": "query",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "description": "月份",
-                        "name": "month",
-                        "in": "query",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/recording.MonthlyStatsOutput"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/recordings/timeline": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "返回某个通道在指定时间范围内的录像时间轴片段，适合前端时间轴控件直接使用。\n请求示例：`/recordings/timeline?cid=GB_34020000001320000001\u0026start_ms=1710864000000\u0026end_ms=1710950400000`\n响应示例：`{ \"items\": [ { \"id\": 1, \"start_ms\": 1710864000000, \"end_ms\": 1710867600000, \"duration\": 3600 } ] }`\n调用前置条件：指定通道已有录像记录。\n失败场景：1. `cid` 缺失；2. 时间范围非法；3. 查询失败。",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Recording"
-                ],
-                "summary": "获取录像时间轴",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "通道ID",
-                        "name": "cid",
-                        "in": "query",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "description": "开始毫秒时间戳",
-                        "name": "start_ms",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "结束毫秒时间戳",
-                        "name": "end_ms",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerTimelineResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/recordings/{id}": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Recording"
-                ],
-                "summary": "获取录像详情",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "录像ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/recording.Recording"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            },
-            "put": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Recording"
-                ],
-                "summary": "修改录像",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "录像ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "录像更新参数",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/recording.EditRecordingInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/recording.Recording"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            },
-            "delete": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Recording"
-                ],
-                "summary": "删除录像",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "录像ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/recording.Recording"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/recordings/{id}/download": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "produces": [
-                    "application/octet-stream"
-                ],
-                "tags": [
-                    "Recording"
-                ],
-                "summary": "下载录像文件",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "录像ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "录像文件",
-                        "schema": {
-                            "type": "file"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/users": {
-            "put": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Auth"
-                ],
-                "summary": "修改登录凭据",
-                "parameters": [
-                    {
-                        "description": "新用户名和密码",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.updateCredentialsInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.SwaggerMessageResponse"
                         }
                     },
                     "400": {
@@ -4315,220 +3523,6 @@
         }
     },
     "definitions": {
-        "api.AIBoundingBox": {
-            "type": "object",
-            "properties": {
-                "x_max": {
-                    "type": "integer",
-                    "example": 360
-                },
-                "x_min": {
-                    "type": "integer",
-                    "example": 120
-                },
-                "y_max": {
-                    "type": "integer",
-                    "example": 500
-                },
-                "y_min": {
-                    "type": "integer",
-                    "example": 80
-                }
-            }
-        },
-        "api.AIDetection": {
-            "type": "object",
-            "properties": {
-                "area": {
-                    "description": "边界框像素面积",
-                    "type": "integer",
-                    "example": 35800
-                },
-                "box": {
-                    "description": "像素坐标边界框",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/api.AIBoundingBox"
-                        }
-                    ]
-                },
-                "confidence": {
-                    "description": "置信度（0.0-1.0）",
-                    "type": "number",
-                    "example": 0.92
-                },
-                "label": {
-                    "description": "物体类别",
-                    "type": "string",
-                    "example": "person"
-                },
-                "norm_box": {
-                    "description": "归一化边界框",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/api.AINormBox"
-                        }
-                    ]
-                }
-            }
-        },
-        "api.AIDetectionInput": {
-            "type": "object",
-            "properties": {
-                "camera_id": {
-                    "description": "摄像头 ID",
-                    "type": "string",
-                    "example": "GB_34020000001320000001"
-                },
-                "detections": {
-                    "description": "检测结果列表",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/api.AIDetection"
-                    }
-                },
-                "snapshot": {
-                    "description": "Base64 编码的快照（JPEG）",
-                    "type": "string"
-                },
-                "snapshot_height": {
-                    "description": "快照高度",
-                    "type": "integer",
-                    "example": 1080
-                },
-                "snapshot_width": {
-                    "description": "快照宽度",
-                    "type": "integer",
-                    "example": 1920
-                },
-                "timestamp": {
-                    "description": "Unix 时间戳 (毫秒)",
-                    "type": "string"
-                }
-            }
-        },
-        "api.AIGlobalStats": {
-            "type": "object",
-            "properties": {
-                "active_streams": {
-                    "description": "活跃流数量",
-                    "type": "integer",
-                    "example": 8
-                },
-                "total_detections": {
-                    "description": "总检测次数",
-                    "type": "integer",
-                    "example": 1234
-                },
-                "uptime_seconds": {
-                    "description": "运行时间（秒）",
-                    "type": "integer",
-                    "example": 3600
-                }
-            }
-        },
-        "api.AIKeepaliveInput": {
-            "type": "object",
-            "properties": {
-                "message": {
-                    "description": "附加消息",
-                    "type": "string",
-                    "example": "alive"
-                },
-                "stats": {
-                    "description": "全局统计信息",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/api.AIGlobalStats"
-                        }
-                    ]
-                },
-                "timestamp": {
-                    "description": "Unix 时间戳（毫秒）",
-                    "type": "integer",
-                    "example": 1710931200000
-                }
-            }
-        },
-        "api.AINormBox": {
-            "type": "object",
-            "properties": {
-                "h": {
-                    "description": "高度",
-                    "type": "number",
-                    "example": 0.32
-                },
-                "w": {
-                    "description": "宽度",
-                    "type": "number",
-                    "example": 0.18
-                },
-                "x": {
-                    "description": "中心点 X 坐标",
-                    "type": "number",
-                    "example": 0.42
-                },
-                "y": {
-                    "description": "中心点 Y 坐标",
-                    "type": "number",
-                    "example": 0.51
-                }
-            }
-        },
-        "api.AIStartedInput": {
-            "type": "object",
-            "properties": {
-                "message": {
-                    "description": "启动消息",
-                    "type": "string",
-                    "example": "service started"
-                },
-                "timestamp": {
-                    "description": "Unix 时间戳（毫秒）",
-                    "type": "integer",
-                    "example": 1710931200000
-                }
-            }
-        },
-        "api.AIStoppedInput": {
-            "type": "object",
-            "properties": {
-                "camera_id": {
-                    "description": "摄像头 ID",
-                    "type": "string",
-                    "example": "GB_34020000001320000001"
-                },
-                "message": {
-                    "description": "详细信息",
-                    "type": "string",
-                    "example": "manual stop"
-                },
-                "reason": {
-                    "description": "停止原因（user_requested/error）",
-                    "type": "string",
-                    "example": "user_requested"
-                },
-                "timestamp": {
-                    "description": "Unix 时间戳 (毫秒)",
-                    "type": "string"
-                }
-            }
-        },
-        "api.AIWebhookOutput": {
-            "type": "object",
-            "properties": {
-                "code": {
-                    "description": "错误代码，0 表示成功",
-                    "type": "integer",
-                    "example": 0
-                },
-                "msg": {
-                    "description": "消息",
-                    "type": "string",
-                    "example": "success"
-                }
-            }
-        },
         "api.Data": {
             "type": "object",
             "properties": {
@@ -4639,6 +3633,26 @@
                 }
             }
         },
+        "api.SIPAccessInfo": {
+            "type": "object",
+            "properties": {
+                "domain": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "password": {
+                    "type": "string"
+                },
+                "port": {
+                    "type": "integer"
+                },
+                "server_ip": {
+                    "type": "string"
+                }
+            }
+        },
         "api.SwaggerAIDisableOutput": {
             "type": "object",
             "properties": {
@@ -4684,6 +3698,17 @@
                 }
             }
         },
+        "api.SwaggerCascadeStatusesResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/gbs.CascadePlatformStatus"
+                    }
+                }
+            }
+        },
         "api.SwaggerChannelsResponse": {
             "type": "object",
             "properties": {
@@ -4701,6 +3726,14 @@
         "api.SwaggerConfigInfoOutput": {
             "type": "object",
             "properties": {
+                "access_info": {
+                    "description": "设备接入所需的精简地址信息",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/api.SIPAccessInfo"
+                        }
+                    ]
+                },
                 "sip": {
                     "description": "当前系统使用的 SIP 配置",
                     "allOf": [
@@ -4708,6 +3741,19 @@
                             "$ref": "#/definitions/api.SwaggerSIPConfig"
                         }
                     ]
+                }
+            }
+        },
+        "api.SwaggerDeviceHistoryConfig": {
+            "type": "object",
+            "properties": {
+                "max_days": {
+                    "type": "integer",
+                    "example": 30
+                },
+                "max_records": {
+                    "type": "integer",
+                    "example": 1000
                 }
             }
         },
@@ -4725,6 +3771,136 @@
                 }
             }
         },
+        "api.SwaggerDirectTCPDownloadConfig": {
+            "type": "object",
+            "properties": {
+                "allow_address_mismatch": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "allowed_address_cidrs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "device_allowlist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "device_concurrency": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "dial_timeout": {
+                    "description": "纳秒",
+                    "type": "integer",
+                    "example": 5000000000
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "first_byte_timeout": {
+                    "description": "纳秒",
+                    "type": "integer",
+                    "example": 15000000000
+                },
+                "global_concurrency": {
+                    "type": "integer",
+                    "example": 4
+                },
+                "idle_timeout": {
+                    "description": "纳秒",
+                    "type": "integer",
+                    "example": 30000000000
+                },
+                "max_file_size": {
+                    "type": "integer",
+                    "example": 10737418240
+                },
+                "offer_port": {
+                    "type": "integer",
+                    "example": 9
+                },
+                "retain_days": {
+                    "type": "integer",
+                    "example": 7
+                },
+                "storage_dir": {
+                    "type": "string",
+                    "example": "./configs/downloads/gb28181"
+                },
+                "total_timeout": {
+                    "description": "纳秒",
+                    "type": "integer",
+                    "example": 7200000000000
+                }
+            }
+        },
+        "api.SwaggerDirectTCPDownloadState": {
+            "type": "object",
+            "properties": {
+                "channel_id": {
+                    "type": "string",
+                    "example": "34020000001320000002"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "device_id": {
+                    "type": "string",
+                    "example": "34020000001320000001"
+                },
+                "end_reason": {
+                    "type": "string",
+                    "example": "size_reached"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "file_size": {
+                    "type": "integer",
+                    "example": 2097152
+                },
+                "file_size_known": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "output": {
+                    "type": "string"
+                },
+                "received": {
+                    "type": "integer",
+                    "example": 1048576
+                },
+                "session_id": {
+                    "type": "string",
+                    "example": "call-id@example"
+                },
+                "sha256": {
+                    "type": "string"
+                },
+                "size_verified": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "started_at": {
+                    "type": "string",
+                    "example": "2026-08-10T19:30:00+08:00"
+                },
+                "status": {
+                    "type": "string",
+                    "example": "receiving"
+                },
+                "updated_at": {
+                    "type": "string",
+                    "example": "2026-08-10T19:30:05+08:00"
+                }
+            }
+        },
         "api.SwaggerErrorResponse": {
             "type": "object",
             "properties": {
@@ -4732,22 +3908,6 @@
                     "description": "错误信息",
                     "type": "string",
                     "example": "参数错误"
-                }
-            }
-        },
-        "api.SwaggerEventsResponse": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "description": "事件列表",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/event.Event"
-                    }
-                },
-                "total": {
-                    "description": "总记录数",
-                    "type": "integer"
                 }
             }
         },
@@ -4914,6 +4074,11 @@
                     "type": "integer",
                     "example": 60
                 },
+                "number": {
+                    "description": "巡航轨迹编号（0 或 1）",
+                    "type": "integer",
+                    "example": 0
+                },
                 "start": {
                     "description": "起始时间，Unix 秒",
                     "type": "integer",
@@ -5025,6 +4190,59 @@
                 }
             }
         },
+        "api.SwaggerGBMetricsSnapshot": {
+            "type": "object",
+            "properties": {
+                "catalog_partial": {
+                    "type": "integer"
+                },
+                "catalog_requests": {
+                    "type": "integer"
+                },
+                "catalog_success": {
+                    "type": "integer"
+                },
+                "catalog_timeouts": {
+                    "type": "integer"
+                },
+                "direct_tcp_bytes": {
+                    "type": "integer"
+                },
+                "direct_tcp_cancelled": {
+                    "type": "integer"
+                },
+                "direct_tcp_completed": {
+                    "type": "integer"
+                },
+                "direct_tcp_failed": {
+                    "type": "integer"
+                },
+                "direct_tcp_started": {
+                    "type": "integer"
+                },
+                "media_disconnects": {
+                    "type": "integer"
+                },
+                "media_failures": {
+                    "type": "integer"
+                },
+                "media_requests": {
+                    "type": "integer"
+                },
+                "media_success": {
+                    "type": "integer"
+                },
+                "register_failures": {
+                    "type": "integer"
+                },
+                "register_requests": {
+                    "type": "integer"
+                },
+                "register_success": {
+                    "type": "integer"
+                }
+            }
+        },
         "api.SwaggerGBPTZCmdParamInput": {
             "type": "object",
             "properties": {
@@ -5057,31 +4275,6 @@
                     "description": "精确变倍值",
                     "type": "number",
                     "example": 2
-                }
-            }
-        },
-        "api.SwaggerLoginKeyOutput": {
-            "type": "object",
-            "properties": {
-                "key": {
-                    "description": "Base64 编码的 PEM 公钥，用于前端加密登录数据",
-                    "type": "string"
-                }
-            }
-        },
-        "api.SwaggerMediaServersResponse": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "description": "流媒体服务器列表",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/sms.MediaServer"
-                    }
-                },
-                "total": {
-                    "description": "总记录数",
-                    "type": "integer"
                 }
             }
         },
@@ -5253,25 +4446,25 @@
                 }
             }
         },
-        "api.SwaggerRecordingsResponse": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "description": "录像列表",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/recording.Recording"
-                    }
-                },
-                "total": {
-                    "description": "总记录数",
-                    "type": "integer"
-                }
-            }
-        },
         "api.SwaggerSIPConfig": {
             "type": "object",
             "properties": {
+                "device_history": {
+                    "description": "设备注册与心跳历史保留策略",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/api.SwaggerDeviceHistoryConfig"
+                        }
+                    ]
+                },
+                "direct_tcp_download": {
+                    "description": "2014 附录 O 裸 TCP 下载配置",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/api.SwaggerDirectTCPDownloadConfig"
+                        }
+                    ]
+                },
                 "domain": {
                     "description": "SIP 域",
                     "type": "string",
@@ -5282,10 +4475,23 @@
                     "type": "boolean",
                     "example": false
                 },
+                "host": {
+                    "description": "对设备和上级宣告的 SIP 地址",
+                    "type": "string",
+                    "example": "192.0.2.20"
+                },
                 "id": {
                     "description": "平台 20 位国标编码",
                     "type": "string",
                     "example": "34020000002000000001"
+                },
+                "log": {
+                    "description": "SIP 报文日志配置；更新时可省略以保留当前值",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/api.SwaggerSIPLog"
+                        }
+                    ]
                 },
                 "password": {
                     "description": "注册鉴权密码",
@@ -5326,28 +4532,141 @@
                     "description": "SIP-TLS 监听端口",
                     "type": "integer",
                     "example": 5061
+                },
+                "upstreams": {
+                    "description": "上级 GB/T 28181 平台配置",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.SwaggerSIPUpstream"
+                    }
+                }
+            }
+        },
+        "api.SwaggerSIPLog": {
+            "type": "object",
+            "properties": {
+                "dir": {
+                    "type": "string",
+                    "example": "./logs/sip"
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "max_age": {
+                    "description": "纳秒",
+                    "type": "integer",
+                    "example": 604800000000000
+                },
+                "rotation_size": {
+                    "type": "integer",
+                    "example": 50
+                },
+                "rotation_time": {
+                    "description": "纳秒",
+                    "type": "integer",
+                    "example": 43200000000000
+                }
+            }
+        },
+        "api.SwaggerSIPUpstream": {
+            "type": "object",
+            "properties": {
+                "channel_id_map": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "domain": {
+                    "type": "string",
+                    "example": "3402000000"
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "expires": {
+                    "type": "integer",
+                    "example": 3600
+                },
+                "host": {
+                    "type": "string",
+                    "example": "192.0.2.30"
+                },
+                "keepalive_interval": {
+                    "description": "纳秒，与配置 API 的 Duration 数值一致",
+                    "type": "integer",
+                    "example": 60000000000
+                },
+                "local_domain": {
+                    "type": "string",
+                    "example": "3402000000"
+                },
+                "local_host": {
+                    "type": "string",
+                    "example": "192.0.2.20"
+                },
+                "local_id": {
+                    "type": "string",
+                    "example": "34020000002000000002"
+                },
+                "media_allowed_cidrs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "198.51.100.0/24"
+                    ]
+                },
+                "name": {
+                    "type": "string",
+                    "example": "provincial"
+                },
+                "password": {
+                    "type": "string",
+                    "example": "123456"
+                },
+                "port": {
+                    "type": "integer",
+                    "example": 5060
+                },
+                "server_id": {
+                    "type": "string",
+                    "example": "34020000002000000001"
+                },
+                "shared_channels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "version": {
+                    "type": "string",
+                    "example": "1.1"
                 }
             }
         },
         "api.SwaggerSnapshotLinkOutput": {
             "type": "object",
             "properties": {
+                "attempts": {
+                    "description": "抓拍尝试过程，成功走 fallback 时会包含前序失败原因",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "link": {
                     "description": "可直接访问的快照地址",
                     "type": "string",
                     "example": "http://127.0.0.1:9900/channels/xxx/snapshot?token=xxx"
-                }
-            }
-        },
-        "api.SwaggerTimelineResponse": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "description": "时间轴片段列表",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/recording.TimeRange"
-                    }
+                },
+                "method": {
+                    "description": "本次快照来源：cache/gb28181_device_upload/ffmpeg/zlm_get_snap/url/none",
+                    "type": "string",
+                    "example": "ffmpeg"
                 }
             }
         },
@@ -5511,6 +4830,11 @@
                     "type": "string",
                     "example": "PLAY"
                 },
+                "download_speed": {
+                    "description": "下载整数倍速；仅 mode=download，0 表示默认 1 倍速",
+                    "type": "integer",
+                    "example": 4
+                },
                 "end_at": {
                     "description": "结束时间，Unix 秒；start 时必填",
                     "type": "integer",
@@ -5535,32 +4859,11 @@
                     "description": "开始时间，Unix 秒；start 时必填",
                     "type": "integer",
                     "example": 1710864000
-                }
-            }
-        },
-        "api.loginInput": {
-            "type": "object",
-            "required": [
-                "data"
-            ],
-            "properties": {
-                "data": {
-                    "description": "Username string `json:\"username\" binding:\"required\"`\nPassword string `json:\"password\" binding:\"required\"`",
-                    "type": "string",
-                    "example": "Base64(RSA-OAEP(username/password JSON))"
-                }
-            }
-        },
-        "api.loginOutput": {
-            "type": "object",
-            "properties": {
-                "token": {
-                    "description": "登录成功后返回的 JWT",
-                    "type": "string"
                 },
-                "user": {
-                    "description": "当前登录用户名",
-                    "type": "string"
+                "transport": {
+                    "description": "rtp 或 direct_tcp；direct_tcp 仅支持 1.1 下载",
+                    "type": "string",
+                    "example": "rtp"
                 }
             }
         },
@@ -6075,8 +5378,33 @@
         "api.subscribeInput": {
             "type": "object",
             "properties": {
+                "alarm_method": {
+                    "description": "Alarm 方式组合，0 为全部",
+                    "type": "string",
+                    "example": "25"
+                },
+                "alarm_type": {
+                    "description": "Alarm 类型，仅 2016/2022（2.0/3.0）",
+                    "type": "string",
+                    "example": "2"
+                },
+                "cancel": {
+                    "description": "是否取消已有订阅",
+                    "type": "boolean",
+                    "example": false
+                },
+                "end_alarm_priority": {
+                    "description": "Alarm 终止级别，0 为全部",
+                    "type": "string",
+                    "example": "4"
+                },
+                "end_alarm_time": {
+                    "description": "Alarm 终止时间",
+                    "type": "string",
+                    "example": "2026-08-25T09:00:00"
+                },
                 "event": {
-                    "description": "订阅事件类型，如 alarm/mobile_position/catalog/device_position",
+                    "description": "订阅事件类型，如 alarm/mobile_position/catalog/device_position/ptz_position",
                     "type": "string",
                     "example": "alarm"
                 },
@@ -6084,25 +5412,26 @@
                     "description": "订阅有效期，单位秒",
                     "type": "integer",
                     "example": 3600
-                }
-            }
-        },
-        "api.updateCredentialsInput": {
-            "type": "object",
-            "required": [
-                "password",
-                "username"
-            ],
-            "properties": {
-                "password": {
-                    "description": "新密码",
-                    "type": "string",
-                    "example": "admin"
                 },
-                "username": {
-                    "description": "新用户名",
+                "interval": {
+                    "description": "MobilePosition 上报间隔，单位秒",
+                    "type": "integer",
+                    "example": 5
+                },
+                "start_alarm_priority": {
+                    "description": "Alarm 起始级别，0 为全部",
                     "type": "string",
-                    "example": "admin"
+                    "example": "1"
+                },
+                "start_alarm_time": {
+                    "description": "Alarm 起始时间",
+                    "type": "string",
+                    "example": "2026-08-25T08:00:00"
+                },
+                "target_id": {
+                    "description": "可选目标通道国标编码；空值订阅设备本身",
+                    "type": "string",
+                    "example": "34020000001320000001"
                 }
             }
         },
@@ -6139,71 +5468,122 @@
         "api.voiceControlInput": {
             "type": "object",
             "properties": {
+                "media_server_id": {
+                    "description": "音频源所在媒体服务器；空值使用默认节点",
+                    "type": "string",
+                    "example": "local"
+                },
                 "mode": {
                     "description": "语音模式：talk 对讲，broadcast 广播",
                     "type": "string",
                     "example": "talk"
+                },
+                "source_app": {
+                    "description": "ZLM 音频源应用名",
+                    "type": "string",
+                    "example": "live"
+                },
+                "source_id": {
+                    "description": "语音流发送者国标 ID；空值使用本平台 ID",
+                    "type": "string",
+                    "example": "34020000002000000001"
+                },
+                "source_stream": {
+                    "description": "ZLM G.711 A-law 音频源流 ID；启动语音时必填",
+                    "type": "string",
+                    "example": "voice-microphone-1"
+                },
+                "source_vhost": {
+                    "description": "ZLM 音频源虚拟主机",
+                    "type": "string",
+                    "example": "__defaultVhost__"
                 }
             }
         },
-        "event.EditEventInput": {
+        "gbs.CascadePlatformStatus": {
             "type": "object",
             "properties": {
-                "ended_at": {
-                    "description": "事件结束时间 (毫秒时间戳)",
+                "address": {
+                    "type": "string"
+                },
+                "configured_version": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "last_keepalive_at": {
+                    "type": "string"
+                },
+                "last_register_at": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "negotiated_version": {
+                    "type": "string"
+                },
+                "registered": {
+                    "type": "boolean"
+                },
+                "server_id": {
+                    "type": "string"
+                },
+                "state": {
                     "type": "string"
                 }
             }
         },
-        "event.Event": {
+        "gbs.RTPDownloadState": {
             "type": "object",
             "properties": {
-                "cid": {
-                    "description": "通道 ID (channel 表的 id)",
-                    "type": "string"
+                "approximate": {
+                    "type": "boolean"
                 },
-                "created_at": {
-                    "description": "创建时间",
-                    "type": "string"
-                },
-                "did": {
-                    "description": "设备 ID (device 表的 id)",
-                    "type": "string"
-                },
-                "ended_at": {
-                    "description": "事件结束时间",
-                    "type": "string"
-                },
-                "id": {
-                    "description": "事件 ID",
+                "bytes_speed": {
                     "type": "integer"
                 },
-                "image_path": {
-                    "description": "图片相对路径 (cid/年月日时分秒_随机6位.jpg)",
+                "channel_id": {
                     "type": "string"
                 },
-                "label": {
-                    "description": "检测标签 (person, car 等)",
+                "completed_at": {
                     "type": "string"
                 },
-                "model": {
-                    "description": "分析模型名称",
+                "device_id": {
                     "type": "string"
                 },
-                "score": {
-                    "description": "置信度 (0.0-1.0)",
+                "end_reason": {
+                    "type": "string"
+                },
+                "file_size": {
+                    "type": "integer"
+                },
+                "file_size_known": {
+                    "type": "boolean"
+                },
+                "progress_known": {
+                    "type": "boolean"
+                },
+                "progress_percent": {
                     "type": "number"
                 },
+                "received": {
+                    "type": "integer"
+                },
+                "session_id": {
+                    "type": "string"
+                },
                 "started_at": {
-                    "description": "事件开始时间",
+                    "type": "string"
+                },
+                "status": {
                     "type": "string"
                 },
                 "updated_at": {
-                    "description": "更新时间",
-                    "type": "string"
-                },
-                "zones": {
-                    "description": "检测区域，JSON 格式存储边界框信息",
                     "type": "string"
                 }
             }
@@ -6266,6 +5646,10 @@
                 },
                 "port": {
                     "description": "port",
+                    "type": "integer"
+                },
+                "stream_mode": {
+                    "description": "StreamMode 指定国标设备的 RTP 收流模式（0: UDP，1: TCP 被动，2: TCP 主动）。",
                     "type": "integer"
                 },
                 "type": {
@@ -6439,7 +5823,7 @@
                     "type": "integer"
                 },
                 "name": {
-                    "description": "设备名称",
+                    "description": "自定义名称",
                     "type": "string"
                 },
                 "password": {
@@ -6486,6 +5870,10 @@
         "ipc.DeviceExt": {
             "type": "object",
             "properties": {
+                "analysis_interval": {
+                    "description": "AI 分析间隔（秒），0 表示使用默认值",
+                    "type": "number"
+                },
                 "enabled_ai": {
                     "description": "是否启用 AI",
                     "type": "boolean"
@@ -6501,9 +5889,59 @@
                         "$ref": "#/definitions/ipc.GBAppendixA4Object"
                     }
                 },
-                "gb_version": {
-                    "description": "GB版本",
+                "gb_catalog": {
+                    "description": "GBCatalog 保存 GB/T 28181 目录项扩展和原始 XML，兼容 2014 及厂商私有字段。",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/ipc.GBCatalogExt"
+                        }
+                    ]
+                },
+                "gb_declared_version": {
+                    "description": "GBDeclaredVersion 是设备通过 X-GB-Ver 声明的版本号。",
                     "type": "string"
+                },
+                "gb_disabled_capabilities": {
+                    "description": "GBDisabledCapabilities 按设备关闭已知但设备固件未实现的国标扩展能力。",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "gb_effective_version": {
+                    "description": "GBEffectiveVersion 是平台下行实际使用的版本号。",
+                    "type": "string"
+                },
+                "gb_last_unsupported_command": {
+                    "type": "string"
+                },
+                "gb_last_unsupported_updated_at": {
+                    "type": "integer"
+                },
+                "gb_last_unsupported_version": {
+                    "type": "string"
+                },
+                "gb_manual_version": {
+                    "description": "GBManualVersion 非空时覆盖自动协商；值为空表示恢复自动协商。",
+                    "type": "string"
+                },
+                "gb_version": {
+                    "description": "GB版本（兼容历史年份值）",
+                    "type": "string"
+                },
+                "gb_version_capabilities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "gb_version_source": {
+                    "description": "GBVersionSource 记录 effective version 的来源：manual/header/legacy/default。",
+                    "type": "string"
+                },
+                "gb_version_updated_at": {
+                    "description": "GBVersionUpdatedAt 是最近一次版本协商时间（Unix 秒）。",
+                    "type": "integer"
                 },
                 "manufacturer": {
                     "description": "生产厂商",
@@ -6581,6 +6019,17 @@
                     "description": "20 位国标编号",
                     "type": "string"
                 },
+                "gb_disabled_capabilities": {
+                    "description": "GBDisabledCapabilities 按设备关闭部分国标能力；nil 表示不修改，空数组表示全部恢复。",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "gb_version": {
+                    "description": "GBVersion 手动指定 GB/T 28181 协议版本；支持 1.0/1.1/2.0/3.0 和历史年份值。\nnil 表示不修改，空字符串表示清除手动覆盖并恢复自动协商。",
+                    "type": "string"
+                },
                 "ip": {
                     "description": "ip",
                     "type": "string"
@@ -6635,6 +6084,101 @@
                 },
                 "updated_at": {
                     "description": "最近更新时间（unix 秒）",
+                    "type": "integer"
+                }
+            }
+        },
+        "ipc.GBCatalogExt": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "block": {
+                    "type": "string"
+                },
+                "business_group_id": {
+                    "type": "string"
+                },
+                "cert_num": {
+                    "type": "string"
+                },
+                "certifiable": {
+                    "type": "integer"
+                },
+                "civil_code": {
+                    "type": "string"
+                },
+                "direction_type": {
+                    "type": "integer"
+                },
+                "end_time": {
+                    "type": "string"
+                },
+                "err_code": {
+                    "type": "integer"
+                },
+                "info_raw_xml": {
+                    "type": "string"
+                },
+                "ip_address": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "latitude": {
+                    "type": "number"
+                },
+                "longitude": {
+                    "type": "number"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "parent_id": {
+                    "type": "string"
+                },
+                "parental": {
+                    "type": "integer"
+                },
+                "password": {
+                    "type": "string"
+                },
+                "port": {
+                    "type": "integer"
+                },
+                "position_type": {
+                    "type": "integer"
+                },
+                "ptz_type": {
+                    "type": "integer"
+                },
+                "raw_xml": {
+                    "type": "string"
+                },
+                "register_way": {
+                    "type": "integer"
+                },
+                "resolution": {
+                    "type": "string"
+                },
+                "room_type": {
+                    "type": "integer"
+                },
+                "safety_way": {
+                    "type": "integer"
+                },
+                "secrecy": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "supply_light_type": {
+                    "type": "integer"
+                },
+                "use_type": {
                     "type": "integer"
                 }
             }
@@ -6769,254 +6313,10 @@
                 }
             }
         },
-        "recording.EditRecordingInput": {
-            "type": "object",
-            "properties": {
-                "object_count": {
-                    "description": "AI检测对象数量（从event表统计）",
-                    "type": "integer"
-                }
-            }
-        },
-        "recording.MonthlyStatsOutput": {
-            "type": "object",
-            "properties": {
-                "days": {
-                    "description": "该月总天数",
-                    "type": "integer"
-                },
-                "has_video": {
-                    "description": "位图字符串，如 \"10101010...\" 第 1 天有录像则第 1 位为 1",
-                    "type": "string"
-                },
-                "month": {
-                    "description": "月份",
-                    "type": "integer"
-                },
-                "year": {
-                    "description": "年份",
-                    "type": "integer"
-                }
-            }
-        },
-        "recording.Recording": {
-            "type": "object",
-            "properties": {
-                "app": {
-                    "description": "ZLM 应用名",
-                    "type": "string"
-                },
-                "cid": {
-                    "description": "通道 ID (channel.ID)",
-                    "type": "string"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "delete_flag": {
-                    "description": "待删除标记（即将被清理）",
-                    "type": "boolean"
-                },
-                "duration": {
-                    "description": "持续时长（秒）",
-                    "type": "number"
-                },
-                "ended_at": {
-                    "description": "录像结束时间",
-                    "type": "string"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "object_count": {
-                    "description": "AI检测对象数量（从event表统计）",
-                    "type": "integer"
-                },
-                "path": {
-                    "description": "文件相对路径",
-                    "type": "string"
-                },
-                "size": {
-                    "description": "文件大小（字节）",
-                    "type": "integer"
-                },
-                "started_at": {
-                    "description": "录像开始时间",
-                    "type": "string"
-                },
-                "stream": {
-                    "description": "ZLM 流 ID",
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                }
-            }
-        },
-        "recording.TimeRange": {
-            "type": "object",
-            "properties": {
-                "delete_flag": {
-                    "description": "待删除标记（已被标记即将清理）",
-                    "type": "boolean"
-                },
-                "duration": {
-                    "description": "时长（秒）",
-                    "type": "number"
-                },
-                "end_ms": {
-                    "description": "结束时间（毫秒时间戳）",
-                    "type": "integer"
-                },
-                "id": {
-                    "description": "录像记录 ID",
-                    "type": "integer"
-                },
-                "object_count": {
-                    "description": "AI检测对象数量",
-                    "type": "integer"
-                },
-                "start_ms": {
-                    "description": "开始时间（毫秒时间戳）",
-                    "type": "integer"
-                }
-            }
-        },
-        "sms.EditMediaServerInput": {
-            "type": "object",
-            "properties": {
-                "hook_ip": {
-                    "type": "string"
-                },
-                "ip": {
-                    "type": "string"
-                },
-                "sdp_ip": {
-                    "type": "string"
-                },
-                "secret": {
-                    "description": "StreamIP          string           `json:\"stream_ip\"`\nPorts MediaServerPorts `json:\"ports\"`\nAutoConfig        bool             `json:\"auto_config\"`",
-                    "type": "string"
-                },
-                "type": {
-                    "description": "lalmax/zlm",
-                    "type": "string"
-                }
-            }
-        },
-        "sms.MediaServer": {
-            "type": "object",
-            "properties": {
-                "auto_config": {
-                    "type": "boolean"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "hook_alive_interval": {
-                    "type": "integer"
-                },
-                "hook_ip": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "ip": {
-                    "type": "string"
-                },
-                "last_keepalive_at": {
-                    "type": "string"
-                },
-                "ports": {
-                    "$ref": "#/definitions/sms.MediaServerPorts"
-                },
-                "record_assist_port": {
-                    "type": "integer"
-                },
-                "record_day": {
-                    "type": "integer"
-                },
-                "record_path": {
-                    "type": "string"
-                },
-                "rtpenable": {
-                    "type": "boolean"
-                },
-                "rtpport_range": {
-                    "type": "string"
-                },
-                "sdp_ip": {
-                    "type": "string"
-                },
-                "secret": {
-                    "type": "string"
-                },
-                "send_rtpport_range": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "boolean"
-                },
-                "stream_ip": {
-                    "type": "string"
-                },
-                "transcode_suffix": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                }
-            }
-        },
-        "sms.MediaServerPorts": {
-            "type": "object",
-            "properties": {
-                "flv": {
-                    "type": "integer"
-                },
-                "flvs": {
-                    "type": "integer"
-                },
-                "http": {
-                    "type": "integer"
-                },
-                "https": {
-                    "type": "integer"
-                },
-                "rtmp": {
-                    "type": "integer"
-                },
-                "rtmps": {
-                    "type": "integer"
-                },
-                "rtpporxy": {
-                    "type": "integer"
-                },
-                "rtsp": {
-                    "type": "integer"
-                },
-                "rtsps": {
-                    "type": "integer"
-                },
-                "ws_flv": {
-                    "type": "integer"
-                },
-                "ws_flvs": {
-                    "type": "integer"
-                }
-            }
-        },
         "sms.StreamLiveAddr": {
             "type": "object",
             "properties": {
                 "hls": {
-                    "type": "string"
-                },
-                "http_flv": {
                     "type": "string"
                 },
                 "label": {
@@ -7029,9 +6329,6 @@
                     "type": "string"
                 },
                 "webrtc": {
-                    "type": "string"
-                },
-                "ws_flv": {
                     "type": "string"
                 }
             }

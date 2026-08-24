@@ -15,6 +15,11 @@ func (g *GB28181API) QuerySnapshot(deviceID, targetID, coverKey string) error {
 	if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "图像抓拍(9.14)"); err != nil {
 		return err
 	}
+	if err := g.requireGBFeature(deviceID, "snapshot", "图像抓拍(9.14)", func(c GBCapabilities) bool {
+		return c.Snapshot
+	}); err != nil {
+		return err
+	}
 	ipc, ok := g.svr.memoryStorer.Load(deviceID)
 	if !ok {
 		return ErrDeviceOffline

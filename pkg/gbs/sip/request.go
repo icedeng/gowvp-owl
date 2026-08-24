@@ -45,11 +45,17 @@ func NewRequest(
 
 // NewRequestFromResponse NewRequestFromResponse
 func NewRequestFromResponse(method string, resp *Response) *Request {
-	contact, _ := resp.Contact()
+	var recipient *URI
+	if contact, ok := resp.Contact(); ok && contact != nil && contact.Address != nil {
+		recipient = contact.Address.Clone()
+	} else if to, ok := resp.To(); ok && to != nil && to.Address != nil {
+		// 部分老设备的 2xx 响应缺少 Contact，退化为对话 To URI，避免 ACK/BYE 构造崩溃。
+		recipient = to.Address.Clone()
+	}
 	ackRequest := NewRequest(
 		resp.MessageID(),
 		method,
-		contact.Address,
+		recipient,
 		resp.SipVersion(),
 		[]Header{},
 		[]byte{},

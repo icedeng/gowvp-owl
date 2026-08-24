@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
 type multiResponseFixture struct {
@@ -52,5 +54,16 @@ func TestMultiResponseCollectorConcurrentQueriesSameDevice(t *testing.T) {
 		if len(result.Items) != 1 || result.Items[0].ID != fmt.Sprintf("item-%d", sn) {
 			t.Fatalf("query %d result = %+v", sn, result)
 		}
+	}
+}
+
+func TestRecordInfo11DecodesRecorderAndFileSize(t *testing.T) {
+	body := []byte(`<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10ChannelID + `</DeviceID><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><FilePath>/record/1.ps</FilePath><StartTime>2026-08-25T10:00:00</StartTime><EndTime>2026-08-25T10:01:00</EndTime><RecorderID>` + gb10DeviceID + `</RecorderID><FileSize>1048576</FileSize></Item></RecordList></Response>`)
+	var response MessageRecordInfoResponse
+	if err := sip.XMLDecode(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Item) != 1 || response.Item[0].RecorderID != gb10DeviceID || response.Item[0].FileSize != "1048576" {
+		t.Fatalf("RecordInfo response = %+v", response)
 	}
 }

@@ -1,6 +1,10 @@
 package conf
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+)
 
 type Bootstrap struct {
 	Debug        bool   `toml:"-" json:"-"`
@@ -120,7 +124,29 @@ type SIP struct {
 	PTZWeakConfirm     bool                 `comment:"是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理" json:"ptz_weak_confirm"`
 	DeviceHistory      DeviceHistoryConfig  `comment:"设备心跳与注册历史保留策略" json:"device_history"`
 	DirectTCPDownload  SIPDirectTCPDownload `comment:"GB/T 28181-2014 附录 O 裸 TCP 文件下载" json:"direct_tcp_download"`
-	Log                SIPLog
+	Upstreams          []SIPUpstream        `comment:"上下级平台级联：本平台作为下级注册到上级平台" json:"upstreams,omitempty"`
+	Log                SIPLog               `json:"log"`
+}
+
+// SIPUpstream 描述一个上级 GB/T 28181 平台的注册参数。
+// 第一阶段复用本地 SIP UDP 监听套接字发送注册和心跳；媒体级联由独立会话层处理。
+type SIPUpstream struct {
+	Name              string            `json:"name" comment:"上级平台配置名称，必须唯一"`
+	Enabled           bool              `json:"enabled" comment:"是否启用级联注册"`
+	ServerID          string            `json:"server_id" comment:"上级平台 20 位国标编码"`
+	Domain            string            `json:"domain" comment:"上级平台 SIP 域；为空时取 server_id 前 10 位"`
+	Host              string            `json:"host" comment:"上级平台 SIP 地址"`
+	Port              int               `json:"port" comment:"上级平台 SIP 端口"`
+	LocalID           string            `json:"local_id" comment:"向上级注册使用的本平台国标编码；为空时使用 Sip.ID"`
+	LocalDomain       string            `json:"local_domain" comment:"向上级注册使用的本平台 SIP 域；为空时使用 Sip.Domain 或 local_id 前 10 位"`
+	LocalHost         string            `json:"local_host" comment:"Contact 宣告地址；为空时使用 Sip.Host"`
+	Password          string            `json:"password" comment:"上级平台注册密码"`
+	Version           string            `json:"version" comment:"级联档案版本：1.0/1.1/2.0/3.0"`
+	Expires           int               `json:"expires" comment:"注册有效期秒数"`
+	KeepaliveInterval Duration          `json:"keepalive_interval" comment:"心跳间隔"`
+	SharedChannels    []string          `json:"shared_channels,omitempty" comment:"共享给该上级的本地国标通道编码；空列表表示不共享"`
+	ChannelIDMap      map[string]string `json:"channel_id_map,omitempty" comment:"本地通道编码到上级可见国标编码的映射"`
+	MediaAllowedCIDRs []string          `json:"media_allowed_cidrs,omitempty" comment:"除上级信令 IP 外允许接收级联媒体的 IP/CIDR 白名单"`
 }
 
 type DeviceHistoryConfig struct {
@@ -161,11 +187,11 @@ func (s *SIP) GetDomain() string {
 }
 
 type SIPLog struct {
-	Enabled      bool     `comment:"是否启用 SIP 报文落盘"`
-	Dir          string   `comment:"SIP 日志目录，建议独立目录"`
-	MaxAge       Duration `comment:"SIP 日志保留时长"`
-	RotationTime Duration `comment:"SIP 日志按时间分割间隔"`
-	RotationSize int64    `comment:"SIP 日志按文件大小分割(MB)"`
+	Enabled      bool     `json:"enabled" comment:"是否启用 SIP 报文落盘"`
+	Dir          string   `json:"dir" comment:"SIP 日志目录，建议独立目录"`
+	MaxAge       Duration `json:"max_age" comment:"SIP 日志保留时长"`
+	RotationTime Duration `json:"rotation_time" comment:"SIP 日志按时间分割间隔"`
+	RotationSize int64    `json:"rotation_size" comment:"SIP 日志按文件大小分割(MB)"`
 }
 
 type Media struct {
@@ -188,6 +214,26 @@ func (d *Duration) UnmarshalText(b []byte) error {
 		return err
 	}
 	*d = Duration(x)
+	return nil
+}
+
+// UnmarshalJSON 同时兼容配置 API 历史使用的纳秒整数和便于人工调用的时长字符串。
+func (d *Duration) UnmarshalJSON(body []byte) error {
+	if d == nil {
+		return fmt.Errorf("nil duration target")
+	}
+	if len(body) > 0 && body[0] == '"' {
+		var value string
+		if err := json.Unmarshal(body, &value); err != nil {
+			return err
+		}
+		return d.UnmarshalText([]byte(value))
+	}
+	var nanoseconds int64
+	if err := json.Unmarshal(body, &nanoseconds); err != nil {
+		return fmt.Errorf("duration must be a nanosecond integer or duration string: %w", err)
+	}
+	*d = Duration(nanoseconds)
 	return nil
 }
 

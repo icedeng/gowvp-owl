@@ -1,0 +1,39 @@
+GB/T 28181—2022
+A TA SG Sa EFA Event Sk Sa Hii iy Bal 58 F Th A He a TT Bed 19 2 2 SB (HE A] Expire 3%
+SHE a TT Bed aod mt Ta
+hh) 8 BR TT Bel RD ee MCB TT Bed TES er» 1d EY Bed Sa eI 200 OK I Ns
+i) 9s BET) Ba Bt A Re AEE J ak NOTIFY YH G0 M§ 05 SE AE a 1 Tad da. TP Sk HP EF) Event
+SK NIE TT BE SEF
+3) 10:47 Ra ae 8] NOTIFY JA Eur el 200 OK ae nies
+Ke) 11 FY Ba) 2a 1) 7 Bd Sah Az WE A TTB] SUBSCRIBE 7.) AE Skah f Event Sk Satis 7 Ba
+SEE TES PARE BaF TT Be 9 PE Re, Expire Sk BUEN 05
+VD 12 BHT Bel Bat Se Fo Wie BE TT BF « Wie) TT Ded Sa Ae E200 OK if iF HR HY ad TT Be] Sa Ag 3 A oak AE BE
+AA
+N.4 iM
+N.4.1 #OBXK
+SL TUS A id WE AF 68 ih AL EA PD AS eM HR SE EV Di TA OY AQ I HE
+Hedi) PLEAS fe 4 OCH aL cb HE es Lik $8 SLB eI A OH NG 29 Td FS HG aE CF
+ABE RE.
+N.4.2 TB i 03H SB Event Xiah
+SUBSCRIBE iH &\. NOTIFY i £4 ae 48 a7 Event 3 it dH 28 iT By ae fF. Event 3k Jk Hf st 4
+“Catalog;id=num”. HP num Way BU. A LH BL IETF RFC 6665.
+N.4.3 1] BiH Al a S38
+N.4.3.1 we
+TAT SAS an BaF
+(2? xml version="1.0"2)
+(Query)
+(1 trea A ae TT Ba) CE) —-)
+<CmdType)Catalog¢/CmdType)
+Cl AS RSS Cb) —-)
+(SN) fit > FP BIS ¢/SN)
+CY TY BDAY BE / 45 BK a / TR / Me 3 SY SEL / Hh A HL 2 Bt CU 3) —)
+<DevicelD) i Bi 244 ¢ /DevicelD)
+(/Query)
+N.4.3.2 i8 eB
+TY SS fas BF / ET A aR AP Item MS Be BOE A A.2.1.9 AE
+(? xml version="1,0"?)
+<Notify>
+Cl fr 28a, Baty Ba) Case) —-)
+<CmdType) Catalog</CmdType)
+CL = AS PSIG CE) —)
+149

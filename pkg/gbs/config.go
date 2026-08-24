@@ -57,6 +57,9 @@ type ConfigDownloadResponse struct {
 	Result              string               `xml:"Result"`
 	BasicParam          *BasicParam          `xml:"BasicParam"`
 	VideoParamOpt       *VideoParamOpt       `xml:"VideoParamOpt"`
+	VideoParamConfig    *VideoParamConfig    `xml:"VideoParamConfig"`
+	AudioParamOpt       *AudioParamOpt       `xml:"AudioParamOpt"`
+	AudioParamConfig    *AudioParamConfig    `xml:"AudioParamConfig"`
 	SVACEncodeConfig    *SVACEncodeConfig    `xml:"SVACEncodeConfig"`
 	SVACDecodeConfig    *SVACDecodeConfig    `xml:"SVACDecodeConfig"`
 	VideoParamAttribute *VideoParamAttribute `xml:"VideoParamAttribute"`
@@ -66,7 +69,9 @@ type ConfigDownloadResponse struct {
 	FrameMirror         *FrameMirror         `xml:"FrameMirror"`
 	AlarmReport         *AlarmReport         `xml:"AlarmReport"`
 	OSDConfig           *OSDConfig           `xml:"OSDConfig"`
-	SnapShot            *SnapShot            `xml:"SnapShot"`
+	SnapShotConfig      *SnapShot            `xml:"SnapShotConfig"`
+	// SnapShot 兼容部分厂商使用的非标准旧节点。
+	SnapShot *SnapShot `xml:"SnapShot"`
 }
 
 type SnapShot struct {
@@ -79,7 +84,13 @@ type SnapShot struct {
 // BasicParam 设备基本参数配置
 type BasicParam struct {
 	Name              string `xml:"Name"`              // 设备名称
+	DeviceID          string `xml:"DeviceID"`          // 设备 ID
+	SIPServerID       string `xml:"SIPServerID"`       // SIP 服务器 ID
+	SIPServerIP       string `xml:"SIPServerIP"`       // SIP 服务器 IP
+	SIPServerPort     int    `xml:"SIPServerPort"`     // SIP 服务器端口
+	DomainName        string `xml:"DomainName"`        // SIP 服务器域
 	Expiration        int    `xml:"Expiration"`        // 注册过期时间
+	Password          string `xml:"Password" json:"-"` // 注册口令
 	HeartBeatInterval int    `xml:"HeartBeatInterval"` // 心跳间隔时间
 	HeartBeatCount    int    `xml:"HeartBeatCount"`    // 心跳超时次数
 }
@@ -87,6 +98,15 @@ type BasicParam struct {
 // 下述配置结构体采用 innerxml 承接，保证协议字段兼容且不阻塞解析。
 // 后续可按业务需要继续细化字段。
 type VideoParamOpt struct {
+	InnerXML string `xml:",innerxml" json:"inner_xml"`
+}
+type VideoParamConfig struct {
+	InnerXML string `xml:",innerxml" json:"inner_xml"`
+}
+type AudioParamOpt struct {
+	InnerXML string `xml:",innerxml" json:"inner_xml"`
+}
+type AudioParamConfig struct {
 	InnerXML string `xml:",innerxml" json:"inner_xml"`
 }
 type SVACEncodeConfig struct {
@@ -209,7 +229,7 @@ func (g *GB28181API) SetBasicParam(ctx context.Context, in *BasicParamConfigInpu
 		return nil, fmt.Errorf("invalid BasicParam config input")
 	}
 	deviceID := strings.TrimSpace(in.DeviceID)
-	if err := g.requireGBFeature(deviceID, "基础参数配置(BasicParam)", func(c GBCapabilities) bool {
+	if err := g.requireGBFeature(deviceID, "config_write", "基础参数配置(BasicParam)", func(c GBCapabilities) bool {
 		return c.ConfigWrite
 	}); err != nil {
 		return nil, err
@@ -233,13 +253,20 @@ func (g *GB28181API) SetBasicParam(ctx context.Context, in *BasicParamConfigInpu
 		}
 		target = channel
 	}
+	param, err := g.completeBasicParam(targetID, device, in.Param)
+	if err != nil {
+		return nil, err
+	}
 	timeout := in.Timeout
 	if timeout <= 0 {
 		timeout = 8 * time.Second
 	}
 
 	sn := int32(g.nextControlSN())
-	body := NewDeviceConfig(targetID).SetSN(sn).SetBasicParam(&in.Param).Marshal()
+	body, err := sip.XMLEncode(NewDeviceConfig(targetID).SetSN(sn).SetBasicParam(&param))
+	if err != nil {
+		return nil, err
+	}
 	waitKey := buildPendingDeviceConfigKey(deviceID, int(sn))
 	pending := &pendingDeviceConfig{wait: make(chan *DeviceConfigResponse, 1)}
 	g.pendingDeviceConfig.Store(waitKey, pending)
@@ -274,6 +301,42 @@ func (g *GB28181API) SetBasicParam(ctx context.Context, in *BasicParamConfigInpu
 	case <-timer.C:
 		return nil, fmt.Errorf("wait BasicParam config response timeout")
 	}
+}
+
+func (g *GB28181API) completeBasicParam(targetID string, device *Device, in BasicParam) (BasicParam, error) {
+	if g == nil || g.cfg == nil {
+		return BasicParam{}, fmt.Errorf("SIP configuration is unavailable")
+	}
+	out := in
+	out.DeviceID = strings.TrimSpace(targetID)
+	out.SIPServerID = strings.TrimSpace(g.cfg.ID)
+	out.SIPServerIP = strings.TrimSpace(g.cfg.Host)
+	out.SIPServerPort = g.cfg.Port
+	out.DomainName = strings.TrimSpace(g.cfg.GetDomain())
+	if device != nil {
+		out.Password = device.Password
+	}
+	if out.Password == "" {
+		out.Password = g.cfg.Password
+	}
+	if out.Password == ignorePassword {
+		out.Password = ""
+	}
+	if g.svr != nil && g.svr.fromAddress.URI != nil {
+		if out.SIPServerIP == "" {
+			out.SIPServerIP = strings.TrimSpace(g.svr.fromAddress.URI.Host())
+		}
+		if out.SIPServerPort <= 0 && g.svr.fromAddress.URI.FPort != nil {
+			out.SIPServerPort = int(*g.svr.fromAddress.URI.FPort)
+		}
+	}
+	if out.SIPServerPort <= 0 {
+		out.SIPServerPort = 5060
+	}
+	if out.DeviceID == "" || out.SIPServerID == "" || out.SIPServerIP == "" || out.DomainName == "" {
+		return BasicParam{}, fmt.Errorf("BasicParam requires device and SIP server identity")
+	}
+	return out, nil
 }
 
 func buildPendingDeviceConfigKey(deviceID string, sn int) string {

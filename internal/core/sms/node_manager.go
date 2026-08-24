@@ -329,6 +329,33 @@ func (n *NodeManager) CloseRTPServer(server *MediaServer, in zlm.CloseRTPServerR
 	return driver.CloseRTPServer(context.Background(), server, &in)
 }
 
+// StartSendRTP 从媒体服务器中的已有流启动 RTP 发送。
+func (n *NodeManager) StartSendRTP(server *MediaServer, in zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error) {
+	driver, err := n.getDriver(server.Type)
+	if err != nil {
+		return nil, err
+	}
+	return driver.StartSendRTP(context.Background(), server, &in)
+}
+
+// StartSendRTPTalk 复用设备 RTP 接收链路发送双向对讲音频。
+func (n *NodeManager) StartSendRTPTalk(server *MediaServer, in zlm.StartSendRTPTalkRequest) (*zlm.StartSendRTPResponse, error) {
+	driver, err := n.getDriver(server.Type)
+	if err != nil {
+		return nil, err
+	}
+	return driver.StartSendRTPTalk(context.Background(), server, &in)
+}
+
+// StopSendRTP 停止媒体服务器中的 RTP 发送任务。
+func (n *NodeManager) StopSendRTP(server *MediaServer, in zlm.StopSendRTPRequest) (*zlm.StopSendRTPResponse, error) {
+	driver, err := n.getDriver(server.Type)
+	if err != nil {
+		return nil, err
+	}
+	return driver.StopSendRTP(context.Background(), server, &in)
+}
+
 // CloseStreams 关闭指定流
 func (n *NodeManager) CloseStreams(server *MediaServer, in zlm.CloseStreamsRequest) (*zlm.CloseStreamsResponse, error) {
 	driver, err := n.getDriver(server.Type)

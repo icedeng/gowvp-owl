@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gowvp/owl/internal/core/ipc"
@@ -18,7 +19,9 @@ type MessageNotify struct {
 	SN       int    `xml:"SN"`
 	DeviceID string `xml:"DeviceID"`
 	Status   string `xml:"Status"`
-	Info     string `xml:"Info"`
+	Info     struct {
+		DeviceIDs []string `xml:"DeviceID"`
+	} `xml:"Info"`
 }
 
 func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
@@ -38,6 +41,7 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 	})
 
 	effectiveVersion := GBVersion10
+	var disabledCapabilities []string
 	if err := g.svr.memoryStorer.Change(ctx.DeviceID, func(d *ipc.Device) error {
 		d.KeepaliveAt = orm.Now()
 		// 兼容省略 Status 的厂商，同时保留显式 OFF/ERROR 状态的语义。
@@ -45,12 +49,13 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		d.Address = ctx.Source.String()
 		d.Transport = ctx.Source.Network()
 		effectiveVersion = applyGBProtocolVersion(&d.Ext, ctx.XGBVer)
+		disabledCapabilities = append(disabledCapabilities[:0], d.Ext.GBDisabledCapabilities...)
 		return nil
 	}, func(d *Device) {
 		d.conn = ctx.Request.GetConnection()
 		d.source = ctx.Source
 		d.to = ctx.To
-		d.setGBVersion(effectiveVersion)
+		d.setGBProfile(effectiveVersion, disabledCapabilities)
 	}); err != nil {
 		ctx.Log.Error("keepalive", "err", err)
 	}
@@ -62,10 +67,11 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 
 	// 9.6 状态信息报送：将心跳状态同步为结构化设备状态并推送订阅者。
 	status := &DeviceStatusData{
-		CmdType:  "DeviceStatus",
-		SN:       msg.SN,
-		DeviceID: ctx.DeviceID,
-		Status:   msg.Status,
+		CmdType:        "DeviceStatus",
+		SN:             msg.SN,
+		DeviceID:       ctx.DeviceID,
+		Status:         msg.Status,
+		FaultDeviceIDs: normalizeGBIDList(msg.Info.DeviceIDs),
 	}
 	if msg.Status == "OK" || msg.Status == "ON" {
 		status.Online = "ONLINE"
@@ -90,4 +96,21 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 	}
 
 	ctx.String(200, "OK")
+}
+
+func normalizeGBIDList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

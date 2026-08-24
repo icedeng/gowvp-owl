@@ -63,6 +63,25 @@ const editOpen = ref(false);
 const deleteOpen = ref(false);
 const deleting = ref(false);
 const CHANNEL_PAGE_SIZE = 25;
+const gbCapabilityOptions = [
+  ["config_query", "配置查询"],
+  ["config_write", "配置写入"],
+  ["directory_notify", "目录通知"],
+  ["voice_broadcast", "语音广播"],
+  ["voice_intercom", "语音对讲"],
+  ["rtp_over_tcp", "RTP over TCP"],
+  ["direct_tcp_download", "2014 TCP 下载"],
+  ["iframe_control", "强制关键帧"],
+  ["drag_zoom_control", "拉框缩放"],
+  ["preset_query", "预置位查询"],
+  ["mobile_position", "移动位置"],
+  ["ptz_position", "PTZ 精准位置"],
+  ["home_position", "看守位"],
+  ["cruise_track_query", "巡航轨迹查询"],
+  ["sdcard", "存储卡管理"],
+  ["snapshot", "抓拍"],
+  ["upgrade", "升级"],
+] as const;
 const editForm = reactive({
   name: "",
   device_id: "",
@@ -72,6 +91,7 @@ const editForm = reactive({
   port: 0,
   stream_mode: 1,
   gb_version: "",
+  gb_disabled_capabilities: [] as string[],
 });
 const basicForm = reactive({
   name: "",
@@ -114,6 +134,17 @@ const protocolVersion = computed(() =>
 const protocolDisplay = computed(() =>
   isGb.value ? `GB28181 · ${protocolVersion.value}` : protocolLabel.value
 );
+const subscriptionItems = computed(() => {
+  const items = [
+    { name: "目录订阅", event: "catalog" },
+    { name: "报警订阅", event: "alarm" },
+    { name: "位置订阅", event: "mobile_position" },
+  ];
+  if (device.value?.ext?.gb_version_capabilities?.includes("ptz_position")) {
+    items.push({ name: "PTZ 精准位置订阅", event: "ptz_position" });
+  }
+  return items;
+});
 const streamMode = computed(() => {
   const mode = Number(device.value?.stream_mode);
   return ({ 0: "UDP", 1: "TCP 被动", 2: "TCP 主动" } as Record<number, string>)[mode] || device.value?.transport?.toUpperCase() || "—";
@@ -274,6 +305,7 @@ function openEdit() {
     port: device.value.port || 0,
     stream_mode: device.value.stream_mode ?? 1,
     gb_version: device.value.ext?.gb_manual_version || "",
+    gb_disabled_capabilities: [...(device.value.ext?.gb_disabled_capabilities || [])],
   });
   editOpen.value = true;
 }
@@ -509,7 +541,7 @@ onMounted(load);
               </article>
               <article class="card detail-operation-card">
                 <div class="card-head"><div><h3 class="card-title">事件订阅</h3><p class="card-sub">单次订阅有效期 3600 秒</p></div><Radio /></div>
-                <div v-for="item in [{ name: '目录订阅', event: 'catalog' }, { name: '报警订阅', event: 'alarm' }, { name: '位置订阅', event: 'mobile_position' }]" :key="item.event" class="operation-row">
+                <div v-for="item in subscriptionItems" :key="item.event" class="operation-row">
                   <span><strong>{{ item.name }}</strong><small class="mono">{{ item.event }}</small></span><button class="btn btn-sm" :disabled="actionLoading === item.name" @click="runAction(item.name, () => api.subscribe(device!.id, { event: item.event, expires: 3600 }))">订阅</button>
                 </div>
               </article>
@@ -536,6 +568,7 @@ onMounted(load);
                 <div class="card-head"><div><h3 class="card-title">协议档案</h3><p class="card-sub">自动协商与手动覆盖结果</p></div><ShieldCheck /></div>
                 <dl class="detail-definition-list compact"><div><dt>有效版本</dt><dd>{{ protocolVersion }}</dd></div><div><dt>声明版本</dt><dd>{{ device.ext?.gb_declared_version || "—" }}</dd></div><div><dt>版本来源</dt><dd>{{ device.ext?.gb_version_source || "—" }}</dd></div><div><dt>手动覆盖</dt><dd>{{ device.ext?.gb_manual_version || "未设置" }}</dd></div></dl>
                 <div class="capability-tags"><span v-for="item in device.ext?.gb_version_capabilities || []" :key="item" class="protocol-tag blue">{{ item }}</span><span v-if="!device.ext?.gb_version_capabilities?.length" class="section-note">暂无能力声明</span></div>
+                <div v-if="device.ext?.gb_disabled_capabilities?.length" class="capability-tags mt-2"><span v-for="item in device.ext.gb_disabled_capabilities" :key="item" class="protocol-tag">{{ item }} · 已禁用</span></div>
               </article>
               <article class="card detail-operation-card">
                 <div class="card-head"><div><h3 class="card-title">能力探测</h3><p class="card-sub">仅在线设备可执行</p></div><Search /></div>
@@ -670,6 +703,16 @@ onMounted(load);
               <ChevronDown aria-hidden="true" />
             </span></label
           >
+          <div v-if="isGb" class="form-group full">
+            <span class="form-label">按设备禁用扩展能力</span>
+            <div class="capability-tags">
+              <label v-for="item in gbCapabilityOptions" :key="item[0]" class="protocol-tag">
+                <input v-model="editForm.gb_disabled_capabilities" type="checkbox" :value="item[0]" />
+                {{ item[1] }}
+              </label>
+            </div>
+            <small class="section-note">仅用于设备声明了某版本、但固件未实现其中部分能力的兼容场景。</small>
+          </div>
           <div class="modal-foot full">
             <button type="button" class="btn" @click="editOpen = false">
               取消</button

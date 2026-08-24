@@ -111,7 +111,7 @@ func TestGB10CoreSimulationFlow(t *testing.T) {
 		t.Fatal("Alarm event timeout")
 	}
 
-	// INVITE -> ACK -> BYE：使用 1.0 UDP SDP 驱动真实入向会话状态机。
+	// 非广播的入向 INVITE 属于平台被叫/级联场景；媒体转发未实现时不能回显 SDP 假装成功。
 	sdpBody, err := buildGBSDP(gbSDPInput{
 		Version:     GBVersion10,
 		SessionName: historyModePlay,
@@ -124,19 +124,11 @@ func TestGB10CoreSimulationFlow(t *testing.T) {
 		t.Fatalf("build INVITE SDP: %v", err)
 	}
 	response = runFlowHandler(t, conn, api, sip.MethodInvite, "dialog-1", sdpBody, api.sipInviteGeneric)
-	assertFlowOK(t, response)
-	if !strings.Contains(response, "Content-Type: application/sdp") || !strings.Contains(response, "m=video 30000 RTP/AVP") {
-		t.Fatalf("INVITE response missing 1.0 SDP:\n%s", response)
+	if !strings.Contains(response, "SIP/2.0 501 unrecognized inbound media session") {
+		t.Fatalf("unexpected generic inbound INVITE response:\n%s", response)
 	}
-	ack := newFlowRequest(t, conn, sip.MethodACK, "dialog-1", nil)
-	api.sipAckGeneric(&sip.Context{Request: ack, DeviceID: gb10DeviceID, Log: slog.Default()})
-	if value, ok := api.inviteDialogs.Load("dialog-1"); !ok || !value.(*inboundInviteDialog).Established {
-		t.Fatal("ACK did not establish dialog")
-	}
-	response = runFlowHandler(t, conn, api, sip.MethodBYE, "dialog-1", nil, api.sipByeGeneric)
-	assertFlowOK(t, response)
 	if _, ok := api.inviteDialogs.Load("dialog-1"); ok {
-		t.Fatal("BYE did not remove dialog")
+		t.Fatal("unsupported inbound INVITE created a dialog")
 	}
 }
 

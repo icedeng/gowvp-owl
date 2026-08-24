@@ -1,8 +1,11 @@
 package zlm
 
 const (
-	openRtpServer  = `/index/api/openRtpServer`
-	closeRtpServer = `/index/api/closeRtpServer`
+	openRtpServer    = `/index/api/openRtpServer`
+	closeRtpServer   = `/index/api/closeRtpServer`
+	startSendRtp     = `/index/api/startSendRtp`
+	startSendRtpTalk = `/index/api/startSendRtpTalk`
+	stopSendRtp      = `/index/api/stopSendRtp`
 )
 
 type OpenRTPServerResponse struct {
@@ -10,6 +13,35 @@ type OpenRTPServerResponse struct {
 	Msg  string `json:"msg"`
 	Port int    `json:"port"` // 接收端口，方便获取随机端口号
 }
+
+// StartSendRTPTalkRequest 复用接收设备 RTP 的链路反向发送对讲音频。
+type StartSendRTPTalkRequest struct {
+	Vhost        string `json:"vhost"`
+	App          string `json:"app"`
+	Stream       string `json:"stream"`
+	SSRC         string `json:"ssrc"`
+	RecvStreamID string `json:"recv_stream_id"`
+	Type         int    `json:"type"`
+	PT           int    `json:"pt"`
+	OnlyAudio    bool   `json:"only_audio"`
+}
+
+// StartSendRTPTalk 使用已建立的 RTP 接收连接发送双向对讲音频。
+func (e *Engine) StartSendRTPTalk(in StartSendRTPTalkRequest) (*StartSendRTPResponse, error) {
+	body, err := struct2map(in)
+	if err != nil {
+		return nil, err
+	}
+	var resp StartSendRTPResponse
+	if err := e.post(startSendRtpTalk, body, &resp); err != nil {
+		return nil, err
+	}
+	if err := e.ErrHandle(resp.Code, resp.Msg); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 type OpenRTPServerRequest struct {
 	Port     int    `json:"port"`      // 接收端口，0 则为随机端口
 	TCPMode  int8   `json:"tcp_mode"`  // 0 udp 模式，1 tcp 被动模式, 2 tcp 主动模式。 (兼容 enable_tcp 为 0/1)
@@ -55,6 +87,71 @@ func (e *Engine) CloseRTPServer(in CloseRTPServerRequest) (*CloseRTPServerRespon
 		return nil, err
 	}
 	if err := e.ErrHandle(resp.Code, "rtp close err"); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// StartSendRTPRequest 描述 ZLMediaKit 主动发送 RTP 的参数。
+// Type=1 表示 PS 负载；OnlyAudio=true 时仅将音频轨道封装进 PS。
+type StartSendRTPRequest struct {
+	Vhost     string `json:"vhost"`
+	App       string `json:"app"`
+	Stream    string `json:"stream"`
+	SSRC      string `json:"ssrc"`
+	DstURL    string `json:"dst_url"`
+	DstPort   int    `json:"dst_port"`
+	IsUDP     bool   `json:"is_udp"`
+	Type      int    `json:"type"`
+	PT        int    `json:"pt"`
+	OnlyAudio bool   `json:"only_audio"`
+}
+
+type StartSendRTPResponse struct {
+	Code      int    `json:"code"`
+	Msg       string `json:"msg"`
+	LocalPort int    `json:"local_port"`
+}
+
+// StartSendRTP 从已有媒体流向指定地址发送 RTP。
+func (e *Engine) StartSendRTP(in StartSendRTPRequest) (*StartSendRTPResponse, error) {
+	body, err := struct2map(in)
+	if err != nil {
+		return nil, err
+	}
+	var resp StartSendRTPResponse
+	if err := e.post(startSendRtp, body, &resp); err != nil {
+		return nil, err
+	}
+	if err := e.ErrHandle(resp.Code, resp.Msg); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+type StopSendRTPRequest struct {
+	Vhost  string `json:"vhost"`
+	App    string `json:"app"`
+	Stream string `json:"stream"`
+	SSRC   string `json:"ssrc,omitempty"`
+}
+
+type StopSendRTPResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+}
+
+// StopSendRTP 停止指定 SSRC 的 RTP 发送任务。
+func (e *Engine) StopSendRTP(in StopSendRTPRequest) (*StopSendRTPResponse, error) {
+	body, err := struct2map(in)
+	if err != nil {
+		return nil, err
+	}
+	var resp StopSendRTPResponse
+	if err := e.post(stopSendRtp, body, &resp); err != nil {
+		return nil, err
+	}
+	if err := e.ErrHandle(resp.Code, resp.Msg); err != nil {
 		return nil, err
 	}
 	return &resp, nil

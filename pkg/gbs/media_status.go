@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
+	"github.com/gowvp/owl/pkg/zlm"
 )
 
 const mediaStatusHistoryFinished = "121"
@@ -48,6 +49,12 @@ func (g *GB28181API) sipMessageMediaStatus(ctx *sip.Context) {
 			stream.Status = 1
 			stream.Stop = true
 			stream.EndReason = "media_status"
+			if strings.HasPrefix(key, "history:"+historyModeDownload+":") && !stream.DirectTCP {
+				g.finishRTPDownload(stream, rtpDownloadCompleted, "media_status")
+			}
+			if stream.mediaServer != nil && g.sms != nil {
+				_, _ = g.sms.CloseRTPServer(stream.mediaServer, zlm.CloseRTPServerRequest{StreamID: stream.StreamID})
+			}
 			if g.core.Store() != nil {
 				_ = g.core.EditPlaying(context.Background(), stream.DeviceID, stream.ChannelID, false)
 			}

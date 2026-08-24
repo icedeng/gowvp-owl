@@ -43,6 +43,9 @@ func (c Core) StartHistory(ctx context.Context, channelID string, in *HistoryCon
 	if in.Transport == HistoryTransportDirectTCP && mode != "download" {
 		return reason.ErrBadRequest.SetMsg("direct_tcp transport only supports download")
 	}
+	if in.DownloadSpeed < 0 || (in.DownloadSpeed > 0 && mode != "download") {
+		return reason.ErrBadRequest.SetMsg("download_speed must be non-negative and only used with download mode")
+	}
 	return h.StartHistory(ctx, dev, ch, in)
 }
 

@@ -1,0 +1,35 @@
+GB/T 28181—2022
+Mt 3 M
+CBUSE ED
+21 A Se
+
+Ey SRE HA ee SAE aA me SD J) ST AS, 2 SR eG ht Bs AB RY TE 5,
+FBP TY aah 2 A MN HL AP Ti aE A HE A HS 4 AL PLEA) SN {Eat SiR ALMA I]. OY TPR AIE
+Ze Ae ed INE HUB FA TS A ay BAY RET SE, 2 AN HH WY EAR EB TAGE Te KR AR IE IC
+#|_.—% SIP Message/Notify 7H AMY SIP mj his Ser FUE TT Ja BE Ae WS eh BL, FB ACR i RA BGA BT ARM
+SA ARE 5 Fy 5 Sa i AY VA) “EE BE A MY a 2 A i OR BE AR YY 8 iF il ae LE: BR 10 000
+Ue AMZ AE EE 10 000 ARI. HERI TCP Py st HEFT FE 3%
+
+SIP Pp SRF TCP Fr shy SIP YY GW Ag ab HE AR SIP TH ek MTU ANY. FEAR TCP
+Ta HET FEL «AE BL ld MRE VETF RFC 3261 9 18 #2“ Transport” fy LE
+
+Ey SRA HA CE AE A AE A RE OF Ge ey ie 4 SumNum pi HAE 0. FLAN BE air ic a BI) Ze.
+DA SCAG AE i mi Iie ME As AIA
+
+<? xml version="1.0"?)
+
+(Response)
+
+(CmdType) RecordInfo( /CmdT ype)
+
+(SN) 17430¢/SN)
+
+(DeviceID) 64010000001310000001< /DeviceID)
+
+(Name) Cameral « /Name)
+
+(SumNum)0¢/SumNum)
+
+</Response)
+
+145

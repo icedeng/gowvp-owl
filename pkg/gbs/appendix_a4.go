@@ -3,7 +3,9 @@ package gbs
 import (
 	"encoding/json"
 	"encoding/xml"
+	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,31 +31,33 @@ type a4XMLNode struct {
 }
 
 var appendixA4TypeSet = map[string]struct{}{
-	"detectorType":                         {},
-	"pmsHostType":                          {},
-	"capCameraType":                        {},
-	"barrierType":                          {},
-	"pmsVehInOutInfoType":                  {},
-	"dmsHostType":                          {},
-	"doorType":                             {},
-	"readerType":                           {},
-	"doorEventType":                        {},
-	"remoteControlDoorEventType":           {},
-	"doorOpenType":                         {},
-	"alarmType":                            {},
-	"doorControlType":                      {},
-	"personType":                           {},
-	"verifyModeType":                       {},
-	"credentialType":                       {},
-	"securityDetectDeviceType":             {},
-	"dangerousGoodsValueType":              {},
-	"rectType":                             {},
-	"dangerousInfoType":                    {},
-	"metalDetectionInfoType":               {},
-	"holographicDetectionInfoType":         {},
-	"holographicDetectionEventType":        {},
-	"visiblePackageEventType":              {},
-	"xrayPackageEventType":                 {},
+	"detectorType":                  {},
+	"pmsHostType":                   {},
+	"capCameraType":                 {},
+	"barrierType":                   {},
+	"pmsVehInOutInfoType":           {},
+	"dmsHostType":                   {},
+	"doorType":                      {},
+	"readerType":                    {},
+	"doorEventType":                 {},
+	"remoteControlDoorEventType":    {},
+	"doorOpenType":                  {},
+	"alarmType":                     {},
+	"doorControlType":               {},
+	"personType":                    {},
+	"verifyModeType":                {},
+	"credentialType":                {},
+	"securityDetectDeviceType":      {},
+	"dangerousGoodsValueType":       {},
+	"rectType":                      {},
+	"dangerousInfoType":             {},
+	"metalDetectionInfoType":        {},
+	"holographicDetectionInfoType":  {},
+	"holographicDetectionEventType": {},
+	"visiblePackageEventType":       {},
+	"xrayPackageEventType":          {},
+	"behavioralEventType":           {},
+	// 兼容早期厂商使用的非标准别名。
 	"behaviorAlertEventType":               {},
 	"openCheckEventType":                   {},
 	"metalDetectionEventType":              {},
@@ -148,28 +152,65 @@ func parseExtraInfoJSON(text string) map[string]string {
 	if text == "" || (!strings.HasPrefix(text, "{") && !strings.HasPrefix(text, "[")) {
 		return nil
 	}
-	out := map[string]string{}
-	var kv map[string]any
-	if err := json.Unmarshal([]byte(text), &kv); err != nil {
+	value, ok := decodeExtraInfoJSON(text)
+	if !ok {
 		return nil
 	}
-	for k, v := range kv {
-		switch t := v.(type) {
-		case string:
-			if strings.TrimSpace(t) != "" {
-				out[k] = strings.TrimSpace(t)
+	out := map[string]string{}
+	flattenExtraInfoJSON(out, "", value)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func decodeExtraInfoJSON(text string) (any, bool) {
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, false
+	}
+	// 只接受一个完整 JSON 值，避免把尾随内容静默吞掉。
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, false
+	}
+	return value, true
+}
+
+func flattenExtraInfoJSON(out map[string]string, path string, value any) {
+	switch item := value.(type) {
+	case map[string]any:
+		for key, child := range item {
+			childPath := key
+			if path != "" {
+				childPath = path + "." + key
 			}
-		case float64:
-			out[k] = strings.TrimSpace(strings.TrimRight(strings.TrimRight(formatFloat(t), "0"), "."))
-		case bool:
-			if t {
-				out[k] = "true"
+			flattenExtraInfoJSON(out, childPath, child)
+		}
+	case []any:
+		for index, child := range item {
+			childPath := path + "[" + strconv.Itoa(index) + "]"
+			flattenExtraInfoJSON(out, childPath, child)
+		}
+	case string:
+		if trimmed := strings.TrimSpace(item); path != "" && trimmed != "" {
+			out[path] = trimmed
+		}
+	case json.Number:
+		if path != "" {
+			out[path] = item.String()
+		}
+	case bool:
+		if path != "" {
+			if item {
+				out[path] = "true"
 			} else {
-				out[k] = "false"
+				out[path] = "false"
 			}
 		}
 	}
-	return out
 }
 
 func inferAppendixA4Type(text string, fields map[string]string) string {
@@ -283,13 +324,4 @@ func canonicalFields(fields map[string]string) string {
 		parts = append(parts, k+"="+strings.TrimSpace(fields[k]))
 	}
 	return strings.Join(parts, ";")
-}
-
-func formatFloat(v float64) string {
-	return strings.TrimSpace(strings.TrimRight(strings.TrimRight(jsonNumber(v), "0"), "."))
-}
-
-func jsonNumber(v float64) string {
-	b, _ := json.Marshal(v)
-	return string(b)
 }

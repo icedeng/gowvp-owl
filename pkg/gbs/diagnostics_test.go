@@ -21,10 +21,17 @@ func TestCapabilityNamesByVersion(t *testing.T) {
 	}
 }
 
+func TestEffectiveCapabilityNamesExcludeDeviceOverrides(t *testing.T) {
+	names := effectiveCapabilityNames(GBVersion30, []string{"snapshot", "upgrade"})
+	if slices.Contains(names, "snapshot") || slices.Contains(names, "upgrade") || !slices.Contains(names, "voice_intercom") {
+		t.Fatalf("effective capabilities = %v", names)
+	}
+}
+
 func TestUnsupportedFeatureUpdatesDiagnostics(t *testing.T) {
 	memory := newFlowMemory(gb10DeviceID)
 	api := &GB28181API{svr: &Server{memoryStorer: memory}}
-	if err := api.requireGBFeature(gb10DeviceID, "语音广播", func(c GBCapabilities) bool { return c.VoiceBroadcast }); err == nil {
+	if err := api.requireGBFeature(gb10DeviceID, "voice_broadcast", "语音广播", func(c GBCapabilities) bool { return c.VoiceBroadcast }); err == nil {
 		t.Fatal("1.0 Broadcast should be rejected")
 	}
 	if memory.persistent.Ext.GBLastUnsupportedCommand != "语音广播" ||

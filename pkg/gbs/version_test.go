@@ -9,11 +9,53 @@ import (
 )
 
 func TestRefreshDeviceVersionUpdatesCapabilitySnapshot(t *testing.T) {
-	device := &ipc.Device{Ext: ipc.DeviceExt{GBManualVersion: "1.1"}}
+	device := &ipc.Device{Ext: ipc.DeviceExt{GBManualVersion: "1.1", GBDisabledCapabilities: []string{"direct_tcp_download"}}}
 	(&Server{}).RefreshDeviceVersion(device)
-	if !slices.Contains(device.Ext.GBVersionCapabilities, "direct_tcp_download") ||
+	if slices.Contains(device.Ext.GBVersionCapabilities, "direct_tcp_download") ||
 		slices.Contains(device.Ext.GBVersionCapabilities, "rtp_over_tcp") {
 		t.Fatalf("1.1 capability snapshot = %v", device.Ext.GBVersionCapabilities)
+	}
+	if !slices.Contains(device.Ext.GBVersionCapabilities, "voice_broadcast") {
+		t.Fatalf("unrelated 1.1 capability was removed: %v", device.Ext.GBVersionCapabilities)
+	}
+}
+
+func TestGBDisabledCapabilitiesNormalizationAndGate(t *testing.T) {
+	normalized, err := NormalizeGBDisabledCapabilities([]string{" Voice_Intercom ", "voice_intercom", "ptz_position"})
+	if err != nil || len(normalized) != 2 || normalized[0] != "voice_intercom" || normalized[1] != "ptz_position" {
+		t.Fatalf("normalized capabilities = %v, err = %v", normalized, err)
+	}
+	if _, err := NormalizeGBDisabledCapabilities([]string{"voice_typo"}); err == nil {
+		t.Fatal("unknown capability must be rejected")
+	}
+
+	api, memory := newVersionGateAPI(GBVersion20)
+	memory.device.setGBProfile(GBVersion20, []string{"voice_intercom", "directory_notify"})
+	if err := api.requireGBFeature("device", "voice_intercom", "语音对讲", func(c GBCapabilities) bool {
+		return c.VoiceIntercom
+	}); err == nil {
+		t.Fatal("device-level disabled voice_intercom was accepted")
+	}
+	if err := api.requireMediaTransport("device", 1, "实时点播"); err != nil {
+		t.Fatalf("unrelated RTP over TCP capability rejected: %v", err)
+	}
+	if err := api.Subscribe(t.Context(), &SubscribeInput{DeviceID: "device", Event: "Catalog"}); err == nil {
+		t.Fatal("device-level disabled directory_notify subscription was accepted")
+	}
+	if err := api.Subscribe(t.Context(), &SubscribeInput{DeviceID: "device", Event: "PTZPosition"}); err == nil {
+		t.Fatal("2.0 device accepted the 3.0 PTZ position subscription")
+	}
+	api, memory = newVersionGateAPI(GBVersion30)
+	memory.device.setGBProfile(GBVersion30, []string{"ptz_position", "sdcard"})
+	if err := api.Subscribe(t.Context(), &SubscribeInput{DeviceID: "device", Event: "PTZPosition"}); err == nil {
+		t.Fatal("device-level disabled PTZ position subscription was accepted")
+	}
+	pan := 1.0
+	if err := api.fillDeviceControlRequest("device", deviceControlActionPTZPrecise, &DeviceControlInput{PTZPrecise: &PTZPreciseParam{Pan: &pan}}, &deviceControlA23Request{}); err == nil {
+		t.Fatal("device-level disabled precise PTZ control was accepted")
+	}
+	if _, err := api.resolveDeviceQueryCmdType("device", deviceQueryActionSDCardStatus, ""); err == nil {
+		t.Fatal("device-level disabled SD card query was accepted")
 	}
 }
 
@@ -47,6 +89,18 @@ func TestParseGBProtocolVersion(t *testing.T) {
 	}
 }
 
+func TestGBIdentifiersRequireASCIIDigits(t *testing.T) {
+	if err := filterUnknowDevices("١١١١١١١١١١"); err == nil {
+		t.Fatal("REGISTER accepted non-ASCII numeric device ID")
+	}
+	if allDecimalDigits("１２３４５６") {
+		t.Fatal("Catalog accepted non-ASCII numeric ID")
+	}
+	if validGBSSRC("١١١١١") {
+		t.Fatal("SDP accepted non-ASCII numeric SSRC")
+	}
+}
+
 func TestGBProtocolVersionCapabilities(t *testing.T) {
 	gb10 := GBVersion10.Capabilities()
 	if !gb10.MediaStatus {
@@ -61,17 +115,33 @@ func TestGBProtocolVersionCapabilities(t *testing.T) {
 	if !GBVersion11.Capabilities().DirectTCPDownload {
 		t.Fatal("1.1 must enable direct TCP download capability")
 	}
+	if GBVersion10.Capabilities().DownloadSpeed || !GBVersion11.Capabilities().DownloadSpeed || !GBVersion20.Capabilities().DownloadSpeed || !GBVersion30.Capabilities().DownloadSpeed {
+		t.Fatal("download speed must be enabled for 1.1/2.0/3.0 only")
+	}
 	if GBVersion11.Capabilities().RTPOverTCP {
 		t.Fatal("1.1 direct TCP download must not be treated as RTP over TCP")
 	}
 	if GBVersion11.Capabilities().VoiceIntercom {
 		t.Fatal("1.1 broadcast capability must not enable 2.0 voice intercom")
 	}
+	if GBVersion11.Capabilities().IFrameControl {
+		t.Fatal("1.1 must not enable the 2.0 IFrame command")
+	}
+	if !GBVersion11.Capabilities().PresetQuery {
+		t.Fatal("1.1 must enable PresetQuery")
+	}
 	if !GBVersion20.Capabilities().RTPOverTCP {
 		t.Fatal("2.0 must enable RTP over TCP")
 	}
-	if !GBVersion30.Capabilities().Snapshot || !GBVersion30.Capabilities().Upgrade {
-		t.Fatal("3.0 must enable 2022 snapshot and upgrade capabilities")
+	if !GBVersion20.Capabilities().IFrameControl {
+		t.Fatal("2.0 must enable IFrame control")
+	}
+	if !GBVersion30.Capabilities().Snapshot || !GBVersion30.Capabilities().Upgrade || !GBVersion30.Capabilities().PTZPosition ||
+		!GBVersion30.Capabilities().CruiseTrackQuery || !GBVersion30.Capabilities().SDCard {
+		t.Fatal("3.0 must enable 2022 snapshot, upgrade, PTZ, cruise and SD card capabilities")
+	}
+	if GBVersion20.Capabilities().PTZPosition {
+		t.Fatal("2.0 must not enable the 3.0 PTZ position event")
 	}
 }
 

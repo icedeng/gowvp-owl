@@ -16,11 +16,22 @@ var (
 	errAuthHeaderMissing = errors.New("authorization header required")
 )
 
+const cascadeWorkerContextKey = "gb28181.cascade.worker"
+
 // sipAccessControlMiddleware 为 MESSAGE/NOTIFY 提供访问控制中间件。
 // 控制项：
 // 1) strict_source_check：校验上报源 IP 是否与注册源一致；
 // 2) require_message_auth：要求 MESSAGE/NOTIFY 携带 Digest 鉴权。
 func (g *GB28181API) sipAccessControlMiddleware(ctx *sip.Context) {
+	if g != nil && g.svr != nil && g.svr.cascade != nil {
+		if worker, ok := g.svr.cascade.matchRegistered(ctx.DeviceID, ctx.Source); ok {
+			ctx.Set(cascadeWorkerContextKey, worker)
+			ctx.XGBVer = string(worker.protocolVersion())
+			ctx.XGBVerRaw = ctx.XGBVer
+			ctx.Next()
+			return
+		}
+	}
 	if err := g.checkSourceAddress(ctx); err != nil {
 		ctx.AbortString(403, err.Error())
 		return

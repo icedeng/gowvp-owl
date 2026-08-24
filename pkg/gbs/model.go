@@ -1,6 +1,10 @@
 package gbs
 
-import "encoding/xml"
+import (
+	"encoding/xml"
+
+	"github.com/gowvp/owl/pkg/gbs/sip"
+)
 
 const snapShotConfig = "SnapShotConfig" // 图像抓拍配置
 
@@ -38,6 +42,6 @@ func (d *DeviceConfigRequest) SetSnapShotConfig(snapShot *SnapShot) *DeviceConfi
 }
 
 func (d *DeviceConfigRequest) Marshal() []byte {
-	b, _ := xml.Marshal(d)
+	b, _ := sip.XMLEncode(d)
 	return b
 }

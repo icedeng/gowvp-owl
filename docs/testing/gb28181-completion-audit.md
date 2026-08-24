@@ -1,12 +1,12 @@
 # GB/T 28181 1.0/1.1 开发计划完成审计
 
-审计时间：2026-08-10（Asia/Shanghai）
+审计时间：2026-08-25（Asia/Shanghai）
 
 ## 1. 审计结论
 
 代码建设、自动化测试和本地协议模拟器已完成到开发计划的 AI-502；AI-403 的 2014 附录 O 裸 TCP 下载已经实现，不再是代码阻断项。
 
-目标尚不能标记为生产完成，原因是 AI-503 真实设备矩阵和 AI-602 部署灰度/回滚必须在外部设备及目标环境执行。完整上下级平台级联不属于本阶段范围。
+目标尚不能标记为生产完成，原因是 AI-503 真实设备矩阵和 AI-602 部署灰度/回滚必须在外部设备及目标环境执行。上下级平台级联的注册、查询、目录、事件订阅、直播、回放、下载和语音广播/对讲代码链路已经补齐；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅现在会自动建立、续订、复用和取消下级订阅，但仍需要真实上级平台及真实设备共同验证。
 
 ## 2. 任务逐项证据
 
@@ -21,23 +21,39 @@
 | AI-105 下行版本/探测 | 完成 | 下行使用有效版本；1.0 不发 ConfigDownload；版本夹具与门禁测试 |
 | AI-201 1.0 门禁 | 完成 | Config、广播/对讲、RTP over TCP、IFrame、DragZoom 等能力门禁测试 |
 | AI-202 1.0 SDP | 完成 | 统一 SDP Builder；直播/回放/下载 golden；Subject、u/t/y/f 测试 |
-| AI-203 1.0 核心流程 | 完成（模拟器） | REGISTER→Keepalive→Catalog→INVITE→ACK→BYE、RecordInfo、Alarm 流程测试 |
+| AI-203 1.0 核心流程 | 完成（设备接入模拟器） | REGISTER→Keepalive→Catalog、RecordInfo、Alarm 流程测试；平台主动点播的 1.0 UDP SDP 由 golden 测试覆盖。已注册上级的入向 INVITE 进入级联 B2BUA，其他未知入向 INVITE 明确返回 501 |
 | AI-301 Catalog 扩展 | 完成 | 目录树五类节点、2014 字段、厂商 XML 保留；`catalog_extension_test.go` |
 | AI-302 配置读写 | 完成 | ConfigDownload、BasicParam 写入、原始 XML、Web/Core/Adapter API；`config_11_test.go` |
 | AI-303 MediaStatus | 完成 | Call-ID 关联、121、未知/重复幂等；`media_status_test.go`；并纳入 1.1 串联模拟流程 |
 | AI-304 多响应 | 完成 | 乱序、重复、总数冲突、超时部分结果、同设备并发；`multi_response_test.go` |
-| AI-305 目录订阅 | 完成 | 初始、续订、取消、Event id；`subscribe_11_test.go` |
-| AI-401 广播时序 | 完成 | Broadcast MESSAGE/业务 Response/INVITE；`broadcast_11_test.go` |
+| AI-305 目录/事件订阅 | 完成（自动化） | Catalog 初始、续订、取消、Event id；Alarm 查询过滤参数、MobilePosition Interval、PTZPosition 版本门禁；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅自动桥接下级并按引用计数复用及释放，目录快照变化后重新计算 Catalog 下级来源；`subscribe_11_test.go`、`cascade_subscribe_test.go` |
+| AI-401 广播时序 | 完成（自动化） | 接收者主动 INVITE；1.1 `PS/90000` 与 2.0/3.0 `PCMA/8000` 分派；ZLM `startSendRtp/stopSendRtp`；ACK/BYE 清理；`broadcast_11_test.go`、`pkg/zlm/rtp_test.go` |
 | AI-402 技术验证 | 完成 | `docs/adr/gb28181-2014-direct-tcp-download.md`，已采用 Owl 内置客户端 |
 | AI-403 裸 TCP 下载 | 完成（模拟器） | 独立 `tcp` SDP、文件客户端、进度/取消 API、SHA-256、原子落盘、大小/并发/超时/地址策略；`direct_tcp_*_test.go` |
 | AI-404 媒体保活 | 完成 | ZLM/LALMAX 流事件收敛、MediaStatus/BYE 竞争；`media_lifecycle_test.go` |
-| AI-501 2.0/3.0 回归 | 完成（自动化） | RTP over TCP、对讲隔离、2022 升级/抓拍/精确 PTZ/存储卡/A.4；`version_regression_test.go` |
-| AI-502 诊断/API | 完成 | 有效版本、来源、能力、最近拒绝；手动版本设置/清除；下载状态、取消和灰度指标 API |
+| AI-501 2.0/3.0 回归 | 完成（自动化） | RTP over TCP、双向对讲 RTP、2022 升级/抓拍/精确 PTZ/存储卡/A.4；`version_regression_test.go`、`voice_talk_test.go` |
+| AI-502 诊断/API | 完成 | 有效版本、来源、过滤后的能力、设备级 `gb_disabled_capabilities`、最近拒绝；手动版本设置/清除；下载状态、取消和灰度指标 API |
 | AI-503 真实设备矩阵 | 待外部执行 | `docs/testing/gb28181-device-matrix.md` 提供证据模板，`docs/testing/gb28181-interoperability-runbook.md` 提供逐步执行与回滚手册 |
 | AI-601 发布候选验证 | 完成（自动化） | 全仓 test/vet/race 和补丁检查通过；外部真实设备与部署验收归入 AI-503/AI-602 |
 | AI-602 灰度/回滚 | 待目标环境执行 | 已具备按设备手动版本覆盖、诊断、`GET /gb28181/metrics` 和关闭下载即取消活动任务；尚无目标环境指标及回滚演练证据 |
 
-## 3. 阶段门
+## 3. 上下级平台级联增量审计
+
+| 能力 | 状态 | 当前证据 |
+|---|---|---|
+| 多上级注册 | 完成（自动化） | Digest/qop、续注册、注销、退避、热更新、实际 Expires；`cascade_test.go` |
+| 查询与目录 | 完成（自动化） | 平台与共享通道 DeviceInfo/DeviceStatus、共享通道 RecordInfo 下级查询及响应编码映射；可信 NVR 可代表其已知子通道返回 DeviceInfo，通道元数据单独落库且不会覆盖父设备，非法跨设备编码仍拒绝；按上级版本安全转发 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 CruiseTrackListQuery/CruiseTrackQuery/PTZPosition/SDCardStatus；巡航轨迹编号、列表、预置位、停留时间和速度结构化解析；上下级 SN 独立、响应恢复上级 SN，DeviceID/ParentID 映射且未知下级编码不透传，多上级并发响应隔离；Catalog 共享白名单、20 条分包和版本化 Info；录像列表 20 条分包且不泄露下级编码；`cascade_query_test.go`、`device_info_channel_test.go` |
+| 设备控制 | 完成（共享通道安全子集） | PTZ、录像控制及版本匹配的 IFrame/DragZoom/HomePosition/精准 PTZ 转发下级并映射业务响应；校验 PTZ 校验和、上下级版本与设备能力关闭项；重启、布撤防、报警复位、格式化等设备级操作不允许经仅共享通道越权执行；`cascade_control_test.go` |
+| 订阅通知 | 完成（自动化） | 1.1+ Catalog 初始通知仅发送离线/异常目录并携带 `Status=OK`，默认 Expires 600 秒；1.0、Alarm、MobilePosition、PTZPosition 不误发初始 Catalog；刷新保留原对话与 NOTIFY CSeq；上级 Catalog 订阅自动映射到承载共享通道的下级 NVR，目录快照变化后重新计算来源并为新增或迁移通道补订阅；Catalog/Alarm/MobilePosition/PTZPosition 下级订阅支持续订、退订、过期/上级移除清理和多上级引用计数，续订与过期清理串行收敛；Alarm 完整支持 Start/EndAlarmPriority、AlarmMethod、AlarmType、Start/EndAlarmTime 过滤，兼容 2011 示例的 StartTime/EndTime 别名；事件通知按平台级、指定共享通道和过滤条件二次筛选并映射编码；2.0 起支持 AlarmType，3.0 支持 PTZ 精准位置变化订阅/通知且 1.0/1.1/2.0 明确拒绝；非标准级联订阅明确拒绝；`cascade_subscribe_test.go` |
+| 实时点播 | 完成（自动化） | 1.0/1.1 UDP，2.0/3.0 UDP/TCP；ZLM 转发、ACK/BYE/CANCEL 和引用计数；对话内请求绑定发起该会话的已注册上级，其他上级不能确认或终止会话；`cascade_media_test.go` |
+| 历史回放/下载 | 完成（自动化） | 独立时间段媒体源、Playback/Download SDP、下载倍速/文件大小；四版本 `INVITE→ACK→INFO→BYE` 串联回归；MANSRTSP/RTSP 版本转换；普通和级联控制 CSeq 原子递增；资源关闭；`cascade_media_test.go`、`history_control_test.go` |
+| 语音广播/对讲级联 | 完成（自动化） | 按附录 Q/9.12 转发上级 Broadcast 通知，主动建立上游语音源 INVITE（支持 Digest）与 ZLM 接收流，再通知真实下级并处理接收方主动 INVITE；1.1 上游/下游使用 PS/90000，2.0/3.0 使用 PCMA/8000，跨版本由 ZLM 解封装/重封装；上下游 SN、SourceID/TargetID 隔离，多通道按 Subject 接收者定位；ACK/CANCEL/双侧 BYE、媒体注销和关闭均幂等释放。语音对讲按 2016 的“实时视音频点播上行 + 语音广播下行”组合实现；`cascade_voice_test.go`、`cascade_version_matrix_test.go` |
+| 2022 扩展级联 | 完成（自动化） | CruiseTrackListQuery、CruiseTrackQuery、PTZPosition、SDCardStatus 按 3.0 门禁安全转发并重写 SN/DeviceID/ParentID；3.0 PTZ 精准位置变化事件支持自动下级订阅和安全通知级联；ConfigDownload 使用标准 `SnapShotConfig`，同时接收旧厂商 `SnapShot` 别名；A.4 是扩展应用数据对象类型定义而非独立查询命令，已按真实承载路径支持 3.0 Catalog ExtraInfo、Alarm/MobilePosition 嵌套对象和 3.0 DeviceStatus 下级响应。共享对象编码递归映射、ParentID/下级父设备映射为本级平台编码，字符串及数值型 20 位对象编码均保留精度并执行映射，未知编码拒绝整条响应/通知；JSON 数字和数组不丢值；补正标准 `behavioralEventType` 并兼容旧厂商别名；`cascade_a4.go`、`cascade_query_test.go`、`cascade_subscribe_test.go` |
+| 真实平台互通 | 待外部执行 | 需要 1.0/1.1/2.0/3.0 上级平台分别验证注册、目录、直播、回放、下载和订阅 |
+
+四版本级联自动化矩阵由 `cascade_version_matrix_test.go` 固化，统一检查 REGISTER 版本、Catalog 字段、UDP/TCP 媒体、下载倍速、语音载荷、MANSRTSP/RTSP 控制和订阅能力。`cascade_media_test.go` 进一步使用四版本完整历史对话验证媒体启动、控制、终止和资源回收，并验证两个已注册上级之间的对话所有权隔离；`cascade_voice_test.go` 验证广播的上下游完整 B2BUA、Digest、编码映射、会话所有权及双侧清理。SIP 配置 Swagger 已包含上级平台完整字段；配置 API 的 Duration 同时接受历史纳秒整数和 `60s` 形式字符串。
+
+## 4. 阶段门
 
 | 阶段门 | 结果 |
 |---|---|
@@ -45,10 +61,10 @@
 | G1 四版本 REGISTER/未知版本保守处理 | 自动化证据通过 |
 | G2 1.0 模拟核心流程 | 模拟器通过；真实设备项待 AI-503 |
 | G3 1.1 信令和数据 | 模拟器通过；新增 Keepalive→Catalog→DeviceConfig→MediaStatus 串联回归 |
-| G4 1.1 广播和下载 | 模拟器通过；真实设备兼容待 AI-503 |
+| G4 1.1 广播和下载 | 广播 SIP/SDP/RTP 状态机与下载模拟器通过；真实设备音频和下载兼容待 AI-503 |
 | G5 生产发布 | 未通过：设备矩阵、目标环境灰度和回滚未完成 |
 
-## 4. 最近验证
+## 5. 最近验证
 
 通过：
 
@@ -57,13 +73,14 @@ go test ./pkg/gbs/... ./internal/conf ./internal/adapter/gbadapter ./internal/co
 go test ./... -count=1
 go vet ./...
 go test -race -vet=off ./... -count=1
+pnpm --dir admin-ui build
 git diff --check
 ```
 
-## 5. 生产完成所需证据
+## 6. 生产完成所需证据
 
 1. 按设备矩阵完成 1.0 两厂商、1.1 两厂商、2.0 一厂商、3.0 一厂商联调；
-2. 每台设备归档厂商、型号、固件、网络模式、脱敏 SIP 报文、文件 SHA-256 和结果；
+2. 每台设备归档厂商、型号、固件、网络模式、脱敏 SIP 报文、语音 RTP 收发证据、文件 SHA-256 和结果；
 3. 在最终发布候选提交上重跑全仓 test/vet/race；
 4. 白名单灰度观察注册失败率、目录超时率、播放成功率、下载失败率和异常断流；
 5. 演练按设备清除/设置手动版本、关闭直接 TCP 开关和回退发布版本。
