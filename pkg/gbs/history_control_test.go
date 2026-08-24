@@ -54,6 +54,20 @@ func TestBuildHistoryControlCmdUsesVersionProfile(t *testing.T) {
 	}
 }
 
+func TestDownloadSpeedRespectsDeviceCapabilityOverride(t *testing.T) {
+	api, memory := newVersionGateAPI(GBVersion11)
+	if err := api.requireHistoryDownloadSpeed(gb10DeviceID, 4); err != nil {
+		t.Fatalf("2014 download speed rejected: %v", err)
+	}
+	memory.device.setGBProfile(GBVersion11, []string{"download_speed"})
+	if err := api.requireHistoryDownloadSpeed(gb10DeviceID, 4); err == nil {
+		t.Fatal("disabled download_speed capability was ignored")
+	}
+	if err := api.requireHistoryDownloadSpeed(gb10DeviceID, 0); err != nil {
+		t.Fatalf("default download speed rejected: %v", err)
+	}
+}
+
 func TestBuildHistoryControlCmdRejectsSeekOutsideSession(t *testing.T) {
 	start := time.Unix(1711929600, 0)
 	stream := &Streams{S: start, E: start.Add(time.Hour)}

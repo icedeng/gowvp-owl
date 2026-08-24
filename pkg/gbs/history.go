@@ -77,6 +77,9 @@ func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
 	if in.Mode != historyModePlayback && in.Mode != historyModeDownload {
 		return fmt.Errorf("invalid history mode: %s", in.Mode)
 	}
+	if err := g.requireHistoryDownloadSpeed(in.Channel.DeviceID, in.DownloadSpeed); err != nil {
+		return err
+	}
 
 	ch, ok := g.svr.memoryStorer.GetChannel(in.Channel.DeviceID, in.Channel.ChannelID)
 	if !ok {
@@ -140,6 +143,15 @@ func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
 	// 历史播放/下载属于播放态，复用播放状态字段。
 	_ = g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, true)
 	return nil
+}
+
+func (g *GB28181API) requireHistoryDownloadSpeed(deviceID string, speed int) error {
+	if speed <= 0 {
+		return nil
+	}
+	return g.requireGBFeature(deviceID, "download_speed", "历史视音频下载倍速", func(c GBCapabilities) bool {
+		return c.DownloadSpeed
+	})
 }
 
 // StopHistory 停止历史回放或下载会话。
