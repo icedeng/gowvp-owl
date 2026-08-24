@@ -14,10 +14,11 @@ import {
   Trash2,
   X,
 } from "@lucide/vue";
-import { api, collectPages, errorMessage, typeLabel } from "../services/api";
-import type { ApiChannel, ApiDevice, MediaServer } from "../types/api";
+import { api, countDevicesByType, errorMessage } from "../services/api";
+import type { ApiChannel, MediaServer } from "../types/api";
 import { useUiStore } from "../stores/ui";
 import ModalDialog from "../components/ModalDialog.vue";
+import RemoteChannelSelect from "../components/RemoteChannelSelect.vue";
 
 const ui = useUiStore();
 const route = useRoute();
@@ -33,7 +34,7 @@ const status = ref("all");
 const rows = ref<ApiChannel[]>([]);
 const currentPage = ref(1);
 const total = ref(0);
-const devices = ref<ApiDevice[]>([]);
+const deviceTotal = ref(0);
 const media = ref<MediaServer[]>([]);
 const form = reactive({
   name: "",
@@ -53,11 +54,6 @@ let routeEditHandled = false;
 let searchTimer: number | undefined;
 let loadSequence = 0;
 const PAGE_SIZE = 30;
-const rtspDevices = computed(() =>
-  devices.value.filter(
-    (item) => typeLabel(item.type, item.device_id || item.id) === "RTSP"
-  )
-);
 const pageCount = computed(() =>
   Math.max(1, Math.ceil(total.value / PAGE_SIZE))
 );
@@ -116,14 +112,14 @@ async function load() {
   try {
     const [channelResponse, deviceResponse, mediaResponse] = await Promise.allSettled([
       api.channels({ page: currentPage.value, size: PAGE_SIZE, ...listParams() }),
-      collectPages(api.devices, { type: "RTSP" }),
+      countDevicesByType("RTSP"),
       api.mediaServers({ page: 1, size: 100 }),
     ]);
     if (sequence !== loadSequence) return;
     if (channelResponse.status === "rejected") throw channelResponse.reason;
     rows.value = channelResponse.value.data?.items || [];
     total.value = Number(channelResponse.value.data?.total ?? rows.value.length);
-    if (deviceResponse.status === "fulfilled") devices.value = deviceResponse.value.items;
+    if (deviceResponse.status === "fulfilled") deviceTotal.value = deviceResponse.value;
     if (mediaResponse.status === "fulfilled") media.value = mediaResponse.value.data?.items || [];
     const auxiliaryFailure = [deviceResponse, mediaResponse].find((item) => item.status === "rejected");
     if (auxiliaryFailure?.status === "rejected") {
@@ -166,8 +162,8 @@ function create() {
     transport: 0,
     app: "live",
     stream: "",
-    device_mode: rtspDevices.value.length ? "existing" : "new",
-    device_id: rtspDevices.value[0]?.id || "",
+    device_mode: deviceTotal.value ? "existing" : "new",
+    device_id: "",
     device_name: "RTSP 拉流设备",
     media_server_id: media.value[0]?.id || "local",
     timeout_s: 10,
@@ -199,6 +195,10 @@ function edit(row: ApiChannel) {
 async function save() {
   if (form.source_url && !/^rtsp:\/\//i.test(form.source_url.trim())) {
     ui.toast("RTSP 源地址必须以 rtsp:// 开头");
+    return;
+  }
+  if (!editing.value && form.device_mode === "existing" && !form.device_id) {
+    ui.toast("请选择已有 RTSP 设备");
     return;
   }
   saving.value = true;
@@ -456,22 +456,21 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
           ><label class="form-group"
             ><span class="form-label">虚拟设备</span
             ><select v-model="form.device_mode" class="select w-full">
-              <option value="existing" :disabled="!rtspDevices.length">
+              <option value="existing" :disabled="!deviceTotal">
                 使用已有 RTSP 设备
               </option>
               <option value="new">新建 RTSP 虚拟设备</option>
             </select></label
-          ><label v-if="form.device_mode === 'existing'" class="form-group"
+          ><div v-if="form.device_mode === 'existing'" class="form-group"
             ><span class="form-label">选择设备</span
-            ><select v-model="form.device_id" class="select w-full" required>
-              <option
-                v-for="item in rtspDevices"
-                :key="item.id"
-                :value="item.id"
-              >
-                {{ item.name || item.id }}
-              </option>
-            </select></label
+            ><RemoteChannelSelect
+              v-model="form.device_id"
+              resource="device"
+              type="RTSP"
+              aria-label="选择已有 RTSP 设备"
+              :all-label="''"
+              placeholder-label="请选择 RTSP 设备"
+            /></div
           ><label v-else class="form-group"
             ><span class="form-label">新设备名称</span
             ><input

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import {
   Activity,
@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   XCircle,
 } from "@lucide/vue";
-import { api, collectPages, errorMessage, typeLabel } from "../services/api";
+import { api, errorMessage, typeLabel } from "../services/api";
 import type { ApiDevice, GbMetrics } from "../types/api";
 import { formatDate } from "../utils/format";
 import { useUiStore } from "../stores/ui";
@@ -21,12 +21,20 @@ const route = useRoute();
 const ui = useUiStore();
 const devices = ref<ApiDevice[]>([]);
 const selectedId = ref("");
+const deviceQuery = ref("");
+const devicePage = ref(1);
+const deviceTotal = ref(0);
+const loadedDeviceCount = ref(0);
+const loadingMoreDevices = ref(false);
 const loading = ref(false);
 const running = ref(false);
 const loadError = ref("");
 const metrics = ref<GbMetrics>({});
 const metricsAvailable = ref(false);
 const lastResult = ref("尚未在本次会话执行探测");
+const DEVICE_PAGE_SIZE = 50;
+let deviceSearchTimer: number | undefined;
+let deviceLoadSequence = 0;
 const selected = computed(
   () =>
     devices.value.find((item) => item.id === selectedId.value) ||
@@ -67,6 +75,44 @@ const mediaRate = computed(() =>
       100
     : 0
 );
+const canLoadMoreDevices = computed(
+  () => loadedDeviceCount.value < deviceTotal.value
+);
+
+function isGbDevice(item: ApiDevice) {
+  return typeLabel(item.type, item.device_id || item.id) === "GB28181";
+}
+
+async function loadDevicePage(reset = true) {
+  const sequence = ++deviceLoadSequence;
+  const requestedPage = reset ? 1 : devicePage.value + 1;
+  if (!reset) loadingMoreDevices.value = true;
+  try {
+    const { data } = await api.devices({
+      type: "GB28181",
+      key: deviceQuery.value.trim() || undefined,
+      page: requestedPage,
+      size: DEVICE_PAGE_SIZE,
+    });
+    if (sequence !== deviceLoadSequence) return;
+    const batch = (data?.items || []).filter(isGbDevice);
+    devices.value = reset
+      ? batch
+      : [...new Map([...devices.value, ...batch].map((item) => [item.id, item])).values()];
+    devicePage.value = requestedPage;
+    loadedDeviceCount.value = reset
+      ? (data?.items || []).length
+      : loadedDeviceCount.value + (data?.items || []).length;
+    deviceTotal.value = Number(data?.total ?? loadedDeviceCount.value);
+    if (!devices.value.some((item) => item.id === selectedId.value)) {
+      selectedId.value = devices.value[0]?.id || "";
+    }
+  } catch (cause) {
+    loadError.value = errorMessage(cause, "诊断设备加载失败");
+  } finally {
+    if (sequence === deviceLoadSequence) loadingMoreDevices.value = false;
+  }
+}
 
 async function load() {
   loading.value = true;
@@ -75,15 +121,24 @@ async function load() {
   metricsAvailable.value = false;
   try {
     const [deviceResult, metricsResult] = await Promise.allSettled([
-      collectPages(api.devices),
+      api.devices({ type: "GB28181", page: 1, size: DEVICE_PAGE_SIZE }),
       api.gbMetrics(),
     ]);
     if (deviceResult.status === "rejected") throw deviceResult.reason;
-    devices.value = deviceResult.value.items.filter(
-      (item) =>
-        typeLabel(item.type, item.device_id || item.id) === "GB28181"
-    );
+    const initialItems = deviceResult.value.data?.items || [];
+    devices.value = initialItems.filter(isGbDevice);
+    devicePage.value = 1;
+    loadedDeviceCount.value = initialItems.length;
+    deviceTotal.value = Number(deviceResult.value.data?.total ?? initialItems.length);
     const routeId = String(route.query.device || "");
+    if (routeId && !devices.value.some((item) => item.id === routeId)) {
+      try {
+        const { data } = await api.device(routeId);
+        if (isGbDevice(data)) devices.value = [data, ...devices.value];
+      } catch {
+        // 路由指定设备可能已删除，回退到首个可用设备。
+      }
+    }
     selectedId.value = devices.value.some((item) => item.id === routeId)
       ? routeId
       : devices.value[0]?.id || "";
@@ -128,7 +183,15 @@ async function run() {
   }
 }
 
+watch(deviceQuery, () => {
+  window.clearTimeout(deviceSearchTimer);
+  deviceSearchTimer = window.setTimeout(() => {
+    loadError.value = "";
+    void loadDevicePage(true);
+  }, 350);
+});
 onMounted(load);
+onBeforeUnmount(() => window.clearTimeout(deviceSearchTimer));
 </script>
 
 <template>
@@ -158,16 +221,32 @@ onMounted(load);
     <section class="card card-pad mb-4">
       <div class="toolbar mb-0">
         <label class="field"
-          ><Search /><select
+          ><Search /><input
+            v-model="deviceQuery"
+            class="input"
+            aria-label="搜索诊断设备"
+            placeholder="搜索设备名称或编号"
+        /></label>
+        <select
             v-model="selectedId"
-            class="select !border-0 !bg-transparent"
+            class="select"
             aria-label="选择诊断设备"
           >
             <option v-for="item in devices" :key="item.id" :value="item.id">
               {{ item.name || item.device_id || item.id }}
             </option>
-          </select></label
-        ><span class="protocol-tag blue"
+          </select>
+        <button
+          v-if="canLoadMoreDevices"
+          type="button"
+          class="btn btn-sm"
+          :disabled="loadingMoreDevices"
+          @click="loadDevicePage(false)"
+        >
+          <LoaderCircle v-if="loadingMoreDevices" class="animate-spin" />
+          {{ loadingMoreDevices ? "加载中…" : "更多设备" }}
+        </button>
+        <span class="protocol-tag blue"
           >GB/T 28181-{{
             selected?.ext?.gb_effective_version ||
             selected?.ext?.gb_version ||

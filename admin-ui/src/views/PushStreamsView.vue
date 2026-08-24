@@ -15,11 +15,12 @@ import {
   UploadCloud,
   X,
 } from "@lucide/vue";
-import { api, collectPages, countItems, errorMessage, typeLabel } from "../services/api";
-import type { ApiChannel, ApiDevice, MediaServer } from "../types/api";
+import { api, countDevicesByType, countItems, errorMessage } from "../services/api";
+import type { ApiChannel, MediaServer } from "../types/api";
 import { relativeTime } from "../utils/format";
 import { useUiStore } from "../stores/ui";
 import ModalDialog from "../components/ModalDialog.vue";
+import RemoteChannelSelect from "../components/RemoteChannelSelect.vue";
 
 const ui = useUiStore();
 const route = useRoute();
@@ -36,7 +37,7 @@ const rows = ref<ApiChannel[]>([]);
 const currentPage = ref(1);
 const total = ref(0);
 const onlineTotal = ref(0);
-const devices = ref<ApiDevice[]>([]);
+const deviceTotal = ref(0);
 const media = ref<MediaServer[]>([]);
 const form = reactive({
   name: "",
@@ -52,11 +53,6 @@ let routeEditHandled = false;
 let searchTimer: number | undefined;
 let loadSequence = 0;
 const PAGE_SIZE = 30;
-const rtmpDevices = computed(() =>
-  devices.value.filter(
-    (item) => typeLabel(item.type, item.device_id || item.id) === "RTMP"
-  )
-);
 const pageCount = computed(() =>
   Math.max(1, Math.ceil(total.value / PAGE_SIZE))
 );
@@ -111,7 +107,7 @@ async function load() {
   try {
     const [channelResponse, deviceResponse, mediaResponse, onlineResponse] = await Promise.allSettled([
       api.channels({ page: currentPage.value, size: PAGE_SIZE, ...listParams() }),
-      collectPages(api.devices, { type: "RTMP" }),
+      countDevicesByType("RTMP"),
       api.mediaServers({ page: 1, size: 100 }),
       countItems(api.channels, { type: "RTMP", is_online: true }),
     ]);
@@ -119,7 +115,7 @@ async function load() {
     if (channelResponse.status === "rejected") throw channelResponse.reason;
     rows.value = channelResponse.value.data?.items || [];
     total.value = Number(channelResponse.value.data?.total ?? rows.value.length);
-    if (deviceResponse.status === "fulfilled") devices.value = deviceResponse.value.items;
+    if (deviceResponse.status === "fulfilled") deviceTotal.value = deviceResponse.value;
     if (mediaResponse.status === "fulfilled") media.value = mediaResponse.value.data?.items || [];
     if (onlineResponse.status === "fulfilled") onlineTotal.value = onlineResponse.value;
     const auxiliaryFailure = [deviceResponse, mediaResponse, onlineResponse].find((item) => item.status === "rejected");
@@ -161,8 +157,8 @@ function create() {
     name: "",
     app: "live",
     stream: "",
-    device_mode: rtmpDevices.value.length ? "existing" : "new",
-    device_id: rtmpDevices.value[0]?.id || "",
+    device_mode: deviceTotal.value ? "existing" : "new",
+    device_id: "",
     device_name: "RTMP 推流设备",
     media_server_id: media.value[0]?.id || "local",
     auth_enabled: true,
@@ -188,6 +184,10 @@ function edit(row: ApiChannel) {
 async function save() {
   if (form.app.trim().toLowerCase() === "rtp") {
     ui.toast("App 不能使用系统保留值 rtp");
+    return;
+  }
+  if (!editing.value && form.device_mode === "existing" && !form.device_id) {
+    ui.toast("请选择已有 RTMP 设备");
     return;
   }
   saving.value = true;
@@ -299,7 +299,7 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
       <div class="metric-item">
         <div class="metric-label"><span>推流配置</span><UploadCloud /></div>
         <div class="metric-value">{{ total }}</div>
-        <div class="metric-foot">RTMP 虚拟设备 {{ rtmpDevices.length }} 台</div>
+        <div class="metric-foot">RTMP 虚拟设备 {{ deviceTotal }} 台</div>
       </div>
       <div class="metric-item">
         <div class="metric-label"><span>在线推流</span><UploadCloud /></div>
@@ -307,7 +307,7 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
         <div class="metric-foot">当前活跃</div>
       </div>
       <div class="metric-item">
-        <div class="metric-label"><span>启用鉴权</span><KeyRound /></div>
+        <div class="metric-label"><span>本页鉴权</span><KeyRound /></div>
         <div class="metric-value">{{ protectedCount }}</div>
         <div class="metric-foot">
           {{
@@ -460,22 +460,21 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
           ><label class="form-group"
             ><span class="form-label">虚拟设备</span
             ><select v-model="form.device_mode" class="select w-full">
-              <option value="existing" :disabled="!rtmpDevices.length">
+              <option value="existing" :disabled="!deviceTotal">
                 使用已有 RTMP 设备
               </option>
               <option value="new">新建 RTMP 虚拟设备</option>
             </select></label
-          ><label v-if="form.device_mode === 'existing'" class="form-group"
+          ><div v-if="form.device_mode === 'existing'" class="form-group"
             ><span class="form-label">选择设备</span
-            ><select v-model="form.device_id" class="select w-full" required>
-              <option
-                v-for="item in rtmpDevices"
-                :key="item.id"
-                :value="item.id"
-              >
-                {{ item.name || item.id }}
-              </option>
-            </select></label
+            ><RemoteChannelSelect
+              v-model="form.device_id"
+              resource="device"
+              type="RTMP"
+              aria-label="选择已有 RTMP 设备"
+              :all-label="''"
+              placeholder-label="请选择 RTMP 设备"
+            /></div
           ><label v-else class="form-group"
             ><span class="form-label">新设备名称</span
             ><input

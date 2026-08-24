@@ -10,18 +10,26 @@ import {
   watch,
 } from "vue";
 import { Check, ChevronDown, LoaderCircle, Search } from "@lucide/vue";
-import { api, errorMessage } from "../services/api";
-import type { ApiChannel } from "../types/api";
+import { api, collectPages, errorMessage, typeLabel } from "../services/api";
+import type { ApiChannel, ApiDevice } from "../types/api";
+
+type SelectableItem = ApiChannel | ApiDevice;
 
 const props = withDefaults(
   defineProps<{
     modelValue: string;
     ariaLabel?: string;
     allLabel?: string;
+    placeholderLabel?: string;
+    resource?: "channel" | "device";
+    type?: string;
   }>(),
   {
     ariaLabel: "选择通道",
     allLabel: "全部通道",
+    placeholderLabel: "请选择",
+    resource: "channel",
+    type: "",
   }
 );
 
@@ -38,8 +46,8 @@ const loading = ref(false);
 const loadingMore = ref(false);
 const loadError = ref("");
 const query = ref("");
-const options = shallowRef<ApiChannel[]>([]);
-const selectedCache = shallowRef<ApiChannel | null>(null);
+const options = shallowRef<SelectableItem[]>([]);
+const selectedCache = shallowRef<SelectableItem | null>(null);
 const total = ref(0);
 const page = ref(1);
 const activeIndex = ref(-1);
@@ -56,15 +64,36 @@ const selected = computed(() =>
 const selectedLabel = computed(() => {
   if (props.modelValue === "all") return props.allLabel;
   const item = selected.value;
-  return item?.name || item?.channel_id || item?.id || props.modelValue || props.allLabel;
+  return item?.name || (item ? itemIdentifier(item) : "") || props.modelValue || props.placeholderLabel;
 });
 const canLoadMore = computed(() => page.value * pageSize < total.value);
+const resourceLabel = computed(() => props.resource === "device" ? "设备" : "通道");
 
-function optionLabel(item: ApiChannel) {
-  return item.name || item.channel_id || item.id;
+function itemIdentifier(item: SelectableItem) {
+  return "channel_id" in item
+    ? item.channel_id || item.id
+    : item.device_id || item.id;
 }
 
-function mergeOptions(items: ApiChannel[], reset: boolean) {
+function optionLabel(item: SelectableItem) {
+  return item.name || itemIdentifier(item);
+}
+
+function matchesType(item: SelectableItem) {
+  if (props.resource !== "device" || !props.type) return true;
+  const device = item as ApiDevice;
+  return typeLabel(device.type, device.device_id || device.id) === props.type;
+}
+
+function matchesQuery(item: SelectableItem) {
+  const key = query.value.trim().toLowerCase();
+  if (!key) return true;
+  return `${item.name || ""}${itemIdentifier(item)}${item.id}`
+    .toLowerCase()
+    .includes(key);
+}
+
+function mergeOptions(items: SelectableItem[], reset: boolean) {
   const selectedItem = selected.value;
   const source = reset ? items : [...options.value, ...items];
   if (selectedItem && !source.some((item) => item.id === selectedItem.id)) {
@@ -82,19 +111,42 @@ async function load(reset = true) {
   else loadingMore.value = true;
   loadError.value = "";
   try {
-    const response = await api.channels({
+    const params = {
       page: requestedPage,
       size: pageSize,
       key: query.value.trim() || undefined,
-    });
+      type: props.type || undefined,
+    };
+    const response = props.resource === "device"
+      ? await api.devices(params)
+      : await api.channels(params);
     if (sequence !== loadSequence) return;
-    mergeOptions(response.data?.items || [], reset);
+    const rawItems = (response.data?.items || []) as SelectableItem[];
+    if (
+      reset &&
+      props.resource === "device" &&
+      props.type &&
+      rawItems.some((item) => !matchesType(item))
+    ) {
+      const legacy = await collectPages(api.devices, {
+        key: query.value.trim() || undefined,
+      });
+      if (sequence !== loadSequence) return;
+      const legacyItems = legacy.items.filter(matchesType).filter(matchesQuery);
+      mergeOptions(legacyItems, true);
+      total.value = legacyItems.length;
+      page.value = 1;
+      activeIndex.value = options.value.length ? 0 : -1;
+      return;
+    }
+    const matchingItems = rawItems.filter(matchesType).filter(matchesQuery);
+    mergeOptions(matchingItems, reset);
     total.value = Number(response.data?.total ?? options.value.length);
     page.value = requestedPage;
     activeIndex.value = options.value.length ? 0 : -1;
   } catch (cause) {
     if (sequence === loadSequence)
-      loadError.value = errorMessage(cause, "通道选项加载失败");
+      loadError.value = errorMessage(cause, `${resourceLabel.value}选项加载失败`);
   } finally {
     if (sequence === loadSequence) {
       loading.value = false;
@@ -114,14 +166,17 @@ async function ensureSelected(value: string) {
     return;
   }
   try {
-    const { data } = await api.channel(value);
+    const { data } = props.resource === "device"
+      ? await api.device(value)
+      : await api.channel(value);
+    if (!matchesType(data)) return;
     selectedCache.value = data;
     options.value = [
       data,
       ...options.value.filter((item) => item.id !== data.id),
     ];
   } catch {
-    // 路由中的通道可能已被删除，保留原始 ID 便于用户识别筛选上下文。
+    // 路由中的资源可能已被删除，保留原始 ID 便于用户识别筛选上下文。
   }
 }
 
@@ -238,7 +293,7 @@ onBeforeUnmount(() => {
           :aria-controls="listboxId"
           :aria-expanded="open"
           :aria-activedescendant="activeIndex >= 0 ? `${baseId}-option-${activeIndex}` : undefined"
-          placeholder="输入通道名称或编号"
+          :placeholder="`输入${resourceLabel}名称或编号`"
           @keydown="onSearchKeydown"
         />
       </label>
@@ -251,7 +306,7 @@ onBeforeUnmount(() => {
           :aria-selected="modelValue === 'all'"
           @click="selectValue('all')"
         >
-          <span><strong>{{ allLabel }}</strong><small>不限制通道</small></span>
+          <span><strong>{{ allLabel }}</strong><small>不限制{{ resourceLabel }}</small></span>
           <Check v-if="modelValue === 'all'" />
         </button>
         <button
@@ -266,16 +321,16 @@ onBeforeUnmount(() => {
           @pointerenter="activeIndex = index"
           @click="selectValue(item.id)"
         >
-          <span><strong>{{ optionLabel(item) }}</strong><small class="mono">{{ item.channel_id || item.id }}</small></span>
+          <span><strong>{{ optionLabel(item) }}</strong><small class="mono">{{ itemIdentifier(item) }}</small></span>
           <Check v-if="modelValue === item.id" />
         </button>
         <div v-if="loading" class="remote-select-state" aria-live="polite">
-          <LoaderCircle class="animate-spin" />正在搜索通道…
+          <LoaderCircle class="animate-spin" />正在搜索{{ resourceLabel }}…
         </div>
         <div v-else-if="loadError" class="remote-select-state error" role="alert">
           <span>{{ loadError }}</span><button type="button" @click="load()">重试</button>
         </div>
-        <div v-else-if="!options.length" class="remote-select-state">没有匹配的通道</div>
+        <div v-else-if="!options.length" class="remote-select-state">没有匹配的{{ resourceLabel }}</div>
       </div>
       <button
         v-if="canLoadMore && !loading"

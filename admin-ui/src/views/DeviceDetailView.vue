@@ -86,12 +86,23 @@ const isGb = computed(
       device.value?.device_id || device.value?.id
     ) === "GB28181"
 );
-const tabs: Array<{ key: DetailTab; name: string; note: string; icon: typeof Activity }> = [
+const allTabs: Array<{ key: DetailTab; name: string; note: string; icon: typeof Activity }> = [
   { key: "overview", name: "运行概览", note: "状态、档案与最近活动", icon: Activity },
   { key: "channels", name: "通道资源", note: "预览与通道能力", icon: ListVideo },
   { key: "operations", name: "设备运维", note: "同步、订阅与参数下发", icon: Wrench },
   { key: "diagnostics", name: "协议诊断", note: "版本、探测与高级查询", icon: ShieldCheck },
 ];
+const tabs = computed(() =>
+  isGb.value
+    ? allTabs
+    : allTabs.filter((item) => item.key === "overview" || item.key === "channels")
+);
+const isTransportContext = computed(() => route.name === "transport-device-detail");
+const listRoute = computed(() => isTransportContext.value ? "/transport-devices" : "/devices");
+const listLabel = computed(() => isTransportContext.value ? "部标设备" : "国标设备");
+const protocolLabel = computed(() =>
+  typeLabel(device.value?.type, device.value?.device_id || device.value?.id)
+);
 const deviceAddress = computed(() =>
   device.value?.address ||
   [device.value?.ip, device.value?.port].filter(Boolean).join(":") ||
@@ -99,6 +110,9 @@ const deviceAddress = computed(() =>
 );
 const protocolVersion = computed(() =>
   device.value?.ext?.gb_effective_version || device.value?.ext?.gb_version || "—"
+);
+const protocolDisplay = computed(() =>
+  isGb.value ? `GB28181 · ${protocolVersion.value}` : protocolLabel.value
 );
 const streamMode = computed(() => {
   const mode = Number(device.value?.stream_mode);
@@ -193,6 +207,10 @@ async function load() {
       } catch {
         diagnostics.value = null;
       }
+    } else {
+      diagnostics.value = null;
+      a4.value = null;
+      if (tab.value === "operations" || tab.value === "diagnostics") tab.value = "overview";
     }
   } catch (cause) {
     loadError.value = errorMessage(cause, "设备详情加载失败");
@@ -281,7 +299,7 @@ async function deleteDevice() {
   try {
     await api.deleteDevice(device.value.id);
     ui.toast(`设备 ${name} 已删除`);
-    await router.push("/devices");
+    await router.push(listRoute.value);
   } catch (cause) {
     ui.toast(errorMessage(cause, "设备删除失败"));
   } finally {
@@ -348,16 +366,16 @@ onMounted(load);
         <div class="device-command-identity">
           <RouterLink
             class="device-command-back"
-            to="/devices"
-            aria-label="返回国标设备列表"
-            title="返回国标设备"
+            :to="listRoute"
+            :aria-label="`返回${listLabel}列表`"
+            :title="`返回${listLabel}`"
           ><ArrowLeft /></RouterLink>
           <span class="device-command-icon"><Camera /></span>
           <div>
             <div class="device-command-title">
               <h1>{{ device.name || "未命名设备" }}</h1>
               <span class="status" :class="device.is_online ? 'online' : 'offline'">{{ device.is_online ? "在线" : "离线" }}</span>
-              <span class="protocol-tag blue">GB28181 · {{ protocolVersion }}</span>
+              <span class="protocol-tag blue">{{ protocolDisplay }}</span>
             </div>
             <div class="device-command-meta">
               <span class="mono">{{ device.device_id || device.id }}</span>
@@ -411,7 +429,7 @@ onMounted(load);
                   <div><dt>注册地址</dt><dd class="mono">{{ deviceAddress }}</dd></div>
                   <div><dt>流传输模式</dt><dd>{{ streamMode }}</dd></div>
                   <div><dt>注册时间</dt><dd>{{ formatDate(device.registered_at) }}</dd></div>
-                  <div><dt>协议版本</dt><dd>{{ protocolVersion }} <small>{{ device.ext?.gb_version_source || "自动识别" }}</small></dd></div>
+                  <div><dt>{{ isGb ? "协议版本" : "接入协议" }}</dt><dd>{{ isGb ? protocolVersion : protocolLabel }} <small v-if="isGb">{{ device.ext?.gb_version_source || "自动识别" }}</small></dd></div>
                 </dl>
               </article>
               <article class="card detail-capability-card">
@@ -420,7 +438,8 @@ onMounted(load);
                   <div class="ready"><Play /><span><strong>实时播放</strong><small>统一播放链路可用</small></span><b>可用</b></div>
                   <div :class="device.ptz_capable ? 'ready' : 'pending'"><Activity /><span><strong>PTZ 控制</strong><small>{{ device.ptz_verified ? "设备通道已验证" : device.ptz_capable ? "设备声明支持" : "尚未完成探测" }}</small></span><b>{{ device.ptz_capable ? "支持" : "待探测" }}</b></div>
                   <div class="ready"><Camera /><span><strong>快照与录像</strong><small>进入具体通道执行</small></span><b>可用</b></div>
-                  <div :class="device.ext?.gb_version_capabilities?.length ? 'ready' : 'pending'"><Settings2 /><span><strong>版本扩展</strong><small>{{ device.ext?.gb_version_capabilities?.length || 0 }} 项能力声明</small></span><b>{{ protocolVersion }}</b></div>
+                  <div v-if="isGb" :class="device.ext?.gb_version_capabilities?.length ? 'ready' : 'pending'"><Settings2 /><span><strong>版本扩展</strong><small>{{ device.ext?.gb_version_capabilities?.length || 0 }} 项能力声明</small></span><b>{{ protocolVersion }}</b></div>
+                  <div v-else class="ready"><Settings2 /><span><strong>协议接入</strong><small>当前设备按 {{ protocolLabel }} 模型管理</small></span><b>已识别</b></div>
                 </div>
               </article>
               <article class="card detail-activity-card">
@@ -446,7 +465,7 @@ onMounted(load);
           <template v-else-if="tab === 'channels'">
             <section class="detail-section-head">
               <div><h2>通道资源</h2><p>查看通道目录、在线状态并进入通道详情。</p></div>
-              <button class="btn" :disabled="actionLoading === '同步通道'" @click="runAction('同步通道', () => api.catalog(device!.id), true)">
+              <button v-if="isGb" class="btn" :disabled="actionLoading === '同步通道'" @click="runAction('同步通道', () => api.catalog(device!.id), true)">
                 <LoaderCircle v-if="actionLoading === '同步通道'" class="animate-spin" /><RefreshCcw v-else />同步通道
               </button>
             </section>
@@ -468,7 +487,7 @@ onMounted(load);
                   <RouterLink class="device-row-detail" :to="`/channels/${encodeURIComponent(channel.id)}`">详情<ChevronRight /></RouterLink>
                 </div>
               </div>
-              <div v-if="!channelLoading && !channelError && !relatedChannels.length" class="compact-empty"><ListVideo /><span><strong>暂无通道资源</strong><small>执行同步通道，从设备获取最新通道。</small></span></div>
+              <div v-if="!channelLoading && !channelError && !relatedChannels.length" class="compact-empty"><ListVideo /><span><strong>暂无通道资源</strong><small>{{ isGb ? "执行同步通道，从设备获取最新通道。" : "当前设备尚未上报可管理的视频通道。" }}</small></span></div>
               <div v-if="channelTotal" class="pagination">
                 <span>共 {{ channelTotal }} 路通道</span>
                 <div v-if="channelPageCount > 1" class="pagination-actions" aria-label="设备通道分页">
@@ -599,7 +618,7 @@ onMounted(load);
               class="input plain w-full"
               required /></label
           ><label class="form-group"
-            ><span class="form-label">国标编码</span
+            ><span class="form-label">{{ isGb ? "国标编码" : "终端编号" }}</span
             ><input
               v-model="editForm.device_id"
               class="input plain w-full mono" /></label

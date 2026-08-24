@@ -51,6 +51,23 @@ export async function countItems<T>(
   return Number(response.data?.total ?? response.data?.items?.length ?? 0)
 }
 
+/**
+ * 新版设备接口支持 type 服务端筛选；旧版会忽略该参数并返回全部设备。
+ * 优先采用服务端总数，检测到混入其他类型时才回退逐页核算。
+ */
+export async function countDevicesByType(type: string): Promise<number> {
+  const response = await api.devices({ type, page: 1, size: 100 })
+  const items = response.data?.items || []
+  const matches = (item: ApiDevice) =>
+    typeLabel(item.type, item.device_id || item.id) === type
+  if (!items.length) return 0
+  if (items.every(matches)) {
+    return Number(response.data?.total ?? items.length)
+  }
+  const legacy = await collectPages(api.devices)
+  return legacy.items.filter(matches).length
+}
+
 export const api = {
   health: () => http.get<HealthInfo>('/health'),
   metrics: () => http.get<ApiMetrics>('/app/metrics/api'),

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Activity, HardDrive, LoaderCircle, RefreshCcw, Server, Settings2, ShieldAlert } from '@lucide/vue'
-import { api, countItems, errorMessage } from '../services/api'
+import { api, collectPages, errorMessage, typeLabel } from '../services/api'
 import type { MediaServer, ResourceStats } from '../types/api'
 import { formatBytes, relativeTime } from '../utils/format'
 import { useUiStore } from '../stores/ui'
@@ -22,10 +22,43 @@ const diskPercent = computed(() => disk.value?.total ? Number(disk.value.used ||
 
 async function loadStreamCounts() {
   const protocols = ['GB28181', 'ONVIF', 'RTMP', 'RTSP']
-  const counts = await Promise.all(
-    protocols.map((type) => countItems(api.channels, { type, is_playing: true }))
+  const [allResponse, activeResponse, idleResponse, ...protocolResponses] = await Promise.all([
+    api.channels({ page: 1, size: 1 }),
+    api.channels({ page: 1, size: 1, is_playing: true }),
+    api.channels({ page: 1, size: 1, is_playing: false }),
+    ...protocols.map((type) => api.channels({ page: 1, size: 1, type, is_playing: true })),
+  ])
+  const pageTotal = (data?: { items?: unknown[]; total?: number }) =>
+    Number(data?.total ?? data?.items?.length ?? 0)
+  const allTotal = pageTotal(allResponse.data)
+  const activeTotal = pageTotal(activeResponse.data)
+  const idleTotal = pageTotal(idleResponse.data)
+  const supportsFilters =
+    activeTotal + idleTotal === allTotal &&
+    (activeResponse.data?.items || []).every((item) => item.is_playing === true) &&
+    (idleResponse.data?.items || []).every((item) => item.is_playing === false) &&
+    protocolResponses.every((response, index) =>
+      (response.data?.items || []).every((item) =>
+        item.is_playing === true &&
+        typeLabel(item.type, item.channel_id || item.id) === protocols[index]
+      )
+    )
+
+  if (supportsFilters) {
+    return Object.fromEntries(
+      protocols.map((type, index) => [type, pageTotal(protocolResponses[index].data)])
+    )
+  }
+
+  const legacy = await collectPages(api.channels)
+  return Object.fromEntries(
+    protocols.map((type) => [
+      type,
+      legacy.items.filter(
+        (item) => item.is_playing === true && typeLabel(item.type, item.channel_id || item.id) === type
+      ).length,
+    ])
   )
-  return Object.fromEntries(protocols.map((type, index) => [type, counts[index]]))
 }
 
 async function load() {
