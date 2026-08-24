@@ -12,20 +12,22 @@ import {
   ShieldAlert,
   X,
 } from "@lucide/vue";
-import { api, collectPages, errorMessage, withToken } from "../services/api";
+import { api, errorMessage, withToken } from "../services/api";
 import type {
-  ApiChannel,
   ApiRecording,
   MonthlyStats,
   TimelineRange,
 } from "../types/api";
 import { formatBytes, formatDate, formatDuration } from "../utils/format";
 import { useUiStore } from "../stores/ui";
+import RemoteChannelSelect from "../components/RemoteChannelSelect.vue";
 
 const ui = useUiStore();
 const route = useRoute();
 const query = ref("");
-const channelFilter = ref("all");
+const channelFilter = ref(
+  typeof route.query.channel === "string" ? route.query.channel : "all"
+);
 function localDateInput(value: Date) {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, "0");
@@ -38,7 +40,7 @@ const loading = ref(false);
 const loadingMore = ref(false);
 const loadError = ref("");
 const recordings = ref<ApiRecording[]>([]);
-const channels = ref<ApiChannel[]>([]);
+const channelNames = ref<Record<string, string>>({});
 const timeline = ref<TimelineRange[]>([]);
 const monthly = ref<MonthlyStats | null>(null);
 const total = ref(0);
@@ -46,15 +48,8 @@ const page = ref(1);
 const downloading = ref<number | null>(null);
 const PAGE_SIZE = 100;
 let loadSequence = 0;
+const channelNamePending = new Set<string>();
 
-const channelNames = computed(() =>
-  Object.fromEntries(
-    channels.value.map((item) => [
-      item.id,
-      item.name || item.channel_id || item.id,
-    ])
-  )
-);
 const contextLabel = computed(() =>
   route.query.event
     ? `事件 #${route.query.event} · ${
@@ -122,14 +117,6 @@ function selectToday() {
   selectedDate.value = localDateInput(new Date());
 }
 
-async function loadChannels() {
-  const data = await collectPages(api.channels);
-  channels.value = data.items;
-  const routeChannel = String(route.query.channel || "");
-  if (routeChannel && channels.value.some((item) => item.id === routeChannel))
-    channelFilter.value = routeChannel;
-}
-
 async function load(options: { append?: boolean } = {}) {
   const append = Boolean(options.append);
   const sequence = ++loadSequence;
@@ -138,16 +125,6 @@ async function load(options: { append?: boolean } = {}) {
   else loading.value = true;
   loadError.value = "";
   try {
-    let channelLoadError = "";
-    if (!channels.value.length) {
-      try {
-        await loadChannels();
-      } catch (cause) {
-        channelLoadError = errorMessage(cause, "通道列表加载失败");
-        const routeChannel = String(route.query.channel || "");
-        if (routeChannel) channelFilter.value = routeChannel;
-      }
-    }
     const channel =
       channelFilter.value === "all" ? undefined : channelFilter.value;
     const [listResponse, monthlyResponse, timelineResponse] = await Promise.allSettled([
@@ -185,9 +162,10 @@ async function load(options: { append?: boolean } = {}) {
     const auxiliaryError = auxiliaryFailure?.status === "rejected"
       ? errorMessage(auxiliaryFailure.reason)
       : "";
-    if (channelLoadError || auxiliaryError) {
-      loadError.value = `录像列表已加载，部分辅助数据暂不可用：${channelLoadError || auxiliaryError}`;
+    if (auxiliaryError) {
+      loadError.value = `录像列表已加载，部分辅助数据暂不可用：${auxiliaryError}`;
     }
+    void resolveChannelNames(recordings.value, channel);
   } catch (cause) {
     if (sequence === loadSequence) loadError.value = errorMessage(cause, "录像数据加载失败");
   } finally {
@@ -196,6 +174,31 @@ async function load(options: { append?: boolean } = {}) {
       loadingMore.value = false;
     }
   }
+}
+
+async function resolveChannelNames(items: ApiRecording[], selectedId?: string) {
+  const ids = [
+    ...new Set(
+      [...items.map((item) => item.cid), selectedId]
+        .filter(
+          (id): id is string =>
+            Boolean(id) &&
+            !channelNames.value[id!] &&
+            !channelNamePending.has(id!)
+        )
+    ),
+  ];
+  if (!ids.length) return;
+  ids.forEach((id) => channelNamePending.add(id));
+  const results = await Promise.allSettled(ids.map((id) => api.channel(id)));
+  const resolved: Record<string, string> = {};
+  results.forEach((result, index) => {
+    if (result.status !== "fulfilled") return;
+    const item = result.value.data;
+    resolved[ids[index]] = item.name || item.channel_id || item.id;
+  });
+  channelNames.value = { ...channelNames.value, ...resolved };
+  ids.forEach((id) => channelNamePending.delete(id));
 }
 
 function loadMore() {
@@ -405,16 +408,11 @@ onMounted(load);
             class="input"
             aria-label="搜索录像"
             placeholder="搜索通道、录像编号或流" /></label
-        ><select v-model="channelFilter" class="select" aria-label="按通道筛选">
-          <option value="all">全部通道</option>
-          <option
-            v-for="channel in channels"
-            :key="channel.id"
-            :value="channel.id"
-          >
-            {{ channel.name || channel.channel_id || channel.id }}
-          </option></select
-        ><button
+        ><RemoteChannelSelect
+          v-model="channelFilter"
+          aria-label="按通道筛选"
+        />
+        <button
           v-if="hasSearch"
           class="btn btn-sm filter-reset"
           type="button"

@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   Camera,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Clock3,
   Download,
@@ -27,7 +28,7 @@ import {
   Wifi,
   Wrench,
 } from "@lucide/vue";
-import { api, collectPages, errorMessage, typeLabel } from "../services/api";
+import { api, countItems, errorMessage, typeLabel } from "../services/api";
 import type { ApiChannel, ApiDevice, DeviceHistoryRecord } from "../types/api";
 import { formatDate, relativeTime } from "../utils/format";
 import { useUiStore } from "../stores/ui";
@@ -45,6 +46,11 @@ const loadError = ref("");
 const actionLoading = ref("");
 const device = ref<ApiDevice | null>(null);
 const relatedChannels = ref<ApiChannel[]>([]);
+const channelTotal = ref(0);
+const onlineChannelTotal = ref(0);
+const channelPage = ref(1);
+const channelLoading = ref(false);
+const channelError = ref("");
 const diagnostics = ref<Record<string, unknown> | null>(null);
 const a4 = ref<Record<string, unknown> | null>(null);
 const heartbeatHistory = ref<DeviceHistoryRecord[]>([]);
@@ -56,6 +62,7 @@ const historyError = ref("");
 const editOpen = ref(false);
 const deleteOpen = ref(false);
 const deleting = ref(false);
+const CHANNEL_PAGE_SIZE = 25;
 const editForm = reactive({
   name: "",
   device_id: "",
@@ -97,7 +104,9 @@ const streamMode = computed(() => {
   const mode = Number(device.value?.stream_mode);
   return ({ 0: "UDP", 1: "TCP 被动", 2: "TCP 主动" } as Record<number, string>)[mode] || device.value?.transport?.toUpperCase() || "—";
 });
-const onlineChannels = computed(() => relatedChannels.value.filter((item) => item.is_online).length);
+const channelPageCount = computed(() =>
+  Math.max(1, Math.ceil(channelTotal.value / CHANNEL_PAGE_SIZE))
+);
 const recentActivity = computed(() => {
   const rows = [...heartbeatHistory.value, ...registerHistory.value];
   const kinds = new Set(rows.map((item) => item.kind));
@@ -151,12 +160,31 @@ async function load() {
     const { data } = await api.device(id);
     device.value = data;
     basicForm.name = data.name || "";
-    const [channelResponse, heartbeatResponse, registerResponse] = await Promise.allSettled([
-      collectPages(api.channels, { did: data.id }),
+    channelPage.value = 1;
+    channelError.value = "";
+    const [channelResponse, onlineChannelResponse, heartbeatResponse, registerResponse] = await Promise.allSettled([
+      api.channels({ did: data.id, page: 1, size: CHANNEL_PAGE_SIZE }),
+      countItems(api.channels, { did: data.id, is_online: true }),
       api.deviceHistory(data.id, "heartbeat", { page: 1, size: 6 }),
       api.deviceHistory(data.id, "register", { page: 1, size: 6 }),
     ]);
-    relatedChannels.value = channelResponse.status === "fulfilled" ? channelResponse.value.items : [];
+    if (channelResponse.status === "fulfilled") {
+      relatedChannels.value = channelResponse.value.data?.items || [];
+      channelTotal.value = Number(
+        channelResponse.value.data?.total ?? relatedChannels.value.length
+      );
+    } else {
+      relatedChannels.value = [];
+      channelTotal.value = 0;
+      channelError.value = errorMessage(
+        channelResponse.reason,
+        "设备通道加载失败"
+      );
+    }
+    onlineChannelTotal.value =
+      onlineChannelResponse.status === "fulfilled"
+        ? onlineChannelResponse.value
+        : relatedChannels.value.filter((item) => item.is_online === true).length;
     heartbeatHistory.value = heartbeatResponse.status === "fulfilled" ? heartbeatResponse.value.data?.items || [] : [];
     registerHistory.value = registerResponse.status === "fulfilled" ? registerResponse.value.data?.items || [] : [];
     if (isGb.value) {
@@ -170,6 +198,30 @@ async function load() {
     loadError.value = errorMessage(cause, "设备详情加载失败");
   } finally {
     loading.value = false;
+  }
+}
+
+async function changeChannelPage(next: number) {
+  if (!device.value) return;
+  const target = Math.min(channelPageCount.value, Math.max(1, next));
+  if (target === channelPage.value && !channelError.value) return;
+  channelLoading.value = true;
+  channelError.value = "";
+  try {
+    const response = await api.channels({
+      did: device.value.id,
+      page: target,
+      size: CHANNEL_PAGE_SIZE,
+    });
+    relatedChannels.value = response.data?.items || [];
+    channelTotal.value = Number(
+      response.data?.total ?? relatedChannels.value.length
+    );
+    channelPage.value = target;
+  } catch (cause) {
+    channelError.value = errorMessage(cause, "设备通道加载失败");
+  } finally {
+    channelLoading.value = false;
   }
 }
 
@@ -325,7 +377,7 @@ onMounted(load);
           <span class="pulse-led" />
           <div><strong>{{ device.is_online ? "信令链路正常" : "设备当前离线" }}</strong><small>{{ device.is_online ? "注册与心跳持续更新" : "请检查注册、网络及鉴权配置" }}</small></div>
         </div>
-        <div><small>通道在线</small><strong>{{ onlineChannels }} / {{ relatedChannels.length }}</strong><span>当前目录资源</span></div>
+        <div><small>通道在线</small><strong>{{ onlineChannelTotal }} / {{ channelTotal }}</strong><span>当前目录资源</span></div>
         <div><small>最近心跳</small><strong>{{ relativeTime(device.keepalive_at) }}</strong><span>{{ heartbeatHistory.length ? "历史已记录" : "等待新记录" }}</span></div>
         <div><small>流传输</small><strong>{{ streamMode }}</strong><span>{{ device.transport?.toUpperCase() || "SIP" }} 信令</span></div>
         <div><small>注册有效期</small><strong>{{ device.expires || "—" }}<em v-if="device.expires">s</em></strong><span>{{ formatDate(device.registered_at) }}</span></div>
@@ -399,6 +451,13 @@ onMounted(load);
               </button>
             </section>
             <section class="card detail-channel-list">
+              <div v-if="channelError" class="inline-resource-error" role="alert">
+                <span>{{ channelError }}</span>
+                <button type="button" class="btn btn-sm" @click="changeChannelPage(channelPage)">重试</button>
+              </div>
+              <div v-if="channelLoading" class="compact-empty" aria-live="polite">
+                <LoaderCircle class="animate-spin" /><span><strong>正在加载通道</strong><small>请稍候…</small></span>
+              </div>
               <div v-for="channel in relatedChannels" :key="channel.id" class="detail-channel-row">
                 <span class="channel-status-icon" :class="{ offline: !channel.is_online }"><Camera /></span>
                 <span class="channel-main"><strong>{{ channel.name || "未命名通道" }}</strong><small class="mono">{{ channel.channel_id || channel.id }}</small></span>
@@ -409,7 +468,15 @@ onMounted(load);
                   <RouterLink class="device-row-detail" :to="`/channels/${encodeURIComponent(channel.id)}`">详情<ChevronRight /></RouterLink>
                 </div>
               </div>
-              <div v-if="!relatedChannels.length" class="compact-empty"><ListVideo /><span><strong>暂无通道资源</strong><small>执行同步通道，从设备获取最新通道。</small></span></div>
+              <div v-if="!channelLoading && !channelError && !relatedChannels.length" class="compact-empty"><ListVideo /><span><strong>暂无通道资源</strong><small>执行同步通道，从设备获取最新通道。</small></span></div>
+              <div v-if="channelTotal" class="pagination">
+                <span>共 {{ channelTotal }} 路通道</span>
+                <div v-if="channelPageCount > 1" class="pagination-actions" aria-label="设备通道分页">
+                  <button type="button" class="page-btn" :disabled="channelPage === 1 || channelLoading" aria-label="上一页通道" @click="changeChannelPage(channelPage - 1)"><ChevronLeft /></button>
+                  <span>第 {{ channelPage }} / {{ channelPageCount }} 页</span>
+                  <button type="button" class="page-btn" :disabled="channelPage === channelPageCount || channelLoading" aria-label="下一页通道" @click="changeChannelPage(channelPage + 1)"><ChevronRight /></button>
+                </div>
+              </div>
             </section>
           </template>
 
@@ -505,7 +572,7 @@ onMounted(load);
           <div>
             <strong>{{ device.name || device.device_id || device.id }}</strong>
             <p>
-              将同时删除 {{ relatedChannels.length }} 路关联通道；录像和事件历史不会在此同步删除。
+              将同时删除 {{ channelTotal }} 路关联通道；录像和事件历史不会在此同步删除。
             </p>
           </div>
         </div>

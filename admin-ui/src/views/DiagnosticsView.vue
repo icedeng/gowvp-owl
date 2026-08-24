@@ -42,6 +42,7 @@ const matrix = computed(() =>
     ["BasicParam", "2014+", "config_query"],
     ["预置位查询", "2014+", "preset_query"],
     ["语音广播", "2014+", "voice_broadcast"],
+    ["语音对讲", "2016+", "voice_intercom"],
     ["强制关键帧", "2016+", "iframe_control"],
     ["移动位置订阅", "2016+", "mobile_position"],
     ["设备抓拍", "2022", "snapshot"],
@@ -91,7 +92,8 @@ async function load() {
       metricsAvailable.value = true;
     } else {
       loadError.value = `设备档案已加载，运行指标暂不可用：${errorMessage(
-        metricsResult.reason
+        metricsResult.reason,
+        "当前服务未开放 GB28181 运行指标接口"
       )}`;
     }
   } catch (cause) {

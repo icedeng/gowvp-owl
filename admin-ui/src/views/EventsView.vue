@@ -13,9 +13,10 @@ import {
   Video,
   X,
 } from "@lucide/vue";
-import { api, collectPages, errorMessage } from "../services/api";
-import type { ApiChannel, ApiEvent } from "../types/api";
+import { api, errorMessage } from "../services/api";
+import type { ApiEvent } from "../types/api";
 import { formatDate } from "../utils/format";
+import RemoteChannelSelect from "../components/RemoteChannelSelect.vue";
 
 const route = useRoute();
 const query = ref("");
@@ -26,7 +27,7 @@ const loading = ref(false);
 const loadingMore = ref(false);
 const loadError = ref("");
 const events = ref<ApiEvent[]>([]);
-const channels = ref<ApiChannel[]>([]);
+const channelNames = ref<Record<string, string>>({});
 const total = ref(0);
 const page = ref(1);
 const eventImageErrors = ref(new Set<number>());
@@ -34,16 +35,9 @@ const autoRefresh = ref(false);
 const PAGE_SIZE = 48;
 let timer: number | undefined;
 let loadSequence = 0;
+const channelNamePending = new Set<string>();
 
 const focusedId = computed(() => Number(route.query.event || 0));
-const channelNames = computed(() =>
-  Object.fromEntries(
-    channels.value.map((item) => [
-      item.id,
-      item.name || item.channel_id || item.id,
-    ])
-  )
-);
 const filtered = computed(() =>
   events.value
     .filter((item) => {
@@ -106,31 +100,20 @@ async function load(silent = false, append = false) {
   else if (!silent) loading.value = true;
   loadError.value = "";
   try {
-    const [eventResponse, channelResponse] = await Promise.allSettled([
-      api.events({
-        page: requestedPage,
-        size: PAGE_SIZE,
-        cid: channelFilter.value === "all" ? undefined : channelFilter.value,
-        ...rangeParams(),
-      }),
-      channels.value.length
-        ? Promise.resolve(null)
-        : collectPages(api.channels),
-    ]);
+    const eventResponse = await api.events({
+      page: requestedPage,
+      size: PAGE_SIZE,
+      cid: channelFilter.value === "all" ? undefined : channelFilter.value,
+      ...rangeParams(),
+    });
     if (sequence !== loadSequence) return;
-    if (eventResponse.status === "rejected") throw eventResponse.reason;
-    const nextEvents = eventResponse.value.data?.items || [];
+    const nextEvents = eventResponse.data?.items || [];
     events.value = append
       ? [...new Map([...events.value, ...nextEvents].map((item) => [item.id, item])).values()]
       : nextEvents;
     if (!append) eventImageErrors.value = new Set();
     page.value = requestedPage;
-    total.value = eventResponse.value.data?.total ?? events.value.length;
-    if (channelResponse.status === "fulfilled" && channelResponse.value) {
-      channels.value = channelResponse.value.items;
-    } else if (channelResponse.status === "rejected") {
-      loadError.value = `事件已加载，通道名称暂不可用：${errorMessage(channelResponse.reason)}`;
-    }
+    total.value = eventResponse.data?.total ?? events.value.length;
     if (
       !append &&
       focusedId.value &&
@@ -143,6 +126,7 @@ async function load(silent = false, append = false) {
         // 聚焦事件可能已过期或无权访问，保留当前列表。
       }
     }
+    void resolveChannelNames(events.value);
   } catch (cause) {
     if (sequence === loadSequence) loadError.value = errorMessage(cause, "事件列表加载失败");
   } finally {
@@ -151,6 +135,32 @@ async function load(silent = false, append = false) {
       loadingMore.value = false;
     }
   }
+}
+
+async function resolveChannelNames(items: ApiEvent[]) {
+  const ids = [
+    ...new Set(
+      items
+        .map((item) => item.cid)
+        .filter(
+          (id): id is string =>
+            Boolean(id) &&
+            !channelNames.value[id!] &&
+            !channelNamePending.has(id!)
+        )
+    ),
+  ];
+  if (!ids.length) return;
+  ids.forEach((id) => channelNamePending.add(id));
+  const results = await Promise.allSettled(ids.map((id) => api.channel(id)));
+  const resolved: Record<string, string> = {};
+  results.forEach((result, index) => {
+    if (result.status !== "fulfilled") return;
+    const item = result.value.data;
+    resolved[ids[index]] = item.name || item.channel_id || item.id;
+  });
+  channelNames.value = { ...channelNames.value, ...resolved };
+  ids.forEach((id) => channelNamePending.delete(id));
 }
 
 function loadMore() {
@@ -217,21 +227,12 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <option>全部来源</option>
           <option>AI 检测</option>
           <option>设备报警</option></select
-        ><select
+        ><RemoteChannelSelect
           v-model="channelFilter"
-          class="select"
           aria-label="按通道筛选"
           @change="load()"
-        >
-          <option value="all">全部通道</option>
-          <option
-            v-for="channel in channels"
-            :key="channel.id"
-            :value="channel.id"
-          >
-            {{ channel.name || channel.channel_id || channel.id }}
-          </option></select
-        ><select
+        />
+        <select
           v-model="period"
           class="select"
           aria-label="按时间范围筛选"

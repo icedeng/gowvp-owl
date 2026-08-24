@@ -143,8 +143,19 @@ export function withQuery(url: string, params?: Record<string, string | number>)
 }
 
 export function errorMessage(error: unknown, fallback = '请求失败，请稍后重试') {
-  const body = (error as { response?: { data?: ApiErrorBody }; message?: string })?.response?.data
-  return body?.msg || (error as { message?: string })?.message || fallback
+  const response = (error as { response?: { data?: ApiErrorBody; status?: number }; message?: string })?.response
+  const bodyMessage = String(response?.data?.msg || '').trim()
+  if (bodyMessage && bodyMessage !== '来到了无人的荒漠') return bodyMessage
+
+  const message = String((error as { message?: string })?.message || '').trim()
+  if (!response && /network error|failed to fetch|econnrefused/i.test(message)) {
+    return '无法连接核心服务，请检查服务状态与网络后重试'
+  }
+  if (response?.status === 404 && fallback === '请求失败，请稍后重试') {
+    return '请求的资源不存在或当前服务未开放该功能'
+  }
+  if (!response && message) return message
+  return fallback || '请求失败，请稍后重试'
 }
 
 export function typeLabel(type?: string, idHint?: string) {

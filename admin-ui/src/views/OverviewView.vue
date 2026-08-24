@@ -15,11 +15,12 @@ import {
   ShieldAlert,
   Video,
 } from "@lucide/vue";
-import { api, countItems, errorMessage } from "../services/api";
+import { api, collectPages, errorMessage, typeLabel } from "../services/api";
 import type {
   ApiDevice,
   ApiEvent,
   ApiMetrics,
+  ApiPage,
   HealthInfo,
   MediaServer,
   ResourceStats,
@@ -162,42 +163,123 @@ const trend = computed(() => {
 });
 
 async function loadDeviceSummary() {
-  const [total, online, offlineResponse] = await Promise.all([
-    countItems(api.devices),
-    countItems(api.devices, { is_online: true }),
+  const [allResponse, onlineResponse, offlineResponse] = await Promise.all([
+    api.devices({ page: 1, size: 1 }),
+    api.devices({ page: 1, size: 1, is_online: true }),
     api.devices({ page: 1, size: 2, is_online: false }),
   ]);
+  const all = pageStats(allResponse.data);
+  const online = pageStats(onlineResponse.data);
+  const offline = pageStats(offlineResponse.data);
+  const supportsStatusFilter =
+    online.total + offline.total === all.total &&
+    online.items.every((item) => item.is_online === true) &&
+    offline.items.every((item) => item.is_online === false);
+
+  if (supportsStatusFilter) {
+    return {
+      total: all.total,
+      online: online.total,
+      offline: offline.items,
+    };
+  }
+
+  // 兼容尚未支持 is_online 查询参数的旧服务，避免把全部设备误报为在线。
+  const legacy = await collectPages(api.devices);
   return {
-    total,
-    online,
-    offline: offlineResponse.data?.items || [],
+    total: legacy.total,
+    online: legacy.items.filter((item) => item.is_online === true).length,
+    offline: legacy.items.filter((item) => item.is_online !== true).slice(0, 2),
   };
 }
 
 async function loadChannelSummary() {
   const protocols = ["GB28181", "ONVIF", "RTMP", "RTSP"];
-  const [total, online, active, ...protocolValues] = await Promise.all([
-    countItems(api.channels),
-    countItems(api.channels, { is_online: true }),
-    countItems(api.channels, { is_playing: true }),
+  const [allResponse, onlineResponse, offlineResponse, activeResponse, idleResponse, ...protocolResponses] = await Promise.all([
+    api.channels({ page: 1, size: 1 }),
+    api.channels({ page: 1, size: 1, is_online: true }),
+    api.channels({ page: 1, size: 1, is_online: false }),
+    api.channels({ page: 1, size: 1, is_playing: true }),
+    api.channels({ page: 1, size: 1, is_playing: false }),
     ...protocols.flatMap((type) => [
-      countItems(api.channels, { type }),
-      countItems(api.channels, { type, is_online: true }),
+      api.channels({ page: 1, size: 1, type }),
+      api.channels({ page: 1, size: 1, type, is_online: true }),
     ]),
   ]);
+  const all = pageStats(allResponse.data);
+  const online = pageStats(onlineResponse.data);
+  const offline = pageStats(offlineResponse.data);
+  const active = pageStats(activeResponse.data);
+  const idle = pageStats(idleResponse.data);
+  const protocolValues = protocolResponses.map((response) => pageStats(response.data));
+  const protocolTotal = protocols.reduce(
+    (sum, _type, index) => sum + protocolValues[index * 2].total,
+    0
+  );
+  const supportsFilters =
+    online.total + offline.total === all.total &&
+    active.total + idle.total === all.total &&
+    online.items.every((item) => item.is_online === true) &&
+    offline.items.every((item) => item.is_online === false) &&
+    active.items.every((item) => item.is_playing === true) &&
+    idle.items.every((item) => item.is_playing === false) &&
+    protocolTotal <= all.total &&
+    protocols.every((_type, index) =>
+      protocolValues[index * 2].items.every(
+        (item) =>
+          typeLabel(item.type, item.channel_id || item.id) === protocols[index]
+      )
+    );
+
+  if (!supportsFilters) {
+    // 旧服务会忽略筛选参数；仅在探测失败时逐页核算，兼顾准确性与新服务性能。
+    const legacy = await collectPages(api.channels);
+    return {
+      total: legacy.total,
+      online: legacy.items.filter((item) => item.is_online === true).length,
+      active: legacy.items.filter((item) => item.is_playing === true).length,
+      protocols: Object.fromEntries(
+        protocols.map((type) => {
+          const items = legacy.items.filter(
+            (item) => typeLabel(item.type, item.channel_id || item.id) === type
+          );
+          return [
+            type,
+            {
+              total: items.length,
+              online: items.filter((item) => item.is_online === true).length,
+            },
+          ];
+        })
+      ),
+    };
+  }
+
   return {
-    total,
-    online,
-    active,
+    total: all.total,
+    online: online.total,
+    active: active.total,
     protocols: Object.fromEntries(
       protocols.map((type, index) => [
         type,
         {
-          total: protocolValues[index * 2],
-          online: protocolValues[index * 2 + 1],
+          total: protocolValues[index * 2].total,
+          online: protocolValues[index * 2 + 1].total,
         },
       ])
     ),
+  };
+}
+
+function pageStats<T>(page?: ApiPage<T>) {
+  const items = page?.items || [];
+  const reportedTotal = Number(page?.total);
+  return {
+    items,
+    total:
+      Number.isFinite(reportedTotal) && reportedTotal >= 0
+        ? reportedTotal
+        : items.length,
   };
 }
 

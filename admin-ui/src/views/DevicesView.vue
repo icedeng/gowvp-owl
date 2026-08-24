@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import {
   Clock3,
   ChevronLeft,
@@ -16,7 +16,13 @@ import {
   ShieldAlert,
   X,
 } from "@lucide/vue";
-import { api, collectPages, errorMessage, typeLabel } from "../services/api";
+import {
+  api,
+  collectPages,
+  countItems,
+  errorMessage,
+  typeLabel,
+} from "../services/api";
 import type { ApiDevice, DeviceHistoryRecord } from "../types/api";
 import { formatDate, relativeTime } from "../utils/format";
 import { useUiStore } from "../stores/ui";
@@ -37,13 +43,22 @@ const saving = ref(false);
 const loadError = ref("");
 const actionLoading = ref("");
 const rows = ref<ApiDevice[]>([]);
+const legacyRows = ref<ApiDevice[]>([]);
 const currentPage = ref(1);
+const total = ref(0);
+const deviceTotal = ref(0);
+const onlineTotal = ref(0);
+const offlineTotal = ref(0);
+const channelTotal = ref(0);
+const supportsServerFilters = ref<boolean | null>(null);
 const statisticDevice = ref<ApiDevice | null>(null);
 const statisticKind = ref<StatisticKind>("heartbeat");
 const statisticLoading = ref(false);
 const statisticError = ref("");
 const statisticRows = ref<DeviceHistoryRecord[]>([]);
 const PAGE_SIZE = 20;
+let loadSequence = 0;
+let searchTimer: number | undefined;
 const form = reactive({ name: "", device_id: "", password: "", stream_mode: 1 });
 const accessInfo = reactive({
   serverIp: "",
@@ -53,43 +68,11 @@ const accessInfo = reactive({
   password: "",
 });
 
-const gbRows = computed(() =>
-  rows.value.filter(
-    (device) =>
-      typeLabel(device.type, device.device_id || device.id) === "GB28181"
-  )
-);
-const filtered = computed(() =>
-  gbRows.value.filter((device) => {
-    const text = `${device.name || ""}${device.id}${device.device_id || ""}${
-      device.address || ""
-    }${device.ip || ""}`.toLowerCase();
-    const matchQuery = text.includes(query.value.toLowerCase());
-    const matchStatus =
-      status.value === "all" ||
-      (status.value === "online" ? device.is_online : !device.is_online);
-    return matchQuery && matchStatus;
-  })
-);
+const filtered = computed(() => rows.value);
 const pageCount = computed(() =>
-  Math.max(1, Math.ceil(filtered.value.length / PAGE_SIZE))
+  Math.max(1, Math.ceil(total.value / PAGE_SIZE))
 );
-const pagedRows = computed(() =>
-  filtered.value.slice(
-    (currentPage.value - 1) * PAGE_SIZE,
-    currentPage.value * PAGE_SIZE
-  )
-);
-const onlineCount = computed(
-  () => gbRows.value.filter((item) => item.is_online).length
-);
-const offlineCount = computed(() => gbRows.value.length - onlineCount.value);
-const channelCount = computed(() =>
-  gbRows.value.reduce(
-    (sum, item) => sum + Number(item.channels || item.children?.length || 0),
-    0
-  )
-);
+const pagedRows = computed(() => rows.value);
 const hasFilters = computed(() => Boolean(query.value || status.value !== "all"));
 const statisticTitle = computed(() =>
   statisticKind.value === "heartbeat" ? "心跳记录" : "注册记录"
@@ -133,17 +116,107 @@ async function openStatistic(device: ApiDevice, kind: StatisticKind) {
   }
 }
 
-async function load() {
+function isGbDevice(device: ApiDevice) {
+  return typeLabel(device.type, device.device_id || device.id) === "GB28181";
+}
+
+function matchesFilters(device: ApiDevice) {
+  const text = `${device.name || ""}${device.id}${device.device_id || ""}${
+    device.address || ""
+  }${device.ip || ""}`.toLowerCase();
+  const matchStatus =
+    status.value === "all" ||
+    (status.value === "online"
+      ? device.is_online === true
+      : device.is_online !== true);
+  return text.includes(query.value.trim().toLowerCase()) && matchStatus;
+}
+
+async function probeServerFilters() {
+  const [allResponse, onlineResponse, offlineResponse, channels] =
+    await Promise.all([
+      api.devices({ page: 1, size: 1, type: "GB28181" }),
+      api.devices({ page: 1, size: 1, type: "GB28181", is_online: true }),
+      api.devices({ page: 1, size: 1, type: "GB28181", is_online: false }),
+      countItems(api.channels, { type: "GB28181" }),
+    ]);
+  const allItems = allResponse.data?.items || [];
+  const onlineItems = onlineResponse.data?.items || [];
+  const offlineItems = offlineResponse.data?.items || [];
+  const all = Number(allResponse.data?.total ?? allItems.length);
+  const online = Number(onlineResponse.data?.total ?? onlineItems.length);
+  const offline = Number(offlineResponse.data?.total ?? offlineItems.length);
+  const supported =
+    online + offline === all &&
+    allItems.every(isGbDevice) &&
+    onlineItems.every((item) => isGbDevice(item) && item.is_online === true) &&
+    offlineItems.every(
+      (item) => isGbDevice(item) && item.is_online === false
+    );
+  return { supported, all, online, offline, channels };
+}
+
+async function load(refreshSummary = false) {
+  const sequence = ++loadSequence;
   loading.value = true;
   loadError.value = "";
   try {
-    const data = await collectPages(api.devices);
-    rows.value = data.items;
+    if (supportsServerFilters.value === null || refreshSummary) {
+      const summary = await probeServerFilters();
+      if (sequence !== loadSequence) return;
+      supportsServerFilters.value = summary.supported;
+      channelTotal.value = summary.channels;
+      if (summary.supported) {
+        deviceTotal.value = summary.all;
+        onlineTotal.value = summary.online;
+        offlineTotal.value = summary.offline;
+        legacyRows.value = [];
+      }
+    }
+
+    if (supportsServerFilters.value) {
+      const response = await api.devices({
+        page: currentPage.value,
+        size: PAGE_SIZE,
+        type: "GB28181",
+        key: query.value.trim() || undefined,
+        is_online:
+          status.value === "all" ? undefined : status.value === "online",
+      });
+      if (sequence !== loadSequence) return;
+      rows.value = (response.data?.items || []).filter(isGbDevice);
+      total.value = Number(response.data?.total ?? rows.value.length);
+    } else {
+      if (!legacyRows.value.length || refreshSummary) {
+        const data = await collectPages(api.devices);
+        if (sequence !== loadSequence) return;
+        legacyRows.value = data.items.filter(isGbDevice);
+        deviceTotal.value = legacyRows.value.length;
+        onlineTotal.value = legacyRows.value.filter(
+          (item) => item.is_online === true
+        ).length;
+        offlineTotal.value = deviceTotal.value - onlineTotal.value;
+      }
+      const matched = legacyRows.value.filter(matchesFilters);
+      total.value = matched.length;
+      rows.value = matched.slice(
+        (currentPage.value - 1) * PAGE_SIZE,
+        currentPage.value * PAGE_SIZE
+      );
+    }
   } catch (cause) {
-    loadError.value = errorMessage(cause, "国标设备列表加载失败");
+    if (sequence === loadSequence)
+      loadError.value = errorMessage(cause, "国标设备列表加载失败");
   } finally {
-    loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
+}
+
+function changePage(next: number) {
+  const target = Math.min(pageCount.value, Math.max(1, next));
+  if (target === currentPage.value) return;
+  currentPage.value = target;
+  void load();
 }
 
 async function openAccessInfo() {
@@ -174,7 +247,7 @@ async function refreshDevice(device: ApiDevice) {
   try {
     await api.catalog(device.id);
     ui.toast(`${device.name || device.device_id || device.id} · 目录刷新指令已发送`);
-    await load();
+    await load(true);
   } catch (cause) {
     ui.toast(errorMessage(cause, "刷新设备失败"));
   } finally {
@@ -189,7 +262,7 @@ async function addDevice() {
     addOpen.value = false;
     ui.toast(`${form.name} 已添加`);
     Object.assign(form, { name: "", device_id: "", password: "", stream_mode: 1 });
-    await load();
+    await load(true);
   } catch (cause) {
     ui.toast(errorMessage(cause, "添加国标设备失败"));
   } finally {
@@ -197,12 +270,12 @@ async function addDevice() {
   }
 }
 
-onMounted(load);
+onMounted(() => load(true));
+onBeforeUnmount(() => window.clearTimeout(searchTimer));
 watch([query, status], () => {
   currentPage.value = 1;
-});
-watch(pageCount, (count) => {
-  if (currentPage.value > count) currentPage.value = count;
+  window.clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => void load(), 280);
 });
 </script>
 
@@ -219,7 +292,7 @@ watch(pageCount, (count) => {
         <button class="btn" @click="openAccessInfo">
           <RadioTower />接入信息
         </button>
-        <button class="btn" :disabled="loading" @click="load">
+        <button class="btn" :disabled="loading" @click="load(true)">
           <RefreshCcw :class="{ 'animate-spin': loading }" />刷新
         </button>
         <button class="btn btn-primary" @click="addOpen = true">
@@ -230,25 +303,25 @@ watch(pageCount, (count) => {
 
     <div v-if="loadError" class="warning-box mb-4" role="alert">
       <ShieldAlert /><span>{{ loadError }}</span>
-      <button class="btn btn-sm ml-auto" @click="load">重试</button>
+      <button class="btn btn-sm ml-auto" @click="load(true)">重试</button>
     </div>
 
     <section class="device-summary" aria-label="国标设备统计">
       <div>
         <span>设备</span>
-        <strong>{{ gbRows.length }}</strong>
+        <strong>{{ deviceTotal }}</strong>
       </div>
       <div>
         <span>在线</span>
-        <strong class="text-green-700">{{ onlineCount }}</strong>
+        <strong class="text-green-700">{{ onlineTotal }}</strong>
       </div>
       <div>
         <span>离线</span>
-        <strong class="text-red-700">{{ offlineCount }}</strong>
+        <strong class="text-red-700">{{ offlineTotal }}</strong>
       </div>
       <div>
         <span>通道</span>
-        <strong>{{ channelCount }}</strong>
+        <strong>{{ channelTotal }}</strong>
       </div>
     </section>
 
@@ -277,7 +350,7 @@ watch(pageCount, (count) => {
         </button>
         <span class="toolbar-spacer" />
         <span class="section-note" aria-live="polite">
-          本页 {{ pagedRows.length }} 台 · 匹配 {{ filtered.length }} / {{ gbRows.length }} 台
+          本页 {{ pagedRows.length }} 台 · 匹配 {{ total }} 台
         </span>
       </div>
       <div class="table-wrap">
@@ -373,23 +446,23 @@ watch(pageCount, (count) => {
         </div>
         <div v-else-if="!filtered.length" class="empty-state empty-action">
           <ListFilter />
-          <strong>{{ gbRows.length ? "没有符合当前条件的国标设备" : "当前环境尚未接入国标设备" }}</strong>
-          <span>{{ gbRows.length ? "清除筛选后可恢复全部设备。" : "设备注册成功后会自动出现在此列表。" }}</span>
+          <strong>{{ deviceTotal ? "没有符合当前条件的国标设备" : "当前环境尚未接入国标设备" }}</strong>
+          <span>{{ deviceTotal ? "清除筛选后可恢复全部设备。" : "设备注册成功后会自动出现在此列表。" }}</span>
           <div class="button-row">
-            <button v-if="gbRows.length" class="btn" @click="resetFilters">清除筛选</button>
+            <button v-if="deviceTotal" class="btn" @click="resetFilters">清除筛选</button>
             <button v-else class="btn btn-primary" @click="addOpen = true"><Plus />添加国标设备</button>
           </div>
         </div>
       </div>
       <div class="pagination">
-        <span>共 {{ filtered.length }} 条匹配记录</span>
+        <span>共 {{ total }} 条匹配记录</span>
         <div v-if="pageCount > 1" class="pagination-actions" aria-label="设备列表分页">
           <button
             type="button"
             class="page-btn"
             :disabled="currentPage === 1"
             aria-label="上一页"
-            @click="currentPage -= 1"
+            @click="changePage(currentPage - 1)"
           ><ChevronLeft /></button>
           <span>第 {{ currentPage }} / {{ pageCount }} 页</span>
           <button
@@ -397,10 +470,10 @@ watch(pageCount, (count) => {
             class="page-btn"
             :disabled="currentPage === pageCount"
             aria-label="下一页"
-            @click="currentPage += 1"
+            @click="changePage(currentPage + 1)"
           ><ChevronRight /></button>
         </div>
-        <span v-else class="section-note">筛选在已加载结果内即时生效</span>
+        <span v-else class="section-note">共 1 页</span>
       </div>
     </section>
 

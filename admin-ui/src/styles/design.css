@@ -233,6 +233,27 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .field > svg { position: absolute; left: 11px; width: 14px; color: var(--muted); pointer-events: none; }
 .input, .select, .textarea { color: var(--ink); background: white; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; transition: .16s ease; }
 .input, .select { min-height: 36px; }
+.remote-select { position: relative; min-width: 190px; }
+.remote-select-trigger { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; cursor: pointer; }
+.remote-select-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-select-trigger > svg { width: 15px; height: 15px; flex: 0 0 auto; color: var(--muted); }
+.remote-select-popover { position: absolute; z-index: 70; top: calc(100% + 6px); right: 0; width: min(360px, calc(100vw - 24px)); overflow: hidden; background: white; border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 14px 34px rgba(25, 42, 70, .14); }
+.remote-select-search { margin: 10px; }
+.remote-select-search .input { width: 100%; }
+.remote-select-options { max-height: 320px; overflow: auto; padding: 0 6px 6px; }
+.remote-select-option { width: 100%; min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 9px; color: var(--ink); background: transparent; border: 0; border-radius: 7px; text-align: left; cursor: pointer; }
+.remote-select-option:hover, .remote-select-option.active { background: var(--blue-soft); }
+.remote-select-option[aria-selected="true"] { color: var(--blue); background: var(--blue-soft); }
+.remote-select-option > span { min-width: 0; display: grid; gap: 2px; }
+.remote-select-option strong, .remote-select-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-select-option strong { font-size: 12px; }
+.remote-select-option small { color: var(--muted); font-size: 10px; }
+.remote-select-option > svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.remote-select-state { min-height: 72px; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 12px; color: var(--muted); font-size: 12px; text-align: center; }
+.remote-select-state.error { color: var(--red); }
+.remote-select-state button { min-height: 36px; padding: 0 9px; color: var(--red); background: white; border: 1px solid #efc8cc; border-radius: 7px; font-weight: 700; cursor: pointer; }
+.remote-select-more { width: 100%; min-height: 40px; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--blue); background: #f8fbff; border: 0; border-top: 1px solid var(--line); font-size: 11px; font-weight: 700; cursor: pointer; }
+.remote-select-more:disabled { cursor: wait; opacity: .65; }
 .input { width: 235px; padding: 0 11px 0 34px; }
 .input.plain { padding-left: 11px; }
 .select { padding: 0 34px 0 10px; }
@@ -527,6 +548,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .channel-live-grid > .channel-stream-addresses { grid-column: 1; grid-row: 2; }
 .channel-live-grid > .channel-control-stack { grid-column: 2; grid-row: 1 / span 2; }
 .channel-control-stack { gap: 14px; }
+.channel-control-stack .form-grid > * { min-width: 0; }
+.channel-control-stack .input, .channel-control-stack .select { width: 100%; min-width: 0; }
 .channel-video-foot { gap: 14px; }
 .channel-video-foot .stream-context { flex: 1 1 220px; }
 .channel-video-foot .stream-context span { color: #9facbe; }
@@ -602,6 +625,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .device-command-title h1 { margin: 0 4px 0 0; color: var(--ink-strong); font-size: 22px; line-height: 1.25; letter-spacing: -.02em; }
 .device-command-meta { display: flex; align-items: center; gap: 9px 15px; flex-wrap: wrap; margin-top: 7px; color: var(--muted); font-size: 11px; }
 .device-command-meta span { display: inline-flex; align-items: center; gap: 5px; }
+.device-command-meta > a { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px; color: var(--blue); border-radius: 6px; font-weight: 700; }
+.device-command-meta > a:hover { background: var(--blue-soft); }
 .device-command-meta svg { width: 13px; height: 13px; }
 .device-pulse { display: grid; grid-template-columns: minmax(250px, 1.3fr) repeat(4, minmax(125px, 1fr)); margin: var(--detail-gap) 0; overflow: hidden; color: white; background: #172944; border: 1px solid #10213b; border-radius: var(--radius); box-shadow: 0 8px 20px rgba(16, 33, 59, .1); }
 .device-pulse > div { min-width: 0; min-height: 82px; display: flex; flex-direction: column; justify-content: center; padding: 14px 17px; border-left: 1px solid rgba(255,255,255,.12); }
@@ -994,6 +1019,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .channel-core-error .head-actions { width: 100%; grid-column: 1 / -1; }
   .channel-core-error .head-actions .btn { min-height: 44px; flex: 1; }
   .channel-command-header .device-command-identity { width: 100%; }
+  .channel-command-header .device-command-meta > a { min-height: 44px; margin: -5px 0; padding-inline: 8px; }
   .channel-command-header .head-actions { justify-content: stretch; }
   .channel-command-header .head-actions .btn { flex: 1; justify-content: center; }
   .channel-detail-tabs { grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 16px; padding: 5px; }
@@ -1033,6 +1059,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .page-head { align-items: flex-start; flex-direction: column; gap: 12px; }
   .page-title { font-size: 21px; }.head-actions { width: 100%; }.head-actions .btn { flex: 1; }
   .page-head .head-actions .btn, .page-head > .btn, .toolbar > .btn { min-height: 44px; }
+  .toolbar > .remote-select { width: 100%; min-width: 0; }
+  .toolbar > .remote-select .remote-select-trigger { min-height: 44px; }
+  .toolbar > .remote-select .remote-select-popover { right: auto; left: 0; width: 100%; }
   .pagination { align-items: stretch; flex-direction: column; gap: 10px; }
   .pagination-actions { justify-content: space-between; }
   .pagination .page-btn { width: 44px; height: 44px; }
