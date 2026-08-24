@@ -17,7 +17,7 @@
 | AI-101 版本/能力矩阵 | 完成 | `pkg/gbs/version.go`；`version_test.go`、`version_gate_test.go` |
 | AI-102 X-GB-Ver 1.1 | 完成 | SIP context/header 测试及四版本 SIP 夹具 |
 | AI-103 持久化/手动覆盖 | 完成 | `DeviceExt` 版本档案、设备编辑输入、在线会话刷新；`device_version_test.go` |
-| AI-104 REGISTER 协商 | 完成 | 401/200/失败响应平台 3.0、声明/有效版本；`register_version_test.go`、`gb10_core_flow_test.go` |
+| AI-104 REGISTER 协商 | 完成 | 401/200/失败响应平台 3.0、声明/有效版本；Contact `expires` 按 SIP 注册绑定语义覆盖全局 `Expires` 头；`register_version_test.go`、`gb10_core_flow_test.go` |
 | AI-105 下行版本/探测 | 完成 | 下行使用有效版本；1.0 不发 ConfigDownload；版本夹具与门禁测试 |
 | AI-201 1.0 门禁 | 完成 | Config、广播/对讲、RTP over TCP、IFrame、DragZoom 等能力门禁测试 |
 | AI-202 1.0 SDP | 完成 | 统一 SDP Builder；直播/回放/下载 golden；Subject、u/t/y/f 测试 |

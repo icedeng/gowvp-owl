@@ -55,7 +55,20 @@ func TestParseRegisterExpires(t *testing.T) {
 	if got, err := parseRegisterExpires(ctx); err != nil || got != 7200 {
 		t.Fatalf("Contact expires = %d, %v", got, err)
 	}
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "3600"})
+	if got, err := parseRegisterExpires(ctx); err != nil || got != 7200 {
+		t.Fatalf("Contact expires did not override Expires header: %d, %v", got, err)
+	}
+	request.RemoveHeader("Contact")
+	unregisterContact := mustFlowAddress(t, "sip:"+gb10DeviceID+"@192.0.2.10:5060")
+	unregisterContact.Params.Add("expires", sip.String{Str: "0"})
+	request.AppendHeader(&sip.ContactHeader{Address: unregisterContact.URI, Params: unregisterContact.Params})
+	if got, err := parseRegisterExpires(ctx); err != nil || got != 0 {
+		t.Fatalf("Contact expires=0 did not override Expires header: %d, %v", got, err)
+	}
 
+	request.RemoveHeader("Contact")
+	request.RemoveHeader("Expires")
 	request.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "invalid"})
 	if _, err := parseRegisterExpires(ctx); err == nil {
 		t.Fatal("invalid expires accepted")

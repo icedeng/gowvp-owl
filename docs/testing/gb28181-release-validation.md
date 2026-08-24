@@ -23,6 +23,7 @@ go test ./... -count=1
 覆盖内容包括：
 
 - 四版本 REGISTER、SIP/XML/SDP 夹具；
+- REGISTER 同时携带 Contact `expires` 与全局 `Expires` 时，以 Contact 绑定参数为准，包括 `expires=0` 注销语义；
 - 版本解析、协商、持久化、手动覆盖和下行版本；
 - 1.0 功能门禁、直播/回放/下载 SDP golden；
 - 1.0 REGISTER、Keepalive、Catalog、RecordInfo、Alarm 模拟流程，以及平台主动点播使用的 UDP SDP golden；

@@ -367,13 +367,15 @@ func parseRegisterExpires(ctx *sip.Context) (int, error) {
 	if ctx == nil || ctx.Request == nil {
 		return 0, fmt.Errorf("invalid REGISTER request")
 	}
-	value := strings.TrimSpace(ctx.GetHeader("Expires"))
-	if value == "" {
-		if contact, ok := ctx.Request.Contact(); ok && contact != nil && contact.Params != nil {
-			if expires, ok := contact.Params.Get("expires"); ok && expires != nil {
-				value = strings.TrimSpace(expires.String())
-			}
+	// RFC 3261 10.2.1: Contact 的 expires 参数作用于该注册绑定，并覆盖 Expires 头的默认值。
+	value := ""
+	if contact, ok := ctx.Request.Contact(); ok && contact != nil && contact.Params != nil {
+		if expires, ok := contact.Params.Get("expires"); ok && expires != nil {
+			value = strings.TrimSpace(expires.String())
 		}
+	}
+	if value == "" {
+		value = strings.TrimSpace(ctx.GetHeader("Expires"))
 	}
 	if value == "" {
 		return defaultRegisterExpires, nil
