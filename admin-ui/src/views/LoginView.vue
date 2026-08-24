@@ -69,8 +69,8 @@ async function submit() {
         </div>
         <div class="signal-metrics">
           <div><strong>4</strong><span>接入协议</span></div>
-          <div><strong>26</strong><span>在线通道</span></div>
-          <div><strong>24/7</strong><span>持续值守</span></div>
+          <div><strong>1–16</strong><span>分屏布局</span></div>
+          <div><strong>实时</strong><span>运行状态</span></div>
         </div>
       </div>
       <div class="signal-caption">

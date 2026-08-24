@@ -144,10 +144,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .card-head > .btn,
   .card-head > a.btn,
   .toolbar > .btn {
-    min-height: 32px;
+    min-height: 34px;
     gap: 6px;
     padding-inline: 10px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .page-head .head-actions .btn svg,
   .page-head > .btn svg,
@@ -303,6 +303,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .pagination { display: flex; align-items: center; justify-content: space-between; padding: 12px 15px; color: var(--muted); border-top: 1px solid var(--line); font-size: 9px; }
 .pages { display: flex; gap: 5px; }
 .page-btn { width: 28px; height: 28px; background: white; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.page-btn:disabled { color: var(--muted-2); background: var(--panel-2); cursor: not-allowed; opacity: .65; }
+.page-btn svg { width: 14px; height: 14px; margin: auto; }
+.pagination-actions { display: inline-flex; align-items: center; gap: 8px; }
 .page-btn.active { color: white; background: var(--blue); border-color: var(--blue); }
 .empty-state { padding: 36px 18px; color: var(--muted); text-align: center; font-size: 11px; }
 .empty-action { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 176px; }
@@ -381,6 +384,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .live-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr) 280px; align-items: start; gap: 12px; }
 .resource-panel, .control-panel { min-width: 0; padding: 14px; }
 .resource-tree { display: grid; gap: 4px; }
+.resource-load-more { width: 100%; justify-content: center; margin-top: 8px; }
 .tree-group { width: 100%; min-height: 34px; display: grid; grid-template-columns: minmax(0, 1fr) auto 16px; align-items: center; gap: 7px; margin-top: 4px; padding: 0 7px; color: #526078; background: #f7f9fc; border: 1px solid transparent; border-radius: 7px; font-size: 11px; font-weight: 700; text-align: left; cursor: pointer; }
 .tree-group:hover, .tree-group:focus-visible { color: var(--blue); background: var(--blue-soft); border-color: #d3e3f7; }
 .tree-group span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1029,6 +1033,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .page-head { align-items: flex-start; flex-direction: column; gap: 12px; }
   .page-title { font-size: 21px; }.head-actions { width: 100%; }.head-actions .btn { flex: 1; }
   .page-head .head-actions .btn, .page-head > .btn, .toolbar > .btn { min-height: 44px; }
+  .pagination { align-items: stretch; flex-direction: column; gap: 10px; }
+  .pagination-actions { justify-content: space-between; }
+  .pagination .page-btn { width: 44px; height: 44px; }
   .page-head .head-actions input[type="date"] { min-height: 44px; font-size: 16px; }
   .overview-actions { grid-template-columns: 1fr 1fr; }
   .overview-actions-intro { align-items: flex-start; flex-direction: column; }
@@ -1189,6 +1196,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .activity-main span, .activity-time, .command-foot, .user-chip small, .crumb small, .matrix-slot p, .event-meta, .definition-grid dt, .capability small { font-size: 11px; }
 .nav-label, .demo-flag, .metric-label, .form-label, .health-row, .form-help { font-size: 12px; }
 .data-table td, .watch-row small, .step-item small, .read-only { font-size: 12px; }
+.tree-group, .tree-item { font-size: 12px; }
+.live-toolbar strong { font-size: 13px; }
+.live-toolbar span, .video-foot { font-size: 12px; }
+.video-placeholder small, .video-name strong { font-size: 12px; }
+.video-name small { font-size: 11px; }
+.stream-link { font-size: 11px; }
+.toggle-row strong { display: block; font-size: 13px; }
+.toggle-row small { display: block; margin-top: 2px; font-size: 12px !important; line-height: 1.45; }
+.event-body h3 { font-size: 14px; }
+.event-meta, .definition-grid dt, .capability small { font-size: 12px; }
+.definition-grid dd, .capability strong { font-size: 13px; }
+.row-title strong { font-size: 13px; }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }

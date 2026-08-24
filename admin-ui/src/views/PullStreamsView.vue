@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import {
+  ChevronLeft,
+  ChevronRight,
   Eye,
   LoaderCircle,
   Plus,
@@ -12,7 +14,7 @@ import {
   Trash2,
   X,
 } from "@lucide/vue";
-import { api, errorMessage, typeLabel } from "../services/api";
+import { api, collectPages, errorMessage, typeLabel } from "../services/api";
 import type { ApiChannel, ApiDevice, MediaServer } from "../types/api";
 import { useUiStore } from "../stores/ui";
 import ModalDialog from "../components/ModalDialog.vue";
@@ -29,6 +31,8 @@ const loadError = ref("");
 const query = ref("");
 const status = ref("all");
 const rows = ref<ApiChannel[]>([]);
+const currentPage = ref(1);
+const total = ref(0);
 const devices = ref<ApiDevice[]>([]);
 const media = ref<MediaServer[]>([]);
 const form = reactive({
@@ -46,21 +50,18 @@ const form = reactive({
   enabled: true,
 });
 let routeEditHandled = false;
+let searchTimer: number | undefined;
+let loadSequence = 0;
+const PAGE_SIZE = 30;
 const rtspDevices = computed(() =>
   devices.value.filter(
     (item) => typeLabel(item.type, item.device_id || item.id) === "RTSP"
   )
 );
-const filtered = computed(() =>
-  rows.value.filter(
-    (item) =>
-      `${item.name || ""}${item.app || ""}${item.stream || ""}${item.id}`
-        .toLowerCase()
-        .includes(query.value.toLowerCase()) &&
-      (status.value === "all" ||
-        (status.value === "online" ? item.is_online : !item.is_online))
-  )
+const pageCount = computed(() =>
+  Math.max(1, Math.ceil(total.value / PAGE_SIZE))
 );
+const pagedRows = computed(() => rows.value);
 const hasFilters = computed(
   () => Boolean(query.value || status.value !== "all")
 );
@@ -68,6 +69,7 @@ const hasFilters = computed(
 function resetFilters() {
   query.value = "";
   status.value = "all";
+  currentPage.value = 1;
 }
 
 function maskSource(value?: string) {
@@ -77,18 +79,51 @@ function maskSource(value?: string) {
     .replace(/(rtsp:\/\/[^/]+\/).+/, "$1***");
 }
 
+function listParams() {
+  return {
+    type: "RTSP",
+    key: query.value.trim() || undefined,
+    is_online:
+      status.value === "all" ? undefined : status.value === "online",
+  };
+}
+
+async function loadList() {
+  const sequence = ++loadSequence;
+  loading.value = true;
+  loadError.value = "";
+  try {
+    const response = await api.channels({
+      page: currentPage.value,
+      size: PAGE_SIZE,
+      ...listParams(),
+    });
+    if (sequence !== loadSequence) return;
+    rows.value = response.data?.items || [];
+    total.value = Number(response.data?.total ?? rows.value.length);
+  } catch (cause) {
+    if (sequence === loadSequence)
+      loadError.value = errorMessage(cause, "RTSP 拉流列表加载失败");
+  } finally {
+    if (sequence === loadSequence) loading.value = false;
+  }
+}
+
 async function load() {
+  const sequence = ++loadSequence;
   loading.value = true;
   loadError.value = "";
   try {
     const [channelResponse, deviceResponse, mediaResponse] = await Promise.allSettled([
-      api.channels({ page: 1, size: 99999, type: "RTSP" }),
-      api.devices({ page: 1, size: 99999 }),
+      api.channels({ page: currentPage.value, size: PAGE_SIZE, ...listParams() }),
+      collectPages(api.devices, { type: "RTSP" }),
       api.mediaServers({ page: 1, size: 100 }),
     ]);
+    if (sequence !== loadSequence) return;
     if (channelResponse.status === "rejected") throw channelResponse.reason;
     rows.value = channelResponse.value.data?.items || [];
-    if (deviceResponse.status === "fulfilled") devices.value = deviceResponse.value.data?.items || [];
+    total.value = Number(channelResponse.value.data?.total ?? rows.value.length);
+    if (deviceResponse.status === "fulfilled") devices.value = deviceResponse.value.items;
     if (mediaResponse.status === "fulfilled") media.value = mediaResponse.value.data?.items || [];
     const auxiliaryFailure = [deviceResponse, mediaResponse].find((item) => item.status === "rejected");
     if (auxiliaryFailure?.status === "rejected") {
@@ -96,15 +131,31 @@ async function load() {
     }
     if (!routeEditHandled) {
       const target = String(route.query.channel || route.query.stream || "");
-      const matched = rows.value.find((item) => item.id === target || item.stream === target);
+      let matched = rows.value.find((item) => item.id === target || item.stream === target);
+      if (target && !matched) {
+        try {
+          const response = await api.channels({ page: 1, size: 20, type: "RTSP", key: target });
+          matched = (response.data?.items || []).find((item) => item.id === target || item.stream === target);
+        } catch {
+          // 路由目标可能已删除，保留当前列表。
+        }
+      }
       if (matched) edit(matched);
       routeEditHandled = true;
     }
   } catch (cause) {
-    loadError.value = errorMessage(cause, "RTSP 拉流列表加载失败");
+    if (sequence === loadSequence)
+      loadError.value = errorMessage(cause, "RTSP 拉流列表加载失败");
   } finally {
-    loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
+}
+
+function changePage(next: number) {
+  const target = Math.min(pageCount.value, Math.max(1, next));
+  if (target === currentPage.value) return;
+  currentPage.value = target;
+  void loadList();
 }
 
 function create() {
@@ -209,6 +260,18 @@ async function remove() {
 }
 
 onMounted(load);
+watch([query, status], () => {
+  currentPage.value = 1;
+  window.clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => void loadList(), 350);
+});
+watch(pageCount, (count) => {
+  if (currentPage.value > count) {
+    currentPage.value = count;
+    void loadList();
+  }
+});
+onBeforeUnmount(() => window.clearTimeout(searchTimer));
 </script>
 
 <template>
@@ -258,7 +321,7 @@ onMounted(load);
         >
           <X />清除筛选</button
         ><span class="toolbar-spacer" /><span class="section-note"
-          >{{ filtered.length }} / {{ rows.length }} 个拉流通道</span
+          >本页 {{ rows.length }} / 共 {{ total }} 个拉流通道</span
         >
       </div>
       <div class="table-wrap">
@@ -276,7 +339,7 @@ onMounted(load);
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in filtered" :key="row.id">
+            <tr v-for="row in pagedRows" :key="row.id">
               <td>
                 <div class="row-title">
                   <span class="device-glyph"><RadioTower /></span
@@ -328,24 +391,32 @@ onMounted(load);
         <div v-if="loading" class="empty-state">
           <LoaderCircle class="mx-auto mb-2 animate-spin" />正在加载拉流配置…
         </div>
-        <div v-else-if="!filtered.length" class="empty-state empty-action">
+        <div v-else-if="!rows.length" class="empty-state empty-action">
           <RadioTower />
           <strong>{{
-            rows.length
+            hasFilters
               ? "没有符合条件的拉流"
               : "当前环境尚无 RTSP 拉流配置"
           }}</strong>
           <span>{{
-            rows.length
+            hasFilters
               ? "清除筛选后可恢复全部拉流配置。"
               : "创建拉流配置后，媒体节点会按需代理 RTSP 源。"
           }}</span>
-          <button v-if="rows.length" class="btn" @click="resetFilters">
+          <button v-if="hasFilters" class="btn" @click="resetFilters">
             清除筛选
           </button>
           <button v-else class="btn btn-primary" @click="create">
             <Plus />新增拉流
           </button>
+        </div>
+      </div>
+      <div class="pagination">
+        <span>本页 {{ pagedRows.length }} 条 · 共 {{ total }} 条匹配配置</span>
+        <div v-if="pageCount > 1" class="pagination-actions" aria-label="拉流列表分页">
+          <button type="button" class="page-btn" :disabled="currentPage === 1" aria-label="上一页" @click="changePage(currentPage - 1)"><ChevronLeft /></button>
+          <span>第 {{ currentPage }} / {{ pageCount }} 页</span>
+          <button type="button" class="page-btn" :disabled="currentPage === pageCount" aria-label="下一页" @click="changePage(currentPage + 1)"><ChevronRight /></button>
         </div>
       </div>
     </section>

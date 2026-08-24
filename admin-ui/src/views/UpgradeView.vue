@@ -187,7 +187,7 @@ onMounted(check);
         </div>
         <ul
           v-if="releaseNotes.length"
-          class="mt-4 space-y-2 pl-5 text-[10px] text-slate-600"
+          class="mt-4 space-y-2 pl-5 text-xs text-slate-600"
         >
           <li v-for="item in releaseNotes" :key="item">{{ item }}</li>
         </ul>

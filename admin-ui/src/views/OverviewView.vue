@@ -15,9 +15,8 @@ import {
   ShieldAlert,
   Video,
 } from "@lucide/vue";
-import { api, errorMessage, typeLabel } from "../services/api";
+import { api, countItems, errorMessage } from "../services/api";
 import type {
-  ApiChannel,
   ApiDevice,
   ApiEvent,
   ApiMetrics,
@@ -33,22 +32,20 @@ const TrendChart = defineAsyncComponent(
 const loading = ref(false);
 const loadError = ref("");
 const devices = ref<ApiDevice[]>([]);
-const channels = ref<ApiChannel[]>([]);
+const totalDevices = ref(0);
+const onlineDevices = ref(0);
+const totalChannels = ref(0);
+const onlineChannels = ref(0);
+const activeStreams = ref(0);
+const protocolCounts = ref<Record<string, { total: number; online: number }>>({});
+const channelNames = ref<Record<string, string>>({});
 const events = ref<ApiEvent[]>([]);
+const eventsTotal = ref(0);
 const mediaServers = ref<MediaServer[]>([]);
 const health = ref<HealthInfo>({});
 const metrics = ref<ApiMetrics>({});
 const stats = ref<ResourceStats>({});
 
-const onlineDevices = computed(
-  () => devices.value.filter((item) => item.is_online).length
-);
-const onlineChannels = computed(
-  () => channels.value.filter((item) => item.is_online).length
-);
-const activeStreams = computed(
-  () => channels.value.filter((item) => item.is_playing).length
-);
 const activeMedia = computed(
   () => mediaServers.value.filter((item) => item.status).length
 );
@@ -79,29 +76,14 @@ const diskPercent = computed(() =>
 );
 const protocolSlots = computed(() =>
   ["GB28181", "ONVIF", "RTMP", "RTSP"].map((protocol) => {
-    const items = channels.value.filter(
-      (item) =>
-        typeLabel(
-          item.type,
-          item.did || item.device_id || item.channel_id || item.id
-        ) === protocol
-    );
-    const online = items.filter((item) => item.is_online).length;
+    const counts = protocolCounts.value[protocol] || { total: 0, online: 0 };
     return {
       protocol,
-      value: `${online} / ${items.length}`,
-      note: items.length ? `${items.length - online} 路离线` : "暂无接入",
-      state: items.length && online < items.length ? "warn" : "",
+      value: `${counts.online} / ${counts.total}`,
+      note: counts.total ? `${counts.total - counts.online} 路离线` : "暂无接入",
+      state: counts.total && counts.online < counts.total ? "warn" : "",
     };
   })
-);
-const channelNames = computed(() =>
-  Object.fromEntries(
-    channels.value.map((item) => [
-      item.id,
-      item.name || item.channel_id || item.id,
-    ])
-  )
 );
 const watchItems = computed(() => {
   const items: {
@@ -179,20 +161,80 @@ const trend = computed(() => {
   };
 });
 
+async function loadDeviceSummary() {
+  const [total, online, offlineResponse] = await Promise.all([
+    countItems(api.devices),
+    countItems(api.devices, { is_online: true }),
+    api.devices({ page: 1, size: 2, is_online: false }),
+  ]);
+  return {
+    total,
+    online,
+    offline: offlineResponse.data?.items || [],
+  };
+}
+
+async function loadChannelSummary() {
+  const protocols = ["GB28181", "ONVIF", "RTMP", "RTSP"];
+  const [total, online, active, ...protocolValues] = await Promise.all([
+    countItems(api.channels),
+    countItems(api.channels, { is_online: true }),
+    countItems(api.channels, { is_playing: true }),
+    ...protocols.flatMap((type) => [
+      countItems(api.channels, { type }),
+      countItems(api.channels, { type, is_online: true }),
+    ]),
+  ]);
+  return {
+    total,
+    online,
+    active,
+    protocols: Object.fromEntries(
+      protocols.map((type, index) => [
+        type,
+        {
+          total: protocolValues[index * 2],
+          online: protocolValues[index * 2 + 1],
+        },
+      ])
+    ),
+  };
+}
+
+async function loadEventSummary(now: number) {
+  const response = await api.events({
+    page: 1,
+    size: 1000,
+    start_ms: now - 24 * 3600000,
+    end_ms: now,
+  });
+  const items = response.data?.items || [];
+  const ids = [
+    ...new Set(items.slice(0, 3).map((item) => item.cid).filter(Boolean)),
+  ] as string[];
+  const channelResponses = await Promise.allSettled(ids.map((id) => api.channel(id)));
+  const names: Record<string, string> = {};
+  channelResponses.forEach((result, index) => {
+    if (result.status !== "fulfilled") return;
+    const item = result.value.data;
+    names[ids[index]] = item.name || item.channel_id || item.id;
+  });
+  return {
+    items,
+    total: Number(response.data?.total ?? items.length),
+    names,
+  };
+}
+
 async function load() {
   loading.value = true;
   loadError.value = "";
   try {
     const now = Date.now();
     const results = await Promise.allSettled([
-      api.devices({ page: 1, size: 99999 }),
-      api.channels({ page: 1, size: 99999 }),
-      api.events({
-        page: 1,
-        size: 1000,
-        start_ms: now - 24 * 3600000,
-        end_ms: now,
-      }),
+      loadDeviceSummary(),
+      loadChannelSummary(),
+      loadEventSummary(now),
       api.mediaServers({ page: 1, size: 100 }),
       api.health(),
       api.metrics(),
@@ -207,9 +249,22 @@ async function load() {
       metricsResponse,
       statsResponse,
     ] = results;
-    if (deviceResponse.status === "fulfilled") devices.value = deviceResponse.value.data?.items || [];
-    if (channelResponse.status === "fulfilled") channels.value = channelResponse.value.data?.items || [];
-    if (eventResponse.status === "fulfilled") events.value = eventResponse.value.data?.items || [];
+    if (deviceResponse.status === "fulfilled") {
+      devices.value = deviceResponse.value.offline;
+      totalDevices.value = deviceResponse.value.total;
+      onlineDevices.value = deviceResponse.value.online;
+    }
+    if (channelResponse.status === "fulfilled") {
+      totalChannels.value = channelResponse.value.total;
+      onlineChannels.value = channelResponse.value.online;
+      activeStreams.value = channelResponse.value.active;
+      protocolCounts.value = channelResponse.value.protocols;
+    }
+    if (eventResponse.status === "fulfilled") {
+      events.value = eventResponse.value.items;
+      eventsTotal.value = eventResponse.value.total;
+      channelNames.value = eventResponse.value.names;
+    }
     if (mediaResponse.status === "fulfilled") mediaServers.value = mediaResponse.value.data?.items || [];
     if (healthResponse.status === "fulfilled") health.value = healthResponse.value.data || {};
     if (metricsResponse.status === "fulfilled") metrics.value = metricsResponse.value.data || {};
@@ -262,34 +317,34 @@ onMounted(load);
       </div>
       <div
         class="signal-cell"
-        :class="{ warn: devices.length && onlineDevices < devices.length }"
+        :class="{ warn: totalDevices && onlineDevices < totalDevices }"
       >
         <small>在线设备</small
-        ><strong>{{ onlineDevices }} / {{ devices.length }}</strong
+        ><strong>{{ onlineDevices }} / {{ totalDevices }}</strong
         ><span
           ><i />{{
-            devices.length
-              ? ((onlineDevices / devices.length) * 100).toFixed(1)
+            totalDevices
+              ? ((onlineDevices / totalDevices) * 100).toFixed(1)
               : 0
           }}% 在线</span
         >
       </div>
       <div
         class="signal-cell"
-        :class="{ warn: channels.length && onlineChannels < channels.length }"
+        :class="{ warn: totalChannels && onlineChannels < totalChannels }"
       >
         <small>在线通道</small
-        ><strong>{{ onlineChannels }} / {{ channels.length }}</strong
+        ><strong>{{ onlineChannels }} / {{ totalChannels }}</strong
         ><span
           ><i />{{
-            channels.length
-              ? ((onlineChannels / channels.length) * 100).toFixed(1)
+            totalChannels
+              ? ((onlineChannels / totalChannels) * 100).toFixed(1)
               : 0
           }}% 可用</span
         >
       </div>
-      <div class="signal-cell" :class="{ warn: events.length }">
-        <small>24 小时事件</small><strong>{{ events.length }}</strong
+      <div class="signal-cell" :class="{ warn: eventsTotal }">
+        <small>24 小时事件</small><strong>{{ eventsTotal }}</strong
         ><span
           ><i />最近一条
           {{
@@ -518,9 +573,9 @@ onMounted(load);
         <div class="card-head">
           <div>
             <h2 class="card-title">过去 24 小时事件趋势</h2>
-            <p class="card-sub">按 2 小时聚合当前已加载事件</p>
+            <p class="card-sub">按 2 小时聚合当前已加载事件<span v-if="eventsTotal > events.length">（{{ events.length }} / {{ eventsTotal }}）</span></p>
           </div>
-          <span class="status info">{{ events.length }} 次</span>
+          <span class="status info">{{ eventsTotal || events.length }} 次</span>
         </div>
         <TrendChart
           :values="trend.values"

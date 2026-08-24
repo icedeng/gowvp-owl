@@ -4,6 +4,7 @@ package ipc
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,6 +66,13 @@ func (c Core) FindDevice(ctx context.Context, in *FindDeviceInput) ([]*Device, i
 	query.OrderBy("created_at DESC")
 	if in.Key != "" {
 		query.Where("name LIKE ? OR device_id like ? OR id=?", "%"+in.Key+"%", "%"+in.Key+"%", in.Key)
+	}
+	if in.Type != "" {
+		query.Where("type = ?", strings.ToUpper(strings.TrimSpace(in.Type)))
+	}
+	if in.IsOnline == "true" || in.IsOnline == "false" {
+		isOnline, _ := strconv.ParseBool(in.IsOnline)
+		query.Where("is_online = ?", isOnline)
 	}
 
 	total, err := c.store.Device().List(ctx, &items, in, query.Encode()...)

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import {
   Clock3,
+  ChevronLeft,
   ChevronRight,
   Eye,
   EyeOff,
@@ -15,7 +16,7 @@ import {
   ShieldAlert,
   X,
 } from "@lucide/vue";
-import { api, errorMessage, typeLabel } from "../services/api";
+import { api, collectPages, errorMessage, typeLabel } from "../services/api";
 import type { ApiDevice, DeviceHistoryRecord } from "../types/api";
 import { formatDate, relativeTime } from "../utils/format";
 import { useUiStore } from "../stores/ui";
@@ -36,11 +37,13 @@ const saving = ref(false);
 const loadError = ref("");
 const actionLoading = ref("");
 const rows = ref<ApiDevice[]>([]);
+const currentPage = ref(1);
 const statisticDevice = ref<ApiDevice | null>(null);
 const statisticKind = ref<StatisticKind>("heartbeat");
 const statisticLoading = ref(false);
 const statisticError = ref("");
 const statisticRows = ref<DeviceHistoryRecord[]>([]);
+const PAGE_SIZE = 20;
 const form = reactive({ name: "", device_id: "", password: "", stream_mode: 1 });
 const accessInfo = reactive({
   serverIp: "",
@@ -68,6 +71,15 @@ const filtered = computed(() =>
     return matchQuery && matchStatus;
   })
 );
+const pageCount = computed(() =>
+  Math.max(1, Math.ceil(filtered.value.length / PAGE_SIZE))
+);
+const pagedRows = computed(() =>
+  filtered.value.slice(
+    (currentPage.value - 1) * PAGE_SIZE,
+    currentPage.value * PAGE_SIZE
+  )
+);
 const onlineCount = computed(
   () => gbRows.value.filter((item) => item.is_online).length
 );
@@ -86,6 +98,7 @@ const statisticTitle = computed(() =>
 function resetFilters() {
   query.value = "";
   status.value = "all";
+  currentPage.value = 1;
 }
 
 function deviceAddress(device: ApiDevice) {
@@ -124,8 +137,8 @@ async function load() {
   loading.value = true;
   loadError.value = "";
   try {
-    const { data } = await api.devices({ page: 1, size: 99999 });
-    rows.value = data?.items || [];
+    const data = await collectPages(api.devices);
+    rows.value = data.items;
   } catch (cause) {
     loadError.value = errorMessage(cause, "国标设备列表加载失败");
   } finally {
@@ -185,6 +198,12 @@ async function addDevice() {
 }
 
 onMounted(load);
+watch([query, status], () => {
+  currentPage.value = 1;
+});
+watch(pageCount, (count) => {
+  if (currentPage.value > count) currentPage.value = count;
+});
 </script>
 
 <template>
@@ -258,7 +277,7 @@ onMounted(load);
         </button>
         <span class="toolbar-spacer" />
         <span class="section-note" aria-live="polite">
-          当前显示 {{ filtered.length }} / {{ gbRows.length }} 台
+          本页 {{ pagedRows.length }} 台 · 匹配 {{ filtered.length }} / {{ gbRows.length }} 台
         </span>
       </div>
       <div class="table-wrap">
@@ -276,7 +295,7 @@ onMounted(load);
             </tr>
           </thead>
           <tbody>
-            <tr v-for="device in filtered" :key="device.id">
+            <tr v-for="device in pagedRows" :key="device.id">
               <td data-label="设备">
                 <div class="row-title compact">
                   <span>
@@ -363,8 +382,25 @@ onMounted(load);
         </div>
       </div>
       <div class="pagination">
-        <span>已加载 {{ gbRows.length }} 条国标设备记录</span>
-        <span class="section-note">筛选在当前结果内即时生效</span>
+        <span>共 {{ filtered.length }} 条匹配记录</span>
+        <div v-if="pageCount > 1" class="pagination-actions" aria-label="设备列表分页">
+          <button
+            type="button"
+            class="page-btn"
+            :disabled="currentPage === 1"
+            aria-label="上一页"
+            @click="currentPage -= 1"
+          ><ChevronLeft /></button>
+          <span>第 {{ currentPage }} / {{ pageCount }} 页</span>
+          <button
+            type="button"
+            class="page-btn"
+            :disabled="currentPage === pageCount"
+            aria-label="下一页"
+            @click="currentPage += 1"
+          ><ChevronRight /></button>
+        </div>
+        <span v-else class="section-note">筛选在已加载结果内即时生效</span>
       </div>
     </section>
 

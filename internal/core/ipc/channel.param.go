@@ -5,13 +5,14 @@ import "github.com/ixugo/goddd/pkg/web"
 
 type FindChannelInput struct {
 	web.PagerFilter
-	DID      string `form:"did"`       // 设备 id
-	DeviceID string `form:"device_id"` // 国标编码
-	Key      string `form:"key"`       // 名称/国标编码 模糊搜索，id 精确搜索
-	IsOnline string `form:"is_online"` // 是否在线
-	Type     string `form:"type"`      // 通道类型 (GB28181/ONVIF/RTMP/RTSP)
-	App      string `form:"app"`       // 应用名
-	Stream   string `form:"stream"`    // 流 ID
+	DID       string `form:"did"`        // 设备 id
+	DeviceID  string `form:"device_id"`  // 国标编码
+	Key       string `form:"key"`        // 名称/国标编码 模糊搜索，id 精确搜索
+	IsOnline  string `form:"is_online"`  // 是否在线
+	IsPlaying string `form:"is_playing"` // 是否正在播放
+	Type      string `form:"type"`       // 通道类型 (GB28181/ONVIF/RTMP/RTSP)
+	App       string `form:"app"`        // 应用名
+	Stream    string `form:"stream"`     // 流 ID
 }
 
 type EditChannelInput struct {

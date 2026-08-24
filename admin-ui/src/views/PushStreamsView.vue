@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import {
   Copy,
+  ChevronLeft,
+  ChevronRight,
   KeyRound,
   LoaderCircle,
   Plus,
@@ -13,7 +15,7 @@ import {
   UploadCloud,
   X,
 } from "@lucide/vue";
-import { api, errorMessage, typeLabel } from "../services/api";
+import { api, collectPages, countItems, errorMessage, typeLabel } from "../services/api";
 import type { ApiChannel, ApiDevice, MediaServer } from "../types/api";
 import { relativeTime } from "../utils/format";
 import { useUiStore } from "../stores/ui";
@@ -31,6 +33,9 @@ const loadError = ref("");
 const query = ref("");
 const status = ref("all");
 const rows = ref<ApiChannel[]>([]);
+const currentPage = ref(1);
+const total = ref(0);
+const onlineTotal = ref(0);
 const devices = ref<ApiDevice[]>([]);
 const media = ref<MediaServer[]>([]);
 const form = reactive({
@@ -44,24 +49,18 @@ const form = reactive({
   auth_enabled: true,
 });
 let routeEditHandled = false;
+let searchTimer: number | undefined;
+let loadSequence = 0;
+const PAGE_SIZE = 30;
 const rtmpDevices = computed(() =>
   devices.value.filter(
     (item) => typeLabel(item.type, item.device_id || item.id) === "RTMP"
   )
 );
-const filtered = computed(() =>
-  rows.value.filter(
-    (item) =>
-      `${item.name || ""}${item.app || ""}${item.stream || ""}${item.id}`
-        .toLowerCase()
-        .includes(query.value.toLowerCase()) &&
-      (status.value === "all" ||
-        (status.value === "online" ? item.is_online : !item.is_online))
-  )
+const pageCount = computed(() =>
+  Math.max(1, Math.ceil(total.value / PAGE_SIZE))
 );
-const online = computed(
-  () => rows.value.filter((item) => item.is_online).length
-);
+const pagedRows = computed(() => rows.value);
 const protectedCount = computed(
   () => rows.value.filter((item) => !item.config?.is_auth_disabled).length
 );
@@ -72,36 +71,88 @@ const hasFilters = computed(
 function resetFilters() {
   query.value = "";
   status.value = "all";
+  currentPage.value = 1;
 }
 
-async function load() {
+function listParams() {
+  return {
+    type: "RTMP",
+    key: query.value.trim() || undefined,
+    is_online:
+      status.value === "all" ? undefined : status.value === "online",
+  };
+}
+
+async function loadList() {
+  const sequence = ++loadSequence;
   loading.value = true;
   loadError.value = "";
   try {
-    const [channelResponse, deviceResponse, mediaResponse] = await Promise.allSettled([
-      api.channels({ page: 1, size: 99999, type: "RTMP" }),
-      api.devices({ page: 1, size: 99999 }),
-      api.mediaServers({ page: 1, size: 100 }),
+    const [pageResponse, online] = await Promise.all([
+      api.channels({ page: currentPage.value, size: PAGE_SIZE, ...listParams() }),
+      countItems(api.channels, { type: "RTMP", is_online: true }),
     ]);
+    if (sequence !== loadSequence) return;
+    rows.value = pageResponse.data?.items || [];
+    total.value = Number(pageResponse.data?.total ?? rows.value.length);
+    onlineTotal.value = online;
+  } catch (cause) {
+    if (sequence === loadSequence)
+      loadError.value = errorMessage(cause, "RTMP 推流列表加载失败");
+  } finally {
+    if (sequence === loadSequence) loading.value = false;
+  }
+}
+
+async function load() {
+  const sequence = ++loadSequence;
+  loading.value = true;
+  loadError.value = "";
+  try {
+    const [channelResponse, deviceResponse, mediaResponse, onlineResponse] = await Promise.allSettled([
+      api.channels({ page: currentPage.value, size: PAGE_SIZE, ...listParams() }),
+      collectPages(api.devices, { type: "RTMP" }),
+      api.mediaServers({ page: 1, size: 100 }),
+      countItems(api.channels, { type: "RTMP", is_online: true }),
+    ]);
+    if (sequence !== loadSequence) return;
     if (channelResponse.status === "rejected") throw channelResponse.reason;
     rows.value = channelResponse.value.data?.items || [];
-    if (deviceResponse.status === "fulfilled") devices.value = deviceResponse.value.data?.items || [];
+    total.value = Number(channelResponse.value.data?.total ?? rows.value.length);
+    if (deviceResponse.status === "fulfilled") devices.value = deviceResponse.value.items;
     if (mediaResponse.status === "fulfilled") media.value = mediaResponse.value.data?.items || [];
-    const auxiliaryFailure = [deviceResponse, mediaResponse].find((item) => item.status === "rejected");
+    if (onlineResponse.status === "fulfilled") onlineTotal.value = onlineResponse.value;
+    const auxiliaryFailure = [deviceResponse, mediaResponse, onlineResponse].find((item) => item.status === "rejected");
     if (auxiliaryFailure?.status === "rejected") {
       loadError.value = `推流列表已加载，部分表单选项暂不可用：${errorMessage(auxiliaryFailure.reason)}`;
     }
     if (!routeEditHandled) {
       const target = String(route.query.channel || route.query.stream || "");
-      const matched = rows.value.find((item) => item.id === target || item.stream === target);
+      let matched = rows.value.find((item) => item.id === target || item.stream === target);
+      if (target && !matched) {
+        try {
+          const response = await api.channels({ page: 1, size: 20, type: "RTMP", key: target });
+          matched = (response.data?.items || []).find((item) => item.id === target || item.stream === target);
+        } catch {
+          // 路由目标可能已删除，保留当前列表。
+        }
+      }
       if (matched) edit(matched);
       routeEditHandled = true;
     }
   } catch (cause) {
-    loadError.value = errorMessage(cause, "RTMP 推流列表加载失败");
+    if (sequence === loadSequence)
+      loadError.value = errorMessage(cause, "RTMP 推流列表加载失败");
   } finally {
-    loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
+}
+
+function changePage(next: number) {
+  const target = Math.min(pageCount.value, Math.max(1, next));
+  if (target === currentPage.value) return;
+  currentPage.value = target;
+  void loadList();
 }
 
 function create() {
@@ -207,6 +258,18 @@ async function copyAddress(row: ApiChannel) {
 }
 
 onMounted(load);
+watch([query, status], () => {
+  currentPage.value = 1;
+  window.clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => void loadList(), 350);
+});
+watch(pageCount, (count) => {
+  if (currentPage.value > count) {
+    currentPage.value = count;
+    void loadList();
+  }
+});
+onBeforeUnmount(() => window.clearTimeout(searchTimer));
 </script>
 
 <template>
@@ -235,12 +298,12 @@ onMounted(load);
     <section class="metric-line mb-4">
       <div class="metric-item">
         <div class="metric-label"><span>推流配置</span><UploadCloud /></div>
-        <div class="metric-value">{{ rows.length }}</div>
+        <div class="metric-value">{{ total }}</div>
         <div class="metric-foot">RTMP 虚拟设备 {{ rtmpDevices.length }} 台</div>
       </div>
       <div class="metric-item">
         <div class="metric-label"><span>在线推流</span><UploadCloud /></div>
-        <div class="metric-value">{{ online }}</div>
+        <div class="metric-value">{{ onlineTotal }}</div>
         <div class="metric-foot">当前活跃</div>
       </div>
       <div class="metric-item">
@@ -249,7 +312,7 @@ onMounted(load);
         <div class="metric-foot">
           {{
             rows.length
-              ? `${((protectedCount / rows.length) * 100).toFixed(1)}% 已保护`
+              ? `本页 ${((protectedCount / rows.length) * 100).toFixed(1)}% 已保护`
               : "暂无配置"
           }}
         </div>
@@ -282,7 +345,7 @@ onMounted(load);
         >
           <X />清除筛选</button
         ><span class="toolbar-spacer" /><span class="section-note"
-          >{{ filtered.length }} / {{ rows.length }} 个配置</span
+          >本页 {{ rows.length }} / 共 {{ total }} 个配置</span
         >
       </div>
       <div class="table-wrap">
@@ -299,7 +362,7 @@ onMounted(load);
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in filtered" :key="row.id">
+            <tr v-for="row in pagedRows" :key="row.id">
               <td>
                 <div class="row-title">
                   <span class="device-glyph"><UploadCloud /></span
@@ -352,24 +415,32 @@ onMounted(load);
         <div v-if="loading" class="empty-state">
           <LoaderCircle class="mx-auto mb-2 animate-spin" />正在加载推流配置…
         </div>
-        <div v-else-if="!filtered.length" class="empty-state empty-action">
+        <div v-else-if="!rows.length" class="empty-state empty-action">
           <UploadCloud />
           <strong>{{
-            rows.length
+            hasFilters
               ? "没有符合条件的推流"
               : "当前环境尚无 RTMP 推流配置"
           }}</strong>
           <span>{{
-            rows.length
+            hasFilters
               ? "清除筛选后可恢复全部推流配置。"
               : "创建推流入口后即可向媒体节点推送视频。"
           }}</span>
-          <button v-if="rows.length" class="btn" @click="resetFilters">
+          <button v-if="hasFilters" class="btn" @click="resetFilters">
             清除筛选
           </button>
           <button v-else class="btn btn-primary" @click="create">
             <Plus />新增推流
           </button>
+        </div>
+      </div>
+      <div class="pagination">
+        <span>本页 {{ pagedRows.length }} 条 · 共 {{ total }} 条匹配配置</span>
+        <div v-if="pageCount > 1" class="pagination-actions" aria-label="推流列表分页">
+          <button type="button" class="page-btn" :disabled="currentPage === 1" aria-label="上一页" @click="changePage(currentPage - 1)"><ChevronLeft /></button>
+          <span>第 {{ currentPage }} / {{ pageCount }} 页</span>
+          <button type="button" class="page-btn" :disabled="currentPage === pageCount" aria-label="下一页" @click="changePage(currentPage + 1)"><ChevronRight /></button>
         </div>
       </div>
     </section>

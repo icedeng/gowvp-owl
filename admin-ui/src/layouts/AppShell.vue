@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import type { Component } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import {
@@ -125,6 +125,30 @@ function onDocumentPointerDown(event: PointerEvent) {
 
 function toggleUserMenu() {
   userMenuOpen.value = !userMenuOpen.value;
+}
+
+function userMenuItems() {
+  return [
+    ...(userMenu.value?.querySelectorAll<HTMLElement>("[role='menuitem']") || []),
+  ];
+}
+
+async function onUserMenuKeydown(event: KeyboardEvent) {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  if (!userMenuOpen.value) {
+    userMenuOpen.value = true;
+    await nextTick();
+  }
+  const items = userMenuItems();
+  if (!items.length) return;
+  if (event.key === "Home") return items[0].focus();
+  if (event.key === "End") return items[items.length - 1].focus();
+  const current = items.indexOf(document.activeElement as HTMLElement);
+  const next = event.key === "ArrowDown"
+    ? (current + 1 + items.length) % items.length
+    : (current - 1 + items.length) % items.length;
+  items[next].focus();
 }
 
 function closeSidebarAndRestoreFocus() {
@@ -265,7 +289,7 @@ onBeforeUnmount(() => {
               eventBadge
             }}</span>
           </button>
-          <div ref="userMenu" class="user-menu-wrap">
+          <div ref="userMenu" class="user-menu-wrap" @keydown="onUserMenuKeydown">
             <button
               ref="userMenuTrigger"
               type="button"

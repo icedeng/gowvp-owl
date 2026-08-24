@@ -8,6 +8,49 @@ import type {
 
 export type ListParams = Record<string, string | number | boolean | undefined>
 
+export interface CollectedPage<T> extends ApiPage<T> {
+  items: T[]
+  total: number
+}
+
+type PageRequest<T> = (params?: ListParams) => Promise<{ data: ApiPage<T> }>
+
+/**
+ * 分页接口会把单页数量限制在 10000；使用超大 size 只会静默截断第一页。
+ * 需要完整数据集的少量管理端场景统一通过正常页码逐页收集，避免漏数。
+ */
+export async function collectPages<T>(
+  request: PageRequest<T>,
+  params: ListParams = {},
+  pageSize = 1000,
+): Promise<CollectedPage<T>> {
+  const size = Math.min(10000, Math.max(1, Math.trunc(pageSize)))
+  const items: T[] = []
+  let page = 1
+  let total: number | undefined
+
+  while (true) {
+    const response = await request({ ...params, page, size })
+    const batch = response.data?.items || []
+    const reportedTotal = Number(response.data?.total)
+    if (Number.isFinite(reportedTotal) && reportedTotal >= 0) total = reportedTotal
+    items.push(...batch)
+
+    if (!batch.length || batch.length < size || (total !== undefined && items.length >= total)) break
+    page += 1
+  }
+
+  return { items, total: total ?? items.length }
+}
+
+export async function countItems<T>(
+  request: PageRequest<T>,
+  params: ListParams = {},
+): Promise<number> {
+  const response = await request({ ...params, page: 1, size: 1 })
+  return Number(response.data?.total ?? response.data?.items?.length ?? 0)
+}
+
 export const api = {
   health: () => http.get<HealthInfo>('/health'),
   metrics: () => http.get<ApiMetrics>('/app/metrics/api'),

@@ -4,7 +4,6 @@ import {
   Activity,
   ArrowUpRight,
   Box,
-  Braces,
   Cpu,
   Database,
   HardDrive,
@@ -17,7 +16,6 @@ import {
 } from "@lucide/vue";
 import { api, apiUrl, errorMessage } from "../services/api";
 import type {
-  ApiChannel,
   ApiMetrics,
   HealthInfo,
   MediaServer,
@@ -36,7 +34,6 @@ const health = ref<HealthInfo>({});
 const metrics = ref<ApiMetrics>({});
 const stats = ref<ResourceStats>({});
 const media = ref<MediaServer[]>([]);
-const channels = ref<ApiChannel[]>([]);
 const latest = (items?: { used?: number; up?: number; down?: number }[]) =>
   items?.[Math.max(0, (items?.length || 1) - 1)] || {};
 const cpu = computed(() => Number(latest(stats.value.cpu).used || 0));
@@ -76,10 +73,6 @@ const statusPercent = (prefix: string) =>
     .reduce((sum, [, value]) => sum + Number(value), 0) /
     responseTotal.value) *
   100;
-const aiTasks = computed(
-  () => channels.value.filter((item) => item.ext?.enabled_ai).length
-);
-
 async function load() {
   loading.value = true;
   loadError.value = "";
@@ -89,23 +82,20 @@ async function load() {
       api.metrics(),
       api.stats(),
       api.mediaServers({ page: 1, size: 100 }),
-      api.channels({ page: 1, size: 99999 }),
     ]);
     const [
       healthResponse,
       metricResponse,
       statResponse,
       mediaResponse,
-      channelResponse,
     ] = results;
     if (healthResponse.status === "fulfilled") health.value = healthResponse.value.data || {};
     if (metricResponse.status === "fulfilled") metrics.value = metricResponse.value.data || {};
     if (statResponse.status === "fulfilled") stats.value = statResponse.value.data || {};
     if (mediaResponse.status === "fulfilled") media.value = mediaResponse.value.data?.items || [];
-    if (channelResponse.status === "fulfilled") channels.value = channelResponse.value.data?.items || [];
     const failures = results.filter((item) => item.status === "rejected");
     if (failures.length) {
-      loadError.value = `部分系统指标加载失败（${failures.length}/5）：${errorMessage(failures[0].reason)}`;
+      loadError.value = `部分系统指标加载失败（${failures.length}/4）：${errorMessage(failures[0].reason)}`;
     }
   } catch (cause) {
     loadError.value = errorMessage(cause, "系统指标加载失败");
@@ -216,14 +206,6 @@ onMounted(load);
             ><span class="status" :class="item.status ? 'online' : 'offline'">{{
               item.status ? "在线" : "离线"
             }}</span>
-          </div>
-          <div class="step-item">
-            <span class="step-index"><Braces /></span
-            ><span
-              ><strong>AI 分析任务</strong><small>来自通道启用状态</small></span
-            ><span class="status" :class="aiTasks ? 'online' : ''"
-              >{{ aiTasks }} 个</span
-            >
           </div>
           <div class="step-item">
             <span class="step-index"><Database /></span

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import {
   Aperture,
@@ -19,7 +19,7 @@ import {
   ShieldAlert,
   Volume2,
 } from "@lucide/vue";
-import { api, errorMessage, typeLabel } from "../services/api";
+import { api, collectPages, errorMessage, typeLabel } from "../services/api";
 import type { ApiChannel, ApiDevice, PlayResult } from "../types/api";
 import { useUiStore } from "../stores/ui";
 import StreamPlayer from "../components/StreamPlayer.vue";
@@ -31,13 +31,20 @@ const layout = ref("4");
 const muted = ref(false);
 const query = ref("");
 const loading = ref(false);
+const loadingMore = ref(false);
 const loadError = ref("");
 const actionLoading = ref("");
 const channels = ref<ApiChannel[]>([]);
 const devices = ref<ApiDevice[]>([]);
+const channelPage = ref(1);
+const channelTotal = ref(0);
+const loadedChannelCount = ref(0);
 const playResults = ref<Record<string, PlayResult>>({});
 const snapshots = ref<Record<string, string>>({});
 const collapsedResourceGroups = ref<Set<string>>(new Set());
+const CHANNEL_PAGE_SIZE = 200;
+let searchTimer: number | undefined;
+let channelLoadSequence = 0;
 const selectedChannel = computed(
   () =>
     channels.value.find((item) => item.id === selected.value) ||
@@ -59,6 +66,9 @@ const filteredChannels = computed(() =>
       .toLowerCase()
       .includes(query.value.toLowerCase())
   )
+);
+const canLoadMoreChannels = computed(
+  () => loadedChannelCount.value < channelTotal.value
 );
 const wallChannels = computed(() => {
   if (!filteredChannels.value.length) return [];
@@ -115,23 +125,53 @@ function toggleResourceGroup(groupID: string) {
   collapsedResourceGroups.value = next;
 }
 
-async function load() {
-  loading.value = true;
-  loadError.value = "";
+async function loadChannels(reset = true) {
+  const sequence = ++channelLoadSequence;
+  const requestedPage = reset ? 1 : channelPage.value + 1;
+  if (reset) loading.value = true;
+  else loadingMore.value = true;
   try {
-    const [channelResponse, deviceResponse] = await Promise.allSettled([
-      api.channels({ page: 1, size: 99999 }),
-      api.devices({ page: 1, size: 99999 }),
-    ]);
-    if (channelResponse.status === "rejected") throw channelResponse.reason;
-    channels.value = channelResponse.value.data?.items || [];
-    if (deviceResponse.status === "fulfilled") {
-      devices.value = deviceResponse.value.data?.items || [];
-    } else {
-      devices.value = [];
-      loadError.value = `设备分组加载失败，通道已按未分组展示：${errorMessage(deviceResponse.reason)}`;
+    const { data } = await api.channels({
+      page: requestedPage,
+      size: CHANNEL_PAGE_SIZE,
+      key: query.value.trim() || undefined,
+    });
+    if (sequence !== channelLoadSequence) return;
+    const nextItems = data?.items || [];
+    channels.value = reset
+      ? nextItems
+      : [
+          ...new Map(
+            [...channels.value, ...nextItems].map((item) => [item.id, item])
+          ).values(),
+        ];
+    channelPage.value = requestedPage;
+    channelTotal.value = Number(data?.total ?? channels.value.length);
+    loadedChannelCount.value = reset
+      ? nextItems.length
+      : Math.min(channelTotal.value, loadedChannelCount.value + nextItems.length);
+    await syncRouteContext();
+  } finally {
+    if (sequence === channelLoadSequence) {
+      loading.value = false;
+      loadingMore.value = false;
     }
-    syncRouteContext();
+  }
+}
+
+async function load() {
+  loadError.value = "";
+  loading.value = true;
+  const deviceTask = collectPages(api.devices)
+    .then((result) => {
+      devices.value = result.items;
+    })
+    .catch((cause) => {
+      devices.value = [];
+      loadError.value = `设备分组加载失败，通道已按未分组展示：${errorMessage(cause)}`;
+    });
+  try {
+    await Promise.all([loadChannels(true), deviceTask]);
   } catch (cause) {
     loadError.value = errorMessage(cause, "实时通道加载失败");
   } finally {
@@ -139,10 +179,10 @@ async function load() {
   }
 }
 
-function syncRouteContext() {
+async function syncRouteContext() {
   const target = String(route.query.channel || route.query.stream || "");
   const device = String(route.query.device || "");
-  const matched =
+  let matched =
     (target
       ? channels.value.find(
           (item) =>
@@ -154,12 +194,31 @@ function syncRouteContext() {
     (device
       ? channels.value.find((item) => item.did === device)
       : undefined);
+  if (target && !matched && !query.value.trim()) {
+    try {
+      const { data } = await api.channel(target);
+      matched = data;
+      channels.value = [
+        data,
+        ...channels.value.filter((item) => item.id !== data.id),
+      ];
+    } catch {
+      // 路由目标可能已删除，继续选中首个可用通道。
+    }
+  }
   selected.value =
     matched?.id ||
     channels.value.find((item) => item.is_online)?.id ||
     selected.value ||
     channels.value[0]?.id ||
     "";
+}
+
+function loadMoreChannels() {
+  if (!loading.value && !loadingMore.value && canLoadMoreChannels.value)
+    void loadChannels(false).catch((cause) => {
+      loadError.value = errorMessage(cause, "更多通道加载失败");
+    });
 }
 
 async function action(name: string, fn: () => Promise<unknown>) {
@@ -246,8 +305,18 @@ async function toggleRecording() {
   }
 }
 
-watch(() => route.query, syncRouteContext);
+watch(() => route.query, () => void syncRouteContext());
+watch(query, () => {
+  window.clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => {
+    loadError.value = "";
+    void loadChannels(true).catch((cause) => {
+      loadError.value = errorMessage(cause, "通道搜索失败");
+    });
+  }, 350);
+});
 onMounted(load);
+onBeforeUnmount(() => window.clearTimeout(searchTimer));
 </script>
 
 <template>
@@ -299,7 +368,7 @@ onMounted(load);
             <h2 class="card-title">通道资源</h2>
             <p class="card-sub">
               {{ channels.filter((item) => item.is_online).length }} 路在线 /
-              {{ channels.length }} 路
+              已加载 {{ loadedChannelCount }} / {{ channelTotal }} 路
             </p>
           </div>
           <Radio />
@@ -308,8 +377,8 @@ onMounted(load);
           ><Search /><input
             v-model="query"
             class="input w-full"
-            aria-label="搜索设备或通道"
-            placeholder="搜索设备或通道"
+            aria-label="搜索通道名称、编号或流"
+            placeholder="搜索通道名称、编号或流"
         /></label>
         <div class="resource-tree">
           <template v-for="device in devices" :key="device.id">
@@ -377,6 +446,16 @@ onMounted(load);
               }}<i class="slot-led" :class="{ warn: !channel.is_online }" />
             </button>
           </div>
+          <button
+            v-if="canLoadMoreChannels"
+            type="button"
+            class="btn resource-load-more"
+            :disabled="loadingMore"
+            @click="loadMoreChannels"
+          >
+            <LoaderCircle v-if="loadingMore" class="animate-spin" />
+            {{ loadingMore ? "正在加载…" : `加载更多（剩余 ${channelTotal - loadedChannelCount} 路）` }}
+          </button>
         </div>
       </aside>
       <article class="card video-workspace">
@@ -653,8 +732,8 @@ onMounted(load);
           </div>
           <label class="toggle-row"
             ><span
-              ><strong class="block text-[10px]">静音播放</strong
-              ><small class="text-[8px] text-slate-500"
+              ><strong>静音播放</strong
+              ><small class="text-slate-500"
                 >仅影响当前浏览器</small
               ></span
             ><span class="switch"
@@ -662,8 +741,8 @@ onMounted(load);
                 class="slider" /></span></label
           ><label class="toggle-row"
             ><span
-              ><strong class="block text-[10px]">AI 分析</strong
-              ><small class="text-[8px] text-slate-500"
+              ><strong>AI 分析</strong
+              ><small class="text-slate-500"
                 >使用通道已配置区域</small
               ></span
             ><span class="switch"
@@ -673,8 +752,8 @@ onMounted(load);
                 @change="toggleAI" /><span class="slider" /></span></label
           ><label class="toggle-row"
             ><span
-              ><strong class="block text-[10px]">持续录像</strong
-              ><small class="text-[8px] text-slate-500"
+              ><strong>持续录像</strong
+              ><small class="text-slate-500"
                 >AI 录制暂不开放</small
               ></span
             ><span class="switch"

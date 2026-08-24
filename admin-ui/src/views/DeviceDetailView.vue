@@ -27,7 +27,7 @@ import {
   Wifi,
   Wrench,
 } from "@lucide/vue";
-import { api, errorMessage, typeLabel } from "../services/api";
+import { api, collectPages, errorMessage, typeLabel } from "../services/api";
 import type { ApiChannel, ApiDevice, DeviceHistoryRecord } from "../types/api";
 import { formatDate, relativeTime } from "../utils/format";
 import { useUiStore } from "../stores/ui";
@@ -152,11 +152,11 @@ async function load() {
     device.value = data;
     basicForm.name = data.name || "";
     const [channelResponse, heartbeatResponse, registerResponse] = await Promise.allSettled([
-      api.channels({ page: 1, size: 99999, did: data.id }),
+      collectPages(api.channels, { did: data.id }),
       api.deviceHistory(data.id, "heartbeat", { page: 1, size: 6 }),
       api.deviceHistory(data.id, "register", { page: 1, size: 6 }),
     ]);
-    relatedChannels.value = channelResponse.status === "fulfilled" ? channelResponse.value.data?.items || [] : [];
+    relatedChannels.value = channelResponse.status === "fulfilled" ? channelResponse.value.items : [];
     heartbeatHistory.value = heartbeatResponse.status === "fulfilled" ? heartbeatResponse.value.data?.items || [] : [];
     registerHistory.value = registerResponse.status === "fulfilled" ? registerResponse.value.data?.items || [] : [];
     if (isGb.value) {

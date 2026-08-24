@@ -44,6 +44,7 @@ const loadError = ref("");
 const channel = ref<ApiChannel | null>(null);
 const device = ref<ApiDevice | null>(null);
 const recordings = ref<ApiRecording[]>([]);
+const recordingTotal = ref(0);
 const zones = ref<Zone[]>([]);
 const play = ref<PlayResult | null>(null);
 const snapshotUrl = ref("");
@@ -145,6 +146,7 @@ function clearContext() {
   channel.value = null;
   device.value = null;
   recordings.value = [];
+  recordingTotal.value = 0;
   zones.value = [];
   play.value = null;
   snapshotUrl.value = "";
@@ -158,7 +160,10 @@ async function loadRecordings(id: string, sequence = loadSequence) {
   resourceErrors.recordings = "";
   try {
     const response = await api.recordings({ page: 1, size: 100, cid: id });
-    if (sequence === loadSequence) recordings.value = response.data?.items || [];
+    if (sequence === loadSequence) {
+      recordings.value = response.data?.items || [];
+      recordingTotal.value = Number(response.data?.total ?? recordings.value.length);
+    }
   } catch (cause) {
     if (sequence === loadSequence) resourceErrors.recordings = errorMessage(cause, "平台录像暂时无法读取");
   } finally {
@@ -494,7 +499,7 @@ watch(() => route.params.id, load, { immediate: true });
         <div class="detail-section-head"><div><h2>录像与回看</h2><p>集中管理平台录像策略、录像片段和 GB28181 设备端录像。</p></div><RouterLink class="btn btn-primary" :to="`/recordings?channel=${encodeURIComponent(channel.id)}`"><Film />进入录像中心</RouterLink></div>
         <div class="channel-recording-summary">
           <div><small>当前策略</small><strong>{{ recordMode === "always" ? "持续录像" : "不录制" }}</strong></div>
-          <div><small>平台片段</small><strong>{{ resourceErrors.recordings ? "—" : recordings.length }}</strong></div>
+          <div><small>平台片段</small><strong>{{ resourceErrors.recordings ? "—" : recordingTotal }}</strong></div>
           <div><small>最近录像</small><strong>{{ resourceErrors.recordings ? "读取失败" : formatDate(recordings[0]?.started_at, "暂无") }}</strong></div>
         </div>
         <div class="channel-recording-grid">

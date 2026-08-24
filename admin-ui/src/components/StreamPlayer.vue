@@ -161,8 +161,8 @@ defineExpose({ play: start, destroy: destroyPlayer })
 .stream-player-poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .7; }
 .stream-player-state { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 18px; text-align: center; background: radial-gradient(circle at 50% 44%, rgba(23, 38, 58, .86), rgba(11, 20, 34, .96) 68%); }
 .stream-player-state svg { width: 24px; height: 24px; }
-.stream-player-state small { max-width: 320px; font-size: 11px; line-height: 1.5; }
-.stream-player-state button { min-height: 36px; padding: 0 12px; color: #d8e8fb; background: #1b2b42; border: 1px solid #344963; border-radius: 6px; font-size: 11px; cursor: pointer; }
-.stream-player-protocol { position: absolute; right: 8px; bottom: 8px; padding: 2px 6px; color: #d8e8fb; background: rgba(7, 12, 20, .72); border-radius: 4px; font: 700 10px "SFMono-Regular", monospace; text-transform: uppercase; pointer-events: none; }
+.stream-player-state small { max-width: 320px; font-size: 12px; line-height: 1.5; }
+.stream-player-state button { min-height: 36px; padding: 0 12px; color: #d8e8fb; background: #1b2b42; border: 1px solid #344963; border-radius: 6px; font-size: 12px; cursor: pointer; }
+.stream-player-protocol { position: absolute; right: 8px; bottom: 8px; padding: 2px 6px; color: #d8e8fb; background: rgba(7, 12, 20, .72); border-radius: 4px; font: 700 11px "SFMono-Regular", monospace; text-transform: uppercase; pointer-events: none; }
 @media (max-width: 640px) { .stream-player-state button { min-height: 44px; } }
 </style>

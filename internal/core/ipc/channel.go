@@ -56,6 +56,10 @@ func (c *Core) FindChannel(ctx context.Context, in *FindChannelInput) ([]*Channe
 		isOnline, _ := strconv.ParseBool(in.IsOnline)
 		query.Where("is_online = ?", isOnline)
 	}
+	if in.IsPlaying == "true" || in.IsPlaying == "false" {
+		isPlaying, _ := strconv.ParseBool(in.IsPlaying)
+		query.Where("is_playing = ?", isPlaying)
+	}
 
 	// 按类型过滤
 	if in.Type != "" {

@@ -12,7 +12,7 @@ import {
   ShieldAlert,
   X,
 } from "@lucide/vue";
-import { api, errorMessage, withToken } from "../services/api";
+import { api, collectPages, errorMessage, withToken } from "../services/api";
 import type {
   ApiChannel,
   ApiRecording,
@@ -123,8 +123,8 @@ function selectToday() {
 }
 
 async function loadChannels() {
-  const { data } = await api.channels({ page: 1, size: 99999 });
-  channels.value = data?.items || [];
+  const data = await collectPages(api.channels);
+  channels.value = data.items;
   const routeChannel = String(route.query.channel || "");
   if (routeChannel && channels.value.some((item) => item.id === routeChannel))
     channelFilter.value = routeChannel;

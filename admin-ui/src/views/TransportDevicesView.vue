@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { RadioTower, RefreshCcw, Search, ShieldAlert, Truck } from "@lucide/vue";
-import { api, errorMessage } from "../services/api";
+import { api, collectPages, errorMessage } from "../services/api";
 import type { ApiDevice } from "../types/api";
 
 const loading = ref(false);
@@ -26,8 +26,8 @@ async function load() {
   loading.value = true;
   loadError.value = "";
   try {
-    const { data } = await api.devices({ page: 1, size: 99999 });
-    rows.value = data?.items || [];
+    const data = await collectPages(api.devices);
+    rows.value = data.items;
   } catch (cause) {
     loadError.value = errorMessage(cause, "部标设备列表加载失败");
   } finally {

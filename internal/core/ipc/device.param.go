@@ -7,7 +7,9 @@ import (
 
 type FindDeviceInput struct {
 	web.PagerFilter
-	Key string `form:"key"`
+	Key      string `form:"key"`
+	Type     string `form:"type"`
+	IsOnline string `form:"is_online"`
 	// DeviceID string `form:"device_id"` // 20 位国标编号
 	// Name     string `form:"name"`      // 设备名称
 	// ID       string `form:"id"`
@@ -15,7 +17,6 @@ type FindDeviceInput struct {
 	// StreamMode   string    `form:"stream_mode"` // 数据传输模式(UDP/TCP_PASSIVE,TCP_ACTIVE)
 	// IP           string    `form:"ip"`
 	// Port         int       `form:"port"`
-	// IsOnline     bool      `form:"is_online"`
 	// RegisteredAt orm.Time  `form:"registered_at"` // 注册时间
 	// KeepaliveAt  orm.Time  `form:"keepalive_at"`  // 心跳时间
 	// Keepalives   int       `form:"keepalives"`    // 心跳间隔

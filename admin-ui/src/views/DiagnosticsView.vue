@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   XCircle,
 } from "@lucide/vue";
-import { api, errorMessage, typeLabel } from "../services/api";
+import { api, collectPages, errorMessage, typeLabel } from "../services/api";
 import type { ApiDevice, GbMetrics } from "../types/api";
 import { formatDate } from "../utils/format";
 import { useUiStore } from "../stores/ui";
@@ -37,12 +37,15 @@ const capabilities = computed(
 );
 const matrix = computed(() =>
   [
-    ["目录查询", "2011+", "catalog"],
-    ["BasicParam", "2014+", "basic_param"],
+    ["目录订阅", "2011+", "directory_notify"],
+    ["媒体结束通知", "2011+", "media_status"],
+    ["BasicParam", "2014+", "config_query"],
+    ["预置位查询", "2014+", "preset_query"],
+    ["语音广播", "2014+", "voice_broadcast"],
+    ["强制关键帧", "2016+", "iframe_control"],
     ["移动位置订阅", "2016+", "mobile_position"],
-    ["A.4 快照", "2022", "appendix_a4"],
-    ["设备升级", "2022", "device_upgrade"],
-    ["语音广播", "2016+", "broadcast"],
+    ["设备抓拍", "2022", "snapshot"],
+    ["设备升级", "2022", "upgrade"],
   ].map(([name, version, key]) => ({
     name,
     version,
@@ -71,11 +74,11 @@ async function load() {
   metricsAvailable.value = false;
   try {
     const [deviceResult, metricsResult] = await Promise.allSettled([
-      api.devices({ page: 1, size: 99999 }),
+      collectPages(api.devices),
       api.gbMetrics(),
     ]);
     if (deviceResult.status === "rejected") throw deviceResult.reason;
-    devices.value = (deviceResult.value.data?.items || []).filter(
+    devices.value = deviceResult.value.items.filter(
       (item) =>
         typeLabel(item.type, item.device_id || item.id) === "GB28181"
     );

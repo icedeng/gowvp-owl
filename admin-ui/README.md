@@ -20,8 +20,9 @@
 - `#/live`：1/4/9/16 分屏、PTZ、抓拍、对讲、AI 与录像控制。
 - `#/events`：AI 检测和国标报警统一查询、实时与录像跳转。
 - `#/recordings`：月历、时间轴、上下文筛选、播放与下载。
-- `#/devices`、`#/devices/:id`：四协议设备列表、设备档案和国标高级能力。
-- `#/channels`、`#/channels/:id`：通道列表、播放、PTZ、AI、录像和设备端录像。
+- `#/devices`、`#/devices/:id`：国标设备列表、设备档案和 GB/T 28181 高级能力。
+- `#/transport-devices`：部标设备能力入口；当前后端开放对应设备类型后自动展示。
+- `#/channels/:id`：通道播放、PTZ、AI、录像和设备端录像；兼容路由 `#/channels` 会跳转实时监控。
 - `#/push-streams`、`#/pull-streams`：RTMP 推流与 RTSP 拉流配置。
 - `#/media-servers`：默认媒体节点、带宽、存储和会话摘要。
 - `#/system-status`：服务构建、资源、API 与依赖服务状态。
@@ -60,7 +61,7 @@ pnpm preview
 ## 数据与接口
 
 - 登录先读取 `/login/key`，在浏览器使用 RSA-OAEP/SHA-256 加密凭据，再以 JWT 调用受保护接口。
-- Axios 在请求中统一附加 `Authorization: Bearer <token>`；401 会清理会话并返回登录页。
+- Axios 在请求中统一附加 `Authorization: Bearer <token>`；401 会清理会话并返回登录页，重新登录后回到原页面。
 - 总览、设备、通道、事件、录像、RTMP/RTSP、媒体节点、系统指标、SIP、诊断、升级和账号页面均使用真实接口。
 - 数据页包含加载、空数据、错误和重试状态；写操作只在用户明确点击后执行。
 - 密码、媒体 Secret、RTMP Session 和 RTSP 源凭据不会显示在列表、写入源码或持久化到浏览器配置。

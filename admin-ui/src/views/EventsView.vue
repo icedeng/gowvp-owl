@@ -13,7 +13,7 @@ import {
   Video,
   X,
 } from "@lucide/vue";
-import { api, errorMessage } from "../services/api";
+import { api, collectPages, errorMessage } from "../services/api";
 import type { ApiChannel, ApiEvent } from "../types/api";
 import { formatDate } from "../utils/format";
 
@@ -115,7 +115,7 @@ async function load(silent = false, append = false) {
       }),
       channels.value.length
         ? Promise.resolve(null)
-        : api.channels({ page: 1, size: 99999 }),
+        : collectPages(api.channels),
     ]);
     if (sequence !== loadSequence) return;
     if (eventResponse.status === "rejected") throw eventResponse.reason;
@@ -127,7 +127,7 @@ async function load(silent = false, append = false) {
     page.value = requestedPage;
     total.value = eventResponse.value.data?.total ?? events.value.length;
     if (channelResponse.status === "fulfilled" && channelResponse.value) {
-      channels.value = channelResponse.value.data?.items || [];
+      channels.value = channelResponse.value.items;
     } else if (channelResponse.status === "rejected") {
       loadError.value = `事件已加载，通道名称暂不可用：${errorMessage(channelResponse.reason)}`;
     }
@@ -300,7 +300,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <div class="flex items-start justify-between gap-3">
             <div>
               <h3>{{ event.label || "未分类事件" }}</h3>
-              <p class="mt-1 text-[9px] text-slate-500">事件 #{{ event.id }}</p>
+              <p class="mt-1 text-xs text-slate-500">事件 #{{ event.id }}</p>
             </div>
             <span
               class="protocol-tag"
