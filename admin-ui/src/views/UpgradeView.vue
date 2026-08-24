@@ -123,7 +123,7 @@ onMounted(check);
         <RefreshCcw :class="{ 'animate-spin': loading }" />检查更新
       </button>
     </header>
-    <div v-if="loadError" class="warning-box mb-4">
+    <div v-if="loadError" class="warning-box mb-4" role="alert">
       <ShieldAlert /><span>{{ loadError }}</span
       ><button class="btn btn-sm ml-auto" @click="check">重试</button>
     </div>
@@ -132,7 +132,7 @@ onMounted(check);
         <div class="card-head">
           <div>
             <h2 class="card-title">当前版本</h2>
-            <p class="card-sub">Owl Server</p>
+            <p class="card-sub">国标视频管理服务</p>
           </div>
           <span class="status" :class="health.version ? 'online' : 'offline'">{{
             health.version ? "运行中" : "状态未知"
@@ -141,7 +141,7 @@ onMounted(check);
         <div class="details-identity">
           <span class="details-icon"><ShieldCheck /></span>
           <div>
-            <h1>{{ health.version || version.current_version || "—" }}</h1>
+            <h2 class="metric-value">{{ health.version || version.current_version || "—" }}</h2>
             <p>
               Build {{ health.git_hash || "—" }} ·
               {{ health.git_branch || "—" }}

@@ -43,6 +43,7 @@ const eventCount = ref(0);
 const userMenuOpen = ref(false);
 const userMenu = ref<HTMLElement | null>(null);
 const userMenuTrigger = ref<HTMLButtonElement | null>(null);
+const mobileMenuButton = ref<HTMLButtonElement | null>(null);
 const eventBadge = computed(() =>
   eventCount.value > 99 ? "99+" : String(eventCount.value)
 );
@@ -106,6 +107,9 @@ function onKeydown(event: KeyboardEvent) {
   }
   if (event.key === "Escape") {
     ui.closeCommand();
+    if (ui.sidebarOpen) {
+      closeSidebarAndRestoreFocus();
+    }
     if (userMenuOpen.value) {
       userMenuOpen.value = false;
       userMenuTrigger.value?.focus();
@@ -121,6 +125,11 @@ function onDocumentPointerDown(event: PointerEvent) {
 
 function toggleUserMenu() {
   userMenuOpen.value = !userMenuOpen.value;
+}
+
+function closeSidebarAndRestoreFocus() {
+  ui.closeSidebar();
+  mobileMenuButton.value?.focus();
 }
 
 async function logout() {
@@ -160,9 +169,9 @@ onBeforeUnmount(() => {
       v-if="ui.sidebarOpen"
       class="mobile-scrim"
       aria-label="关闭导航"
-      @click="ui.closeSidebar"
+      @click="closeSidebarAndRestoreFocus"
     />
-    <aside class="sidebar" aria-label="主导航">
+    <aside id="app-sidebar" class="sidebar" aria-label="主导航">
       <RouterLink
         class="brand"
         to="/overview"
@@ -203,8 +212,11 @@ onBeforeUnmount(() => {
     <section class="workspace">
       <header class="topbar">
         <button
+          ref="mobileMenuButton"
           class="icon-btn menu-btn"
-          aria-label="打开导航"
+          :aria-label="ui.sidebarOpen ? '关闭导航' : '打开导航'"
+          aria-controls="app-sidebar"
+          :aria-expanded="ui.sidebarOpen"
           @click="ui.toggleSidebar"
         >
           <X v-if="ui.sidebarOpen" /><Menu v-else />

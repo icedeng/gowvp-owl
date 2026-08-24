@@ -18,7 +18,10 @@ http.interceptors.response.use(
     if (error?.response?.status === 401) {
       localStorage.removeItem('owl-token')
       localStorage.removeItem('owl-user')
-      if (window.location.hash !== '#/login') window.location.hash = '#/login'
+      if (!window.location.hash.startsWith('#/login')) {
+        const redirect = window.location.hash.replace(/^#/, '') || '/overview'
+        window.location.hash = `#/login?${new URLSearchParams({ redirect })}`
+      }
     }
     const body = error?.response?.data as ApiErrorBody | undefined
     if (body?.msg) error.message = body.msg

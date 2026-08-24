@@ -25,6 +25,7 @@ const loading = ref(false);
 const running = ref(false);
 const loadError = ref("");
 const metrics = ref<GbMetrics>({});
+const metricsAvailable = ref(false);
 const lastResult = ref("尚未在本次会话执行探测");
 const selected = computed(
   () =>
@@ -66,6 +67,8 @@ const mediaRate = computed(() =>
 async function load() {
   loading.value = true;
   loadError.value = "";
+  metrics.value = {};
+  metricsAvailable.value = false;
   try {
     const [deviceResult, metricsResult] = await Promise.allSettled([
       api.devices({ page: 1, size: 99999 }),
@@ -80,8 +83,14 @@ async function load() {
     selectedId.value = devices.value.some((item) => item.id === routeId)
       ? routeId
       : devices.value[0]?.id || "";
-    if (metricsResult.status === "fulfilled")
+    if (metricsResult.status === "fulfilled") {
       metrics.value = metricsResult.value.data;
+      metricsAvailable.value = true;
+    } else {
+      loadError.value = `设备档案已加载，运行指标暂不可用：${errorMessage(
+        metricsResult.reason
+      )}`;
+    }
   } catch (cause) {
     loadError.value = errorMessage(cause, "诊断数据加载失败");
   } finally {
@@ -137,7 +146,7 @@ onMounted(load);
         }}
       </button>
     </header>
-    <div v-if="loadError" class="warning-box mb-4">
+    <div v-if="loadError" class="warning-box mb-4" role="alert">
       <ShieldAlert /><span>{{ loadError }}</span
       ><button class="btn btn-sm ml-auto" @click="load">重试</button>
     </div>
@@ -147,6 +156,7 @@ onMounted(load);
           ><Search /><select
             v-model="selectedId"
             class="select !border-0 !bg-transparent"
+            aria-label="选择诊断设备"
           >
             <option v-for="item in devices" :key="item.id" :value="item.id">
               {{ item.name || item.device_id || item.id }}
@@ -162,7 +172,7 @@ onMounted(load);
           class="status"
           :class="selected?.is_online ? 'online' : 'offline'"
           >{{ selected?.is_online ? "设备在线" : "设备离线" }}</span
-        ><span class="toolbar-spacer" /><span class="section-note">{{
+        ><span class="toolbar-spacer" /><span class="section-note" aria-live="polite">{{
           lastResult
         }}</span>
       </div>
@@ -182,10 +192,9 @@ onMounted(load);
           </div>
           <Activity />
         </div>
-        <div class="metric-value">{{ registerRate.toFixed(1) }}%</div>
+        <div class="metric-value">{{ metricsAvailable ? `${registerRate.toFixed(1)}%` : "—" }}</div>
         <p class="section-note mt-2">
-          {{ metrics.register_success || 0 }} /
-          {{ metrics.register_requests || 0 }} 次
+          {{ metricsAvailable ? `${metrics.register_success || 0} / ${metrics.register_requests || 0} 次` : "指标暂不可用" }}
         </p>
       </article>
       <article class="card card-pad">
@@ -196,10 +205,9 @@ onMounted(load);
           </div>
           <Radio />
         </div>
-        <div class="metric-value">{{ mediaRate.toFixed(1) }}%</div>
+        <div class="metric-value">{{ metricsAvailable ? `${mediaRate.toFixed(1)}%` : "—" }}</div>
         <p class="section-note mt-2">
-          {{ metrics.media_success || 0 }} /
-          {{ metrics.media_requests || 0 }} 次
+          {{ metricsAvailable ? `${metrics.media_success || 0} / ${metrics.media_requests || 0} 次` : "指标暂不可用" }}
         </p>
       </article>
       <article class="card card-pad">
@@ -210,10 +218,9 @@ onMounted(load);
           </div>
           <ShieldCheck />
         </div>
-        <div class="metric-value">{{ metrics.direct_tcp_started || 0 }}</div>
+        <div class="metric-value">{{ metricsAvailable ? metrics.direct_tcp_started || 0 : "—" }}</div>
         <p class="section-note mt-2">
-          {{ metrics.direct_tcp_completed || 0 }} 完成 ·
-          {{ metrics.direct_tcp_failed || 0 }} 失败
+          {{ metricsAvailable ? `${metrics.direct_tcp_completed || 0} 完成 · ${metrics.direct_tcp_failed || 0} 失败` : "指标暂不可用" }}
         </p>
       </article>
     </section>

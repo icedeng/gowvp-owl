@@ -148,8 +148,17 @@ function loadEasyPlayer() {
     script.dataset.owlEasyPlayer = url
     document.head.appendChild(script)
   })
-  easyPlayerLoads.set(url, load)
-  return load
+  const retryableLoad = load.catch((cause) => {
+    easyPlayerLoads.delete(url)
+    document
+      .querySelectorAll<HTMLScriptElement>('script[data-owl-easy-player]')
+      .forEach((script) => {
+        if (script.dataset.owlEasyPlayer === url) script.remove()
+      })
+    throw cause
+  })
+  easyPlayerLoads.set(url, retryableLoad)
+  return retryableLoad
 }
 
 const easyPlayerAdapter: PlayerAdapter = {

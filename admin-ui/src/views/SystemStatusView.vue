@@ -130,7 +130,7 @@ onMounted(load);
         <RefreshCcw :class="{ 'animate-spin': loading }" />刷新指标
       </button>
     </header>
-    <div v-if="loadError" class="warning-box mb-4">
+    <div v-if="loadError" class="warning-box mb-4" role="alert">
       <ShieldAlert /><span>{{ loadError }}</span
       ><button class="btn btn-sm ml-auto" @click="load">重试</button>
     </div>

@@ -35,13 +35,16 @@ function localDateInput(value: Date) {
 
 const selectedDate = ref(localDateInput(new Date()));
 const loading = ref(false);
+const loadingMore = ref(false);
 const loadError = ref("");
 const recordings = ref<ApiRecording[]>([]);
 const channels = ref<ApiChannel[]>([]);
 const timeline = ref<TimelineRange[]>([]);
 const monthly = ref<MonthlyStats | null>(null);
 const total = ref(0);
+const page = ref(1);
 const downloading = ref<number | null>(null);
+const PAGE_SIZE = 100;
 let loadSequence = 0;
 
 const channelNames = computed(() =>
@@ -109,6 +112,7 @@ const canPlayDay = computed(
   () => channelFilter.value !== "all" && recordings.value.length > 0
 );
 const hasSearch = computed(() => Boolean(query.value));
+const canLoadMore = computed(() => recordings.value.length < total.value);
 
 function resetSearch() {
   query.value = "";
@@ -126,9 +130,12 @@ async function loadChannels() {
     channelFilter.value = routeChannel;
 }
 
-async function load() {
+async function load(options: { append?: boolean } = {}) {
+  const append = Boolean(options.append);
   const sequence = ++loadSequence;
-  loading.value = true;
+  const requestedPage = append ? page.value + 1 : 1;
+  if (append) loadingMore.value = true;
+  else loading.value = true;
   loadError.value = "";
   try {
     let channelLoadError = "";
@@ -144,22 +151,36 @@ async function load() {
     const channel =
       channelFilter.value === "all" ? undefined : channelFilter.value;
     const [listResponse, monthlyResponse, timelineResponse] = await Promise.allSettled([
-      api.recordings({ page: 1, size: 500, cid: channel, ...dateRange.value }),
-      api.monthly({
-        cid: channel,
-        year: date.value.getFullYear(),
-        month: date.value.getMonth() + 1,
-      }),
-      channel ? api.timeline({ cid: channel, ...dateRange.value }) : Promise.resolve(null),
+      api.recordings({ page: requestedPage, size: PAGE_SIZE, cid: channel, ...dateRange.value }),
+      append
+        ? Promise.resolve(null)
+        : api.monthly({
+            cid: channel,
+            year: date.value.getFullYear(),
+            month: date.value.getMonth() + 1,
+          }),
+      append
+        ? Promise.resolve(null)
+        : channel
+        ? api.timeline({ cid: channel, ...dateRange.value })
+        : Promise.resolve(null),
     ]);
     if (sequence !== loadSequence) return;
     if (listResponse.status === "rejected") throw listResponse.reason;
-    recordings.value = listResponse.value.data?.items || [];
-    total.value = listResponse.value.data?.total || recordings.value.length;
-    monthly.value = monthlyResponse.status === "fulfilled" ? monthlyResponse.value.data : null;
-    timeline.value = timelineResponse.status === "fulfilled" && timelineResponse.value
-      ? timelineResponse.value.data?.items || []
-      : [];
+    const nextRecordings = listResponse.value.data?.items || [];
+    recordings.value = append
+      ? [...new Map([...recordings.value, ...nextRecordings].map((item) => [item.id, item])).values()]
+      : nextRecordings;
+    page.value = requestedPage;
+    total.value = listResponse.value.data?.total ?? recordings.value.length;
+    if (!append) {
+      monthly.value = monthlyResponse.status === "fulfilled" && monthlyResponse.value
+        ? monthlyResponse.value.data
+        : null;
+      timeline.value = timelineResponse.status === "fulfilled" && timelineResponse.value
+        ? timelineResponse.value.data?.items || []
+        : [];
+    }
     const auxiliaryFailure = [monthlyResponse, timelineResponse].find((item) => item.status === "rejected");
     const auxiliaryError = auxiliaryFailure?.status === "rejected"
       ? errorMessage(auxiliaryFailure.reason)
@@ -170,8 +191,16 @@ async function load() {
   } catch (cause) {
     if (sequence === loadSequence) loadError.value = errorMessage(cause, "录像数据加载失败");
   } finally {
-    if (sequence === loadSequence) loading.value = false;
+    if (sequence === loadSequence) {
+      loading.value = false;
+      loadingMore.value = false;
+    }
   }
+}
+
+function loadMore() {
+  if (!loading.value && !loadingMore.value && canLoadMore.value)
+    void load({ append: true });
 }
 
 function timelineStyle(item: TimelineRange) {
@@ -230,7 +259,7 @@ async function download(record: ApiRecording) {
   }
 }
 
-watch([channelFilter, selectedDate], load);
+watch([channelFilter, selectedDate], () => load());
 onMounted(load);
 </script>
 
@@ -253,7 +282,7 @@ onMounted(load);
             class="bg-transparent outline-none"
             aria-label="选择录像日期"
             type="date" /></label
-        ><button class="btn" :disabled="loading" @click="load">
+        ><button class="btn" :disabled="loading" @click="load()">
           <RefreshCcw :class="{ 'animate-spin': loading }" />刷新</button
         ><button
           class="btn btn-primary"
@@ -267,9 +296,9 @@ onMounted(load);
         </button>
       </div>
     </header>
-    <div v-if="loadError" class="warning-box mb-4">
+    <div v-if="loadError" class="warning-box mb-4" role="alert">
       <ShieldAlert /><span>{{ loadError }}</span
-      ><button class="btn btn-sm ml-auto" @click="load">重试</button>
+      ><button class="btn btn-sm ml-auto" @click="load()">重试</button>
     </div>
     <section class="content-grid">
       <article class="card card-pad">
@@ -350,10 +379,10 @@ onMounted(load);
           </div>
           <div>
             <dt>录像片段</dt>
-            <dd>{{ total }} 条 · {{ formatBytes(totalSize) }}</dd>
+            <dd>{{ total }} 条 · 已加载 {{ formatBytes(totalSize) }}</dd>
           </div>
           <div>
-            <dt>AI 对象</dt>
+            <dt>已加载 AI 对象</dt>
             <dd>{{ eventCount }} 个</dd>
           </div>
           <div>
@@ -489,9 +518,14 @@ onMounted(load);
         </div>
       </div>
       <div class="pagination">
-        <span>当前已加载 {{ recordings.length }} / {{ total }} 条录像</span
-        ><span v-if="total > recordings.length" class="section-note"
-          >列表最多加载前 500 条，请缩小通道或日期范围</span
+        <span>当前已加载 {{ recordings.length }} / {{ total }} 条录像 · {{ formatBytes(totalSize) }}</span
+        ><button
+          v-if="canLoadMore"
+          class="btn btn-sm"
+          type="button"
+          :disabled="loadingMore"
+          @click="loadMore"
+        ><LoaderCircle v-if="loadingMore" class="animate-spin" />{{ loadingMore ? "正在加载…" : "加载更多录像" }}</button
         ><span v-else class="section-note">当前结果已全部加载</span>
       </div>
     </section>

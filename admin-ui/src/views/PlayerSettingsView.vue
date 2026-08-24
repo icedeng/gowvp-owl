@@ -161,7 +161,7 @@ watch(() => playerSettings.revision, syncForm)
         <div class="player-appearance-grid">
           <label class="form-group player-appearance-cover">
             <span class="form-label">默认封面地址</span>
-            <input v-model.trim="form.posterUrl" class="input plain w-full" type="url" maxlength="2048" placeholder="https://example.com/player-cover.jpg" />
+            <input v-model.trim="form.posterUrl" class="input plain w-full" type="text" inputmode="url" maxlength="2048" placeholder="https://example.com/player-cover.jpg" :aria-invalid="!posterUrlValid" />
             <span class="form-help">可填写 HTTP(S) 或以 <code>/</code> 开头的同源静态路径；留空则不展示默认封面。</span>
             <span v-if="!posterUrlValid" class="player-field-error" role="alert"><CircleAlert />默认封面仅支持 HTTP(S) 地址或同源绝对路径。</span>
           </label>

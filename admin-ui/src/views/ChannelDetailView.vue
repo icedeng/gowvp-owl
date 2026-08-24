@@ -255,7 +255,7 @@ async function refreshSnapshot() {
   actionLoading.value = "刷新快照";
   try {
     const { data } = await api.snapshot(channel.value.id);
-    snapshotUrl.value = data?.link || `${api.snapshotImage(channel.value.id)}?t=${Date.now()}`;
+    snapshotUrl.value = data?.link || api.snapshotImage(channel.value.id, Date.now());
     ui.toast(`快照已刷新${data?.method ? ` · ${data.method}` : ""}`);
   } catch (cause) {
     ui.toast(errorMessage(cause, "快照刷新失败"));

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import {
   History,
   Info,
@@ -34,6 +34,11 @@ const form = reactive({
   ptz_weak_confirm: false,
   device_history: { max_records: 1000, max_days: 30 },
 });
+const tlsConfigValid = computed(
+  () =>
+    !form.enable_tls ||
+    (Boolean(form.tls_cert.trim()) && Boolean(form.tls_key.trim()))
+);
 
 async function load() {
   loading.value = true;
@@ -68,6 +73,10 @@ async function load() {
 }
 
 async function save() {
+  if (!tlsConfigValid.value) {
+    ui.toast("启用 SIP-TLS 前请填写证书与私钥路径");
+    return;
+  }
   saving.value = true;
   try {
     const body: SipConfig = {
@@ -104,7 +113,7 @@ onMounted(load);
       </div>
     </header>
 
-    <div v-if="loadError" class="warning-box mb-4">
+    <div v-if="loadError" class="warning-box mb-4" role="alert">
       <ShieldAlert /><span>{{ loadError }}</span><button class="btn btn-sm ml-auto" @click="load">重试</button>
     </div>
 
@@ -136,8 +145,9 @@ onMounted(load);
         <label class="toggle-row"><span><strong>启用 SIP-TLS</strong><small>需要同时配置证书与私钥</small></span><span class="switch"><input v-model="form.enable_tls" type="checkbox" /><span class="slider" /></span></label>
         <div v-if="form.enable_tls" class="form-grid mt-4">
           <label class="form-group"><span class="form-label">TLS 端口</span><input v-model.number="form.tls_port" class="input plain w-full" type="number" min="1" max="65535" /></label>
-          <label class="form-group"><span class="form-label">证书路径</span><input v-model="form.tls_cert" class="input plain w-full mono" /></label>
-          <label class="form-group full"><span class="form-label">私钥路径</span><input v-model="form.tls_key" class="input plain w-full mono" /></label>
+          <label class="form-group"><span class="form-label">证书路径</span><input v-model.trim="form.tls_cert" class="input plain w-full mono" required :aria-invalid="!tlsConfigValid" /></label>
+          <label class="form-group full"><span class="form-label">私钥路径</span><input v-model.trim="form.tls_key" class="input plain w-full mono" required :aria-invalid="!tlsConfigValid" /></label>
+          <p v-if="!tlsConfigValid" class="field-error full" role="alert">启用 SIP-TLS 时必须同时配置证书和私钥路径。</p>
         </div>
         <label class="toggle-row"><span><strong>严格源地址校验</strong><small>校验设备上报源 IP 与注册地址一致</small></span><span class="switch"><input v-model="form.strict_source_check" type="checkbox" /><span class="slider" /></span></label>
         <label class="toggle-row"><span><strong>MESSAGE / NOTIFY 鉴权</strong><small>要求设备消息执行 Digest 鉴权</small></span><span class="switch"><input v-model="form.require_message_auth" type="checkbox" /><span class="slider" /></span></label>
@@ -160,7 +170,7 @@ onMounted(load);
 
         <div class="settings-savebar">
           <span>保存会立即更新当前环境的 SIP 服务及历史保留配置</span>
-          <button class="btn btn-primary" :disabled="saving || loading">
+          <button class="btn btn-primary" :disabled="saving || loading || !tlsConfigValid">
             <LoaderCircle v-if="saving" class="animate-spin" /><Save v-else />{{ saving ? "正在保存…" : "保存配置" }}
           </button>
         </div>

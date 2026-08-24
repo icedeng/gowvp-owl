@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import {
   CalendarClock,
+  ImageOff,
   LoaderCircle,
   Play,
   RefreshCcw,
@@ -22,11 +23,15 @@ const source = ref("全部来源");
 const period = ref("today");
 const channelFilter = ref("all");
 const loading = ref(false);
+const loadingMore = ref(false);
 const loadError = ref("");
 const events = ref<ApiEvent[]>([]);
 const channels = ref<ApiChannel[]>([]);
 const total = ref(0);
+const page = ref(1);
+const eventImageErrors = ref(new Set<number>());
 const autoRefresh = ref(false);
+const PAGE_SIZE = 48;
 let timer: number | undefined;
 let loadSequence = 0;
 
@@ -67,6 +72,7 @@ const hasFilters = computed(() =>
       channelFilter.value !== "all"
   )
 );
+const canLoadMore = computed(() => events.value.length < total.value);
 
 function resetFilters() {
   query.value = "";
@@ -93,15 +99,17 @@ function rangeParams() {
   return { start_ms: start, end_ms: end };
 }
 
-async function load(silent = false) {
+async function load(silent = false, append = false) {
   const sequence = ++loadSequence;
-  if (!silent) loading.value = true;
+  const requestedPage = append ? page.value + 1 : 1;
+  if (append) loadingMore.value = true;
+  else if (!silent) loading.value = true;
   loadError.value = "";
   try {
     const [eventResponse, channelResponse] = await Promise.allSettled([
       api.events({
-        page: 1,
-        size: 100,
+        page: requestedPage,
+        size: PAGE_SIZE,
         cid: channelFilter.value === "all" ? undefined : channelFilter.value,
         ...rangeParams(),
       }),
@@ -111,14 +119,20 @@ async function load(silent = false) {
     ]);
     if (sequence !== loadSequence) return;
     if (eventResponse.status === "rejected") throw eventResponse.reason;
-    events.value = eventResponse.value.data?.items || [];
-    total.value = eventResponse.value.data?.total || events.value.length;
+    const nextEvents = eventResponse.value.data?.items || [];
+    events.value = append
+      ? [...new Map([...events.value, ...nextEvents].map((item) => [item.id, item])).values()]
+      : nextEvents;
+    if (!append) eventImageErrors.value = new Set();
+    page.value = requestedPage;
+    total.value = eventResponse.value.data?.total ?? events.value.length;
     if (channelResponse.status === "fulfilled" && channelResponse.value) {
       channels.value = channelResponse.value.data?.items || [];
     } else if (channelResponse.status === "rejected") {
       loadError.value = `事件已加载，通道名称暂不可用：${errorMessage(channelResponse.reason)}`;
     }
     if (
+      !append &&
       focusedId.value &&
       !events.value.some((item) => item.id === focusedId.value)
     ) {
@@ -132,8 +146,16 @@ async function load(silent = false) {
   } catch (cause) {
     if (sequence === loadSequence) loadError.value = errorMessage(cause, "事件列表加载失败");
   } finally {
-    if (sequence === loadSequence) loading.value = false;
+    if (sequence === loadSequence) {
+      loading.value = false;
+      loadingMore.value = false;
+    }
   }
+}
+
+function loadMore() {
+  if (!loading.value && !loadingMore.value && canLoadMore.value)
+    void load(false, true);
 }
 
 function toggleAutoRefresh() {
@@ -144,6 +166,10 @@ function toggleAutoRefresh() {
 
 function imageUrl(item: ApiEvent) {
   return item.image_path ? api.eventImage(item.image_path) : "";
+}
+
+function markEventImageError(id: number) {
+  eventImageErrors.value = new Set(eventImageErrors.value).add(id);
 }
 
 onMounted(load);
@@ -175,7 +201,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         >
       </div>
     </header>
-    <div v-if="loadError" class="warning-box mb-4">
+    <div v-if="loadError" class="warning-box mb-4" role="alert">
       <ShieldAlert /><span>{{ loadError }}</span
       ><button class="btn btn-sm ml-auto" @click="load()">重试</button>
     </div>
@@ -236,7 +262,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         >当前后端事件没有确认、忽略或派发状态；界面只提供查询、详情与关联跳转。</span
       >
     </div>
-    <section class="event-grid">
+    <section class="event-grid" :aria-busy="loading || loadingMore">
       <article
         v-for="event in filtered"
         :key="event.id"
@@ -245,19 +271,22 @@ onBeforeUnmount(() => window.clearInterval(timer));
       >
         <div
           class="event-visual"
-          :class="isAlarm(event) ? 'alarm' : 'person'"
-          :style="
-            imageUrl(event)
-              ? {
-                  backgroundImage: `linear-gradient(180deg, transparent, rgba(2,6,23,.72)), url(${imageUrl(
-                    event
-                  )})`,
-                  backgroundSize: 'cover',
-                  backgroundPosition: 'center',
-                }
-              : undefined
-          "
+          :class="[
+            isAlarm(event) ? 'alarm' : 'person',
+            { 'has-image': Boolean(imageUrl(event)) && !eventImageErrors.has(event.id) },
+          ]"
         >
+          <img
+            v-if="imageUrl(event) && !eventImageErrors.has(event.id)"
+            class="event-image"
+            :src="imageUrl(event)"
+            :alt="`${event.label || '未分类'}事件抓拍`"
+            loading="lazy"
+            @error="markEventImageError(event.id)"
+          />
+          <div v-else class="event-image-empty">
+            <ImageOff /><span>{{ event.image_path ? "抓拍加载失败" : "无事件抓拍" }}</span>
+          </div>
           <span class="event-time">{{
             formatDate(event.started_at || event.created_at)
           }}</span
@@ -322,5 +351,18 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </button>
       </div>
     </section>
+    <div v-if="events.length" class="pagination mt-4">
+      <span>已加载 {{ events.length }} / {{ total }} 条事件</span>
+      <button
+        v-if="canLoadMore"
+        class="btn btn-sm"
+        type="button"
+        :disabled="loadingMore"
+        @click="loadMore"
+      >
+        <LoaderCircle v-if="loadingMore" class="animate-spin" />{{ loadingMore ? "正在加载…" : "加载更多事件" }}
+      </button>
+      <span v-else class="section-note">当前结果已全部加载</span>
+    </div>
   </main>
 </template>

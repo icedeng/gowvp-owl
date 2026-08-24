@@ -228,7 +228,7 @@ onMounted(load);
         </button>
       </div>
     </header>
-    <div v-if="loadError" class="warning-box mb-4">
+    <div v-if="loadError" class="warning-box mb-4" role="alert">
       <ShieldAlert /><span>{{ loadError }}</span
       ><button class="btn btn-sm ml-auto" @click="load">重试</button>
     </div>

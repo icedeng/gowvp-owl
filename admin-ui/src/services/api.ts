@@ -17,7 +17,7 @@ export const api = {
   upgrade: () => http.post('/app/upgrade', undefined, { timeout: 0, responseType: 'text' }),
 
   devices: (params?: ListParams) => http.get<ApiPage<ApiDevice>>('/devices', { params }),
-  deviceChannels: (params?: ListParams) => http.get<ApiPage<ApiDevice>>('/devices/channels', { params }),
+  deviceChannels: (params?: ListParams) => http.get<ApiPage<ApiChannel>>('/devices/channels', { params }),
   device: (id: string) => http.get<ApiDevice>(`/devices/${encodeURIComponent(id)}`),
   addDevice: (body: Record<string, unknown>) => http.post<ApiDevice>('/devices', body),
   editDevice: (id: string, body: Record<string, unknown>) => http.put<ApiDevice>(`/devices/${encodeURIComponent(id)}`, body),
@@ -44,7 +44,10 @@ export const api = {
   deleteChannel: (id: string) => http.delete<ApiChannel>(`/channels/${encodeURIComponent(id)}`),
   play: (id: string) => http.post<PlayResult>(`/channels/${encodeURIComponent(id)}/play`),
   snapshot: (id: string, body: Record<string, unknown> = {}) => http.post<{ link?: string; method?: string }>(`/channels/${encodeURIComponent(id)}/snapshot`, body),
-  snapshotImage: (id: string) => withToken(apiUrl(`/channels/${encodeURIComponent(id)}/snapshot`)),
+  snapshotImage: (id: string, cacheBust?: number) => withQuery(
+    withToken(apiUrl(`/channels/${encodeURIComponent(id)}/snapshot`)),
+    cacheBust ? { t: cacheBust } : undefined,
+  ),
   ptz: (id: string, body: Record<string, unknown>) => http.post(`/channels/${encodeURIComponent(id)}/ptz`, body),
   ptzProbe: (id: string, body: Record<string, unknown> = {}) => http.post(`/channels/${encodeURIComponent(id)}/ptz_probe`, body),
   enableAI: (id: string) => http.post(`/channels/${encodeURIComponent(id)}/ai/enable`),
@@ -87,6 +90,13 @@ export function apiUrl(path: string) {
 export function withToken(url: string) {
   const token = localStorage.getItem('owl-token')
   return token ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : url
+}
+
+export function withQuery(url: string, params?: Record<string, string | number>) {
+  if (!params) return url
+  const next = new URL(url, window.location.origin)
+  Object.entries(params).forEach(([key, value]) => next.searchParams.set(key, String(value)))
+  return next.toString()
 }
 
 export function errorMessage(error: unknown, fallback = '请求失败，请稍后重试') {
