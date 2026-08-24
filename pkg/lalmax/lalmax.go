@@ -36,6 +36,14 @@ func (e Engine) SetConfig(cfg Config) Engine {
 	return e
 }
 
+// SetHTTPClient 注入自定义 HTTP 客户端，供代理、链路追踪和无监听测试使用。
+func (e Engine) SetHTTPClient(client *http.Client) Engine {
+	if client != nil {
+		e.cli = client
+	}
+	return e
+}
+
 // post 发送 POST 请求到 lalmax API
 // 用法示例：e.post(ctx, "/api/path", map[string]any{"key": "value"}, &response)
 func (e *Engine) post(ctx context.Context, path string, data map[string]any, out any) error {

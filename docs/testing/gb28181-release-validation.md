@@ -43,6 +43,7 @@ go test ./... -count=1
 - 连接/首字节/空闲/总超时、取消、MediaStatus、单设备/全局并发和终态竞争；
 - 下载进度查询、取消接口、白名单、注册地址校验和原子落盘。
 - 注册、目录、媒体会话、异常断流和直接 TCP 下载灰度计数器。
+- LALMAX `code/msg` 与 `error_code/desp` 响应兼容；`stat/group` 映射媒体存在性、音视频轨道、码率及累计字节；直播、回放和语音接收结束后通过 `stop_rtp_pub` 幂等释放 RTP 接收会话；
 - 四版本级联 REGISTER、Catalog、UDP/TCP、下载倍速、订阅能力矩阵；
 - 2022 上级 REGISTER 301/302 重定向，校验 Contact 的 ServerID、SIPS/transport，重定向后重新 Digest 注册，后续心跳、通知、媒体请求和入向身份校验绑定新地址；
 - 共享通道 DeviceInfo、DeviceStatus 和 RecordInfo 查询，录像响应分包并映射为上级可见编码；NVR 代表已知子通道返回 DeviceInfo 时只更新子通道元数据；

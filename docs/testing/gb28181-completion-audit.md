@@ -30,7 +30,7 @@
 | AI-401 广播时序 | 完成（自动化） | 接收者主动 INVITE；1.1 `PS/90000` 与 2.0/3.0 `PCMA/8000` 分派；ZLM `startSendRtp/stopSendRtp`；ACK/BYE 清理；`broadcast_11_test.go`、`pkg/zlm/rtp_test.go` |
 | AI-402 技术验证 | 完成 | `docs/adr/gb28181-2014-direct-tcp-download.md`，已采用 Owl 内置客户端 |
 | AI-403 裸 TCP 下载 | 完成（模拟器） | 独立 `tcp` SDP、文件客户端、进度/取消 API、SHA-256、原子落盘、大小/并发/超时/地址策略；`direct_tcp_*_test.go` |
-| AI-404 媒体保活 | 完成 | ZLM/LALMAX 流事件收敛、MediaStatus/BYE 竞争；`media_lifecycle_test.go` |
+| AI-404 媒体保活 | 完成 | ZLM/LALMAX 流事件收敛、MediaStatus/BYE 竞争；LALMAX 新旧响应结构兼容，通过 `stat/group` 提供媒体源状态、轨道和下载进度，并通过 `stop_rtp_pub` 幂等释放 RTP 接收会话；`media_lifecycle_test.go`、`driver_lalmax_test.go`、`pkg/lalmax/rtp_test.go`、`pkg/lalmax/stat_test.go` |
 | AI-501 2.0/3.0 回归 | 完成（自动化） | RTP over TCP、双向对讲 RTP、2022 升级/抓拍/精确 PTZ/存储卡/A.4；`version_regression_test.go`、`voice_talk_test.go` |
 | AI-502 诊断/API | 完成 | 有效版本、来源、过滤后的能力、设备级 `gb_disabled_capabilities`、最近拒绝；手动版本设置/清除；下载状态、取消和灰度指标 API |
 | AI-503 真实设备矩阵 | 待外部执行 | `docs/testing/gb28181-device-matrix.md` 提供证据模板，`docs/testing/gb28181-interoperability-runbook.md` 提供逐步执行与回滚手册 |

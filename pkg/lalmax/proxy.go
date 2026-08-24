@@ -38,8 +38,31 @@ type ApiCtrlStartRelayPullReq struct {
 }
 
 type CommonResp struct {
-	Code int    `json:"code"`
-	Msg  string `json:"msg"`
+	Code      int    `json:"code"`
+	Msg       string `json:"msg"`
+	ErrorCode *int   `json:"error_code,omitempty"`
+	Desp      string `json:"desp,omitempty"`
+}
+
+const ErrorCodeSessionNotFound = 1003
+
+// StatusCode 同时兼容 lalmax 旧版 code/msg 与新版 error_code/desp 响应。
+func (r CommonResp) StatusCode() int {
+	if r.ErrorCode != nil {
+		return *r.ErrorCode
+	}
+	return r.Code
+}
+
+func (r CommonResp) StatusMessage() string {
+	if r.ErrorCode != nil {
+		return r.Desp
+	}
+	return r.Msg
+}
+
+func (r CommonResp) Err() error {
+	return ErrHandle(r.StatusCode(), r.StatusMessage())
 }
 
 type ApiCtrlStartRelayPullResp struct {
@@ -57,6 +80,9 @@ func (e *Engine) CtrlStartRelayPull(ctx context.Context, in ApiCtrlStartRelayPul
 	}
 	var resp ApiCtrlStartRelayPullResp
 	if err := e.post(ctx, apiCtrlStartRelayPull, body, &resp); err != nil {
+		return nil, err
+	}
+	if err := resp.Err(); err != nil {
 		return nil, err
 	}
 	return &resp, nil

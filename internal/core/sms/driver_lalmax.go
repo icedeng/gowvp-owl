@@ -41,7 +41,67 @@ func (l *LalmaxDriver) GetStreamLiveAddr(ctx context.Context, ms *MediaServer, h
 
 // GetMediaInfo implements Driver.
 func (l *LalmaxDriver) GetMediaInfo(ctx context.Context, ms *MediaServer, app, stream string) ([]zlm.MediaItem, error) {
-	return nil, fmt.Errorf("lalmax 暂不支持获取流详细信息")
+	if ms == nil {
+		return nil, fmt.Errorf("lalmax: media server is required")
+	}
+	engine := l.withConfig(ms)
+	resp, err := engine.ApiStatGroup(ctx, app, stream)
+	if err != nil {
+		return nil, err
+	}
+	group := resp.Data
+	bitrateKbits := group.Pub.ReadBitrateKbits
+	if bitrateKbits <= 0 {
+		bitrateKbits = group.Pub.BitrateKbits
+	}
+	var bytesSpeed uint64
+	if bitrateKbits > 0 {
+		bytesSpeed = uint64(bitrateKbits) * 1024 / 8
+	}
+	item := zlm.MediaItem{
+		App: group.AppName, Stream: group.StreamName, Schema: strings.ToLower(group.Pub.Protocol),
+		Vhost: "__defaultVhost__", OriginTypeStr: group.Pub.Protocol,
+		ReaderCount: len(group.Subs), TotalReaderCount: len(group.Subs),
+		BytesSpeed: bytesSpeed, TotalBytes: group.Pub.ReadBytesSum,
+	}
+	if item.App == "" {
+		item.App = strings.TrimSpace(app)
+	}
+	if item.Stream == "" {
+		item.Stream = strings.TrimSpace(stream)
+	}
+	item.Tracks = buildLalmaxMediaTracks(group)
+	return []zlm.MediaItem{item}, nil
+}
+
+func buildLalmaxMediaTracks(group *lalmax.StatGroup) []zlm.MediaTrack {
+	if group == nil {
+		return nil
+	}
+	tracks := make([]zlm.MediaTrack, 0, 2)
+	if codec := strings.ToUpper(strings.TrimSpace(group.VideoCodec)); codec != "" {
+		codecID := 0
+		if codec == "H265" || codec == "HEVC" {
+			codecID = 1
+		}
+		fps := float64(0)
+		if count := len(group.FPS); count > 0 {
+			fps = float64(group.FPS[count-1].Value)
+		}
+		tracks = append(tracks, zlm.MediaTrack{CodecID: codecID, CodecIDName: codec, CodecType: 0, Ready: true, FPS: fps, Width: group.VideoWidth, Height: group.VideoHeight})
+	}
+	if codec := strings.ToUpper(strings.TrimSpace(group.AudioCodec)); codec != "" {
+		codecID := 2
+		sampleRate := 0
+		switch codec {
+		case "G711A", "PCMA":
+			codecID, sampleRate = 3, 8000
+		case "G711U", "PCMU":
+			codecID, sampleRate = 4, 8000
+		}
+		tracks = append(tracks, zlm.MediaTrack{CodecID: codecID, CodecIDName: codec, CodecType: 1, Ready: true, Channels: 1, SampleRate: sampleRate})
+	}
+	return tracks
 }
 
 // AddStreamProxy implements Driver.
@@ -64,7 +124,24 @@ func (l *LalmaxDriver) AddStreamProxy(ctx context.Context, ms *MediaServer, req 
 
 // CloseRTPServer implements Driver.
 func (l *LalmaxDriver) CloseRTPServer(ctx context.Context, ms *MediaServer, req *zlm.CloseRTPServerRequest) (*zlm.CloseRTPServerResponse, error) {
-	return nil, fmt.Errorf("lalmax 暂不支持关闭 RTP 接收端口")
+	if ms == nil {
+		return nil, fmt.Errorf("lalmax: media server is required")
+	}
+	if req == nil || strings.TrimSpace(req.StreamID) == "" {
+		return nil, fmt.Errorf("lalmax: stream_id is required")
+	}
+	engine := l.withConfig(ms)
+	resp, err := engine.ApiCtrlStopRtpPub(ctx, lalmax.ApiCtrlStopRtpPubReq{StreamName: req.StreamID})
+	if err != nil {
+		return nil, err
+	}
+	if err := resp.Err(); err != nil {
+		if resp.StatusCode() == lalmax.ErrorCodeSessionNotFound {
+			return &zlm.CloseRTPServerResponse{Code: 0, Hit: 0}, nil
+		}
+		return nil, err
+	}
+	return &zlm.CloseRTPServerResponse{Code: 0, Hit: 1}, nil
 }
 
 func (l *LalmaxDriver) StartSendRTP(context.Context, *MediaServer, *zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error) {
