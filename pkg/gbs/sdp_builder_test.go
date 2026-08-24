@@ -165,6 +165,22 @@ func TestBuildGBSDPValidation(t *testing.T) {
 	}
 }
 
+func TestBuildGBSDPCanDisableH265ForDeviceFirmware(t *testing.T) {
+	in := gbSDPInput{
+		Version: GBVersion30, SessionName: historyModePlay,
+		ChannelID: gb10DeviceID, IP: "192.0.2.20", Port: 30000, SSRC: "0100000001",
+		H265Disabled: true,
+	}
+	body, err := buildGBSDP(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if strings.Contains(text, "H265/90000") || strings.Contains(text, " 99") {
+		t.Fatalf("disabled H.265 remained in SDP:\n%s", text)
+	}
+}
+
 func TestBuildGBInviteSubject(t *testing.T) {
 	got := buildGBInviteSubject("34020000001320000002", "0100000001", "34020000002000000001")
 	want := "34020000001320000002:0100000001,34020000002000000001:0"

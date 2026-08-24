@@ -221,13 +221,14 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 
 	ssrc := stream.ssrc
 	body, err := buildGBSDP(gbSDPInput{
-		Version:     g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
-		SessionName: historyModePlay,
-		ChannelID:   ch.ChannelID,
-		IP:          ip4str,
-		Port:        port,
-		StreamMode:  in.StreamMode,
-		SSRC:        ssrc,
+		Version:      g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
+		SessionName:  historyModePlay,
+		ChannelID:    ch.ChannelID,
+		IP:           ip4str,
+		Port:         port,
+		StreamMode:   in.StreamMode,
+		SSRC:         ssrc,
+		H265Disabled: g.isDeviceCapabilityDisabled(in.Channel.DeviceID, "h265"),
 	})
 	if err != nil {
 		return err

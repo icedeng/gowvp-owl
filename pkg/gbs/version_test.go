@@ -21,8 +21,8 @@ func TestRefreshDeviceVersionUpdatesCapabilitySnapshot(t *testing.T) {
 }
 
 func TestGBDisabledCapabilitiesNormalizationAndGate(t *testing.T) {
-	normalized, err := NormalizeGBDisabledCapabilities([]string{" Voice_Intercom ", "voice_intercom", "ptz_position"})
-	if err != nil || len(normalized) != 2 || normalized[0] != "voice_intercom" || normalized[1] != "ptz_position" {
+	normalized, err := NormalizeGBDisabledCapabilities([]string{" Voice_Intercom ", "voice_intercom", "ptz_position", "h265"})
+	if err != nil || len(normalized) != 3 || normalized[0] != "voice_intercom" || normalized[1] != "ptz_position" || normalized[2] != "h265" {
 		t.Fatalf("normalized capabilities = %v, err = %v", normalized, err)
 	}
 	if _, err := NormalizeGBDisabledCapabilities([]string{"voice_typo"}); err == nil {

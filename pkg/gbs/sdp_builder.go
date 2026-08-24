@@ -27,6 +27,7 @@ type gbSDPInput struct {
 	MediaDescription string
 	DownloadSpeed    int
 	DirectTCP        bool
+	H265Disabled     bool
 }
 
 // buildGBSDP 按设备的协议档案生成直播、回放或下载 SDP。
@@ -97,7 +98,8 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 	}
 
 	formats := []string{"96", "97", "98"}
-	if version.Capabilities().H265 {
+	h265Enabled := version.Capabilities().H265 && !in.H265Disabled
+	if h265Enabled {
 		formats = append(formats, "99")
 	}
 	video := sdp.Media{
@@ -125,7 +127,7 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 	video.AddAttribute("rtpmap", "96", "PS/90000")
 	video.AddAttribute("rtpmap", "97", "MPEG4/90000")
 	video.AddAttribute("rtpmap", "98", "H264/90000")
-	if version.Capabilities().H265 {
+	if h265Enabled {
 		video.AddAttribute("rtpmap", "99", "H265/90000")
 	}
 

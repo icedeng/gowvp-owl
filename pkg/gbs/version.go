@@ -233,7 +233,7 @@ var knownGBCapabilityNames = map[string]struct{}{
 	"config_query": {}, "config_write": {}, "directory_notify": {},
 	"voice_broadcast": {}, "voice_intercom": {},
 	"rtp_over_tcp": {}, "direct_tcp_download": {}, "download_speed": {}, "iframe_control": {}, "drag_zoom_control": {},
-	"preset_query": {}, "mobile_position": {}, "ptz_position": {}, "home_position": {}, "cruise_track_query": {}, "sdcard": {}, "snapshot": {}, "upgrade": {},
+	"preset_query": {}, "mobile_position": {}, "ptz_position": {}, "home_position": {}, "cruise_track_query": {}, "sdcard": {}, "h265": {}, "snapshot": {}, "upgrade": {},
 }
 
 // NormalizeGBDisabledCapabilities 校验并规范化设备级能力关闭列表。

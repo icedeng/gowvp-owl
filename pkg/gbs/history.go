@@ -414,6 +414,7 @@ func (g *GB28181API) sipInviteDirectTCPHistory(ch *Channel, in *HistoryInput, st
 		SSRC:          ssrc,
 		DirectTCP:     true,
 		DownloadSpeed: in.DownloadSpeed,
+		H265Disabled:  g.isDeviceCapabilityDisabled(in.Channel.DeviceID, "h265"),
 	})
 	if err != nil {
 		return directTCPDownloadOffer{}, err
@@ -515,6 +516,7 @@ func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, s
 		EndAt:         in.EndAt,
 		SSRC:          ssrc,
 		DownloadSpeed: in.DownloadSpeed,
+		H265Disabled:  g.isDeviceCapabilityDisabled(in.Channel.DeviceID, "h265"),
 	})
 	if err != nil {
 		return err
