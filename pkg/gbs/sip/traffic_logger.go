@@ -72,18 +72,28 @@ func SetTrafficLogger(logger *TrafficLogger) (previous *TrafficLogger) {
 }
 
 func (l *TrafficLogger) Close() error {
-	if l == nil || l.out == nil {
+	if l == nil {
 		return nil
 	}
-	return l.out.Close()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.out == nil {
+		return nil
+	}
+	err := l.out.Close()
+	l.out = nil
+	return err
 }
 
 func (l *TrafficLogger) Log(direction, network string, src, dst net.Addr, payload []byte) {
-	if l == nil || l.out == nil || len(payload) == 0 {
+	if l == nil || len(payload) == 0 {
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.out == nil {
+		return
+	}
 
 	_, _ = fmt.Fprintf(
 		l.out,
