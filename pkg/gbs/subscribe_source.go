@@ -237,7 +237,7 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 	}
 
 	dialogID, fromTag := parseSubscribeDialog(ctx)
-	key := buildEventSubscriptionKey(dialogID, fromTag, cmdType, deviceID)
+	key := buildEventSubscriptionKey(subscriptionOwnerKey(ctx, cascade), dialogID, fromTag, cmdType, deviceID)
 	identityCtx := monitorUserIdentityContext(ctx)
 	unlockSubscription, err := g.lockEventSubscriptionOperation(identityCtx, key)
 	if err != nil {
@@ -622,13 +622,30 @@ func isSupportedSubscribeCmdType(cmdType string) bool {
 	}
 }
 
-func buildEventSubscriptionKey(dialogID, fromTag, cmdType, deviceID string) string {
-	return strings.Join([]string{
+func subscriptionOwnerKey(ctx *sip.Context, cascade *cascadeWorker) string {
+	if cascade != nil {
+		// 上级名称在同一 CascadeManager 内唯一，且不会随 301/302 重定向地址变化。
+		return "cascade:" + strings.TrimSpace(cascade.platform.name)
+	}
+	if ctx == nil {
+		return ""
+	}
+	return "device:" + strings.TrimSpace(ctx.DeviceID)
+}
+
+func buildEventSubscriptionKey(owner, dialogID, fromTag, cmdType, deviceID string) string {
+	parts := []string{
+		strings.TrimSpace(owner),
 		strings.TrimSpace(dialogID),
 		strings.TrimSpace(fromTag),
 		strings.ToUpper(strings.TrimSpace(cmdType)),
 		strings.TrimSpace(deviceID),
-	}, "|")
+	}
+	var key strings.Builder
+	for _, part := range parts {
+		_, _ = fmt.Fprintf(&key, "%d:%s", len(part), part)
+	}
+	return key.String()
 }
 
 func parseSubscribeDialog(ctx *sip.Context) (dialogID, fromTag string) {

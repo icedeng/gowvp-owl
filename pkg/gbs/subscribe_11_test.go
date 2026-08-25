@@ -385,6 +385,55 @@ func TestCatalogSubscriptionInitialRenewCancel11(t *testing.T) {
 	}
 }
 
+func TestCatalogSubscriptionDialogIsolatedBySubscriber(t *testing.T) {
+	api := &GB28181API{}
+	conn := newFlowConnection()
+	body := []byte(`<?xml version="1.0"?><Query><CmdType>Catalog</CmdType><SN>59</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Query>`)
+	const callID = "shared-subscribe-dialog"
+	const fromTag = "shared-from-tag"
+	makeContext := func(subscriberID, expires, txID string) *sip.Context {
+		req := newFlowRequest(t, conn, sip.MethodSubscribe, callID, body)
+		req.RemoveHeader("From")
+		from := mustFlowAddress(t, "sip:"+subscriberID+"@3402000000")
+		from.Params.Add("tag", sip.String{Str: fromTag})
+		req.AppendHeader(&sip.FromHeader{Address: from.URI, Params: from.Params})
+		req.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "Catalog;id=" + gb10DeviceID})
+		req.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: expires})
+		return &sip.Context{
+			Request: req, Tx: sip.NewTransaction(txID, conn), DeviceID: subscriberID,
+			Source: conn.remote, To: mustFlowAddress(t, "sip:"+gb10PlatformID+"@3402000000"), XGBVer: string(GBVersion11),
+		}
+	}
+
+	api.sipSubscribeEvent(makeContext(gb10PlatformID, "60", "subscriber-a"))
+	assertFlowOK(t, <-flowResponse(t, conn))
+	api.sipSubscribeEvent(makeContext("44010000002000000001", "0", "subscriber-b-cancel"))
+	assertFlowOK(t, <-flowResponse(t, conn))
+
+	wantKey := buildEventSubscriptionKey("device:"+gb10PlatformID, callID, fromTag, "Catalog", gb10DeviceID)
+	if _, ok := api.eventSubscribers.Load(wantKey); !ok {
+		t.Fatal("different subscriber cancelled the existing dialog")
+	}
+}
+
+func TestEventSubscriptionKeyIsolatesCascadeWorkers(t *testing.T) {
+	first := newCascadeWorker(nil, testSharedCascadePlatform(t))
+	secondPlatform := testSharedCascadePlatform(t)
+	secondPlatform.name = "secondary"
+	second := newCascadeWorker(nil, secondPlatform)
+	ctx := &sip.Context{DeviceID: first.platform.serverID}
+
+	firstKey := buildEventSubscriptionKey(subscriptionOwnerKey(ctx, first), "shared-call", "shared-tag", "Catalog", first.platform.localID)
+	secondKey := buildEventSubscriptionKey(subscriptionOwnerKey(ctx, second), "shared-call", "shared-tag", "Catalog", first.platform.localID)
+	if firstKey == secondKey {
+		t.Fatalf("different cascade workers share subscription key %q", firstKey)
+	}
+	if buildEventSubscriptionKey("device:a", "b|c", "d", "Catalog", "e") ==
+		buildEventSubscriptionKey("device:a", "b", "c|d", "Catalog", "e") {
+		t.Fatal("subscription key is ambiguous when SIP dialog fields contain separators")
+	}
+}
+
 func TestCatalogSubscriptionResponse10IncludesBusinessAck(t *testing.T) {
 	api := &GB28181API{}
 	conn := newFlowConnection()
