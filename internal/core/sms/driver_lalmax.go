@@ -156,9 +156,29 @@ func (l *LalmaxDriver) StopSendRTP(context.Context, *MediaServer, *zlm.StopSendR
 	return nil, fmt.Errorf("lalmax 暂不支持 RTP 发送")
 }
 
-// CloseStreams lalmax 暂不支持关闭流功能
 func (l *LalmaxDriver) CloseStreams(ctx context.Context, ms *MediaServer, req *zlm.CloseStreamsRequest) (*zlm.CloseStreamsResponse, error) {
-	return nil, fmt.Errorf("lalmax 暂不支持关闭流功能")
+	if ms == nil {
+		return nil, fmt.Errorf("lalmax: media server is required")
+	}
+	if req == nil {
+		return nil, fmt.Errorf("lalmax: close streams request is required")
+	}
+	engine := l.withConfig(ms)
+	resp, err := engine.CloseStreams(ctx, lalmax.CloseStreamsRequest{
+		Schema: req.Schema,
+		Vhost:  req.Vhost,
+		App:    req.App,
+		Stream: req.Stream,
+		Force:  req.Force,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &zlm.CloseStreamsResponse{
+		Code:        0,
+		CountHit:    resp.CountHit,
+		CountClosed: resp.CountClosed,
+	}, nil
 }
 
 // Connect implements Driver.
@@ -223,7 +243,12 @@ func (l *LalmaxDriver) OpenRTPServer(ctx context.Context, ms *MediaServer, req *
 
 // Ping implements Driver.
 func (l *LalmaxDriver) Ping(ctx context.Context, ms *MediaServer) error {
-	return nil
+	if ms == nil {
+		return fmt.Errorf("lalmax: media server is required")
+	}
+	engine := l.withConfig(ms)
+	_, err := engine.GetServerConfig(ctx)
+	return err
 }
 
 // Protocol implements Driver.
@@ -282,17 +307,55 @@ func (l *LalmaxDriver) withConfig(ms *MediaServer) lalmax.Engine {
 	})
 }
 
-// StartRecord lalmax 暂不支持录制功能
 func (l *LalmaxDriver) StartRecord(ctx context.Context, ms *MediaServer, req *zlm.StartRecordRequest) (*zlm.StartRecordResponse, error) {
-	return nil, fmt.Errorf("lalmax 暂不支持录制功能")
+	if ms == nil {
+		return nil, fmt.Errorf("lalmax: media server is required")
+	}
+	if req == nil {
+		return nil, fmt.Errorf("lalmax: start record request is required")
+	}
+	engine := l.withConfig(ms)
+	resp, err := engine.StartRecord(ctx, lalmax.StartRecordRequest{
+		Type:       req.Type,
+		Vhost:      req.Vhost,
+		App:        req.App,
+		Stream:     req.Stream,
+		CustomPath: req.CustomPath,
+		MaxSecond:  req.MaxSecond,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &zlm.StartRecordResponse{
+		FixedHeader: zlm.FixedHeader{Code: 0, Msg: resp.StatusMessage()},
+		Result:      resp.Result,
+	}, nil
 }
 
-// StopRecord lalmax 暂不支持录制功能
 func (l *LalmaxDriver) StopRecord(ctx context.Context, ms *MediaServer, req *zlm.StopRecordRequest) (*zlm.StopRecordResponse, error) {
-	return nil, fmt.Errorf("lalmax 暂不支持录制功能")
+	if ms == nil {
+		return nil, fmt.Errorf("lalmax: media server is required")
+	}
+	if req == nil {
+		return nil, fmt.Errorf("lalmax: stop record request is required")
+	}
+	engine := l.withConfig(ms)
+	resp, err := engine.StopRecord(ctx, lalmax.StopRecordRequest{
+		Type:   req.Type,
+		Vhost:  req.Vhost,
+		App:    req.App,
+		Stream: req.Stream,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &zlm.StopRecordResponse{
+		FixedHeader: zlm.FixedHeader{Code: 0, Msg: resp.StatusMessage()},
+		Result:      resp.Result,
+	}, nil
 }
 
-// GetMediaList lalmax 暂不支持流列表查询
+// GetMediaList 当前 LALMAX 状态接口不暴露录像状态，不能返回空列表伪装成功。
 func (l *LalmaxDriver) GetMediaList(ctx context.Context, ms *MediaServer) (*zlm.GetMediaListResponse, error) {
-	return &zlm.GetMediaListResponse{}, nil
+	return nil, fmt.Errorf("lalmax: media list with recording state is unsupported")
 }

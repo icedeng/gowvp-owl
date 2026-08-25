@@ -69,7 +69,7 @@ func TestLalmaxCloseRTPServer(t *testing.T) {
 
 func TestLalmaxGetMediaInfo(t *testing.T) {
 	client := &http.Client{Transport: lalmaxRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.Method != http.MethodGet || req.URL.Path != "/api/stat/group" || req.URL.Query().Get("app_name") != "rtp" || req.URL.Query().Get("stream_name") != "stream-1" {
+		if req.Method != http.MethodGet || req.URL.Path != "/api/stat/group" || req.URL.Query().Get("app_name") != "rtp" || req.URL.Query().Get("stream_name") != "stream-1" || req.URL.Query().Get("token") != "test-secret" {
 			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
 		}
 		payload, err := json.Marshal(map[string]any{
@@ -89,7 +89,7 @@ func TestLalmaxGetMediaInfo(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(payload)))}, nil
 	})}
 	driver := &LalmaxDriver{engine: lalmax.NewEngine().SetHTTPClient(client)}
-	items, err := driver.GetMediaInfo(context.Background(), &MediaServer{IP: "lalmax.test", Ports: MediaServerPorts{HTTP: 80}}, "rtp", "stream-1")
+	items, err := driver.GetMediaInfo(context.Background(), &MediaServer{IP: "lalmax.test", Secret: "test-secret", Ports: MediaServerPorts{HTTP: 80}}, "rtp", "stream-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +99,100 @@ func TestLalmaxGetMediaInfo(t *testing.T) {
 	video, audio := items[0].Tracks[0], items[0].Tracks[1]
 	if video.CodecID != 0 || video.FPS != 25 || video.Width != 1280 || video.Height != 720 || audio.CodecID != 3 || audio.SampleRate != 8000 {
 		t.Fatalf("media tracks = %+v", items[0].Tracks)
+	}
+}
+
+func TestLalmaxSupportedCompatOperations(t *testing.T) {
+	client := &http.Client{Transport: lalmaxRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Query().Get("token") != "test-secret" {
+			t.Fatalf("missing lalmax token: %s", req.URL.String())
+		}
+		payload := map[string]any{"code": 0}
+		switch req.URL.Path {
+		case "/api/config/svr_config":
+			if req.Method != http.MethodGet {
+				t.Fatalf("Ping method = %s", req.Method)
+			}
+			payload["data"] = map[string]any{"server_id": "lalmax-test"}
+		case "/index/api/close_streams":
+			if req.Method != http.MethodPost {
+				t.Fatalf("CloseStreams method = %s", req.Method)
+			}
+			var body lalmax.CloseStreamsRequest
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.App != "rtp" || body.Stream != "stream-1" || !body.Force {
+				t.Fatalf("CloseStreams body = %+v", body)
+			}
+			payload["count_hit"] = 1
+			payload["count_closed"] = 1
+		case "/index/api/startRecord":
+			if req.Method != http.MethodPost {
+				t.Fatalf("StartRecord method = %s", req.Method)
+			}
+			var body lalmax.StartRecordRequest
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Type != 1 || body.App != "rtp" || body.Stream != "stream-1" || body.CustomPath != "/record" || body.MaxSecond != 60 {
+				t.Fatalf("StartRecord body = %+v", body)
+			}
+			payload["result"] = true
+		case "/index/api/stopRecord":
+			if req.Method != http.MethodPost {
+				t.Fatalf("StopRecord method = %s", req.Method)
+			}
+			var body lalmax.StopRecordRequest
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Type != 1 || body.App != "rtp" || body.Stream != "stream-1" {
+				t.Fatalf("StopRecord body = %+v", body)
+			}
+			payload["result"] = true
+		default:
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
+		}
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(encoded)))}, nil
+	})}
+	driver := &LalmaxDriver{engine: lalmax.NewEngine().SetHTTPClient(client)}
+	mediaServer := &MediaServer{IP: "lalmax.test", Secret: "test-secret", Ports: MediaServerPorts{HTTP: 80}}
+
+	if err := driver.Ping(context.Background(), mediaServer); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := driver.CloseStreams(context.Background(), mediaServer, &zlm.CloseStreamsRequest{App: "rtp", Stream: "stream-1", Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.CountHit != 1 || closed.CountClosed != 1 {
+		t.Fatalf("CloseStreams response = %+v", closed)
+	}
+	started, err := driver.StartRecord(context.Background(), mediaServer, &zlm.StartRecordRequest{Type: 1, Vhost: "__defaultVhost__", App: "rtp", Stream: "stream-1", CustomPath: "/record", MaxSecond: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !started.Result {
+		t.Fatalf("StartRecord response = %+v", started)
+	}
+	stopped, err := driver.StopRecord(context.Background(), mediaServer, &zlm.StopRecordRequest{Type: 1, Vhost: "__defaultVhost__", App: "rtp", Stream: "stream-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stopped.Result {
+		t.Fatalf("StopRecord response = %+v", stopped)
+	}
+}
+
+func TestLalmaxUnsupportedRecordingStateReturnsError(t *testing.T) {
+	driver := NewLalmaxDriver()
+	if _, err := driver.GetMediaList(context.Background(), &MediaServer{}); err == nil {
+		t.Fatal("GetMediaList error = nil")
 	}
 }
 

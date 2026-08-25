@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -44,11 +45,34 @@ func (e Engine) SetHTTPClient(client *http.Client) Engine {
 	return e
 }
 
+func (e *Engine) endpoint(path string) (string, error) {
+	u, err := url.Parse(e.cfg.URL + path)
+	if err != nil {
+		return "", err
+	}
+	if e.cfg.Secret != "" {
+		query := u.Query()
+		query.Set("token", e.cfg.Secret)
+		u.RawQuery = query.Encode()
+	}
+	return u.String(), nil
+}
+
 // post 发送 POST 请求到 lalmax API
 // 用法示例：e.post(ctx, "/api/path", map[string]any{"key": "value"}, &response)
 func (e *Engine) post(ctx context.Context, path string, data map[string]any, out any) error {
-	body, _ := json.Marshal(data)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, e.cfg.URL+path, bytes.NewReader(body))
+	body, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	endpoint, err := e.endpoint(path)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := e.cli.Do(req)
 	if err != nil {
@@ -61,7 +85,14 @@ func (e *Engine) post(ctx context.Context, path string, data map[string]any, out
 // get 发送 GET 请求到 lalmax API
 // 用法示例：e.get(ctx, "/api/path", &response)
 func (e *Engine) get(ctx context.Context, path string, out any) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, e.cfg.URL+path, nil)
+	endpoint, err := e.endpoint(path)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
 	resp, err := e.cli.Do(req)
 	if err != nil {
 		return err
