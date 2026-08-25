@@ -13,6 +13,7 @@ import (
 	mathrand "math/rand"
 	"net"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -164,20 +165,32 @@ func GetRequest(url string) ([]byte, error) {
 
 // XMLDecode 解码 xml
 func XMLDecode(data []byte, v any) error {
-	decoder := xml.NewDecoder(bytes.NewReader(data))
-	decoder.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
-		if utf8.Valid(data) {
-			return input, nil
-		}
-		return simplifiedchinese.GB18030.NewDecoder().Reader(input), nil
+	destination := reflect.ValueOf(v)
+	if !destination.IsValid() || destination.Kind() != reflect.Pointer || destination.IsNil() {
+		return fmt.Errorf("XML decode destination must be a non-nil pointer")
 	}
-	if err := decoder.Decode(v); err == nil {
+	decode := func(input []byte) (reflect.Value, error) {
+		temporary := reflect.New(destination.Elem().Type())
+		if err := xmlDecode(input, temporary.Interface()); err != nil {
+			return reflect.Value{}, err
+		}
+		return temporary.Elem(), nil
+	}
+
+	decoded, err := decode(data)
+	if err == nil {
+		destination.Elem().Set(decoded)
 		return nil
 	}
 	value := string(data)
 	value = strings.Replace(value, `<?xml version="1.0"?>`, `<?xml version="1.0" encoding="GB2312"?>`, 1)
 	value = strings.Replace(value, `UTF-8`, `GB2312`, 1)
-	return xmlDecode([]byte(value), v)
+	decoded, err = decode([]byte(value))
+	if err != nil {
+		return err
+	}
+	destination.Elem().Set(decoded)
+	return nil
 }
 
 func xmlDecode(data []byte, v any) error {

@@ -25,7 +25,7 @@
 | AI-301 Catalog 扩展 | 完成 | 目录树五类节点、2014 字段、厂商 XML 保留；`catalog_extension_test.go` |
 | AI-302 配置读写 | 完成 | ConfigDownload 支持 BasicParam、VideoParamOpt/Config、AudioParamOpt/Config、SVACEncode/DecodeConfig 多响应聚合；DeviceConfig 写入支持 BasicParam、结构化 VideoParamConfig/AudioParamConfig 及经过 XML 完整性/指令校验的 SVACEncodeConfig/SVACDecodeConfig，可组合下发并保留 BasicParam 兼容 API；Web/Core/Adapter/Swagger 已贯通；`config_11_test.go`、`gb_config_test.go`、`ipc_gb_config_test.go` |
 | AI-303 MediaStatus | 完成 | Call-ID 关联、121、未知/重复幂等；`media_status_test.go`；并纳入 1.1 串联模拟流程 |
-| AI-304 多响应 | 完成 | 乱序、重复、总数冲突、超时部分结果、同设备并发；`multi_response_test.go` |
+| AI-304 多响应 | 完成 | 乱序、重复、总数冲突、超时部分结果、同设备并发；XML 的 UTF-8→GBK/GB18030 兼容回退使用临时对象原子解码，首轮失败的部分目录/录像切片不会残留并在第二轮重复追加，完全失败也不污染调用方目标；`multi_response_test.go`、`sip/xml_decode_test.go` |
 | AI-305 目录/事件订阅 | 完成（自动化） | Catalog 初始、续订、取消、Event id、部分目录目标及真实 ADD/DEL/ON/OFF/UPDATE 增量；2011 Catalog 通知使用 `Response` 根，2014+ 使用 `Notify` 根；空消息体 terminated NOTIFY 正确确认、清理并在仍被上级引用时重订；Alarm 查询过滤参数、MobilePosition Interval、PTZPosition 版本门禁；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅自动桥接下级并按引用计数复用及释放，目录快照变化后重新计算 Catalog 下级来源；`subscribe_11_test.go`、`cascade_subscribe_test.go`、`cascade_query_test.go` |
 | AI-401 广播时序 | 完成（自动化） | 接收者主动 INVITE；1.1 `PS/90000` 与 2.0/3.0 `PCMA/8000` 分派；ZLM `startSendRtp/stopSendRtp`；ACK/BYE 清理；`broadcast_11_test.go`、`pkg/zlm/rtp_test.go` |
 | AI-402 技术验证 | 完成 | `docs/adr/gb28181-2014-direct-tcp-download.md`，已采用 Owl 内置客户端 |
@@ -73,7 +73,8 @@
 go test ./...
 go test -race -vet=off ./pkg/gbs/...
 go test ./pkg/gbs/sip -run '^$' -fuzz FuzzParseSIPAddressesDoNotPanic -fuzztime=5s
-go vet ./...
+go test ./pkg/gbs/sip -run '^$' -fuzz FuzzParseSIPHeaderDoesNotPanic -fuzztime=8s
+GOCACHE=/tmp/owl-gocache go vet ./...
 git diff --check
 ```
 

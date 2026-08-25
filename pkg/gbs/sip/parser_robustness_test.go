@@ -131,3 +131,21 @@ func FuzzParseSIPAddressesDoNotPanic(f *testing.F) {
 		_, _, _, _ = ParseAddressValues(input)
 	})
 }
+
+func FuzzParseSIPHeaderDoesNotPanic(f *testing.F) {
+	for _, seed := range []string{
+		"",
+		"Via:",
+		"Via: SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK-test",
+		"From: <sip:34020000001320000001@3402000000>;tag=test",
+		"To: <",
+		"CSeq: 1 MESSAGE",
+		"Route: <sip:proxy.example;lr>",
+		"Content-Length: 0",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, input string) {
+		_, _ = ParseHeader(input)
+	})
+}
