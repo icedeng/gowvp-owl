@@ -115,10 +115,12 @@ type SIP struct {
 	Domain   string `comment:"域" json:"domain"`
 	Password string `comment:"注册密码" json:"password"`
 
-	EnableTLS bool   `comment:"是否启用 SIP-TLS 监听" json:"enable_tls"`
-	TLSPort   int    `comment:"SIP-TLS 监听端口，0 表示与 port 相同" json:"tls_port"`
-	TLSCert   string `comment:"SIP-TLS 证书文件路径" json:"tls_cert"`
-	TLSKey    string `comment:"SIP-TLS 私钥文件路径" json:"tls_key"`
+	EnableTLS            bool   `comment:"是否启用 SIP-TLS 监听" json:"enable_tls"`
+	TLSPort              int    `comment:"SIP-TLS 监听端口，0 表示与 port 相同" json:"tls_port"`
+	TLSCert              string `comment:"SIP-TLS 证书文件路径" json:"tls_cert"`
+	TLSKey               string `comment:"SIP-TLS 私钥文件路径" json:"tls_key"`
+	TLSClientCA          string `comment:"用于校验 SIP-TLS 客户端证书的 CA 文件路径" json:"tls_client_ca,omitempty"`
+	TLSRequireClientCert bool   `comment:"是否要求 SIP-TLS 客户端必须提交有效证书" json:"tls_require_client_cert"`
 
 	StrictSourceCheck  bool                 `comment:"是否校验设备上报源IP与注册源IP一致" json:"strict_source_check"`
 	RequireMessageAuth bool                 `comment:"是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权" json:"require_message_auth"`
@@ -220,6 +222,9 @@ func ValidateSIPConfig(config SIP) error {
 		}
 		if strings.TrimSpace(config.TLSKey) == "" {
 			return fmt.Errorf("启用 SIP-TLS 时必须配置私钥文件")
+		}
+		if config.TLSRequireClientCert && strings.TrimSpace(config.TLSClientCA) == "" {
+			return fmt.Errorf("要求 SIP-TLS 客户端证书时必须配置客户端 CA 文件")
 		}
 	}
 	if config.DeviceHistory.MaxRecords < 0 || config.DeviceHistory.MaxRecords > 100000 {

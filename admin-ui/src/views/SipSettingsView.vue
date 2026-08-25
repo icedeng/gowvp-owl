@@ -46,6 +46,8 @@ const form = reactive({
   tls_port: 5061,
   tls_cert: "",
   tls_key: "",
+  tls_client_ca: "",
+  tls_require_client_cert: false,
   strict_source_check: true,
   require_message_auth: false,
   ptz_weak_confirm: false,
@@ -54,7 +56,9 @@ const form = reactive({
 const tlsConfigValid = computed(
   () =>
     !form.enable_tls ||
-    (Boolean(form.tls_cert.trim()) && Boolean(form.tls_key.trim()))
+    (Boolean(form.tls_cert.trim()) &&
+      Boolean(form.tls_key.trim()) &&
+      (!form.tls_require_client_cert || Boolean(form.tls_client_ca.trim())))
 );
 let statusTimer: number | undefined;
 
@@ -187,6 +191,8 @@ async function load() {
       tls_port: sip.tls_port || 5061,
       tls_cert: sip.tls_cert || "",
       tls_key: sip.tls_key || "",
+      tls_client_ca: sip.tls_client_ca || "",
+      tls_require_client_cert: Boolean(sip.tls_require_client_cert),
       strict_source_check: sip.strict_source_check ?? true,
       require_message_auth: Boolean(sip.require_message_auth),
       ptz_weak_confirm: Boolean(sip.ptz_weak_confirm),
@@ -296,8 +302,10 @@ onUnmounted(() => {
         <div v-if="form.enable_tls" class="form-grid mt-4">
           <label class="form-group"><span class="form-label">TLS 端口</span><input v-model.number="form.tls_port" class="input plain w-full" type="number" min="1" max="65535" /></label>
           <label class="form-group"><span class="form-label">证书路径</span><input v-model.trim="form.tls_cert" class="input plain w-full mono" required :aria-invalid="!tlsConfigValid" /></label>
-          <label class="form-group full"><span class="form-label">私钥路径</span><input v-model.trim="form.tls_key" class="input plain w-full mono" required :aria-invalid="!tlsConfigValid" /></label>
-          <p v-if="!tlsConfigValid" class="field-error full" role="alert">启用 SIP-TLS 时必须同时配置证书和私钥路径。</p>
+          <label class="form-group"><span class="form-label">私钥路径</span><input v-model.trim="form.tls_key" class="input plain w-full mono" required :aria-invalid="!tlsConfigValid" /></label>
+          <label class="form-group"><span class="form-label">客户端 CA 路径</span><input v-model.trim="form.tls_client_ca" class="input plain w-full mono" placeholder="配置后校验客户端提交的证书" :required="form.tls_require_client_cert" :aria-invalid="!tlsConfigValid" /></label>
+          <label class="toggle-row full"><span><strong>强制客户端证书</strong><small>拒绝未提交或证书不受客户端 CA 信任的 TLS 连接</small></span><span class="switch"><input v-model="form.tls_require_client_cert" type="checkbox" /><span class="slider" /></span></label>
+          <p v-if="!tlsConfigValid" class="field-error full" role="alert">启用 SIP-TLS 时必须配置证书与私钥；强制客户端证书时还必须配置客户端 CA。</p>
         </div>
         <label class="toggle-row"><span><strong>严格源地址校验</strong><small>校验设备上报源 IP 与注册地址一致</small></span><span class="switch"><input v-model="form.strict_source_check" type="checkbox" /><span class="slider" /></span></label>
         <label class="toggle-row"><span><strong>MESSAGE / NOTIFY 鉴权</strong><small>要求设备消息执行 Digest 鉴权</small></span><span class="switch"><input v-model="form.require_message_auth" type="checkbox" /><span class="slider" /></span></label>

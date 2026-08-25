@@ -212,7 +212,10 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 		}
 	}
 	if listenPlan.TLS {
-		if err := sipServer.StartTLSServer(fmt.Sprintf(":%d", listenPlan.TLSPort), cfg.Sip.TLSCert, cfg.Sip.TLSKey); err != nil {
+		if err := sipServer.StartTLSServerWithOptions(fmt.Sprintf(":%d", listenPlan.TLSPort), sip.TLSListenerOptions{
+			CertFile: cfg.Sip.TLSCert, KeyFile: cfg.Sip.TLSKey,
+			ClientCAFile: cfg.Sip.TLSClientCA, RequireClientCert: cfg.Sip.TLSRequireClientCert,
+		}); err != nil {
 			cleanup()
 			return nil, nil, fmt.Errorf("start SIP TLS listener: %w", err)
 		}

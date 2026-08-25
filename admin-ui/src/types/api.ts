@@ -193,6 +193,8 @@ export interface SipConfig {
   tls_port?: number
   tls_cert?: string
   tls_key?: string
+  tls_client_ca?: string
+  tls_require_client_cert?: boolean
   strict_source_check?: boolean
   require_message_auth?: boolean
   ptz_weak_confirm?: boolean

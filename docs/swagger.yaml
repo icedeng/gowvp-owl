@@ -873,6 +873,10 @@ definitions:
         description: TLS 证书路径
         example: configs/certs/sip.crt
         type: string
+      tls_client_ca:
+        description: TLS 客户端 CA 路径
+        example: configs/certs/client-ca.crt
+        type: string
       tls_key:
         description: TLS 私钥路径
         example: configs/certs/sip.key
@@ -881,6 +885,10 @@ definitions:
         description: SIP-TLS 监听端口
         example: 5061
         type: integer
+      tls_require_client_cert:
+        description: 是否强制校验客户端证书
+        example: false
+        type: boolean
       upstreams:
         description: 上级 GB/T 28181 平台配置
         items:

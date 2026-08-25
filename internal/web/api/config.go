@@ -111,10 +111,12 @@ func sipAccessInfo(cfg conf.SIP, fallbackHost string) SIPAccessInfo {
 
 type updateSIPInput struct {
 	conf.SIP
-	DeviceHistory *conf.DeviceHistoryConfig `json:"device_history"`
-	SignalDigest  *conf.SIPSignalDigest     `json:"signal_digest"`
-	Upstreams     *[]conf.SIPUpstream       `json:"upstreams"`
-	Log           *conf.SIPLog              `json:"log"`
+	TLSClientCA          *string                   `json:"tls_client_ca"`
+	TLSRequireClientCert *bool                     `json:"tls_require_client_cert"`
+	DeviceHistory        *conf.DeviceHistoryConfig `json:"device_history"`
+	SignalDigest         *conf.SIPSignalDigest     `json:"signal_digest"`
+	Upstreams            *[]conf.SIPUpstream       `json:"upstreams"`
+	Log                  *conf.SIPLog              `json:"log"`
 }
 
 // getConfigInfo godoc
@@ -216,7 +218,7 @@ func applyHotSIPConfig(target *conf.SIP, next conf.SIP) {
 }
 
 func sipRestartRequiredFields(current, next conf.SIP) []string {
-	fields := make([]string, 0, 9)
+	fields := make([]string, 0, 11)
 	if current.Host != next.Host {
 		fields = append(fields, "Host")
 	}
@@ -241,6 +243,12 @@ func sipRestartRequiredFields(current, next conf.SIP) []string {
 	if current.TLSKey != next.TLSKey {
 		fields = append(fields, "TLSKey")
 	}
+	if current.TLSClientCA != next.TLSClientCA {
+		fields = append(fields, "TLSClientCA")
+	}
+	if current.TLSRequireClientCert != next.TLSRequireClientCert {
+		fields = append(fields, "TLSRequireClientCert")
+	}
 	if current.Log != next.Log {
 		fields = append(fields, "Log")
 	}
@@ -252,6 +260,16 @@ func mergeSIPUpdate(current conf.SIP, in *updateSIPInput) conf.SIP {
 		return current
 	}
 	next := in.SIP
+	if in.TLSClientCA == nil {
+		next.TLSClientCA = current.TLSClientCA
+	} else {
+		next.TLSClientCA = *in.TLSClientCA
+	}
+	if in.TLSRequireClientCert == nil {
+		next.TLSRequireClientCert = current.TLSRequireClientCert
+	} else {
+		next.TLSRequireClientCert = *in.TLSRequireClientCert
+	}
 	if in.DeviceHistory == nil {
 		next.DeviceHistory = current.DeviceHistory
 	} else {

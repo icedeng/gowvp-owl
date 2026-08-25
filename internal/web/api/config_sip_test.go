@@ -14,6 +14,7 @@ import (
 func TestMergeSIPUpdatePreservesOmittedNestedConfiguration(t *testing.T) {
 	current := conf.SIP{
 		Host: "192.0.2.10", Port: 5060,
+		TLSClientCA: "current-client-ca.crt", TLSRequireClientCert: true,
 		DeviceHistory: conf.DeviceHistoryConfig{MaxRecords: 1000, MaxDays: 30},
 		SignalDigest: conf.SIPSignalDigest{
 			Enabled: true, Required: true, Seed: "current-seed", Algorithm: "SHA-256",
@@ -40,6 +41,21 @@ func TestMergeSIPUpdatePreservesOmittedNestedConfiguration(t *testing.T) {
 	}
 	if next.SignalDigest != current.SignalDigest {
 		t.Fatalf("omitted signal Digest was cleared: got %+v want %+v", next.SignalDigest, current.SignalDigest)
+	}
+	if next.TLSClientCA != current.TLSClientCA || next.TLSRequireClientCert != current.TLSRequireClientCert {
+		t.Fatalf("omitted TLS client verification config was cleared: %+v", next)
+	}
+}
+
+func TestMergeSIPUpdateAppliesExplicitTLSClientVerification(t *testing.T) {
+	current := conf.SIP{TLSClientCA: "old-ca.crt", TLSRequireClientCert: true}
+	var input updateSIPInput
+	if err := json.Unmarshal([]byte(`{"tls_client_ca":"new-ca.crt","tls_require_client_cert":false}`), &input); err != nil {
+		t.Fatal(err)
+	}
+	next := mergeSIPUpdate(current, &input)
+	if next.TLSClientCA != "new-ca.crt" || next.TLSRequireClientCert {
+		t.Fatalf("explicit TLS client verification config = %+v", next)
 	}
 }
 
@@ -185,6 +201,8 @@ func TestSIPRestartRequiredFields(t *testing.T) {
 		{name: "TLS port", change: func(config *conf.SIP) { config.TLSPort++ }},
 		{name: "TLS certificate", change: func(config *conf.SIP) { config.TLSCert = "server.crt" }},
 		{name: "TLS key", change: func(config *conf.SIP) { config.TLSKey = "server.key" }},
+		{name: "TLS client CA", change: func(config *conf.SIP) { config.TLSClientCA = "client-ca.crt" }},
+		{name: "TLS require client certificate", change: func(config *conf.SIP) { config.TLSRequireClientCert = true }},
 		{name: "log", change: func(config *conf.SIP) { config.Log.Enabled = !config.Log.Enabled }},
 	}
 	for _, test := range tests {

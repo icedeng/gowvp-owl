@@ -98,7 +98,7 @@ git diff --check
 | SIP 报文日志生命周期 | 已加固并有 race 证据 | 全局日志器只在监听器全部绑定成功后安装，启动失败关闭候选日志器；关闭与并发报文写入使用同一互斥锁，输出对象只关闭一次并置空，停服或启动回滚不再与在途日志写入竞争；`traffic_logger_test.go` |
 | `Date + Note` 信令数字摘要 | 已形成自动化闭环，待真实互通 | 按 `From + To + Call-ID + Date + seed + 消息体` 计算；Date 使用北京时间并校验可配置时间窗；支持 MD5/SHA-1/SHA-256/SM3，SM3 使用成熟国密库并以 GB/T 32905 已知向量校验；nonce 默认 Base64 输出，可配置 hex 并可兼容接收标准示例中的十六进制形式；REGISTER 请求/响应免签。`Enabled` 启用出站签名，并对入向已携带 Note 的报文验签；`Required` 还会拒绝缺失或验签失败的入向报文；无效响应被丢弃，级联和 OPTIONS 使用 context-aware 事务等待，在 deadline 到达时退出且不遗留阻塞等待 goroutine。默认 MD5 且整体默认关闭以保持旧设备兼容。`RequireMessageAuth` 仍是另一套 RFC Digest 兼容开关，二者不能混同；`signal_digest.go`、`signal_digest_test.go`、`sip/signal_digest_test.go`、`cascade_test.go` |
 | SIP 配置加载与热更新 | 已加固并有自动化证据 | 启动及 API 更新统一校验 20 位平台 ID、10 位有效域、端口、TLS 必填项、设备历史范围和信令摘要。候选配置先写临时文件并原子替换，成功后才提交内存及 SIP 运行时快照；失败保持原配置。Host、ID/Domain、Port、TLS 和 SIP 报文日志会影响监听器、身份或全局日志器，API 明确拒绝伪热更新并提示修改文件后重启；密码、访问控制、摘要、历史、2014 直连下载及上级级联可安全热更新。SIP 请求只读取受锁配置快照；`config_sip_test.go`、`config_reload_test.go`、`signal_digest_test.go` |
-| 数字证书双向认证、CRL | 未实现完整协议闭环 | 高安全级别专项，不能宣称支持 |
+| 数字证书双向认证、CRL | 传输层 mTLS 已完成，国标身份认证未形成完整闭环 | 出向 TLS 校验服务端证书并可提交客户端证书；入向 TLS 可校验或强制要求客户端证书。尚未实现 REGISTER `Authorization: Capability/Asymmetric`、证书身份与国标编码绑定及 CRL，因此仍不能宣称完成国标高安全级别认证 |
 | `Monitor-User-Identity` 跨域身份头 | 未实现完整生成、逐级追加和验证 | 与安全路由网关身份体系一起设计，不能仅做字符串透传后宣称完成 |
 | NTP 服务端/客户端 | 项目未内置 NTP 服务 | 标准要求 IP 接入设备通过 REGISTER `200 OK` 的 `Date` 校时，代码已实现；NTP 是可配置部署能力，不把非标准主动 `DeviceControl(Time)` 当成 NTP 完成证据 |
 | 升级/抓拍状态持久化 | 当前为 7 天 TTL、1024 条上限的有界内存状态 | 小时清理器和查询惰性清理会回收过期会话；进程重启后可接收合法最终通知并重建终态，但重启前的 accepted/uploading 中间态不会恢复。若业务要求跨重启展示完整任务链，应设计独立任务表，不把多会话状态塞入单个设备 Ext JSON 造成写放大和并发覆盖 |

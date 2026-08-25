@@ -102,6 +102,12 @@ func TestValidateSIPConfig(t *testing.T) {
 		}},
 		{name: "missing TLS certificate", change: func(config *SIP) { config.EnableTLS = true; config.TLSCert = ""; config.TLSKey = "server.key" }},
 		{name: "missing TLS key", change: func(config *SIP) { config.EnableTLS = true; config.TLSCert = "server.crt"; config.TLSKey = "" }},
+		{name: "missing TLS client CA", change: func(config *SIP) {
+			config.EnableTLS = true
+			config.TLSCert = "server.crt"
+			config.TLSKey = "server.key"
+			config.TLSRequireClientCert = true
+		}},
 		{name: "history record limit", change: func(config *SIP) { config.DeviceHistory.MaxRecords = 100001 }},
 		{name: "history day limit", change: func(config *SIP) { config.DeviceHistory.MaxDays = 3651 }},
 	}
@@ -127,5 +133,10 @@ func TestValidateSIPConfig(t *testing.T) {
 	tlsOnMainPort.TLSKey = "server.key"
 	if err := ValidateSIPConfig(tlsOnMainPort); err != nil {
 		t.Fatalf("TLS main-port fallback was rejected: %v", err)
+	}
+	tlsOnMainPort.TLSRequireClientCert = true
+	tlsOnMainPort.TLSClientCA = "client-ca.crt"
+	if err := ValidateSIPConfig(tlsOnMainPort); err != nil {
+		t.Fatalf("TLS client certificate config was rejected: %v", err)
 	}
 }

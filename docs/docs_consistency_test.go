@@ -57,7 +57,7 @@ func TestSwaggerSIPConfigDocumentsCascadeFields(t *testing.T) {
 		t.Fatal("Swagger is missing api.SwaggerSIPConfig")
 	}
 	properties := config["properties"].(map[string]any)
-	for _, name := range []string{"host", "device_history", "direct_tcp_download", "upstreams", "log"} {
+	for _, name := range []string{"host", "tls_client_ca", "tls_require_client_cert", "device_history", "direct_tcp_download", "upstreams", "log"} {
 		if _, ok := properties[name]; !ok {
 			t.Errorf("Swagger SIP config is missing %s", name)
 		}

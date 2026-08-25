@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -19,6 +21,14 @@ import (
 
 	"github.com/ixugo/goddd/pkg/conc"
 )
+
+// TLSListenerOptions 描述 SIP-TLS 监听器及可选客户端证书校验。
+type TLSListenerOptions struct {
+	CertFile          string
+	KeyFile           string
+	ClientCAFile      string
+	RequireClientCert bool
+}
 
 var bufferSize uint16 = 65535 - 20 - 8 // IPv4 max size - IPv4 Header size - UDP Header size
 
@@ -284,7 +294,12 @@ func (s *Server) serveTCP(listener *net.TCPListener, addr string) error {
 
 // ListenTLSServer 启动 TLS 服务器并监听指定地址。
 func (s *Server) ListenTLSServer(addr, certFile, keyFile string) error {
-	if err := s.bindTLS(addr, certFile, keyFile); err != nil {
+	return s.ListenTLSServerWithOptions(addr, TLSListenerOptions{CertFile: certFile, KeyFile: keyFile})
+}
+
+// ListenTLSServerWithOptions 启动支持可选客户端证书校验的 TLS 监听器。
+func (s *Server) ListenTLSServerWithOptions(addr string, options TLSListenerOptions) error {
+	if err := s.bindTLS(addr, options); err != nil {
 		return err
 	}
 	return s.serveTLS(s.tlsListener, addr)
@@ -292,7 +307,12 @@ func (s *Server) ListenTLSServer(addr, certFile, keyFile string) error {
 
 // StartTLSServer 同步完成证书加载和端口绑定，成功后在后台接受 TLS 连接。
 func (s *Server) StartTLSServer(addr, certFile, keyFile string) error {
-	if err := s.bindTLS(addr, certFile, keyFile); err != nil {
+	return s.StartTLSServerWithOptions(addr, TLSListenerOptions{CertFile: certFile, KeyFile: keyFile})
+}
+
+// StartTLSServerWithOptions 在后台启动支持可选客户端证书校验的 TLS 监听器。
+func (s *Server) StartTLSServerWithOptions(addr string, options TLSListenerOptions) error {
+	if err := s.bindTLS(addr, options); err != nil {
 		return err
 	}
 	listener := s.tlsListener
@@ -304,26 +324,50 @@ func (s *Server) StartTLSServer(addr, certFile, keyFile string) error {
 	return nil
 }
 
-func (s *Server) bindTLS(addr, certFile, keyFile string) error {
+func (s *Server) bindTLS(addr string, options TLSListenerOptions) error {
 	tcpaddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("net.ResolveTCPAddr err[%w]", err)
 	}
 
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	tlsConfig, err := newTLSListenerConfig(options)
 	if err != nil {
-		return fmt.Errorf("tls.LoadX509KeyPair err[%w]", err)
+		return err
 	}
-	ln, err := tls.Listen("tcp", tcpaddr.String(), &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-	})
+	ln, err := tls.Listen("tcp", tcpaddr.String(), tlsConfig)
 	if err != nil {
 		return fmt.Errorf("tls.Listen err[%w]", err)
 	}
 
 	s.tlsListener = ln
 	return nil
+}
+
+func newTLSListenerConfig(options TLSListenerOptions) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(options.CertFile, options.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("tls.LoadX509KeyPair err[%w]", err)
+	}
+	config := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	if clientCAFile := strings.TrimSpace(options.ClientCAFile); clientCAFile != "" {
+		contents, err := os.ReadFile(clientCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read SIP-TLS client CA: %w", err)
+		}
+		clientCAs := x509.NewCertPool()
+		if !clientCAs.AppendCertsFromPEM(contents) {
+			return nil, fmt.Errorf("SIP-TLS client CA does not contain a valid certificate")
+		}
+		config.ClientCAs = clientCAs
+		config.ClientAuth = tls.VerifyClientCertIfGiven
+	}
+	if options.RequireClientCert {
+		if config.ClientCAs == nil {
+			return nil, fmt.Errorf("SIP-TLS client CA is required when client certificates are mandatory")
+		}
+		config.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+	return config, nil
 }
 
 func (s *Server) serveTLS(listener net.Listener, addr string) error {

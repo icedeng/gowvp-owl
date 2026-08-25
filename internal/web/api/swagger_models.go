@@ -73,23 +73,25 @@ type SwaggerConfigInfoOutput struct {
 
 // SwaggerSIPConfig 是 Swagger 友好的 SIP 配置模型。
 type SwaggerSIPConfig struct {
-	Host               string                         `json:"host" example:"192.0.2.20"`                // 对设备和上级宣告的 SIP 地址
-	Port               int                            `json:"port" example:"5060"`                      // SIP TCP/UDP 监听端口
-	ID                 string                         `json:"id" example:"34020000002000000001"`        // 平台 20 位国标编码
-	Domain             string                         `json:"domain" example:"3402000000"`              // SIP 域
-	Password           string                         `json:"password" example:"123456"`                // 注册鉴权密码
-	EnableTLS          bool                           `json:"enable_tls" example:"false"`               // 是否启用 SIP-TLS
-	TLSPort            int                            `json:"tls_port" example:"5061"`                  // SIP-TLS 监听端口
-	TLSCert            string                         `json:"tls_cert" example:"configs/certs/sip.crt"` // TLS 证书路径
-	TLSKey             string                         `json:"tls_key" example:"configs/certs/sip.key"`  // TLS 私钥路径
-	StrictSourceCheck  bool                           `json:"strict_source_check" example:"true"`       // 是否严格校验源 IP
-	RequireMessageAuth bool                           `json:"require_message_auth" example:"false"`     // 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
-	PTZWeakConfirm     bool                           `json:"ptz_weak_confirm" example:"false"`         // 是否启用 PTZ 弱确认模式
-	SignalDigest       SwaggerSIPSignalDigest         `json:"signal_digest"`                            // Date+Note 信令数字摘要配置
-	DeviceHistory      SwaggerDeviceHistoryConfig     `json:"device_history"`                           // 设备注册与心跳历史保留策略
-	DirectTCPDownload  SwaggerDirectTCPDownloadConfig `json:"direct_tcp_download"`                      // 2014 附录 O 裸 TCP 下载配置
-	Upstreams          []SwaggerSIPUpstream           `json:"upstreams"`                                // 上级 GB/T 28181 平台配置
-	Log                SwaggerSIPLog                  `json:"log"`                                      // SIP 报文日志配置；更新时可省略以保留当前值
+	Host                 string                         `json:"host" example:"192.0.2.20"`                           // 对设备和上级宣告的 SIP 地址
+	Port                 int                            `json:"port" example:"5060"`                                 // SIP TCP/UDP 监听端口
+	ID                   string                         `json:"id" example:"34020000002000000001"`                   // 平台 20 位国标编码
+	Domain               string                         `json:"domain" example:"3402000000"`                         // SIP 域
+	Password             string                         `json:"password" example:"123456"`                           // 注册鉴权密码
+	EnableTLS            bool                           `json:"enable_tls" example:"false"`                          // 是否启用 SIP-TLS
+	TLSPort              int                            `json:"tls_port" example:"5061"`                             // SIP-TLS 监听端口
+	TLSCert              string                         `json:"tls_cert" example:"configs/certs/sip.crt"`            // TLS 证书路径
+	TLSKey               string                         `json:"tls_key" example:"configs/certs/sip.key"`             // TLS 私钥路径
+	TLSClientCA          string                         `json:"tls_client_ca" example:"configs/certs/client-ca.crt"` // TLS 客户端 CA 路径
+	TLSRequireClientCert bool                           `json:"tls_require_client_cert" example:"false"`             // 是否强制校验客户端证书
+	StrictSourceCheck    bool                           `json:"strict_source_check" example:"true"`                  // 是否严格校验源 IP
+	RequireMessageAuth   bool                           `json:"require_message_auth" example:"false"`                // 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
+	PTZWeakConfirm       bool                           `json:"ptz_weak_confirm" example:"false"`                    // 是否启用 PTZ 弱确认模式
+	SignalDigest         SwaggerSIPSignalDigest         `json:"signal_digest"`                                       // Date+Note 信令数字摘要配置
+	DeviceHistory        SwaggerDeviceHistoryConfig     `json:"device_history"`                                      // 设备注册与心跳历史保留策略
+	DirectTCPDownload    SwaggerDirectTCPDownloadConfig `json:"direct_tcp_download"`                                 // 2014 附录 O 裸 TCP 下载配置
+	Upstreams            []SwaggerSIPUpstream           `json:"upstreams"`                                           // 上级 GB/T 28181 平台配置
+	Log                  SwaggerSIPLog                  `json:"log"`                                                 // SIP 报文日志配置；更新时可省略以保留当前值
 }
 
 type SwaggerSIPSignalDigest struct {

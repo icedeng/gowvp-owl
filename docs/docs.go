@@ -4906,6 +4906,11 @@ const docTemplate = `{
                     "type": "string",
                     "example": "configs/certs/sip.crt"
                 },
+                "tls_client_ca": {
+                    "description": "TLS 客户端 CA 路径",
+                    "type": "string",
+                    "example": "configs/certs/client-ca.crt"
+                },
                 "tls_key": {
                     "description": "TLS 私钥路径",
                     "type": "string",
@@ -4915,6 +4920,11 @@ const docTemplate = `{
                     "description": "SIP-TLS 监听端口",
                     "type": "integer",
                     "example": 5061
+                },
+                "tls_require_client_cert": {
+                    "description": "是否强制校验客户端证书",
+                    "type": "boolean",
+                    "example": false
                 },
                 "upstreams": {
                     "description": "上级 GB/T 28181 平台配置",
