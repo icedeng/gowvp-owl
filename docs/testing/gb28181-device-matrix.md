@@ -13,6 +13,17 @@
 | 2.0 | 待填写 |  |  | UDP/TCP |  |  |  |  | 待测 |
 | 3.0 | 待填写 |  |  | UDP/TCP/TLS |  |  |  |  | 待测 |
 
+### 1.1 上级平台登记
+
+| 档案 | 厂商/平台 | 版本 | 传输 | 上级平台 ID | Owl 本级 ID | 下级设备 | 测试人 | 日期 | 结果 |
+|---|---|---|---|---|---|---|---|---|---|
+| 1.0 | 待填写 |  | UDP/TCP |  |  |  |  |  | 待测 |
+| 1.1 | 待填写 |  | UDP/TCP |  |  |  |  |  | 待测 |
+| 2.0 | 待填写 |  | UDP/TCP |  |  |  |  |  | 待测 |
+| 3.0 | 待填写 |  | UDP/TCP |  |  |  |  |  | 待测 |
+
+3.0 三级路径另登记“上级平台 → Owl → 下级平台 → 设备”四个节点的平台/设备编码、地址和版本；平台编码必须是 20 位数字且类型码为 `200`。
+
 ## 2. 通用验收
 
 每台设备都需验证并保留脱敏抓包：
@@ -29,6 +40,9 @@
 - 分别订阅平台根目录和单个共享通道：2011 Catalog 变化通知根节点应为 `Response`，2014/2016/2022 应为 `Notify`；新增、删除、上下线、元数据修改应分别收到 ADD、DEL、ON/OFF、UPDATE，且每包 `SumNum` 等于 `DeviceList Num`；下级发送空消息体 `Subscription-State: terminated` 后 Owl 应返回 200，并在上级订阅仍有效时重新建立下级订阅；
 - 2022 上级返回 REGISTER 301/302 和新的 Contact 后，确认 Owl 向新地址完成 Digest 注册，后续 Keepalive/NOTIFY/INVITE 使用新地址，旧地址不再具有上级身份；
 - Alarm 分别使用级别、方式、类型和时间过滤，确认不匹配报警不会发往上级；2011 厂商分别验证 `StartAlarmTime/EndAlarmTime` 和示例别名 `StartTime/EndTime`。
+- 四版本真实上级分别完成 REGISTER（401/Digest/200）、Keepalive、Catalog、DeviceInfo/DeviceStatus、直播、回放、下载、INFO 控制、BYE 和资源释放；1.1+ 再执行订阅，2.0/3.0 再执行 RTP over TCP 与语音流程。
+- 3.0 三级路径分别执行直播、回放和下载：上级发送 `X-PreferredPath`，每一跳只消费本级编码并向下转发剩余路径，响应 `X-RoutePath` 顺序与实际路径一致；错误首跳、重复节点、下级确认不匹配和路由环必须被拒绝。
+- `Date + Note` 先以关闭状态建立兼容基线，再分别验证 Enabled 和 Required；至少覆盖双方约定 seed、Base64 与 hex、一个传统摘要算法和 SM3，并保存缺失签名、正文篡改和超时 Date 的拒绝证据。REGISTER 不应被该摘要要求误拦截。
 
 ## 3. 版本专项
 
@@ -103,6 +117,18 @@ docs/testing/evidence/gb28181/<version>/<vendor>-<model>-<firmware>/
 ├── voice-rtp.md
 ├── direct-download.sip.txt
 ├── expected.sha256
+└── result.md
+
+docs/testing/evidence/gb28181/platforms/<version>/<vendor>-<platform>/
+├── platform.md
+├── register.sip.txt
+├── catalog.sip.txt
+├── live.sip.txt
+├── history.sip.txt
+├── subscribe.sip.txt
+├── voice.sip.txt
+├── signal-digest.md
+├── route-path.sip.txt
 └── result.md
 ```
 
