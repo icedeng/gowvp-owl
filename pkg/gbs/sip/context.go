@@ -38,6 +38,14 @@ type Context struct {
 }
 
 func newContext(req *Request, tx *Transaction) *Context {
+	c, err := newContextChecked(req, tx)
+	if err != nil {
+		slog.Error("parserRequest", "err", err)
+	}
+	return c
+}
+
+func newContextChecked(req *Request, tx *Transaction) (*Context, error) {
 	c := Context{
 		Request: req,
 		Tx:      tx,
@@ -45,14 +53,15 @@ func newContext(req *Request, tx *Transaction) *Context {
 		Log:     slog.Default(),
 		index:   -1,
 	}
-	if err := c.parserRequest(); err != nil {
-		slog.Error("parserRequest", "err", err)
-	}
-	return &c
+	err := c.parserRequest()
+	return &c, err
 }
 
 func (c *Context) parserRequest() error {
 	req := c.Request
+	if req == nil {
+		return fmt.Errorf("request is nil")
+	}
 	header, ok := req.From()
 	if !ok {
 		return fmt.Errorf("req from is nil")

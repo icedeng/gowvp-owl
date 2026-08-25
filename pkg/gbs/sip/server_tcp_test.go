@@ -1,8 +1,10 @@
 package sip
 
 import (
+	"bufio"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,6 +44,66 @@ func TestProcessTCPConnFramesCaseInsensitiveAndCompactContentLength(t *testing.T
 	}
 	if !gotBodies[firstBody] || !gotBodies[secondBody] || len(gotBodies) != 2 {
 		t.Fatalf("TCP SIP bodies = %#v", gotBodies)
+	}
+}
+
+func TestProcessTCPConnRejectsMissingRequiredRoutingHeaders(t *testing.T) {
+	localURI, err := ParseSipURI("sip:34020000002000000001@127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name    string
+		headers string
+	}{
+		{
+			name: "From",
+			headers: "Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-missing-from\r\n" +
+				"To: <sip:34020000002000000001@127.0.0.1>\r\n",
+		},
+		{
+			name: "Via",
+			headers: "From: <sip:34020000001320000001@127.0.0.1>;tag=from-missing-via\r\n" +
+				"To: <sip:34020000002000000001@127.0.0.1>\r\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := NewServer(&Address{URI: &localURI, Params: NewParams()})
+			defer server.Close()
+			handled := make(chan struct{}, 1)
+			server.Handle(MethodOptions, func(*Context) { handled <- struct{}{} })
+
+			serverPipe, clientConn := net.Pipe()
+			defer clientConn.Close()
+			serverConn := &sipTestTCPConn{
+				Conn:   serverPipe,
+				local:  &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 5060},
+				remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 5060},
+			}
+			go server.ProcessTcpConn(serverConn)
+			request := "OPTIONS sip:34020000002000000001@127.0.0.1 SIP/2.0\r\n" + test.headers +
+				"Call-ID: missing-" + strings.ToLower(test.name) + "\r\n" +
+				"CSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n"
+			if _, err := clientConn.Write([]byte(request)); err != nil {
+				t.Fatal(err)
+			}
+			if err := clientConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			status, err := bufio.NewReader(clientConn).ReadString('\n')
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(status, "SIP/2.0 400") {
+				t.Fatalf("malformed request status = %q", status)
+			}
+			select {
+			case <-handled:
+				t.Fatal("handler ran for malformed request")
+			default:
+			}
+		})
 	}
 }
 

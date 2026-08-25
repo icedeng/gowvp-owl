@@ -430,7 +430,11 @@ func (s *Server) handlerRequest(msg *Request) {
 	chain = append(chain, s.middlewares...)
 	chain = append(chain, routeHandlers...)
 
-	ctx := newContext(msg, tx)
+	ctx, err := newContextChecked(msg, tx)
+	if err != nil {
+		_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusBadRequest, err.Error(), nil))
+		return
+	}
 	ctx.handlers = chain
 	ctx.From = s.from
 	ctx.svr = s
