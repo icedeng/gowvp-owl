@@ -150,14 +150,14 @@ func TestGB30VideoUploadNotifyStoresStructuredState(t *testing.T) {
 func TestGB30CruiseTrackQueriesDecodeStructuredState(t *testing.T) {
 	api := &GB28181API{}
 	listBody := []byte(`<Response><CmdType>CruiseTrackListQuery</CmdType><SN>74</SN><DeviceID>` + gb10ChannelID + `</DeviceID><SumNum>2</SumNum><CruiseTrackList Num="2"><CruiseTrack><Number>0</Number><Name>白天</Name></CruiseTrack><CruiseTrack><Number>1</Number><Name>夜间</Name></CruiseTrack></CruiseTrackList></Response>`)
-	list := api.decodeAndStoreQueryData(gb10DeviceID, "CruiseTrackListQuery", listBody)
+	list := api.decodeAndStoreQueryResult(gb10DeviceID, "CruiseTrackListQuery", listBody).data
 	tracks, ok := list.([]CruiseTrackData)
 	if !ok || len(tracks) != 2 || tracks[0].Number != 0 || tracks[0].Name != "白天" || tracks[1].Number != 1 {
 		t.Fatalf("CruiseTrackListQuery data = %+v", list)
 	}
 
 	detailBody := []byte(`<Response><CmdType>CruiseTrackQuery</CmdType><SN>75</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Number>1</Number><Name>夜间</Name><SumNum>2</SumNum><CruisePointList Num="2"><CruisePoint><PresetIndex>3</PresetIndex><StayTime>10</StayTime><Speed>5</Speed></CruisePoint><CruisePoint><PresetIndex>7</PresetIndex><StayTime>20</StayTime><Speed>8</Speed></CruisePoint></CruisePointList></Response>`)
-	detail := api.decodeAndStoreQueryData(gb10DeviceID, "CruiseTrackQuery", detailBody)
+	detail := api.decodeAndStoreQueryResult(gb10DeviceID, "CruiseTrackQuery", detailBody).data
 	track, ok := detail.(*CruiseTrackData)
 	if !ok || track.Number != 1 || track.Name != "夜间" || len(track.Points) != 2 || track.Points[0].PresetIndex != 3 || track.Points[1].Speed != 8 {
 		t.Fatalf("CruiseTrackQuery data = %+v", detail)

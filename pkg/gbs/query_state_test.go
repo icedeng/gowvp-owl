@@ -189,11 +189,19 @@ func TestGenericQueryAcknowledgesBeforeSinglePersistence(t *testing.T) {
 	}
 	select {
 	case output := <-pending.wait:
-		if output.Data == nil || len(output.AppendixA4) != 1 {
+		status, ok := output.Data.(*DeviceStatusData)
+		if !ok || len(output.AppendixA4) != 1 {
 			t.Fatalf("pending DeviceStatus output = %+v", output)
 		}
+		status.Online = "OFFLINE"
+		output.AppendixA4[0].Fields["DeviceID"] = "mutated"
 	default:
 		t.Fatal("DeviceStatus response did not resolve pending query")
+	}
+	state, ok := api.GetQueryState(gb10DeviceID)
+	if !ok || state.DeviceStatus == nil || state.DeviceStatus.Online != "ONLINE" ||
+		len(state.AppendixA4) != 1 || state.AppendixA4[0].Fields["DeviceID"] != gb10DeviceID {
+		t.Fatalf("DeviceQuery output leaked internal state: %+v", state)
 	}
 }
 

@@ -223,10 +223,7 @@ func cloneQueryState(state *QueryState) *QueryState {
 	if out.DeviceConfig != nil {
 		out.DeviceConfig.SnapShot = cloneValue(state.DeviceConfig.SnapShot)
 	}
-	out.AppendixA4 = append([]AppendixA4Object(nil), state.AppendixA4...)
-	for index := range out.AppendixA4 {
-		out.AppendixA4[index].Fields = maps.Clone(state.AppendixA4[index].Fields)
-	}
+	out.AppendixA4 = cloneAppendixA4Objects(state.AppendixA4)
 	return &out
 }
 
@@ -275,6 +272,52 @@ func cloneConfigDownloadState(state *ConfigDownloadState) *ConfigDownloadState {
 	out.OSDConfig = cloneValue(state.OSDConfig)
 	out.SnapShot = cloneValue(state.SnapShot)
 	return out
+}
+
+func cloneAppendixA4Objects(objects []AppendixA4Object) []AppendixA4Object {
+	out := append([]AppendixA4Object(nil), objects...)
+	for index := range out {
+		out[index].Fields = maps.Clone(objects[index].Fields)
+	}
+	return out
+}
+
+func cloneDeviceQueryData(data any) any {
+	state := &QueryState{}
+	switch value := data.(type) {
+	case *DeviceStatusData:
+		state.DeviceStatus = value
+		return cloneQueryState(state).DeviceStatus
+	case []PresetItemData:
+		state.Presets = value
+		return cloneQueryState(state).Presets
+	case *HomePositionData:
+		state.HomePosition = value
+		return cloneQueryState(state).HomePosition
+	case []CruiseTrackData:
+		state.CruiseTracks = value
+		return cloneQueryState(state).CruiseTracks
+	case *CruiseTrackData:
+		state.CruiseTrack = value
+		return cloneQueryState(state).CruiseTrack
+	case *PTZPositionData:
+		state.PTZPosition = value
+		return cloneQueryState(state).PTZPosition
+	case []SDCardItemData:
+		state.SDCards = value
+		return cloneQueryState(state).SDCards
+	case *MobilePositionData:
+		state.MobilePosition = value
+		return cloneQueryState(state).MobilePosition
+	case *VideoUploadData:
+		state.VideoUpload = value
+		return cloneQueryState(state).VideoUpload
+	case *ConfigDownloadState:
+		state.ConfigDownload = value
+		return cloneQueryState(state).ConfigDownload
+	default:
+		return nil
+	}
 }
 
 func (g *GB28181API) cleanupQueryStates(now time.Time) {
@@ -366,12 +409,6 @@ func (g *GB28181API) persistDecodedQuery(deviceID, cmdType string, result decode
 	if len(result.appendixA4) > 0 {
 		g.persistAppendixA4Objects(deviceID, result.appendixA4)
 	}
-}
-
-func (g *GB28181API) decodeAndStoreQueryData(deviceID, cmdType string, body []byte) any {
-	result := g.decodeAndStoreQueryResult(deviceID, cmdType, body)
-	g.persistDecodedQuery(deviceID, strings.TrimSpace(cmdType), result)
-	return result.data
 }
 
 func (g *GB28181API) storeQueryState(deviceID, cmdType string, data any) {

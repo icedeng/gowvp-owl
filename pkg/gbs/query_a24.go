@@ -444,8 +444,8 @@ func (g *GB28181API) resolvePendingDeviceQueryResult(deviceID, cmdType string, s
 		if out.DeviceID == "" {
 			out.DeviceID = strings.TrimSpace(deviceID)
 		}
-		out.Data = decoded.data
-		out.AppendixA4 = decoded.appendixA4
+		out.Data = cloneDeviceQueryData(decoded.data)
+		out.AppendixA4 = cloneAppendixA4Objects(decoded.appendixA4)
 		pending := v.(*pendingQueryWait)
 		if out.CmdType == "ConfigDownload" && (out.Result == "" || strings.EqualFold(out.Result, "OK")) {
 			state, _ := out.Data.(*ConfigDownloadState)
