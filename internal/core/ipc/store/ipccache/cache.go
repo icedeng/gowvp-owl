@@ -50,12 +50,12 @@ func NewCache(store ipc.Storer) *Cache {
 }
 
 // LoadDeviceToMemory implements gbs.MemoryStorer.
-func (c *Cache) LoadDeviceToMemory(conn sip.Connection) {
+func (c *Cache) LoadDeviceToMemory(conn sip.Connection) error {
 	// TODO: 加载 gb28181 设备
 	devices := make([]*ipc.Device, 0, 100)
 	_, err := c.Storer.Device().List(context.TODO(), &devices, web.NewPagerFilterMaxSize(), orm.Where("type != ?", ipc.TypeOnvif))
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("list GB28181 devices: %w", err)
 	}
 
 	for _, d := range devices {
@@ -81,12 +81,13 @@ func (c *Cache) LoadDeviceToMemory(conn sip.Connection) {
 			channels := make([]*ipc.Channel, 0, 8)
 			_, err := c.Storer.Channel().List(context.TODO(), &channels, web.NewPagerFilterMaxSize(), orm.Where("device_id=?", d.GetGB28181DeviceID()))
 			if err != nil {
-				panic(err)
+				return fmt.Errorf("list GB28181 channels for %s: %w", d.GetGB28181DeviceID(), err)
 			}
 			dev.LoadChannels(channels...)
 			c.devices.Store(d.GetGB28181DeviceID(), dev)
 		}
 	}
+	return nil
 }
 
 // RangeDevices implements gbs.MemoryStorer.

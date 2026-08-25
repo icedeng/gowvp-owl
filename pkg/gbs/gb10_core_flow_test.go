@@ -239,7 +239,7 @@ func (m *flowMemory) LoadOrStore(_ string, device *Device) {
 		m.runtime = device
 	}
 }
-func (m *flowMemory) LoadDeviceToMemory(sip.Connection) {}
+func (m *flowMemory) LoadDeviceToMemory(sip.Connection) error { return nil }
 func (m *flowMemory) RangeDevices(fn func(string, *Device) bool) {
 	fn(m.persistent.DeviceID, m.runtime)
 }

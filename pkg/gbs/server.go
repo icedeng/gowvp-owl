@@ -26,7 +26,7 @@ var defaultSIPServer atomic.Pointer[sip.Server]
 
 type MemoryStorer interface {
 	LoadOrStore(deviceID string, value *Device)
-	LoadDeviceToMemory(conn sip.Connection)               // 加载设备到内存
+	LoadDeviceToMemory(conn sip.Connection) error         // 加载设备到内存
 	RangeDevices(fn func(key string, value *Device) bool) // 遍历设备
 
 	Change(deviceID string, changeFn func(*ipc.Device) error, changeFn2 func(*Device)) error // 登出设备
@@ -223,7 +223,10 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	}
 	go c.startTickerCheck()
 	defaultSIPServer.Store(sipServer)
-	c.memoryStorer.LoadDeviceToMemory(sipServer.UDPConn())
+	if err := c.memoryStorer.LoadDeviceToMemory(sipServer.UDPConn()); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("load GB28181 devices into memory: %w", err)
+	}
 	c.cascade = NewCascadeManager(&c)
 	if err := c.cascade.Apply(cfg.Sip, cfg.Sip.Upstreams); err != nil {
 		cleanup()

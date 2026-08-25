@@ -75,7 +75,7 @@ func newVersionGateAPI(version GBProtocolVersion) (*GB28181API, *versionGateMemo
 }
 
 func (m *versionGateMemory) LoadOrStore(string, *Device)             {}
-func (m *versionGateMemory) LoadDeviceToMemory(sip.Connection)       {}
+func (m *versionGateMemory) LoadDeviceToMemory(sip.Connection) error { return nil }
 func (m *versionGateMemory) RangeDevices(func(string, *Device) bool) {}
 func (m *versionGateMemory) Change(string, func(*ipc.Device) error, func(*Device)) error {
 	return nil
