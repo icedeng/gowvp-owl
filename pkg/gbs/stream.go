@@ -3,6 +3,7 @@ package gbs
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -81,11 +82,26 @@ type streamsList struct {
 
 var StreamList streamsList
 
-func (g *GB28181API) getSSRC(t int) string {
+func (g *GB28181API) getSSRC(t int) (string, error) {
+	if t != 0 && t != 1 {
+		return "", fmt.Errorf("invalid GB28181 SSRC stream type %d", t)
+	}
+	if g == nil || g.cfg == nil {
+		return "", fmt.Errorf("GB28181 SIP configuration is unavailable")
+	}
+	domain := strings.TrimSpace(g.cfg.GetDomain())
+	if len(domain) != 10 {
+		return "", fmt.Errorf("GB28181 SIP domain must be a 10-digit code, got %q", domain)
+	}
+	for _, char := range domain {
+		if char < '0' || char > '9' {
+			return "", fmt.Errorf("GB28181 SIP domain must be a 10-digit code, got %q", domain)
+		}
+	}
 	v := atomic.AddUint32(&StreamList.ssrc, 1)
 	ssrc := v % 9000
-	key := fmt.Sprintf("%d%s%04d", t, g.cfg.GetDomain()[3:8], ssrc)
-	return key
+	key := fmt.Sprintf("%d%s%04d", t, domain[3:8], ssrc)
+	return key, nil
 }
 
 // 定时检查未关闭的流

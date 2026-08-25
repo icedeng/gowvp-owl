@@ -402,7 +402,10 @@ func (g *GB28181API) sipInviteDirectTCPHistory(ch *Channel, in *HistoryInput, st
 	if err != nil {
 		return directTCPDownloadOffer{}, err
 	}
-	ssrc := g.getSSRC(1)
+	ssrc, err := g.getSSRC(1)
+	if err != nil {
+		return directTCPDownloadOffer{}, err
+	}
 	body, err := buildGBSDP(gbSDPInput{
 		Version:       g.getDeviceGBProtocolVersion(in.Channel.DeviceID),
 		SessionName:   historyModeDownload,
@@ -504,7 +507,10 @@ func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, s
 	if err != nil {
 		return err
 	}
-	ssrc := g.getSSRC(1)
+	ssrc, err := g.getSSRC(1)
+	if err != nil {
+		return err
+	}
 	version := g.getDeviceGBProtocolVersion(in.Channel.DeviceID)
 	if in.preferredPath != "" && version != GBVersion30 {
 		return fmt.Errorf("X-PreferredPath requires downstream protocol 3.0, got %s", version)

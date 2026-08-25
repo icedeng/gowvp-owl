@@ -211,7 +211,11 @@ func (g *GB28181API) sipInviteBroadcast(ctx *sip.Context, callID string, session
 		}
 		session.complete(cause)
 	}
-	ssrc := g.getSSRC(0)
+	ssrc, err := g.getSSRC(0)
+	if err != nil {
+		fail(http.StatusInternalServerError, err)
+		return
+	}
 	started, err := g.sms.StartSendRTP(session.SMS, zlm.StartSendRTPRequest{
 		Vhost:     session.SourceVHost,
 		App:       session.SourceApp,

@@ -412,11 +412,6 @@ func ParseAddressValues(addresses string) (
 			var params Params
 			displayName, uri, params, err = ParseAddressValue(addresses[prevIdx:idx])
 			if err != nil {
-				// sip:1678@80.79.5.134;expires=3600
-				arr := strings.Split(addresses, "@")
-				if len(arr) == 2 && len(arr[0]) < 20 {
-					err = nil
-				}
 				return
 			}
 			prevIdx = idx + 1
@@ -425,6 +420,11 @@ func ParseAddressValues(addresses string) (
 			uris = append(uris, uri)
 			headerParams = append(headerParams, params)
 		}
+	}
+	if inQuotes {
+		err = fmt.Errorf("unclosed quotes in address list: %s", strings.TrimSuffix(addresses, ","))
+	} else if inBrackets {
+		err = fmt.Errorf("'<' without closing '>' in address list: %s", strings.TrimSuffix(addresses, ","))
 	}
 
 	return
@@ -448,16 +448,14 @@ func ParseAddressValue(addressText string) (
 ) {
 	headerParams = NewParams()
 
+	addressTextCopy := addressText
+	addressText = strings.TrimSpace(addressText)
 	if len(addressText) == 0 {
 		err = fmt.Errorf("address-type header has empty body")
 		return
 	}
 
-	addressTextCopy := addressText
-	addressText = strings.TrimSpace(addressText)
-
 	firstAngleBracket := findUnescaped(addressText, '<', quotesDelim)
-	displayName = String{}
 	if firstAngleBracket > 0 {
 		// We have an angle bracket, and it's not the first character.
 		// Since we have just trimmed whitespace, this means there must
@@ -493,6 +491,10 @@ func ParseAddressValue(addressText string) (
 
 	// Work out where the SIP URI starts and ends.
 	addressText = strings.TrimSpace(addressText)
+	if len(addressText) == 0 {
+		err = fmt.Errorf("address-type header has no URI: %s", addressTextCopy)
+		return
+	}
 	var endOfURI int
 	var startOfParams int
 	if addressText[0] != '<' {
@@ -517,9 +519,13 @@ func ParseAddressValue(addressText string) (
 	} else {
 		addressText = addressText[1:]
 		endOfURI = strings.Index(addressText, ">")
-		if endOfURI == 0 {
+		if endOfURI == -1 {
 			err = fmt.Errorf("'<' without closing '>' in address %s",
 				addressTextCopy)
+			return
+		}
+		if endOfURI == 0 {
+			err = fmt.Errorf("empty URI in address %s", addressTextCopy)
 			return
 		}
 		startOfParams = endOfURI + 1
@@ -820,31 +826,38 @@ func ParseSipURI(uriStr string) (uri URI, err error) {
 	// Store off the original URI in case we need to print it in an error.
 	uriStrCopy := uriStr
 
-	// URI should start 'sip' or 'sips'. Check the first 3 chars.
-	if strings.ToLower(uriStr[:3]) != "sip" {
-		err = fmt.Errorf("invalid SIP uri protocol name in '%s'", uriStrCopy)
-		return
-	}
-	uriStr = uriStr[3:]
-
-	if strings.ToLower(uriStr[0:1]) == "s" {
-		// URI started 'sips', so it's encrypted.
-		uri.FIsEncrypted = true
-		uriStr = uriStr[1:]
-	}
-
-	// The 'sip' or 'sips' protocol name should be followed by a ':' character.
-	if uriStr[0] != ':' {
+	scheme, remainder, ok := strings.Cut(uriStr, ":")
+	if !ok {
 		err = fmt.Errorf("no ':' after protocol name in SIP uri '%s'", uriStrCopy)
 		return
 	}
-	uriStr = uriStr[1:]
+	switch strings.ToLower(scheme) {
+	case "sip":
+	case "sips":
+		uri.FIsEncrypted = true
+	default:
+		err = fmt.Errorf("invalid SIP uri protocol name in '%s'", uriStrCopy)
+		return
+	}
+	uriStr = remainder
+	if len(uriStr) == 0 {
+		err = fmt.Errorf("SIP uri has empty address in '%s'", uriStrCopy)
+		return
+	}
 
 	// SIP URIs may contain a user-info part, ending in a '@'.
 	// This is the only place '@' may occur, so we can use it to check for the
 	// existence of a user-info part.
 	endOfUserInfoPart := strings.Index(uriStr, "@")
 	if endOfUserInfoPart != -1 {
+		if endOfUserInfoPart == 0 {
+			err = fmt.Errorf("SIP uri has empty user in '%s'", uriStrCopy)
+			return
+		}
+		if strings.Contains(uriStr[endOfUserInfoPart+1:], "@") {
+			err = fmt.Errorf("SIP uri has multiple '@' characters in '%s'", uriStrCopy)
+			return
+		}
 		// A user-info part is present. These take the form:
 		//     user [ ":" password ] "@"
 		endOfUsernamePart := strings.Index(uriStr, ":")
@@ -923,21 +936,65 @@ func ParseSipURI(uriStr string) (uri URI, err error) {
 // The port may or may not be present, so we represent it with a *uint16,
 // and return 'nil' if no port was present.
 func ParseHostPort(rawText string) (host string, port *Port, err error) {
+	if rawText == "" {
+		err = fmt.Errorf("host is empty")
+		return
+	}
+
+	if rawText[0] == '[' {
+		endBracket := strings.IndexByte(rawText, ']')
+		if endBracket == -1 {
+			err = fmt.Errorf("IPv6 host is missing closing bracket in %q", rawText)
+			return
+		}
+		host = rawText[:endBracket+1]
+		remainder := rawText[endBracket+1:]
+		if remainder == "" {
+			return
+		}
+		if remainder[0] != ':' || len(remainder) == 1 {
+			err = fmt.Errorf("invalid text after bracketed host in %q", rawText)
+			return
+		}
+		port, err = parsePort(remainder[1:])
+		return
+	}
+	if strings.ContainsAny(rawText, "[]") {
+		err = fmt.Errorf("invalid bracket in host %q", rawText)
+		return
+	}
+
 	before, after, ok := strings.Cut(rawText, ":")
 	if !ok {
 		host = rawText
 		return
 	}
+	if before == "" {
+		err = fmt.Errorf("host is empty in %q", rawText)
+		return
+	}
+	if after == "" {
+		err = fmt.Errorf("port is empty in %q", rawText)
+		return
+	}
+	if strings.Contains(after, ":") {
+		err = fmt.Errorf("IPv6 host must be enclosed in brackets in %q", rawText)
+		return
+	}
 
-	// Surely there must be a better way..!
-	var portRaw64 uint64
-	var portRaw16 uint16
 	host = before
-	portRaw64, err = strconv.ParseUint(after, 10, 16)
-	portRaw16 = uint16(portRaw64)
-	port = (*Port)(&portRaw16)
+	port, err = parsePort(after)
 
 	return
+}
+
+func parsePort(raw string) (*Port, error) {
+	value, err := strconv.ParseUint(raw, 10, 16)
+	if err != nil {
+		return nil, err
+	}
+	port := Port(value)
+	return &port, nil
 }
 
 // ParseParams General utility method for parsing 'key=value' parameters.

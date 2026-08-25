@@ -4,7 +4,7 @@
 
 ## 1. 审计结论
 
-代码建设、自动化测试和本地协议模拟器已完成到开发计划的 AI-502；AI-403 的 2014 附录 O 裸 TCP 下载已经实现，不再是代码阻断项。2022 的设备升级、图像抓拍、目标跟踪、扩展配置写入、注册重定向、AAC/H.265 SDP 和主动视频上传通知已补齐代码闭环，其中升级与抓拍现在同时覆盖受理应答、最终通知和会话状态查询，不再把“命令已受理”误判为“业务已完成”。四版本除 REGISTER 外的 `Date + Note` 信令摘要已经形成请求/响应、时间窗、设备及上级独立 seed 的自动化闭环，但默认关闭，尚未经过真实设备和真实上级平台互通。
+代码建设、自动化测试和本地协议模拟器已完成到开发计划的 AI-502；AI-403 的 2014 附录 O 裸 TCP 下载已经实现，不再是代码阻断项。2022 的设备升级、图像抓拍、目标跟踪、扩展配置写入、注册重定向、AAC/H.265 SDP 和主动视频上传通知已补齐代码闭环，其中升级与抓拍现在同时覆盖受理应答、最终通知和会话状态查询，不再把“命令已受理”误判为“业务已完成”。四版本除 REGISTER 外的 `Date + Note` 信令摘要已经形成请求/响应、时间窗、设备及上级独立 seed 的自动化闭环，但默认关闭，尚未经过真实设备和真实上级平台互通。SIP URI/地址解析已补齐短输入、纯空白、缺失闭合符、空主机及括号 IPv6 的边界处理；畸形报文返回解析错误，不再触发切片越界。SSRC 生成会校验 10 位数字域编码，并将配置错误显式返回给直播、回放、下载、广播、对讲和级联媒体调用链。
 
 目标尚不能标记为生产完成，原因是 AI-503 真实设备矩阵和 AI-602 部署灰度/回滚必须在外部设备及目标环境执行。上下级平台级联的 UDP/TCP 注册、查询、目录、事件订阅、直播、回放、下载和语音广播/对讲代码链路已经补齐；2022 附录 H 指定路径级联已完成自动化闭环；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅现在会自动建立、续订、复用和取消下级订阅，但仍需要真实上级平台及真实设备共同验证。
 
@@ -21,7 +21,7 @@
 | AI-105 下行版本/探测 | 完成 | 下行使用有效版本；1.0 不发 ConfigDownload；版本夹具与门禁测试 |
 | AI-201 1.0 门禁 | 完成 | Config、广播/对讲、RTP over TCP、IFrame、DragZoom 等能力门禁测试 |
 | AI-202 1.0 SDP | 完成 | 统一 SDP Builder；直播/回放/下载 golden；Subject、u/t/y/f 测试 |
-| AI-203 1.0 核心流程 | 完成（设备接入模拟器） | REGISTER→Keepalive→Catalog、RecordInfo、Alarm 流程测试；平台主动点播的 1.0 UDP SDP 由 golden 测试覆盖；SIP/TCP 支持大小写不敏感 `Content-Length`、紧凑头 `l` 及同连接连续报文分帧；ACK/BYE 从响应建立的路由集按 RFC 3261 反转 `Record-Route` 且不修改原响应 CSeq。已注册上级的入向 INVITE 进入级联 B2BUA，其他未知入向 INVITE 明确返回 501；`server_tcp_test.go`、`panic_fix_test.go` |
+| AI-203 1.0 核心流程 | 完成（设备接入模拟器） | REGISTER→Keepalive→Catalog、RecordInfo、Alarm 流程测试；平台主动点播的 1.0 UDP SDP 由 golden 测试覆盖；SIP/TCP 支持大小写不敏感 `Content-Length`、紧凑头 `l` 及同连接连续报文分帧；ACK/BYE 从响应建立的路由集按 RFC 3261 反转 `Record-Route` 且不修改原响应 CSeq。短 URI、纯空白地址、缺失 `>`、空主机等畸形输入返回错误，合法裸地址与括号 IPv6 保持可解析，并有模糊测试防止解析 panic。已注册上级的入向 INVITE 进入级联 B2BUA，其他未知入向 INVITE 明确返回 501；`server_tcp_test.go`、`panic_fix_test.go`、`parser_robustness_test.go` |
 | AI-301 Catalog 扩展 | 完成 | 目录树五类节点、2014 字段、厂商 XML 保留；`catalog_extension_test.go` |
 | AI-302 配置读写 | 完成 | ConfigDownload 支持 BasicParam、VideoParamOpt/Config、AudioParamOpt/Config、SVACEncode/DecodeConfig 多响应聚合；DeviceConfig 写入支持 BasicParam、结构化 VideoParamConfig/AudioParamConfig 及经过 XML 完整性/指令校验的 SVACEncodeConfig/SVACDecodeConfig，可组合下发并保留 BasicParam 兼容 API；Web/Core/Adapter/Swagger 已贯通；`config_11_test.go`、`gb_config_test.go`、`ipc_gb_config_test.go` |
 | AI-303 MediaStatus | 完成 | Call-ID 关联、121、未知/重复幂等；`media_status_test.go`；并纳入 1.1 串联模拟流程 |
@@ -70,10 +70,10 @@
 通过：
 
 ```bash
-GOCACHE=/tmp/owl-gocache go test ./pkg/gbs/... ./internal/conf ./internal/core/ipc ./internal/adapter/gbadapter ./internal/web/api -count=1
-GOCACHE=/tmp/owl-gocache go test -race -vet=off ./pkg/gbs/... ./internal/adapter/gbadapter ./internal/core/ipc ./internal/web/api -count=1
-GOCACHE=/tmp/owl-gocache go test ./... -count=1
-GOCACHE=/tmp/owl-gocache go vet ./...
+go test ./...
+go test -race -vet=off ./pkg/gbs/...
+go test ./pkg/gbs/sip -run '^$' -fuzz FuzzParseSIPAddressesDoNotPanic -fuzztime=5s
+go vet ./...
 git diff --check
 ```
 
@@ -84,6 +84,7 @@ git diff --check
 | 项目 | 当前状态 | 处理结论 |
 |---|---|---|
 | SIP REGISTER 口令摘要认证 | 已加固并有自动化证据 | nonce 由服务端使用密码学安全随机源签发，绑定设备与源 IP、5 分钟失效且有界保存；首次成功后仅允许同 Call-ID/CSeq/摘要的 UDP 幂等重传，拒绝跨请求重放、任意 nonce、错误 realm/username/URI 和算法混淆；服务端保持 MD5 设备兼容，级联客户端支持 MD5/SHA-1/SHA-256 并明确拒绝未知算法；`register_version_test.go`、`sip/auth_test.go`、`cascade_test.go` |
+| 畸形 SIP 地址与 SSRC 配置 | 已加固并有自动化证据 | `ParseSipURI`、`ParseAddressValue(s)` 对空串、短 scheme、纯空白、空用户/主机、缺失引号或 `>` 返回错误；裸 `addr-spec` 和括号 IPv6 正常解析；模糊测试覆盖任意字符串不 panic。SSRC 仅接受 0/1 流类型和 10 位数字域编码，错误沿媒体调用链返回，不再直接切片；`parser_robustness_test.go`、`stream_test.go` |
 | `Date + Note` 信令数字摘要 | 已形成自动化闭环，待真实互通 | 按 `From + To + Call-ID + Date + seed + 消息体` 计算；Date 使用北京时间并校验可配置时间窗；支持 MD5/SHA-1/SHA-256/SM3，SM3 使用成熟国密库并以 GB/T 32905 已知向量校验；nonce 默认 Base64 输出，可配置 hex 并可兼容接收标准示例中的十六进制形式；REGISTER 请求/响应免签。`Enabled` 启用出站签名，并对入向已携带 Note 的报文验签；`Required` 还会拒绝缺失或验签失败的入向报文；无效响应被丢弃，级联和 OPTIONS 使用 context-aware 事务等待，在 deadline 到达时退出且不遗留阻塞等待 goroutine。默认 MD5 且整体默认关闭以保持旧设备兼容。`RequireMessageAuth` 仍是另一套 RFC Digest 兼容开关，二者不能混同；`signal_digest.go`、`signal_digest_test.go`、`sip/signal_digest_test.go`、`cascade_test.go` |
 | 数字证书双向认证、CRL | 未实现完整协议闭环 | 高安全级别专项，不能宣称支持 |
 | `Monitor-User-Identity` 跨域身份头 | 未实现完整生成、逐级追加和验证 | 与安全路由网关身份体系一起设计，不能仅做字符串透传后宣称完成 |

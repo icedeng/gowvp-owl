@@ -272,7 +272,11 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 		return
 	}
 	if offer.SSRC == "" {
-		offer.SSRC = g.getSSRC(0)
+		offer.SSRC, err = g.getSSRC(0)
+		if err != nil {
+			respondCascadeInviteStatus(ctx, worker, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	sessionCtx, cancel := context.WithCancel(context.Background())

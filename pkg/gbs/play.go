@@ -124,8 +124,16 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	stream.mediaServer = in.SMS
 
 	// SSRC 在打开 ZLM RTP 端口前生成并绑定，避免不同设备向同一端口串流。
-	ssrc := g.getSSRC(0)
-	ssrcValue, _ := strconv.ParseUint(ssrc, 10, 64)
+	ssrc, err := g.getSSRC(0)
+	if err != nil {
+		g.streams.Delete(key)
+		return err
+	}
+	ssrcValue, err := strconv.ParseUint(ssrc, 10, 64)
+	if err != nil {
+		g.streams.Delete(key)
+		return fmt.Errorf("invalid GB28181 SSRC %q: %w", ssrc, err)
+	}
 	stream.ssrc = ssrc
 	log.Debug("1. 开启RTP服务器等待接收视频流", "ssrc", ssrc)
 	// 开启RTP服务器等待接收视频流

@@ -510,8 +510,12 @@ func (g *GB28181API) startTalkRTP(streamID string) error {
 		session.startBusy = false
 		session.mu.Unlock()
 	}()
-	ssrc := g.getSSRC(0)
-	_, err := g.sms.StartSendRTPTalk(session.SMS, zlm.StartSendRTPTalkRequest{
+	ssrc, err := g.getSSRC(0)
+	if err != nil {
+		session.complete(err)
+		return err
+	}
+	_, err = g.sms.StartSendRTPTalk(session.SMS, zlm.StartSendRTPTalkRequest{
 		Vhost: session.SourceVHost, App: session.SourceApp, Stream: session.SourceStream,
 		SSRC: ssrc, RecvStreamID: session.ReceiveStream, Type: broadcastRTPTypeES, PT: broadcastPCMAPayload, OnlyAudio: true,
 	})
@@ -713,7 +717,10 @@ func (g *GB28181API) sipInviteVoice(ch *Channel, in *VoiceInput, port int, strea
 	if err != nil {
 		return err
 	}
-	ssrc := g.getSSRC(0)
+	ssrc, err := g.getSSRC(0)
+	if err != nil {
+		return err
+	}
 	msg := &sdp.Message{
 		Origin: sdp.Origin{
 			Username:    ch.ChannelID,

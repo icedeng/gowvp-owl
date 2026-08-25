@@ -157,7 +157,10 @@ func (g *GB28181API) startCascadeVoiceSource(ctx context.Context, worker *cascad
 	if g == nil || g.sms == nil || worker == nil || server == nil {
 		return nil, fmt.Errorf("cascade Broadcast media service is unavailable")
 	}
-	ssrc := g.getSSRC(0)
+	ssrc, err := g.getSSRC(0)
+	if err != nil {
+		return nil, err
+	}
 	ssrcNumber, err := strconv.ParseUint(ssrc, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid cascade Broadcast SSRC: %w", err)
