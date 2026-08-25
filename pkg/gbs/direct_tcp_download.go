@@ -364,6 +364,29 @@ func (m *DirectTCPDownloadManager) CancelAll() int {
 	return len(sessions)
 }
 
+// CancelDevice 取消指定设备的全部活动下载，其他设备不受影响。
+func (m *DirectTCPDownloadManager) CancelDevice(deviceID string) int {
+	if m == nil {
+		return 0
+	}
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return 0
+	}
+	m.mu.RLock()
+	sessions := make([]*directTCPDownloadSession, 0, m.deviceCount[deviceID])
+	for _, session := range m.active {
+		if session != nil && session.request.DeviceID == deviceID {
+			sessions = append(sessions, session)
+		}
+	}
+	m.mu.RUnlock()
+	for _, session := range sessions {
+		session.requestCancel()
+	}
+	return len(sessions)
+}
+
 // NotifySenderFinished 处理 MediaStatus/121；未知大小时以该通知收敛传输。
 func (m *DirectTCPDownloadManager) NotifySenderFinished(sessionID string) bool {
 	if m == nil {

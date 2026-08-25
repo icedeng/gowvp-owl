@@ -20,7 +20,10 @@ type Adapter struct {
 
 // DeleteDevice implements ipc.Protocoler.
 func (a *Adapter) DeleteDevice(ctx context.Context, device *ipc.Device) error {
-	return nil
+	if a == nil || a.gbs == nil || device == nil {
+		return nil
+	}
+	return a.gbs.CleanupDevice(ctx, device.GetGB28181DeviceID())
 }
 
 func NewAdapter(adapter ipc.Adapter, gbs *gbs.Server, smsCore sms.Core) *Adapter {

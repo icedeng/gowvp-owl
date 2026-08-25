@@ -259,23 +259,19 @@ func (c Core) DelDevice(ctx context.Context, id string) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
+	if protocol, ok := c.protocols[target.GetType()]; ok {
+		if err := protocol.DeleteDevice(ctx, target); err != nil {
+			return nil, reason.ErrDB.Withf(`Cleanup device err[%s]`, err.Error())
+		}
+	}
 
 	var dev Device
 	if err := c.store.Device().Delete(ctx, &dev, orm.Where("id=?", target.ID)); err != nil {
 		return nil, reason.ErrDB.Withf(`Del err[%s]`, err.Error())
 	}
 
-	if err := c.store.Channel().Session(ctx, func(tx *gorm.DB) error {
-		if err := orm.Delete(tx, &dev, orm.Where("id=?", target.ID)); err != nil {
-			return err
-		}
-		if protocol, ok := c.protocols[dev.GetType()]; ok {
-			if err := protocol.DeleteDevice(ctx, &dev); err != nil {
-				return err
-			}
-		}
-		return nil
-	}, func(d *gorm.DB) error {
+	// 缓存存储会在 Device.Delete 事务内删除通道；保留兜底删除以兼容直接使用数据库存储的调用方。
+	if err := c.store.Channel().Session(ctx, func(d *gorm.DB) error {
 		return d.Where("did=?", target.ID).Delete(&Channel{}).Error
 	}); err != nil {
 		return nil, reason.ErrDB.Withf(`DelChannel err[%s]`, err.Error())

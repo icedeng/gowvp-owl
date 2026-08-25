@@ -196,6 +196,36 @@ func TestDirectTCPDownloadManagerTimeoutCancelAndMediaStatus(t *testing.T) {
 		}
 	})
 
+	t.Run("cancel device", func(t *testing.T) {
+		targetRelease := make(chan struct{})
+		targetAddress := startDirectTCPFixture(t, func(net.Conn) { <-targetRelease })
+		defer close(targetRelease)
+		otherRelease := make(chan struct{})
+		otherAddress := startDirectTCPFixture(t, func(net.Conn) { <-otherRelease })
+		defer close(otherRelease)
+		manager := newTestDirectTCPManager(t)
+		target := directTCPRequest("cancel-device-target", targetAddress)
+		other := directTCPRequest("cancel-device-other", otherAddress)
+		other.DeviceID = "34020000001320000009"
+		startDirectTCPTestDownload(t, manager, target)
+		startDirectTCPTestDownload(t, manager, other)
+		waitDirectTCPReceiving(t, manager, target.SessionID)
+		waitDirectTCPReceiving(t, manager, other.SessionID)
+
+		if count := manager.CancelDevice(target.DeviceID); count != 1 {
+			t.Fatalf("cancelled device sessions = %d; want 1", count)
+		}
+		state := waitDirectTCPState(t, manager, target.SessionID)
+		if state.Status != directTCPStatusCancelled {
+			t.Fatalf("target device state = %+v", state)
+		}
+		if state, ok := manager.State(other.SessionID); !ok || state.Status != directTCPStatusReceiving {
+			t.Fatalf("other device state = %+v, exists=%v", state, ok)
+		}
+		manager.CancelDevice(other.DeviceID)
+		_ = waitDirectTCPState(t, manager, other.SessionID)
+	})
+
 	t.Run("media status", func(t *testing.T) {
 		release := make(chan struct{})
 		address := startDirectTCPFixture(t, func(conn net.Conn) {

@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"net"
 	"strings"
@@ -256,6 +257,161 @@ func TestCloseCleansOrdinaryMediaSessionsOnce(t *testing.T) {
 	}
 	if syncMapLen(&api.talkSessions) != 0 || syncMapLen(&api.broadcastSessions) != 0 {
 		t.Fatal("voice sessions survived close")
+	}
+}
+
+func TestCleanupDeviceOnlyRemovesMatchingRuntimeState(t *testing.T) {
+	media := &fakeRTPMediaService{}
+	server := &sms.MediaServer{}
+	streams := &conc.Map[string, *Streams]{}
+	api := &GB28181API{
+		sms: media, streams: streams,
+		cascadeSources:       make(map[string]*cascadeSourceRef),
+		cascadeSubscriptions: make(map[string]*cascadeDownstreamSubscription),
+		registerNonces:       make(map[string]registerNonceState),
+		messageNonces:        make(map[string]messageNonceState),
+		registerResults:      make(map[[sha256.Size]byte]registerResultState),
+		upgradeStates:        make(map[string]UpgradeState),
+		snapshotStates:       make(map[string]SnapshotState),
+	}
+	otherDeviceID := "34020000001320000009"
+
+	live := &Streams{DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, StreamID: "delete-live", mediaServer: server}
+	streams.Store(resolvePlaySessionKey(live.DeviceID, live.ChannelID, ""), live)
+	otherLive := &Streams{DeviceID: otherDeviceID, ChannelID: "34020000001320000010", StreamID: "keep-live", mediaServer: server}
+	streams.Store(resolvePlaySessionKey(otherLive.DeviceID, otherLive.ChannelID, ""), otherLive)
+
+	talkStream := &Streams{DeviceID: gb10DeviceID, ChannelID: "34020000001320000002", StreamID: "delete-talk", mediaServer: server}
+	talk := &talkSession{
+		DeviceID: talkStream.DeviceID, ChannelID: talkStream.ChannelID, ReceiveStream: talkStream.StreamID,
+		SourceVHost: defaultBroadcastVHost, SourceApp: defaultBroadcastApp, SourceStream: "microphone",
+		SMS: server, SSRC: "delete-talk-ssrc", Stream: talkStream, receiverOpened: true, rtpStarted: true,
+		ready: make(chan error, 1),
+	}
+	api.talkSessions.Store(talk.ReceiveStream, talk)
+	streams.Store(voiceKey(voiceModeTalk, talk.DeviceID, talk.ChannelID), talkStream)
+
+	broadcastStream := &Streams{DeviceID: gb10DeviceID, ChannelID: "34020000001320000003", StreamID: "delete-broadcast"}
+	broadcast := &broadcastSession{
+		DeviceID: broadcastStream.DeviceID, ChannelID: broadcastStream.ChannelID,
+		SourceVHost: defaultBroadcastVHost, SourceApp: defaultBroadcastApp, SourceStream: "microphone",
+		SMS: server, SSRC: "delete-broadcast-ssrc", Stream: broadcastStream, rtpStarted: true,
+		ready: make(chan error, 1),
+	}
+	api.broadcastSessions.Store(broadcast.ChannelID, broadcast)
+	streams.Store(voiceKey(voiceModeBroadcast, broadcast.DeviceID, broadcast.ChannelID), broadcastStream)
+
+	source := &cascadeSourceRef{key: "delete-source", refs: 1, stream: live}
+	cascade := &cascadeMediaSession{
+		source: source, server: server, ssrc: "delete-cascade-ssrc",
+		vhost: defaultBroadcastVHost, app: defaultBroadcastApp, stream: "cascade-source",
+	}
+	api.cascadeSources[source.key] = source
+	api.inviteDialogs.Store("delete-cascade", &inboundInviteDialog{CallID: "delete-cascade", Cascade: cascade})
+
+	now := time.Now()
+	api.queryStates.Store(gb10DeviceID, &QueryState{UpdatedAt: now})
+	api.queryStates.Store(otherDeviceID, &QueryState{UpdatedAt: now})
+	api.rtpDownloads.Store("delete-download", testRTPDownloadSession(gb10DeviceID, gb10ChannelID, now))
+	api.rtpDownloads.Store("keep-download", testRTPDownloadSession(otherDeviceID, otherLive.ChannelID, now))
+	api.storeUpgradeState(UpgradeState{DeviceID: gb10DeviceID, SessionID: "delete-upgrade", UpdatedAt: now})
+	api.storeUpgradeState(UpgradeState{DeviceID: otherDeviceID, SessionID: "keep-upgrade", UpdatedAt: now})
+	api.storeSnapshotState(SnapshotState{DeviceID: gb10DeviceID, SessionID: "delete-snapshot", UpdatedAt: now})
+	api.storeSnapshotState(SnapshotState{DeviceID: otherDeviceID, SessionID: "keep-snapshot", UpdatedAt: now})
+	api.outgoingSubscriptions.Store(gb10DeviceID+"|target|Catalog", &outgoingSubscriptionDialog{})
+	api.outgoingSubscriptions.Store(otherDeviceID+"|target|Catalog", &outgoingSubscriptionDialog{})
+	api.cascadeSubscriptions[gb10DeviceID+"|target|Catalog"] = &cascadeDownstreamSubscription{Input: SubscribeInput{DeviceID: gb10DeviceID}}
+	api.cascadeSubscriptions[otherDeviceID+"|target|Catalog"] = &cascadeDownstreamSubscription{Input: SubscribeInput{DeviceID: otherDeviceID}}
+	api.registerNonces["delete-register-nonce"] = registerNonceState{DeviceID: gb10DeviceID}
+	api.registerNonces["keep-register-nonce"] = registerNonceState{DeviceID: otherDeviceID}
+	api.messageNonces["delete-message-nonce"] = messageNonceState{DeviceID: gb10DeviceID}
+	api.messageNonces["keep-message-nonce"] = messageNonceState{DeviceID: otherDeviceID}
+	deleteRegisterResultKey := [sha256.Size]byte{1}
+	keepRegisterResultKey := [sha256.Size]byte{2}
+	api.registerResults[deleteRegisterResultKey] = registerResultState{DeviceID: gb10DeviceID}
+	api.registerResults[keepRegisterResultKey] = registerResultState{DeviceID: otherDeviceID}
+
+	if err := api.cleanupDevice(context.Background(), gb10DeviceID); err != nil {
+		t.Fatal(err)
+	}
+
+	if streams.Len() != 1 {
+		t.Fatalf("remaining streams = %d; want 1", streams.Len())
+	}
+	if current, ok := streams.Load(resolvePlaySessionKey(otherLive.DeviceID, otherLive.ChannelID, "")); !ok || current != otherLive {
+		t.Fatal("other device stream was removed")
+	}
+	if syncMapLen(&api.talkSessions) != 0 || syncMapLen(&api.broadcastSessions) != 0 {
+		t.Fatal("deleted device voice sessions survived cleanup")
+	}
+	if _, ok := api.inviteDialogs.Load("delete-cascade"); ok {
+		t.Fatal("deleted device cascade session survived cleanup")
+	}
+	api.cascadeMediaMu.Lock()
+	_, sourceExists := api.cascadeSources[source.key]
+	api.cascadeMediaMu.Unlock()
+	if sourceExists {
+		t.Fatal("deleted device cascade source survived cleanup")
+	}
+	if _, ok := api.queryStates.Load(gb10DeviceID); ok {
+		t.Fatal("deleted device query state survived cleanup")
+	}
+	if _, ok := api.queryStates.Load(otherDeviceID); !ok {
+		t.Fatal("other device query state was removed")
+	}
+	if _, ok := api.rtpDownloads.Load("delete-download"); ok {
+		t.Fatal("deleted device RTP download state survived cleanup")
+	}
+	if _, ok := api.rtpDownloads.Load("keep-download"); !ok {
+		t.Fatal("other device RTP download state was removed")
+	}
+	if _, ok := api.UpgradeState(gb10DeviceID, "delete-upgrade"); ok {
+		t.Fatal("deleted device upgrade state survived cleanup")
+	}
+	if _, ok := api.UpgradeState(otherDeviceID, "keep-upgrade"); !ok {
+		t.Fatal("other device upgrade state was removed")
+	}
+	if _, ok := api.SnapshotState(gb10DeviceID, "delete-snapshot"); ok {
+		t.Fatal("deleted device snapshot state survived cleanup")
+	}
+	if _, ok := api.SnapshotState(otherDeviceID, "keep-snapshot"); !ok {
+		t.Fatal("other device snapshot state was removed")
+	}
+	if _, ok := api.outgoingSubscriptions.Load(gb10DeviceID + "|target|Catalog"); ok {
+		t.Fatal("deleted device outgoing subscription survived cleanup")
+	}
+	if _, ok := api.outgoingSubscriptions.Load(otherDeviceID + "|target|Catalog"); !ok {
+		t.Fatal("other device outgoing subscription was removed")
+	}
+	if _, ok := api.cascadeSubscriptions[gb10DeviceID+"|target|Catalog"]; ok {
+		t.Fatal("deleted device cascade subscription survived cleanup")
+	}
+	if _, ok := api.cascadeSubscriptions[otherDeviceID+"|target|Catalog"]; !ok {
+		t.Fatal("other device cascade subscription was removed")
+	}
+	if _, ok := api.registerNonces["delete-register-nonce"]; ok {
+		t.Fatal("deleted device REGISTER nonce survived cleanup")
+	}
+	if _, ok := api.registerNonces["keep-register-nonce"]; !ok {
+		t.Fatal("other device REGISTER nonce was removed")
+	}
+	if _, ok := api.messageNonces["delete-message-nonce"]; ok {
+		t.Fatal("deleted device MESSAGE nonce survived cleanup")
+	}
+	if _, ok := api.messageNonces["keep-message-nonce"]; !ok {
+		t.Fatal("other device MESSAGE nonce was removed")
+	}
+	if _, ok := api.registerResults[deleteRegisterResultKey]; ok {
+		t.Fatal("deleted device REGISTER result survived cleanup")
+	}
+	if _, ok := api.registerResults[keepRegisterResultKey]; !ok {
+		t.Fatal("other device REGISTER result was removed")
+	}
+	media.mu.Lock()
+	closeCalls, stopCalls := media.closeCalls, media.stopCalls
+	media.mu.Unlock()
+	if closeCalls != 2 || stopCalls != 3 {
+		t.Fatalf("media cleanup calls = close:%d stop:%d; want close:2 stop:3", closeCalls, stopCalls)
 	}
 }
 

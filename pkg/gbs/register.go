@@ -43,6 +43,7 @@ type registerNonceState struct {
 }
 
 type registerResultState struct {
+	DeviceID  string
 	Date      string
 	ExpiresAt time.Time
 }
@@ -506,6 +507,7 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	respFn := func() {
 		now := time.Now()
 		state := registerResultState{
+			DeviceID:  ctx.DeviceID,
 			Date:      now.Format("2006-01-02T15:04:05.000"),
 			ExpiresAt: now.Add(registerResultTTL),
 		}
