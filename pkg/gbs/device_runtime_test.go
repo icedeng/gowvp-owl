@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs/sip"
+	"github.com/ixugo/goddd/pkg/orm"
 )
 
 func TestDeviceRuntimeStateConcurrentReadWrite(t *testing.T) {
@@ -51,4 +53,18 @@ func TestDeviceRuntimeStateConcurrentReadWrite(t *testing.T) {
 		}()
 	}
 	group.Wait()
+}
+
+func TestNewDeviceRestoresRegistrationExpiry(t *testing.T) {
+	now := orm.Now()
+	device := NewDevice(nil, &ipc.Device{
+		ID: "GB_runtime", DeviceID: gb10DeviceID, Address: "192.0.2.10:5060",
+		RegisteredAt: now, KeepaliveAt: now, Expires: 3600,
+	})
+	if device == nil {
+		t.Fatal("NewDevice returned nil")
+	}
+	if got := device.runtimeSnapshot().Expires; got != 3600 {
+		t.Fatalf("restored Expires = %d, want 3600", got)
+	}
 }

@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -320,53 +321,64 @@ func (s *Server) startTickerCheck() {
 			return
 		case <-timer.C:
 		}
-		now := time.Now()
-		s.memoryStorer.RangeDevices(func(key string, dev *Device) bool {
-			state := dev.runtimeSnapshot()
-			if !state.IsOnline {
-				return true
-			}
-			if len(key) < 18 {
-				return true
-			}
+		s.checkOfflineDevices(time.Now())
+		timer.Reset(time.Second)
+	}
+}
 
-			// 计算超时时间：心跳间隔 * 超时次数
-			// 默认心跳间隔 60s，超时次数 3 次，即 3 分钟无心跳判定离线
-			interval := state.KeepaliveInterval
-			if interval == 0 {
-				interval = 60
-			}
-			timeoutCount := state.KeepaliveTimeout
-			if timeoutCount == 0 {
-				timeoutCount = 3
-			}
-			timeout := time.Duration(interval) * time.Duration(timeoutCount) * time.Second
+var errOfflineSnapshotStale = errors.New("device state changed during offline check")
 
-			// 跳过未收到过心跳的设备（LastKeepaliveAt 为零值），这类设备依赖注册超时处理
-			if state.LastKeepaliveAt.IsZero() {
-				// 如果注册时间也超过了超时时间，则判定离线
-				if !state.LastRegisterAt.IsZero() && now.Sub(state.LastRegisterAt) >= timeout {
-					if err := s.gb.logout(key, func(d *ipc.Device) error {
-						d.IsOnline = false
-						return nil
-					}); err != nil {
-						slog.Error("logout device failed", "device_id", key, "err", err)
-					}
+func (s *Server) checkOfflineDevices(now time.Time) {
+	if s == nil || s.gb == nil || s.memoryStorer == nil {
+		return
+	}
+	s.memoryStorer.RangeDevices(func(key string, dev *Device) bool {
+		state := dev.runtimeSnapshot()
+		if !state.IsOnline {
+			return true
+		}
+		if len(key) < 18 {
+			return true
+		}
+
+		// 计算超时时间：心跳间隔 * 超时次数
+		// 默认心跳间隔 60s，超时次数 3 次，即 3 分钟无心跳判定离线
+		interval := state.KeepaliveInterval
+		if interval == 0 {
+			interval = 60
+		}
+		timeoutCount := state.KeepaliveTimeout
+		if timeoutCount == 0 {
+			timeoutCount = 3
+		}
+		timeout := time.Duration(interval) * time.Duration(timeoutCount) * time.Second
+
+		// 跳过未收到过心跳的设备（LastKeepaliveAt 为零值），这类设备依赖注册超时处理
+		if state.LastKeepaliveAt.IsZero() {
+			// 如果注册时间也超过了超时时间，则判定离线
+			if !state.LastRegisterAt.IsZero() && now.Sub(state.LastRegisterAt) >= timeout {
+				if _, err := s.logoutDeviceIfCurrent(key, state); err != nil {
+					slog.Error("logout device failed", "device_id", key, "err", err)
 				}
-				return true
 			}
+			return true
+		}
 
-			// 心跳超时或连接丢失，判定设备离线
-			if sub := now.Sub(state.LastKeepaliveAt); sub >= timeout || state.Conn == nil {
-				// 对 TCP/TLS 设备在离线判定前先做一次 OPTIONS 探测，避免瞬时抖动误判离线。
-				if sub >= timeout && state.Conn != nil && state.Source != nil && state.Source.Network() != "udp" {
-					if err := s.gb.ProbeOptions(context.Background(), &OptionsProbeInput{
-						DeviceID: key,
-						Timeout:  3 * time.Second,
-					}); err == nil {
-						return true
-					}
+		// 心跳超时或连接丢失，判定设备离线
+		if sub := now.Sub(state.LastKeepaliveAt); sub >= timeout || state.Conn == nil {
+			// 对 TCP/TLS 设备在离线判定前先做一次 OPTIONS 探测，避免瞬时抖动误判离线。
+			if sub >= timeout && state.Conn != nil && state.Source != nil && state.Source.Network() != "udp" {
+				if err := s.gb.ProbeOptions(context.Background(), &OptionsProbeInput{
+					DeviceID: key,
+					Timeout:  3 * time.Second,
+				}); err == nil {
+					return true
 				}
+			}
+			changed, err := s.logoutDeviceIfCurrent(key, state)
+			if err != nil {
+				slog.Error("logout device failed", "device_id", key, "err", err)
+			} else if changed {
 				slog.Info("device offline detected",
 					"device_id", key,
 					"last_keepalive", state.LastKeepaliveAt,
@@ -374,17 +386,26 @@ func (s *Server) startTickerCheck() {
 					"elapsed", sub,
 					"conn_nil", state.Conn == nil,
 				)
-				if err := s.gb.logout(key, func(d *ipc.Device) error {
-					d.IsOnline = false
-					return nil
-				}); err != nil {
-					slog.Error("logout device failed", "device_id", key, "err", err)
-				}
 			}
-			return true
-		})
-		timer.Reset(time.Second)
+		}
+		return true
+	})
+}
+
+func (s *Server) logoutDeviceIfCurrent(deviceID string, expected deviceRuntimeState) (bool, error) {
+	err := s.gb.logout(deviceID, func(d *ipc.Device) error {
+		if !d.IsOnline || d.Expires != expected.Expires ||
+			!d.RegisteredAt.Time.Equal(expected.LastRegisterAt) ||
+			!d.KeepaliveAt.Time.Equal(expected.LastKeepaliveAt) {
+			return errOfflineSnapshotStale
+		}
+		d.IsOnline = false
+		return nil
+	})
+	if errors.Is(err, errOfflineSnapshotStale) {
+		return false, nil
 	}
+	return err == nil, err
 }
 
 // MODDEBUG MODDEBUG

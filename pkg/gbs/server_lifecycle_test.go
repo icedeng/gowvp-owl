@@ -2,12 +2,15 @@ package gbs
 
 import (
 	"context"
+	"net"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/ixugo/goddd/pkg/conc"
+	"github.com/ixugo/goddd/pkg/orm"
 )
 
 func TestTickerCheckStopsWithGB28181Lifecycle(t *testing.T) {
@@ -25,6 +28,82 @@ func TestTickerCheckStopsWithGB28181Lifecycle(t *testing.T) {
 		t.Fatal("device ticker did not stop with GB28181 lifecycle")
 	}
 }
+
+func TestOfflineCheckDoesNotOverrideNewKeepalive(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-time.Minute)
+	connection := newFlowConnection()
+	base := &flowMemory{
+		persistent: &ipc.Device{
+			DeviceID: gb10DeviceID, IsOnline: true, RegisteredAt: orm.Time{Time: old},
+			KeepaliveAt: orm.Time{Time: old}, Expires: 3600,
+		},
+		runtime: &Device{
+			IsOnline: true, LastRegisterAt: old, LastKeepaliveAt: old, Expires: 3600,
+			conn: connection, source: &net.UDPAddr{IP: net.ParseIP("192.0.2.10"), Port: 5060},
+			keepaliveInterval: 1, keepaliveTimeout: 1,
+		},
+	}
+	memory := &refreshBeforeOfflineMemory{flowMemory: base, refreshedAt: now}
+	api := &GB28181API{}
+	server := &Server{gb: api, memoryStorer: memory}
+	api.svr = server
+
+	server.checkOfflineDevices(now)
+
+	if !memory.persistent.IsOnline || !memory.runtime.IsOnlineNow() {
+		t.Fatal("stale offline scan overrode a newer keepalive")
+	}
+	if !memory.persistent.KeepaliveAt.Time.Equal(now) || !memory.runtime.runtimeSnapshot().LastKeepaliveAt.Equal(now) {
+		t.Fatal("newer keepalive was not preserved")
+	}
+}
+
+func TestOfflineCheckMarksUnchangedTimedOutDeviceOffline(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-time.Minute)
+	connection := newFlowConnection()
+	memory := &flowMemory{
+		persistent: &ipc.Device{
+			DeviceID: gb10DeviceID, IsOnline: true, RegisteredAt: orm.Time{Time: old},
+			KeepaliveAt: orm.Time{Time: old}, Expires: 3600,
+		},
+		runtime: &Device{
+			IsOnline: true, LastRegisterAt: old, LastKeepaliveAt: old, Expires: 3600,
+			conn: connection, source: &net.UDPAddr{IP: net.ParseIP("192.0.2.10"), Port: 5060},
+			keepaliveInterval: 1, keepaliveTimeout: 1,
+		},
+	}
+	api := &GB28181API{}
+	server := &Server{gb: api, memoryStorer: memory}
+	api.svr = server
+
+	server.checkOfflineDevices(now)
+
+	if memory.persistent.IsOnline || memory.runtime.IsOnlineNow() {
+		t.Fatal("unchanged timed-out device remained online")
+	}
+}
+
+type refreshBeforeOfflineMemory struct {
+	*flowMemory
+	refreshedAt time.Time
+	refreshed   bool
+}
+
+func (m *refreshBeforeOfflineMemory) Change(deviceID string, persistent func(*ipc.Device) error, runtime func(*Device)) error {
+	if !m.refreshed {
+		m.refreshed = true
+		m.persistent.KeepaliveAt = orm.Time{Time: m.refreshedAt}
+		m.runtime.UpdateRuntime(func(device *Device) {
+			device.LastKeepaliveAt = m.refreshedAt
+			device.conn = newFlowConnection()
+		})
+	}
+	return m.flowMemory.Change(deviceID, persistent, runtime)
+}
+
+var _ MemoryStorer = (*refreshBeforeOfflineMemory)(nil)
 
 func TestRuntimeStateCleanerRunsWithoutNewRequestsAndStops(t *testing.T) {
 	now := time.Now()

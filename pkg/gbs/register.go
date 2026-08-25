@@ -663,9 +663,12 @@ func (g *GB28181API) respondRegister(ctx *sip.Context, status int, reason string
 }
 
 func (g *GB28181API) logout(deviceID string, changeFn func(*ipc.Device) error) error {
-	slog.Info("status change 设备离线", "device_id", deviceID)
-	return g.svr.memoryStorer.Change(deviceID, changeFn, func(d *Device) {
+	err := g.svr.memoryStorer.Change(deviceID, changeFn, func(d *Device) {
 		d.Expires = 0
 		d.IsOnline = false
 	})
+	if err == nil {
+		slog.Info("status change 设备离线", "device_id", deviceID)
+	}
+	return err
 }

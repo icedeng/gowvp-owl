@@ -189,6 +189,19 @@ func (d *Device) UpdateRuntime(update func(*Device)) {
 	d.stateMu.Unlock()
 }
 
+// SerializeRegistrationState 将同一设备的持久化与运行态变更串行化，避免 REGISTER、心跳和离线扫描交错提交。
+func (d *Device) SerializeRegistrationState(change func() error) error {
+	if change == nil {
+		return nil
+	}
+	if d == nil {
+		return change()
+	}
+	d.registerWithKeepaliveMutex.Lock()
+	defer d.registerWithKeepaliveMutex.Unlock()
+	return change()
+}
+
 // IsOnlineNow 返回并发安全的当前在线状态。
 func (d *Device) IsOnlineNow() bool { return d.runtimeSnapshot().IsOnline }
 
@@ -218,6 +231,7 @@ func NewDevice(conn sip.Connection, d *ipc.Device) *Device {
 		Address:                d.Address,
 		LastKeepaliveAt:        d.KeepaliveAt.Time,
 		LastRegisterAt:         d.RegisteredAt.Time,
+		Expires:                d.Expires,
 		IsOnline:               d.IsOnline,
 		Password:               d.Password,
 		gbVersion:              string(deviceProtocolVersion(d.Ext)),

@@ -97,32 +97,37 @@ func (c *Cache) RangeDevices(fn func(key string, value *gbs.Device) bool) {
 
 // Change implements gbs.MemoryStorer.
 func (c *Cache) Change(deviceID string, changeFn func(*ipc.Device) error, changeFn2 func(*gbs.Device)) error {
-	var dev ipc.Device
-	if err := c.Storer.Device().Update(context.TODO(), &dev, changeFn, orm.Where("device_id=?", deviceID)); err != nil {
-		return err
-	}
-
 	dev2, ok := c.devices.Load(deviceID)
 	if !ok {
+		var dev ipc.Device
+		if err := c.Storer.Device().Update(context.TODO(), &dev, changeFn, orm.Where("device_id=?", deviceID)); err != nil {
+			return err
+		}
 		return fmt.Errorf("device not found")
 	}
-	dev2.UpdateRuntime(func(runtime *gbs.Device) {
-		runtime.IsOnline = dev.IsOnline
-		runtime.LastKeepaliveAt = dev.KeepaliveAt.Time
-		runtime.LastRegisterAt = dev.RegisteredAt.Time
-		runtime.Expires = dev.Expires
-		runtime.Password = dev.Password
-		runtime.Address = dev.Address
-		if changeFn2 != nil {
-			changeFn2(runtime)
+	return dev2.SerializeRegistrationState(func() error {
+		var dev ipc.Device
+		if err := c.Storer.Device().Update(context.TODO(), &dev, changeFn, orm.Where("device_id=?", deviceID)); err != nil {
+			return err
 		}
+		dev2.UpdateRuntime(func(runtime *gbs.Device) {
+			runtime.IsOnline = dev.IsOnline
+			runtime.LastKeepaliveAt = dev.KeepaliveAt.Time
+			runtime.LastRegisterAt = dev.RegisteredAt.Time
+			runtime.Expires = dev.Expires
+			runtime.Password = dev.Password
+			runtime.Address = dev.Address
+			if changeFn2 != nil {
+				changeFn2(runtime)
+			}
+		})
+		if !dev2.IsOnlineNow() {
+			if err := c.Storer.Channel().BatchEdit(context.TODO(), "is_online", false, orm.Where("did=?", dev.ID)); err != nil {
+				slog.Error("更新通道离线状态失败", "error", err)
+			}
+		}
+		return nil
 	})
-	if !dev2.IsOnlineNow() {
-		if err := c.Storer.Channel().BatchEdit(context.TODO(), "is_online", false, orm.Where("did=?", dev.ID)); err != nil {
-			slog.Error("更新通道离线状态失败", "error", err)
-		}
-	}
-	return nil
 }
 
 // GetChannel implements gbs.MemoryStorer.
