@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -47,20 +48,25 @@ func (g *GB28181API) stopPlay(ch *Channel, in *StopPlayInput) error {
 		return nil
 	}
 
-	if stream.Resp == nil {
-		return nil
-	}
+	var cleanupErr error
+	if stream.Resp != nil {
+		req, err := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp)
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else {
+			req.SetDestination(ch.Source())
+			req.SetConnection(ch.Conn())
 
-	req, err := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp)
-	if err != nil {
-		return err
+			// 忽略响应，此处必须尽快返回。
+			_, err = g.svr.Request(req)
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
 	}
-	req.SetDestination(ch.Source())
-	req.SetConnection(ch.Conn())
-
-	// 忽略响应，此处必须尽快返回
-	_, err = g.svr.Request(req)
-	return err
+	if g.sms != nil && stream.mediaServer != nil && strings.TrimSpace(stream.StreamID) != "" {
+		_, err := g.sms.CloseRTPServer(stream.mediaServer, zlm.CloseRTPServerRequest{StreamID: stream.StreamID})
+		cleanupErr = errors.Join(cleanupErr, err)
+	}
+	return cleanupErr
 }
 
 // StopPlay 加锁的停止播放
