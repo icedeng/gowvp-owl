@@ -66,6 +66,10 @@ type Server struct {
 	cancel context.CancelFunc
 
 	closeOnce    sync.Once
+	lifecycleMu  sync.Mutex
+	listenerWG   sync.WaitGroup
+	connectionWG sync.WaitGroup
+	requestWG    sync.WaitGroup
 	connectionMu sync.Mutex
 	connections  map[Connection]struct{}
 
@@ -174,6 +178,11 @@ func (s *Server) ListenUDPServer(addr string) error {
 	if err := s.bindUDP(addr); err != nil {
 		return err
 	}
+	if !s.beginListener() {
+		_ = s.udpConn.Close()
+		return fmt.Errorf("SIP server is closed")
+	}
+	defer s.listenerWG.Done()
 	return s.serveUDP(s.udpConn)
 }
 
@@ -182,8 +191,13 @@ func (s *Server) StartUDPServer(addr string) error {
 	if err := s.bindUDP(addr); err != nil {
 		return err
 	}
+	if !s.beginListener() {
+		_ = s.udpConn.Close()
+		return fmt.Errorf("SIP server is closed")
+	}
 	conn := s.udpConn
 	go func() {
+		defer s.listenerWG.Done()
 		if err := s.serveUDP(conn); err != nil {
 			slog.Error("SIP UDP server stopped", "addr", addr, "err", err)
 		}
@@ -217,8 +231,15 @@ func (s *Server) serveUDP(conn Connection) error {
 	)
 	buf := make([]byte, bufferSize)
 	parser := newParser()
-	defer parser.stop()
-	go s.handlerListen(parser.out)
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		s.handlerListen(parser.out)
+	}()
+	defer func() {
+		parser.stop()
+		<-handlerDone
+	}()
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -242,6 +263,11 @@ func (s *Server) ListenTCPServer(addr string) error {
 	if err := s.bindTCP(addr); err != nil {
 		return err
 	}
+	if !s.beginListener() {
+		_ = s.tcpListener.Close()
+		return fmt.Errorf("SIP server is closed")
+	}
+	defer s.listenerWG.Done()
 	return s.serveTCP(s.tcpListener, addr)
 }
 
@@ -250,8 +276,13 @@ func (s *Server) StartTCPServer(addr string) error {
 	if err := s.bindTCP(addr); err != nil {
 		return err
 	}
+	if !s.beginListener() {
+		_ = s.tcpListener.Close()
+		return fmt.Errorf("SIP server is closed")
+	}
 	listener := s.tcpListener
 	go func() {
+		defer s.listenerWG.Done()
 		if err := s.serveTCP(listener, addr); err != nil {
 			slog.Error("SIP TCP server stopped", "addr", addr, "err", err)
 		}
@@ -287,7 +318,12 @@ func (s *Server) serveTCP(listener *net.TCPListener, addr string) error {
 				}
 				return fmt.Errorf("accept SIP TCP connection: %w", err)
 			}
-			go s.ProcessTcpConn(conn)
+			connection := NewTCPConnection(conn)
+			if !s.trackConnection(connection) {
+				_ = connection.Close()
+				continue
+			}
+			go s.processTrackedTCPConnection(connection)
 		}
 	}
 }
@@ -302,6 +338,11 @@ func (s *Server) ListenTLSServerWithOptions(addr string, options TLSListenerOpti
 	if err := s.bindTLS(addr, options); err != nil {
 		return err
 	}
+	if !s.beginListener() {
+		_ = s.tlsListener.Close()
+		return fmt.Errorf("SIP server is closed")
+	}
+	defer s.listenerWG.Done()
 	return s.serveTLS(s.tlsListener, addr)
 }
 
@@ -315,8 +356,13 @@ func (s *Server) StartTLSServerWithOptions(addr string, options TLSListenerOptio
 	if err := s.bindTLS(addr, options); err != nil {
 		return err
 	}
+	if !s.beginListener() {
+		_ = s.tlsListener.Close()
+		return fmt.Errorf("SIP server is closed")
+	}
 	listener := s.tlsListener
 	go func() {
+		defer s.listenerWG.Done()
 		if err := s.serveTLS(listener, addr); err != nil {
 			slog.Error("SIP TLS server stopped", "addr", addr, "err", err)
 		}
@@ -383,7 +429,12 @@ func (s *Server) serveTLS(listener net.Listener, addr string) error {
 				}
 				return fmt.Errorf("accept SIP TLS connection: %w", err)
 			}
-			go s.ProcessTcpConn(conn)
+			connection := NewTCPConnection(conn)
+			if !s.trackConnection(connection) {
+				_ = connection.Close()
+				continue
+			}
+			go s.processTrackedTCPConnection(connection)
 		}
 	}
 }
@@ -393,9 +444,11 @@ func (s *Server) Close() {
 		return
 	}
 	s.closeOnce.Do(func() {
+		s.lifecycleMu.Lock()
 		if s.cancel != nil {
 			s.cancel()
 		}
+		s.lifecycleMu.Unlock()
 		if s.udpConn != nil {
 			_ = s.udpConn.Close()
 		}
@@ -405,11 +458,29 @@ func (s *Server) Close() {
 		if s.tlsListener != nil {
 			_ = s.tlsListener.Close()
 		}
+		s.listenerWG.Wait()
 		s.closeActiveConnections()
+		s.connectionWG.Wait()
 		if s.txs != nil {
 			s.txs.close()
 		}
+		s.requestWG.Wait()
 	})
+}
+
+func (s *Server) beginListener() bool {
+	if s == nil {
+		return false
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	select {
+	case <-s.ctx.Done():
+		return false
+	default:
+		s.listenerWG.Add(1)
+		return true
+	}
 }
 
 func (s *Server) trackConnection(conn Connection) bool {
@@ -427,6 +498,7 @@ func (s *Server) trackConnection(conn Connection) bool {
 		s.connections = make(map[Connection]struct{})
 	}
 	s.connections[conn] = struct{}{}
+	s.connectionWG.Add(1)
 	return true
 }
 
@@ -435,8 +507,14 @@ func (s *Server) untrackConnection(conn Connection) {
 		return
 	}
 	s.connectionMu.Lock()
-	delete(s.connections, conn)
+	_, tracked := s.connections[conn]
+	if tracked {
+		delete(s.connections, conn)
+	}
 	s.connectionMu.Unlock()
+	if tracked {
+		s.connectionWG.Done()
+	}
 }
 
 func (s *Server) closeActiveConnections() {
@@ -444,7 +522,6 @@ func (s *Server) closeActiveConnections() {
 	connections := make([]Connection, 0, len(s.connections))
 	for conn := range s.connections {
 		connections = append(connections, conn)
-		delete(s.connections, conn)
 	}
 	s.connectionMu.Unlock()
 	for _, conn := range connections {
@@ -467,13 +544,24 @@ func (s *Server) ProcessTCPConnection(conn Connection) {
 		_ = conn.Close()
 		return
 	}
-	defer conn.Close()
+	s.processTrackedTCPConnection(conn)
+}
+
+func (s *Server) processTrackedTCPConnection(conn Connection) {
 	defer s.untrackConnection(conn)
+	defer conn.Close()
 	reader := bufio.NewReaderSize(conn, maxSIPHeaderLineBytes+1)
 
 	parser := newParser()
-	defer parser.stop()
-	go s.handlerListen(parser.out)
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		s.handlerListen(parser.out)
+	}()
+	defer func() {
+		parser.stop()
+		<-handlerDone
+	}()
 
 	for {
 		message, err := readTCPMessageWithTimeout(conn, reader, sipTCPFrameReadTimeout)
@@ -585,7 +673,7 @@ func parseTCPContentLength(line []byte) (int, bool, error) {
 	return int(length), true, nil
 }
 
-func (s *Server) handlerListen(msgs chan Message) {
+func (s *Server) handlerListen(msgs <-chan Message) {
 	for msg := range msgs {
 		switch tmsg := msg.(type) {
 		case *Request:
@@ -656,7 +744,26 @@ func (s *Server) handlerRequest(msg *Request) {
 	ctx.handlers = chain
 	ctx.From = s.from
 	ctx.svr = s
-	go s.runContextSafely(ctx)
+	s.startRequestContext(ctx)
+}
+
+func (s *Server) startRequestContext(ctx *Context) {
+	if s == nil || ctx == nil {
+		return
+	}
+	s.lifecycleMu.Lock()
+	select {
+	case <-s.ctx.Done():
+		s.lifecycleMu.Unlock()
+		return
+	default:
+		s.requestWG.Add(1)
+	}
+	s.lifecycleMu.Unlock()
+	go func() {
+		defer s.requestWG.Done()
+		s.runContextSafely(ctx)
+	}()
 }
 
 func requestRouteKey(msg *Request) (string, error) {
@@ -713,6 +820,13 @@ func (s *Server) Request(req *Request) (*Transaction, error) {
 func (s *Server) RequestWithSecurity(req *Request, security MessageSecurity) (*Transaction, error) {
 	if s == nil || req == nil {
 		return nil, fmt.Errorf("SIP request is unavailable")
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	select {
+	case <-s.ctx.Done():
+		return nil, fmt.Errorf("SIP server is closed")
+	default:
 	}
 	if req.GetConnection() == nil {
 		return nil, fmt.Errorf("SIP request connection is unavailable")

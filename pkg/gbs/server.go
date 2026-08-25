@@ -234,7 +234,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	if previous != nil {
 		_ = previous.Close()
 	}
-	go c.startTickerCheck()
+	api.startLifecycleWorker(c.startTickerCheck)
 	defaultSIPServer.Store(sipServer)
 	if err := c.memoryStorer.LoadDeviceToMemory(sipServer.UDPConn()); err != nil {
 		cleanup()

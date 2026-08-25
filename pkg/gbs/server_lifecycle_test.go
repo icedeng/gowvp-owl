@@ -20,15 +20,44 @@ func TestTickerCheckStopsWithGB28181Lifecycle(t *testing.T) {
 	api := &GB28181API{lifecycleDone: make(chan struct{})}
 	server := &Server{gb: api}
 	done := make(chan struct{})
-	go func() {
+	api.startLifecycleWorker(func() {
 		server.startTickerCheck()
 		close(done)
-	}()
+	})
 	api.close()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("device ticker did not stop with GB28181 lifecycle")
+	}
+}
+
+func TestCloseWaitsForLifecycleWorkers(t *testing.T) {
+	api := &GB28181API{lifecycleDone: make(chan struct{})}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	api.startLifecycleWorker(func() {
+		close(started)
+		<-api.lifecycleDone
+		<-release
+	})
+	<-started
+
+	closed := make(chan struct{})
+	go func() {
+		api.close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("close returned while lifecycle worker was active")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("close did not finish after lifecycle worker exited")
 	}
 }
 

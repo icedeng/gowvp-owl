@@ -67,6 +67,11 @@ func (txs *transacionts) close() {
 	for _, tx := range items {
 		tx.Close()
 	}
+	for _, tx := range items {
+		if tx != nil && tx.watchDone != nil {
+			<-tx.watchDone
+		}
+	}
 }
 
 // Transaction Transaction
@@ -81,6 +86,7 @@ type Transaction struct {
 	done       chan struct{}
 	owner      *transacionts
 	closeOnce  sync.Once
+	watchDone  chan struct{}
 }
 
 func (tx *Transaction) setConnection(conn Connection) {
@@ -132,6 +138,7 @@ func newTransaction(key string, conn Connection, owner *transacionts) *Transacti
 	tx := &Transaction{
 		conn: conn, key: key, resp: make(chan *Response, 10), active: make(chan int, 1),
 		done: make(chan struct{}), owner: owner,
+		watchDone: make(chan struct{}),
 	}
 	go tx.watch()
 	return tx
@@ -143,6 +150,7 @@ func (tx *Transaction) Key() string {
 }
 
 func (tx *Transaction) watch() {
+	defer close(tx.watchDone)
 	timer := time.NewTimer(transactionIdleTimeout)
 	defer timer.Stop()
 	for {

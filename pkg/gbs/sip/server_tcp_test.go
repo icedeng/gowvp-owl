@@ -262,6 +262,72 @@ func TestServerCloseTerminatesActiveTCPConnections(t *testing.T) {
 	}
 }
 
+func TestServerCloseWaitsForActiveRequestHandlers(t *testing.T) {
+	server := NewServer(&Address{})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ctx := &Context{handlers: []HandlerFunc{func(*Context) {
+		close(started)
+		<-release
+	}}, index: -1}
+	server.startRequestContext(ctx)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("request handler did not start")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		server.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("Server.Close returned while a request handler was active")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Server.Close did not finish after the request handler exited")
+	}
+}
+
+func TestClosedServerRejectsNewRequestHandlers(t *testing.T) {
+	server := NewServer(&Address{})
+	server.Close()
+	called := make(chan struct{}, 1)
+	server.startRequestContext(&Context{handlers: []HandlerFunc{func(*Context) { called <- struct{}{} }}, index: -1})
+	select {
+	case <-called:
+		t.Fatal("request handler started after Server.Close")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestClosedServerRejectsOutboundRequests(t *testing.T) {
+	server := NewServer(&Address{})
+	server.Close()
+	serverPipe, clientPipe := net.Pipe()
+	defer serverPipe.Close()
+	defer clientPipe.Close()
+	connection := NewTCPConnection(&sipTestTCPConn{
+		Conn:   serverPipe,
+		local:  &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 5060},
+		remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 5060},
+	})
+	target := URI{FHost: "192.0.2.10", FPort: NewPort(5060)}
+	request := NewRequest("", MethodOptions, &target, DefaultSipVersion,
+		NewHeaderBuilder().SetMethod(MethodOptions).AddVia(&ViaHop{Params: NewParams()}).Build(), nil)
+	request.SetConnection(connection)
+	request.SetDestination(connection.RemoteAddr())
+	if _, err := server.Request(request); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("closed server request error = %v", err)
+	}
+}
+
 func TestTCPFrameTimeoutStartsAfterFirstByte(t *testing.T) {
 	newPipe := func() (Connection, net.Conn) {
 		serverPipe, clientPipe := net.Pipe()

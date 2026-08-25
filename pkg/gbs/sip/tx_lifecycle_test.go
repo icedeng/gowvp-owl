@@ -65,6 +65,16 @@ func TestTransactionStoreCloseReleasesAllTransactions(t *testing.T) {
 	default:
 		t.Fatal("second transaction was not closed")
 	}
+	select {
+	case <-first.watchDone:
+	default:
+		t.Fatal("first transaction watcher survived store close")
+	}
+	select {
+	case <-second.watchDone:
+	default:
+		t.Fatal("second transaction watcher survived store close")
+	}
 }
 
 func TestTransactionStoreDeduplicatesConcurrentKey(t *testing.T) {

@@ -141,6 +141,7 @@ type GB28181API struct {
 	metrics         GBMetrics
 	closeOnce       sync.Once
 	lifecycleDone   chan struct{}
+	lifecycleWG     sync.WaitGroup
 
 	svr *Server
 
@@ -173,10 +174,21 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 	g.controlSN.Store(uint32(sip.RandInt(100000, 999999)))
 	g.querySN.Store(uint32(sip.RandInt(100000, 999999)))
 	g.applyDirectTCPConfig(cfg.Sip.DirectTCPDownload)
-	go g.startEventSubscriberCleaner()
-	go g.startInviteDialogCleaner()
-	go g.startRuntimeStateCleaner()
+	g.startLifecycleWorker(g.startEventSubscriberCleaner)
+	g.startLifecycleWorker(g.startInviteDialogCleaner)
+	g.startLifecycleWorker(g.startRuntimeStateCleaner)
 	return &g
+}
+
+func (g *GB28181API) startLifecycleWorker(worker func()) {
+	if g == nil || worker == nil {
+		return
+	}
+	g.lifecycleWG.Add(1)
+	go func() {
+		defer g.lifecycleWG.Done()
+		worker()
+	}()
 }
 
 func (g *GB28181API) serviceDone() <-chan struct{} {
