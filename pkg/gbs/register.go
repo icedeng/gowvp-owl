@@ -101,7 +101,7 @@ type GB28181API struct {
 	// 级联实时点播复用同一通道的下级媒体源，并按会话引用计数释放。
 	cascadeMediaMu         sync.Mutex
 	cascadeSources         map[string]*cascadeSourceRef
-	cascadePlay            func(*PlayInput) error
+	cascadePlay            func(context.Context, *PlayInput) error
 	cascadeStop            func(context.Context, *StopPlayInput) error
 	cascadeHistory         func(context.Context, *HistoryInput) error
 	cascadeStopHistory     func(context.Context, *StopHistoryInput) error

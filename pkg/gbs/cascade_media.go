@@ -419,7 +419,7 @@ func (g *GB28181API) acquireCascadeSource(ctx context.Context, server *sms.Media
 	owned := false
 	if !exists || stream == nil || stream.Stop || stream.Resp == nil {
 		if mode == historyModePlay {
-			play := g.Play
+			play := g.PlayContext
 			if g.cascadePlay != nil {
 				play = g.cascadePlay
 			}
@@ -431,7 +431,7 @@ func (g *GB28181API) acquireCascadeSource(ctx context.Context, server *sms.Media
 				playInput.sessionKey = key
 				playInput.streamID = cascadeSourceStreamID(key)
 			}
-			if err := play(playInput); err != nil {
+			if err := play(ctx, playInput); err != nil {
 				g.cascadeMediaMu.Unlock()
 				return nil, err
 			}

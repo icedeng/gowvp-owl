@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -229,6 +230,50 @@ func TestCascadeHistorySourcesAreIsolatedAndReferenceCounted(t *testing.T) {
 	api.releaseCascadeSource(otherPath, false)
 	if len(stopped) != 3 || stopped[0] == stopped[1] || stopped[0] == stopped[2] || stopped[1] == stopped[2] {
 		t.Fatalf("isolated source cleanup = %v", stopped)
+	}
+}
+
+func TestCascadeRealtimeSourceStartUsesCallerContext(t *testing.T) {
+	api := &GB28181API{
+		streams:        &conc.Map[string, *Streams]{},
+		cascadeSources: make(map[string]*cascadeSourceRef),
+	}
+	channel := &ipc.Channel{ID: "persistent-stream", DeviceID: gb10DeviceID, ChannelID: testCascadeChannelID}
+	device := &ipc.Device{DeviceID: gb10DeviceID, StreamMode: 0}
+	server := &sms.MediaServer{ID: sms.DefaultMediaServerID, SDPIP: "192.0.2.20"}
+	started := make(chan struct{})
+	api.cascadePlay = func(ctx context.Context, _ *PlayInput) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := api.acquireCascadeSource(ctx, server, device, channel, &cascadeVideoOffer{Mode: historyModePlay})
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("cascade live source did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled cascade live source error = %v; want %v", err, context.Canceled)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled cascade live source did not stop")
+	}
+
+	api.cascadeMediaMu.Lock()
+	count := len(api.cascadeSources)
+	api.cascadeMediaMu.Unlock()
+	if count != 0 {
+		t.Fatalf("cancelled cascade live source retained %d entries", count)
 	}
 }
 
@@ -699,7 +744,7 @@ func TestCascadeRealtimeInviteEstablishesAndReleasesB2BUA(t *testing.T) {
 	playCalls := 0
 	stopCalls := 0
 	createdStreamID := ""
-	api.cascadePlay = func(in *PlayInput) error {
+	api.cascadePlay = func(_ context.Context, in *PlayInput) error {
 		playCalls++
 		if in.preferredPath != testCascadePathC+"-"+testCascadePathE {
 			t.Fatalf("forwarded X-PreferredPath = %q", in.preferredPath)
