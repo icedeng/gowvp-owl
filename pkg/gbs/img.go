@@ -48,6 +48,15 @@ func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetI
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	deviceID = strings.TrimSpace(deviceID)
+	targetID = strings.TrimSpace(targetID)
+	coverKey = strings.TrimSpace(coverKey)
+	if targetID == "" {
+		targetID = deviceID
+	}
+	if err := validateSnapshotCoverKey(coverKey); err != nil {
+		return nil, err
+	}
 	slog.Debug("QuerySnapshot", "deviceID", deviceID)
 	if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "图像抓拍(9.14)"); err != nil {
 		return nil, err
@@ -58,12 +67,24 @@ func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetI
 		return nil, err
 	}
 	ipc, ok := g.svr.memoryStorer.Load(deviceID)
-	if !ok {
+	if !ok || !ipc.IsOnlineNow() {
 		return nil, ErrDeviceOffline
+	}
+	var target Targeter = ipc
+	if targetID != deviceID {
+		channel, exists := g.svr.memoryStorer.GetChannel(deviceID, targetID)
+		if !exists {
+			return nil, ErrChannelNotExist
+		}
+		target = channel
 	}
 
 	sn := int32(g.nextControlSN())
 	sessionID := sip.RandString(32)
+	g.storeSnapshotState(SnapshotState{
+		DeviceID: deviceID, ChannelID: targetID, CoverKey: coverKey, SessionID: sessionID,
+		Status: "pending", ExpectedCount: 1, UpdatedAt: time.Now(),
+	})
 	body := NewDeviceConfig(targetID).SetSN(sn).SetSnapShotConfig(&SnapShot{
 		SnapNum:   1,
 		Interval:  1,
@@ -76,11 +97,13 @@ func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetI
 	g.pendingDeviceConfig.Store(waitKey, pending)
 	defer g.pendingDeviceConfig.Delete(waitKey)
 
-	tx, err := g.svr.wrapRequest(ipc, sip.MethodMessage, &sip.ContentTypeXML, body)
+	tx, err := g.svr.wrapRequest(target, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
+		g.deleteSnapshotState(deviceID, sessionID)
 		return nil, err
 	}
 	if _, err = sipResponseContext(ctx, tx); err != nil {
+		g.transitionSnapshotState(deviceID, sessionID, "failed")
 		return nil, err
 	}
 
@@ -89,25 +112,42 @@ func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetI
 	select {
 	case resp := <-pending.wait:
 		if strings.ToUpper(strings.TrimSpace(resp.Result)) == "OK" || strings.TrimSpace(resp.Result) == "" {
-			state := SnapshotState{
-				DeviceID: deviceID, ChannelID: targetID, CoverKey: coverKey, SessionID: sessionID,
-				Status: "accepted", ExpectedCount: 1, UpdatedAt: time.Now(),
+			state, exists := g.transitionSnapshotState(deviceID, sessionID, "accepted")
+			if !exists {
+				return nil, fmt.Errorf("snapshot session disappeared before acceptance")
 			}
-			g.storeSnapshotState(state)
 			return &state, nil
 		}
+		g.transitionSnapshotState(deviceID, sessionID, "rejected")
 		return nil, fmt.Errorf("snapshot config failed: %s", resp.Result)
 	case <-g.serviceDone():
+		g.transitionSnapshotState(deviceID, sessionID, "cancelled")
 		return nil, ErrServiceStopped
 	case <-ctx.Done():
+		g.transitionSnapshotState(deviceID, sessionID, "cancelled")
 		return nil, ctx.Err()
 	case <-timer.C:
+		g.transitionSnapshotState(deviceID, sessionID, "response_timeout")
 		return nil, fmt.Errorf("wait snapshot response timeout")
 	}
 }
 
 func snapshotStateKey(deviceID, sessionID string) string {
 	return strings.TrimSpace(deviceID) + ":" + strings.TrimSpace(sessionID)
+}
+
+func validateSnapshotCoverKey(value string) error {
+	if len(value) == 0 || len(value) > 128 {
+		return fmt.Errorf("snapshot cover key must contain 1 to 128 characters")
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '-' || char == '_' {
+			continue
+		}
+		return fmt.Errorf("snapshot cover key may contain only letters, digits, hyphen, and underscore")
+	}
+	return nil
 }
 
 func (g *GB28181API) storeSnapshotState(state SnapshotState) {
@@ -140,6 +180,43 @@ func (g *GB28181API) storeSnapshotStateLocked(state SnapshotState) {
 		}
 		delete(g.snapshotStates, oldestKey)
 	}
+}
+
+func (g *GB28181API) deleteSnapshotState(deviceID, sessionID string) {
+	if g == nil {
+		return
+	}
+	g.snapshotStateMu.Lock()
+	delete(g.snapshotStates, snapshotStateKey(deviceID, sessionID))
+	g.snapshotStateMu.Unlock()
+}
+
+func (g *GB28181API) transitionSnapshotState(deviceID, sessionID, status string) (SnapshotState, bool) {
+	if g == nil {
+		return SnapshotState{}, false
+	}
+	g.snapshotStateMu.Lock()
+	defer g.snapshotStateMu.Unlock()
+	key := snapshotStateKey(deviceID, sessionID)
+	state, ok := g.snapshotStates[key]
+	if !ok || runtimeStateExpired(state.UpdatedAt, time.Now(), snapshotStateTTL) {
+		delete(g.snapshotStates, key)
+		return SnapshotState{}, false
+	}
+	switch status {
+	case "accepted":
+		if state.Status == "pending" {
+			state.Status = status
+		}
+	default:
+		if state.Status == "pending" || state.Status == "accepted" || state.Status == "response_timeout" {
+			state.Status = status
+		}
+	}
+	state.UpdatedAt = time.Now()
+	g.storeSnapshotStateLocked(state)
+	state.FileIDs = append([]string(nil), state.FileIDs...)
+	return state, true
 }
 
 func (g *GB28181API) SnapshotState(deviceID, sessionID string) (SnapshotState, bool) {
@@ -204,12 +281,21 @@ func (g *GB28181API) MarkSnapshotUploaded(deviceID, sessionID string) {
 		return
 	}
 	state.ReceivedCount++
-	if state.Status != "completed" && state.Status != "failed" && state.Status != "partial_failed" {
+	if !isSnapshotTerminal(state.Status) {
 		state.Status = "uploading"
 	}
 	state.UpdatedAt = now
 	g.storeSnapshotStateLocked(state)
 	g.snapshotStateMu.Unlock()
+}
+
+func isSnapshotTerminal(status string) bool {
+	switch status {
+	case "completed", "failed", "partial_failed", "rejected":
+		return true
+	default:
+		return false
+	}
 }
 
 // sipMessageSnapshotFinished 处理 2022 A.2.5.7 图像抓拍传输完成通知。

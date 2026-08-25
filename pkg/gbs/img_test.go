@@ -1,6 +1,8 @@
 package gbs
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -127,5 +129,54 @@ func TestMarkSnapshotUploadedIsAtomicAndPreservesTerminalState(t *testing.T) {
 	state, ok := api.SnapshotState(gb10DeviceID, sessionID)
 	if !ok || state.ReceivedCount != 200 || state.Status != "completed" {
 		t.Fatalf("concurrent snapshot upload state = %+v, %v", state, ok)
+	}
+}
+
+func TestSnapshotPendingSessionAcceptsEarlyUploadWithoutStateRegression(t *testing.T) {
+	api := &GB28181API{}
+	sessionID := "snapshot-early-upload-000000000001"
+	api.storeSnapshotState(SnapshotState{
+		DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, CoverKey: "cover-early", SessionID: sessionID,
+		Status: "pending", ExpectedCount: 1,
+	})
+	if err := api.ValidateSnapshotUpload(gb10DeviceID, "cover-early", sessionID); err != nil {
+		t.Fatalf("early snapshot upload was rejected: %v", err)
+	}
+	api.MarkSnapshotUploaded(gb10DeviceID, sessionID)
+	state, ok := api.transitionSnapshotState(gb10DeviceID, sessionID, "accepted")
+	if !ok || state.Status != "uploading" || state.ReceivedCount != 1 {
+		t.Fatalf("accepted response regressed early upload state = %+v, %v", state, ok)
+	}
+	api.transitionSnapshotState(gb10DeviceID, sessionID, "rejected")
+	state, ok = api.SnapshotState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "uploading" || state.ReceivedCount != 1 {
+		t.Fatalf("late rejection regressed early upload state = %+v, %v", state, ok)
+	}
+}
+
+func TestQuerySnapshotRequiresOnlineDeviceAndOwnedTarget(t *testing.T) {
+	api, memory := newVersionGateAPI(GBVersion30)
+	if _, err := api.QuerySnapshotContext(context.Background(), gb10DeviceID, gb10DeviceID, "../cover"); err == nil {
+		t.Fatal("unsafe snapshot cover key was accepted")
+	}
+	if _, err := api.QuerySnapshotContext(context.Background(), gb10DeviceID, gb10ChannelID, "cover"); !errors.Is(err, ErrChannelNotExist) {
+		t.Fatalf("unowned snapshot target error = %v; want %v", err, ErrChannelNotExist)
+	}
+	memory.device.IsOnline = false
+	if _, err := api.QuerySnapshotContext(context.Background(), gb10DeviceID, gb10DeviceID, "cover"); !errors.Is(err, ErrDeviceOffline) {
+		t.Fatalf("offline snapshot device error = %v; want %v", err, ErrDeviceOffline)
+	}
+}
+
+func TestQuerySnapshotRemovesPendingSessionWhenRequestWasNotSent(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	if _, err := api.QuerySnapshotContext(context.Background(), gb10DeviceID, gb10DeviceID, "cover"); err == nil {
+		t.Fatal("snapshot query unexpectedly succeeded without a SIP server")
+	}
+	api.snapshotStateMu.RLock()
+	count := len(api.snapshotStates)
+	api.snapshotStateMu.RUnlock()
+	if count != 0 {
+		t.Fatalf("unsent snapshot request retained %d pending sessions", count)
 	}
 }

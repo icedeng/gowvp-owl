@@ -4,11 +4,11 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -655,13 +655,13 @@ func (a IPCAPI) setRecordModeByGB(c *gin.Context, in *setRecordModeInput) (gin.H
 // @Router /gb28181/snapshot [post]
 // @Router /gb28181/snapshot/{device_id}/{cover_key}/{session_id} [post]
 func (a IPCAPI) gbSnapshotUpload(c *gin.Context) {
-	b, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		panic(err)
-	}
-	payload, payloadType, err := decodeGBSnapshotBody(c.Request, b)
+	payload, payloadType, err := readGBSnapshotUploadBody(c.Writer, c.Request)
 	if err != nil {
 		slog.ErrorContext(c.Request.Context(), "decode gb snapshot body", "err", err, "content_type", c.GetHeader("Content-Type"))
+		if errors.Is(err, errGBSnapshotUploadTooLarge) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"msg": "snapshot body too large"})
+			return
+		}
 		c.JSON(400, gin.H{"msg": "invalid snapshot body"})
 		return
 	}

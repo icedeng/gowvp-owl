@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -9,6 +10,31 @@ import (
 	"net/http"
 	"strings"
 )
+
+var errGBSnapshotUploadTooLarge = errors.New("GB28181 snapshot upload is too large")
+
+func readGBSnapshotUploadBody(w http.ResponseWriter, r *http.Request) ([]byte, string, error) {
+	if r == nil || r.Body == nil {
+		return nil, "", fmt.Errorf("snapshot request body is unavailable")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBodyBytes)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			return nil, "", errGBSnapshotUploadTooLarge
+		}
+		return nil, "", err
+	}
+	payload, payloadType, err := decodeGBSnapshotBody(r, body)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(payload) > maxSnapshotBytes {
+		return nil, "", errGBSnapshotUploadTooLarge
+	}
+	return payload, payloadType, nil
+}
 
 // decodeGBSnapshotBody 兼容设备直接上传图片流和 multipart/form-data 两种抓拍回传格式。
 func decodeGBSnapshotBody(r *http.Request, body []byte) ([]byte, string, error) {
