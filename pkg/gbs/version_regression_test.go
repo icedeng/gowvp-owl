@@ -209,7 +209,10 @@ func TestGB30AppendixA4ExtraInfoJSONPreservesNumbersAndArrays(t *testing.T) {
 }
 
 func TestGB30PTZPositionNotifyStoresStructuredState(t *testing.T) {
-	api := &GB28181API{}
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion30)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
 	conn := newFlowConnection()
 	body := []byte(`<Notify><CmdType>PTZPosition</CmdType><SN>72</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Pan>12.5</Pan><Tilt>-3.25</Tilt><Zoom>2</Zoom></Notify>`)
 	response := runFlowHandler(t, conn, api, sip.MethodNotify, "ptz-position-notify", body, api.sipMessageQueryGeneric)
@@ -218,6 +221,39 @@ func TestGB30PTZPositionNotifyStoresStructuredState(t *testing.T) {
 	if !ok || state.PTZPosition == nil || state.PTZPosition.Pan == nil || *state.PTZPosition.Pan != 12.5 ||
 		state.PTZPosition.Tilt == nil || *state.PTZPosition.Tilt != -3.25 || state.PTZPosition.Zoom == nil || *state.PTZPosition.Zoom != 2 {
 		t.Fatalf("PTZPosition state = %+v", state)
+	}
+}
+
+func TestGenericQueryResponseRejectsInvalidEnvelopeVersionAndTarget(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion20)
+	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}
+	api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "PTZPosition", 72), pending)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "invalid root", body: `<Query><CmdType>DeviceStatus</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Query>`},
+		{name: "non-positive SN", body: `<Response><CmdType>DeviceStatus</CmdType><SN>0</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Response>`},
+		{name: "missing device", body: `<Response><CmdType>DeviceStatus</CmdType><SN>1</SN></Response>`},
+		{name: "unknown command", body: `<Response><CmdType>Unknown</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Response>`},
+		{name: "newer-version command", body: `<Notify><CmdType>PTZPosition</CmdType><SN>72</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Pan>1</Pan></Notify>`},
+		{name: "unknown target", body: `<Response><CmdType>DeviceStatus</CmdType><SN>1</SN><DeviceID>34020000001320000009</DeviceID></Response>`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "generic-invalid-"+test.name, []byte(test.body), api.sipMessageQueryGeneric)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("invalid generic query response = %s", response)
+			}
+		})
+	}
+	select {
+	case out := <-pending.wait:
+		t.Fatalf("invalid response resolved pending query: %+v", out)
+	default:
+	}
+	if state, ok := api.GetQueryState(gb10DeviceID); ok && (state.DeviceStatus != nil || state.PTZPosition != nil) {
+		t.Fatalf("invalid generic query response changed state: %+v", state)
 	}
 }
 
@@ -236,6 +272,47 @@ func TestGB30VideoUploadNotifyStoresStructuredState(t *testing.T) {
 	response = runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "video-upload-old", body, api.sipMessageVideoUploadNotify)
 	if !strings.Contains(response, "SIP/2.0 400") {
 		t.Fatalf("2.0 VideoUploadNotify response = %s", response)
+	}
+}
+
+func TestGB30VideoUploadNotifyRejectsSchemaAndTargetViolations(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "wrong command", body: `<Notify><CmdType>Catalog</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Time>2026-08-25T08:48:00</Time></Notify>`},
+		{name: "non-positive SN", body: `<Notify><CmdType>VideoUploadNotify</CmdType><SN>0</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Time>2026-08-25T08:48:00</Time></Notify>`},
+		{name: "missing device", body: `<Notify><CmdType>VideoUploadNotify</CmdType><SN>1</SN><Time>2026-08-25T08:48:00</Time></Notify>`},
+		{name: "invalid time", body: `<Notify><CmdType>VideoUploadNotify</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Time>not-a-time</Time></Notify>`},
+		{name: "non-finite longitude", body: `<Notify><CmdType>VideoUploadNotify</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Time>2026-08-25T08:48:00</Time><Longitude>NaN</Longitude></Notify>`},
+		{name: "unknown target", body: `<Notify><CmdType>VideoUploadNotify</CmdType><SN>1</SN><DeviceID>34020000001320000009</DeviceID><Time>2026-08-25T08:48:00</Time></Notify>`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "video-upload-invalid-"+test.name, []byte(test.body), api.sipMessageVideoUploadNotify)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("invalid VideoUploadNotify response = %s", response)
+			}
+		})
+	}
+	if state, ok := api.GetQueryState(gb10DeviceID); ok && state.VideoUpload != nil {
+		t.Fatalf("invalid VideoUploadNotify changed state: %+v", state.VideoUpload)
+	}
+}
+
+func TestGB30VideoUploadNotifyAcceptsOwnedChannel(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion30)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	body := []byte(`<Notify><CmdType>VideoUploadNotify</CmdType><SN>109</SN><DeviceID>` + gb10ChannelID +
+		`</DeviceID><Time>2026-08-25T08:49:00.123</Time><Longitude>120.12</Longitude></Notify>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodNotify, "video-upload-channel", body, api.sipMessageVideoUploadNotify)
+	assertFlowOK(t, response)
+	state, ok := api.GetQueryState(gb10DeviceID)
+	if !ok || state.VideoUpload == nil || state.VideoUpload.Time != "2026-08-25T08:49:00.123" {
+		t.Fatalf("owned-channel VideoUploadNotify state = %+v, %v", state, ok)
 	}
 }
 

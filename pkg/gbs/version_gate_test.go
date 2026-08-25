@@ -47,7 +47,7 @@ func TestVersionGatesFor2011AndSupplement(t *testing.T) {
 }
 
 func TestPresetQuery11AcceptsSupplementSpelling(t *testing.T) {
-	api := &GB28181API{}
+	api, _ := newVersionGateAPI(GBVersion11)
 	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}
 	api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "PresetQuery", 71), pending)
 	conn := newFlowConnection()

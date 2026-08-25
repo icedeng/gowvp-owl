@@ -71,6 +71,7 @@ type pendingQueryWait struct {
 }
 
 type genericDeviceQueryResponse struct {
+	XMLName  xml.Name
 	CmdType  string `xml:"CmdType"`
 	SN       int    `xml:"SN"`
 	DeviceID string `xml:"DeviceID"`
@@ -571,14 +572,61 @@ func (g *GB28181API) sipMessageQueryGeneric(ctx *sip.Context) {
 		return
 	}
 	msg.CmdType = canonicalGBQueryCmdType(msg.CmdType)
-	deviceID := strings.TrimSpace(ctx.DeviceID)
-	if deviceID == "" {
-		deviceID = strings.TrimSpace(msg.DeviceID)
+	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	if err := g.validateGenericDeviceQueryResponse(ctx, msg); err != nil {
+		ctx.String(400, err.Error())
+		return
 	}
+	deviceID := strings.TrimSpace(ctx.DeviceID)
 	decoded := g.decodeAndStoreQueryResult(deviceID, msg.CmdType, ctx.Request.Body())
 	g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
 	ctx.String(200, "OK")
 	g.persistDecodedQuery(deviceID, msg.CmdType, decoded)
 	// 9.11 事件源侧：通用查询类事件通知。
 	g.publishEventNotify(msg.CmdType, deviceID, ctx.Request.Body())
+}
+
+func (g *GB28181API) validateGenericDeviceQueryResponse(ctx *sip.Context, msg genericDeviceQueryResponse) error {
+	if ctx == nil || strings.TrimSpace(ctx.DeviceID) == "" {
+		return fmt.Errorf("query response requires authenticated device")
+	}
+	if msg.XMLName.Local != "Response" && msg.XMLName.Local != "Notify" {
+		return fmt.Errorf("query response root must be Response or Notify")
+	}
+	if msg.SN <= 0 || msg.DeviceID == "" {
+		return fmt.Errorf("query response requires positive SN and DeviceID")
+	}
+	minimum, ok := genericQueryResponseMinimumVersion(msg.CmdType)
+	if !ok {
+		return fmt.Errorf("unsupported query response command: %s", msg.CmdType)
+	}
+	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
+	if !version.AtLeast(minimum) {
+		return fmt.Errorf("%s requires %s or later", msg.CmdType, minimum.StandardName())
+	}
+	if msg.DeviceID == strings.TrimSpace(ctx.DeviceID) {
+		return nil
+	}
+	if g == nil || g.svr == nil || g.svr.memoryStorer == nil {
+		return fmt.Errorf("query response target mismatch")
+	}
+	if _, ok := g.svr.memoryStorer.GetChannel(ctx.DeviceID, msg.DeviceID); !ok {
+		return fmt.Errorf("query response target mismatch")
+	}
+	return nil
+}
+
+func genericQueryResponseMinimumVersion(cmdType string) (GBProtocolVersion, bool) {
+	switch cmdType {
+	case "DeviceStatus":
+		return GBVersion10, true
+	case "PresetQuery", "ConfigDownload":
+		return GBVersion11, true
+	case "HomePositionQuery", "MobilePosition":
+		return GBVersion20, true
+	case "CruiseTrackListQuery", "CruiseTrackQuery", "PTZPosition", "SDCardStatus", "VideoUploadNotify":
+		return GBVersion30, true
+	default:
+		return "", false
+	}
 }

@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"encoding/xml"
 	"log/slog"
 	"maps"
 	"sort"
@@ -121,6 +122,16 @@ type VideoUploadData struct {
 	Time      string   `json:"time"`
 	Longitude *float64 `json:"longitude,omitempty"`
 	Latitude  *float64 `json:"latitude,omitempty"`
+}
+
+type videoUploadNotifyXML struct {
+	XMLName   xml.Name `xml:"Notify"`
+	CmdType   string   `xml:"CmdType"`
+	SN        int      `xml:"SN"`
+	DeviceID  string   `xml:"DeviceID"`
+	Time      string   `xml:"Time"`
+	Longitude *float64 `xml:"Longitude"`
+	Latitude  *float64 `xml:"Latitude"`
 }
 
 // ConfigDownloadState 是配置查询结果快照。
@@ -835,6 +846,27 @@ func (g *GB28181API) sipMessageVideoUploadNotify(ctx *sip.Context) {
 		ctx.String(400, err.Error())
 		return
 	}
+	var msg videoUploadNotifyXML
+	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
+		ctx.String(400, ErrXMLDecode.Error())
+		return
+	}
+	msg.CmdType = strings.TrimSpace(msg.CmdType)
+	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	msg.Time = strings.TrimSpace(msg.Time)
+	if msg.SN <= 0 || !strings.EqualFold(msg.CmdType, "VideoUploadNotify") || msg.DeviceID == "" {
+		ctx.String(400, "invalid VideoUploadNotify notification")
+		return
+	}
+	if _, hasTime, err := parseSubscriptionTime(msg.Time); err != nil || !hasTime {
+		ctx.String(400, "invalid VideoUploadNotify time")
+		return
+	}
+	if msg.Longitude != nil && !validFinite(*msg.Longitude) || msg.Latitude != nil && !validFinite(*msg.Latitude) {
+		ctx.String(400, "invalid VideoUploadNotify location")
+		return
+	}
+	// 目标所有权和版本能力由通用查询入口统一校验，避免专用通知与查询响应规则漂移。
 	g.sipMessageQueryGeneric(ctx)
 }
 
