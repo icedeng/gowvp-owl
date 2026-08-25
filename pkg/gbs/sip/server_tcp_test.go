@@ -125,6 +125,65 @@ func TestParserStopClosesHandlerOutput(t *testing.T) {
 	}
 }
 
+func TestReadTCPMessageEnforcesResourceLimits(t *testing.T) {
+	read := func(input string) ([]byte, error) {
+		reader := bufio.NewReaderSize(strings.NewReader(input), maxSIPHeaderLineBytes+1)
+		return readTCPMessage(reader)
+	}
+
+	body := "hello"
+	valid := "MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: 5\r\n\r\n" + body
+	message, err := read(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(message) != valid {
+		t.Fatalf("framed SIP message = %q", message)
+	}
+
+	var oversizedHeaders strings.Builder
+	oversizedHeaders.WriteString("OPTIONS sip:test@example.com SIP/2.0\r\n")
+	for oversizedHeaders.Len() <= maxSIPHeaderBytes {
+		oversizedHeaders.WriteString("X-Padding: ")
+		oversizedHeaders.WriteString(strings.Repeat("x", 1000))
+		oversizedHeaders.WriteString("\r\n")
+	}
+	oversizedHeaders.WriteString("\r\n")
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{name: "header line", input: "X-Test: " + strings.Repeat("x", maxSIPHeaderLineBytes) + "\r\n", wantErr: "header line exceeds"},
+		{name: "header total", input: oversizedHeaders.String(), wantErr: "headers exceed"},
+		{name: "body length", input: fmt.Sprintf("MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: %d\r\n\r\n", maxSIPBodyBytes+1), wantErr: "exceeds"},
+		{name: "duplicate length", input: "MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\nl: 0\r\n\r\n", wantErr: "multiple Content-Length"},
+		{name: "truncated body", input: "MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: 5\r\n\r\nabc", wantErr: "read SIP body"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := read(test.input); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("readTCPMessage error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestContentLengthLimitsApplyToTCPAndPacketParser(t *testing.T) {
+	overLimit := fmt.Sprintf("%d", maxSIPBodyBytes+1)
+	if _, found, err := parseTCPContentLength([]byte("Content-Length: " + overLimit + "\r\n")); !found || err == nil {
+		t.Fatalf("oversized TCP Content-Length result = found %v, err %v", found, err)
+	}
+	if _, err := ParseHeader("Content-Length: " + overLimit); err == nil {
+		t.Fatal("oversized parsed Content-Length was accepted")
+	}
+	packet := Packet{bodylength: maxSIPBodyBytes + 1}
+	if _, err := packet.getBody(); err == nil {
+		t.Fatal("oversized packet body allocation was accepted")
+	}
+}
+
 func TestServerUpdatesExistingTransactionToReconnectedTCPConnection(t *testing.T) {
 	localURI, err := ParseSipURI("sip:34020000002000000001@127.0.0.1")
 	if err != nil {

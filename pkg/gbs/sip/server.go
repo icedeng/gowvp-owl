@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +20,12 @@ import (
 )
 
 var bufferSize uint16 = 65535 - 20 - 8 // IPv4 max size - IPv4 Header size - UDP Header size
+
+const (
+	maxSIPHeaderLineBytes = 8 << 10
+	maxSIPHeaderBytes     = 64 << 10
+	maxSIPBodyBytes       = 1 << 20
+)
 
 // Server sip
 type Server struct {
@@ -296,54 +303,70 @@ func (s *Server) ProcessTCPConnection(conn Connection) {
 		return
 	}
 	defer conn.Close()
-	reader := bufio.NewReader(conn)
+	reader := bufio.NewReaderSize(conn, maxSIPHeaderLineBytes+1)
 
 	parser := newParser()
 	defer parser.stop()
 	go s.handlerListen(parser.out)
 
 	for {
-		var buffer bytes.Buffer
-		bodyLen := 0
-		bodyLenSeen := false
-		for {
-			// 读取一行数据，以 '\n' 为结束符
-			line, err := reader.ReadBytes('\n')
-			if err != nil {
-				// logrus.Debugln("tcp conn read error:", err)
-				return
+		message, err := readTCPMessage(reader)
+		if err != nil {
+			if err != io.EOF {
+				slog.Warn("reject SIP/TCP message", "err", err)
 			}
-			buffer.Write(line)
-			if len(line) <= 2 {
-				if bodyLen <= 0 {
-					break
-				}
+			return
+		}
+		parser.in <- newPacket(message, conn.RemoteAddr(), conn)
+	}
+}
 
-				bodyBuf := make([]byte, bodyLen)
-				n, err := io.ReadFull(reader, bodyBuf)
-				if err != nil || n != bodyLen {
-					slog.Error(`error while read full`, "err", err)
+func readTCPMessage(reader *bufio.Reader) ([]byte, error) {
+	if reader == nil {
+		return nil, fmt.Errorf("SIP/TCP reader is nil")
+	}
+	var buffer bytes.Buffer
+	bodyLen := 0
+	bodyLenSeen := false
+	headerBytes := 0
+	for {
+		line, err := reader.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			return nil, fmt.Errorf("SIP header line exceeds %d bytes", maxSIPHeaderLineBytes)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(line) > maxSIPHeaderLineBytes {
+			return nil, fmt.Errorf("SIP header line exceeds %d bytes", maxSIPHeaderLineBytes)
+		}
+		headerBytes += len(line)
+		if headerBytes > maxSIPHeaderBytes {
+			return nil, fmt.Errorf("SIP headers exceed %d bytes", maxSIPHeaderBytes)
+		}
+		_, _ = buffer.Write(line)
+		if len(line) <= 2 {
+			if bodyLen > 0 {
+				body := make([]byte, bodyLen)
+				if _, err := io.ReadFull(reader, body); err != nil {
+					return nil, fmt.Errorf("read SIP body: %w", err)
 				}
-				buffer.Write(bodyBuf)
-				break
+				_, _ = buffer.Write(body)
 			}
-
-			length, found, parseErr := parseTCPContentLength(line)
-			if parseErr != nil {
-				slog.Error("parse Content-Length failed", "err", parseErr)
-				return
-			}
-			if found {
-				if bodyLenSeen {
-					slog.Error("multiple Content-Length headers")
-					return
-				}
-				bodyLen = length
-				bodyLenSeen = true
-			}
+			return buffer.Bytes(), nil
 		}
 
-		parser.in <- newPacket(buffer.Bytes(), conn.RemoteAddr(), conn)
+		length, found, err := parseTCPContentLength(line)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			if bodyLenSeen {
+				return nil, fmt.Errorf("multiple Content-Length headers")
+			}
+			bodyLen = length
+			bodyLenSeen = true
+		}
 	}
 }
 
@@ -361,6 +384,9 @@ func parseTCPContentLength(line []byte) (int, bool, error) {
 	length, err := strconv.ParseUint(strings.TrimSpace(value), 10, 31)
 	if err != nil {
 		return 0, true, fmt.Errorf("invalid %s value: %w", name, err)
+	}
+	if length > maxSIPBodyBytes {
+		return 0, true, fmt.Errorf("%s exceeds %d bytes", name, maxSIPBodyBytes)
 	}
 	return int(length), true, nil
 }

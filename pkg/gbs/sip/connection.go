@@ -3,6 +3,7 @@ package sip
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -47,6 +48,9 @@ func (p *Packet) bodyLength() int {
 func (p *Packet) getBody() ([]byte, error) {
 	if p.bodyLength() < 1 {
 		return []byte{}, nil
+	}
+	if p.bodylength > maxSIPBodyBytes {
+		return nil, fmt.Errorf("SIP body exceeds %d bytes", maxSIPBodyBytes)
 	}
 	body := make([]byte, p.bodylength)
 	if p.bodylength > 0 {

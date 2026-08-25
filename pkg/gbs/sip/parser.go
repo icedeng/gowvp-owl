@@ -375,6 +375,13 @@ func parseContentLength(headerName string, headerText string) (
 	var contentLength ContentLength
 	var value uint64
 	value, err = strconv.ParseUint(strings.TrimSpace(headerText), 10, 32)
+	if err != nil {
+		return
+	}
+	if value > maxSIPBodyBytes {
+		err = fmt.Errorf("Content-Length exceeds %d bytes", maxSIPBodyBytes)
+		return
+	}
 	contentLength = ContentLength(value)
 
 	headers = []Header{&contentLength}
