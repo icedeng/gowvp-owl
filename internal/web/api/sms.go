@@ -17,12 +17,13 @@ type SmsAPI struct {
 	uc      *Usecase
 }
 
-func NewSMSCore(db *gorm.DB, cfg *conf.Bootstrap) sms.Core {
+func NewSMSCore(db *gorm.DB, cfg *conf.Bootstrap) (sms.Core, func(), error) {
 	core := sms.NewCore(smsdb.NewDB(db).AutoMigrate(orm.GetEnabledAutoMigrate()))
 	if err := core.Run(cfg, cfg.Server.HTTP.Port); err != nil {
-		panic(err)
+		core.Close()
+		return sms.Core{}, nil, err
 	}
-	return core
+	return core, core.Close, nil
 }
 
 func NewSmsAPI(core sms.Core) SmsAPI {
@@ -65,10 +66,7 @@ func (a SmsAPI) getMediaServer(c *gin.Context, in *mediaServerIDInput) (any, err
 
 func (a SmsAPI) updateMediaServer(c *gin.Context, in *updateMediaServerInput) (any, error) {
 	out, err := a.smsCore.UpdateMediaServer(c.Request.Context(), &in.EditMediaServerInput, in.ID, a.uc.Conf.Server.HTTP.Port)
-	if err != nil {
-		return nil, err
-	}
-	if in.ID == "local" {
+	if out != nil && in.ID == "local" {
 		a.uc.Conf.Media.IP = out.IP
 		a.uc.Conf.Media.SDPIP = out.SDPIP
 		a.uc.Conf.Media.Secret = out.Secret
@@ -78,7 +76,10 @@ func (a SmsAPI) updateMediaServer(c *gin.Context, in *updateMediaServerInput) (a
 			return nil, reason.ErrServer.WithMsg(err.Error())
 		}
 	}
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (a SmsAPI) createMediaServer(c *gin.Context, in *sms.AddMediaServerInput) (any, error) {

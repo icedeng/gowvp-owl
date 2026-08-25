@@ -47,6 +47,7 @@ go test ./... -count=1
 - MediaStatus/121 与入向 BYE 必须同时匹配 Call-ID 和已鉴权设备编号，跨设备同 Call-ID 不得终止 RTP 或 Direct TCP 会话；
 - 注册、目录、媒体会话、异常断流和直接 TCP 下载灰度计数器。
 - LALMAX `code/msg` 与 `error_code/desp` 响应兼容；管理请求携带配置 token，主动健康检查必须真实访问配置接口；`stat/group` 映射媒体存在性、音视频轨道、码率及累计字节；直播、回放和语音接收结束后通过 `stop_rtp_pub` 幂等释放 RTP 接收会话；新版 ZLM 兼容接口覆盖关闭流与开始/停止录像，缺失录像状态列表时必须返回错误而非空成功；
+- 媒体节点连接、动态 Hook 配置和状态持久化必须全部成功后才能显示在线；初次失败保持离线，探测恢复重新执行完整配置，数据库失败返回错误且不得触发后台 `panic`；应用清理必须等待节点检查器退出；
 - 四版本级联 REGISTER、Catalog、UDP/TCP/TLS、下载倍速、订阅能力矩阵；
 - 四版本协议时间固定按北京时间编码/解析；查询与控制 SN 为单调正整数，RecordInfo 无响应、空结果、部分分包、重叠区间及午夜分日能够区分；
 - 上级级联信令可配置 UDP/TCP/TLS；TCP/TLS 同一连接完成 REGISTER Digest 与 Keepalive，断线后同一 Call-ID 事务切换新连接，301/302 可切换到 TCP/TLS 或 `sips:` 目标，且 SIPS 不允许降级到明文传输；

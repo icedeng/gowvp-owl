@@ -27,13 +27,17 @@ func wireApp(bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error)
 	}
 	core := versionapi.NewVersionCore(db)
 	versionapiAPI := versionapi.New(core)
-	smsCore := api.NewSMSCore(db, bc)
+	smsCore, smsCleanup, err := api.NewSMSCore(db, bc)
+	if err != nil {
+		return nil, nil, err
+	}
 	smsAPI := api.NewSmsAPI(smsCore)
 	storer := api.NewIPCStore(db, bc)
 	uniqueidCore := api.NewUniqueID(db)
 	adapter := api.NewGBAdapter(storer, uniqueidCore)
 	server, cleanup, err := gbs.NewServer(bc, adapter, smsCore)
 	if err != nil {
+		smsCleanup()
 		return nil, nil, err
 	}
 	ipcBundle := api.NewIPCCoreWithProtocols(storer, uniqueidCore, adapter, smsCore, server, bc)
@@ -72,5 +76,6 @@ func wireApp(bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error)
 	handler := api.NewHTTPHandler(usecase)
 	return handler, func() {
 		cleanup()
+		smsCleanup()
 	}, nil
 }

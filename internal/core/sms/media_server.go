@@ -70,7 +70,9 @@ func (c Core) UpdateMediaServer(ctx context.Context, in *EditMediaServerInput, i
 	}, orm.Where("id=?", id)); err != nil {
 		return nil, reason.ErrDB.Withf(`Update err[%s]`, err.Error())
 	}
-	c.connection(&out, serverPort)
+	if err := c.connection(&out, serverPort); err != nil {
+		return &out, reason.ErrServer.Withf(`Connect err[%s]`, err.Error())
+	}
 	return &out, nil
 }
 

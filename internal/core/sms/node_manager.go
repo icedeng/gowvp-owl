@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gowvp/owl/internal/conf"
@@ -56,6 +57,10 @@ type NodeManager struct {
 	drivers      map[string]Driver
 	cacheServers conc.Map[string, *WarpMediaServer]
 	quit         chan struct{}
+	connectionMu sync.Mutex
+	closeOnce    sync.Once
+	wg           sync.WaitGroup
+	serverPort   atomic.Int64
 }
 
 func NewNodeManager(storer Storer) *NodeManager {
@@ -66,6 +71,7 @@ func NewNodeManager(storer Storer) *NodeManager {
 	}
 	n.RegisterDriver(ProtocolZLMediaKit, NewZLMDriver())
 	n.RegisterDriver(ProtocolLalmax, NewLalmaxDriver())
+	n.wg.Add(1)
 	go n.tickCheck()
 	return &n
 }
@@ -86,11 +92,18 @@ func (n *NodeManager) getDriver(name string) (Driver, error) {
 }
 
 func (n *NodeManager) Close() {
-	close(n.quit)
+	if n == nil {
+		return
+	}
+	n.closeOnce.Do(func() {
+		close(n.quit)
+		n.wg.Wait()
+	})
 }
 
 // tickCheck 定时检查服务是否离线
 func (n *NodeManager) tickCheck() {
+	defer n.wg.Done()
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -99,30 +112,43 @@ func (n *NodeManager) tickCheck() {
 			return
 		case <-ticker.C:
 			n.cacheServers.Range(func(_ string, ms *WarpMediaServer) bool {
-				_, lastUpdatedAt, config := ms.status()
-				if time.Since(lastUpdatedAt) < KeepaliveInterval {
-					ms.update(true, time.Time{})
-					return true
-				}
-
-				// 尝试主动探测
-				if config != nil {
-					driver, err := n.getDriver(config.Type)
-					if err == nil {
-						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-						if err := driver.Ping(ctx, config); err == nil {
-							ms.update(true, time.Now())
-							cancel()
-							return true
-						}
-						cancel()
-					}
-				}
-
-				ms.update(false, time.Time{})
+				n.checkMediaServer(ms)
 				return true
 			})
 		}
+	}
+}
+
+func (n *NodeManager) checkMediaServer(ms *WarpMediaServer) {
+	if ms == nil {
+		return
+	}
+	isOnline, lastUpdatedAt, config := ms.status()
+	if isOnline && !lastUpdatedAt.IsZero() && time.Since(lastUpdatedAt) < KeepaliveInterval {
+		return
+	}
+	if config == nil {
+		ms.update(false, time.Time{})
+		return
+	}
+
+	driver, err := n.getDriver(config.Type)
+	if err != nil {
+		ms.update(false, time.Time{})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	err = driver.Ping(ctx, config)
+	cancel()
+	if err != nil {
+		ms.update(false, time.Time{})
+		return
+	}
+
+	// 节点可能已经重启并丢失动态 Hook 配置，恢复时必须执行完整连接流程。
+	if err := n.connection(config, int(n.serverPort.Load())); err != nil {
+		slog.Error("Reconnect media server failed", "id", config.ID, "err", err)
+		ms.update(false, time.Time{})
 	}
 }
 
@@ -182,6 +208,7 @@ func setupSecret(bc *conf.Bootstrap) {
 
 func (n *NodeManager) Run(bc *conf.Bootstrap, serverPort int) error {
 	ctx := context.Background()
+	n.serverPort.Store(int64(serverPort))
 	setupSecret(bc)
 	if bc.Media.Secret == "" {
 		return fmt.Errorf("media secret is required; set OWL_MEDIA_SECRET or provide zlm.ini/config.ini")
@@ -224,7 +251,9 @@ func (n *NodeManager) Run(bc *conf.Bootstrap, serverPort int) error {
 	}
 
 	for _, ms := range mediaServers {
+		n.wg.Add(1)
 		go func(ms *MediaServer) {
+			defer n.wg.Done()
 			if err := n.connection(ms, serverPort); err != nil {
 				slog.Error("Connect media server failed", "id", ms.ID, "err", err)
 			}
@@ -235,10 +264,14 @@ func (n *NodeManager) Run(bc *conf.Bootstrap, serverPort int) error {
 }
 
 func (n *NodeManager) connection(server *MediaServer, serverPort int) error {
-	n.cacheServers.Store(server.ID, &WarpMediaServer{
-		LastUpdatedAt: time.Now(),
-		Config:        server,
-	})
+	if server == nil {
+		return fmt.Errorf("media server is required")
+	}
+	n.connectionMu.Lock()
+	defer n.connectionMu.Unlock()
+
+	state := &WarpMediaServer{Config: server}
+	n.cacheServers.Store(server.ID, state)
 
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
@@ -256,16 +289,6 @@ func (n *NodeManager) connection(server *MediaServer, serverPort int) error {
 	}
 	log.Info("MediaServer 连接成功")
 
-	// 更新数据库中的端口信息等
-	if err := n.storer.MediaServer().Update(ctx, &MediaServer{}, func(b *MediaServer) {
-		// 更新字段
-		b.Ports = server.Ports
-		b.HookAliveInterval = server.HookAliveInterval
-		b.Status = server.Status
-	}, orm.Where("id=?", server.ID)); err != nil {
-		panic(fmt.Errorf("保存 MediaServer 失败 %w", err))
-	}
-
 	log.Info("MediaServer 配置设置...")
 	hookPrefix := fmt.Sprintf("http://%s:%d/webhook", server.HookIP, serverPort)
 	u, err := url.Parse(hookPrefix)
@@ -280,6 +303,16 @@ func (n *NodeManager) connection(server *MediaServer, serverPort int) error {
 		log.Error("MediaServer 配置设置失败", "err", err)
 		return err
 	}
+
+	// 只有连接和动态配置都成功后，才持久化并发布在线状态。
+	if err := n.storer.MediaServer().Update(ctx, &MediaServer{}, func(b *MediaServer) {
+		b.Ports = server.Ports
+		b.HookAliveInterval = server.HookAliveInterval
+		b.Status = server.Status
+	}, orm.Where("id=?", server.ID)); err != nil {
+		return fmt.Errorf("save media server: %w", err)
+	}
+	state.update(true, time.Now())
 
 	return nil
 }
