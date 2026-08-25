@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/gofrs/uuid"
 )
@@ -45,12 +46,41 @@ func NewRequest(
 
 // NewRequestFromResponse NewRequestFromResponse
 func NewRequestFromResponse(method string, resp *Response) *Request {
+	request, _ := NewRequestFromResponseChecked(method, resp)
+	return request
+}
+
+// NewRequestFromResponseChecked 根据响应构造对话内请求，并校验 RFC 3261 必需头。
+// 设备返回畸形 2xx 时应把错误交给业务层处理，不能因缺失 Via/CSeq/To 等字段触发 panic。
+func NewRequestFromResponseChecked(method string, resp *Response) (*Request, error) {
+	if resp == nil {
+		return nil, fmt.Errorf("cannot build %s request from nil response", method)
+	}
 	var recipient *URI
 	if contact, ok := resp.Contact(); ok && contact != nil && contact.Address != nil {
 		recipient = contact.Address.Clone()
 	} else if to, ok := resp.To(); ok && to != nil && to.Address != nil {
 		// 部分老设备的 2xx 响应缺少 Contact，退化为对话 To URI，避免 ACK/BYE 构造崩溃。
 		recipient = to.Address.Clone()
+	}
+	if recipient == nil {
+		return nil, fmt.Errorf("cannot build %s request: response has no Contact or To target", method)
+	}
+	if from, ok := resp.From(); !ok || from == nil || from.Address == nil {
+		return nil, fmt.Errorf("cannot build %s request: response is missing From", method)
+	}
+	if to, ok := resp.To(); !ok || to == nil || to.Address == nil {
+		return nil, fmt.Errorf("cannot build %s request: response is missing To", method)
+	}
+	if callID, ok := resp.CallID(); !ok || callID == nil || strings.TrimSpace(string(*callID)) == "" {
+		return nil, fmt.Errorf("cannot build %s request: response is missing Call-ID", method)
+	}
+	responseCSeq, ok := resp.CSeq()
+	if !ok || responseCSeq == nil {
+		return nil, fmt.Errorf("cannot build %s request: response is missing CSeq", method)
+	}
+	if viaHop, ok := resp.ViaHop(); !ok || viaHop == nil || strings.TrimSpace(viaHop.Host) == "" {
+		return nil, fmt.Errorf("cannot build %s request: response is missing Via", method)
 	}
 	ackRequest := NewRequest(
 		resp.MessageID(),
@@ -62,7 +92,13 @@ func NewRequestFromResponse(method string, resp *Response) *Request {
 	)
 
 	CopyHeaders("Via", resp, ackRequest)
-	viaHop, _ := ackRequest.ViaHop()
+	viaHop, ok := ackRequest.ViaHop()
+	if !ok || viaHop == nil {
+		return nil, fmt.Errorf("cannot build %s request: failed to copy Via", method)
+	}
+	if viaHop.Params == nil {
+		viaHop.Params = NewParams()
+	}
 	// update branch, 2xx ACK is separate Tx
 	viaHop.Params.Add("branch", String{Str: GenerateBranch()})
 
@@ -93,7 +129,6 @@ func NewRequestFromResponse(method string, resp *Response) *Request {
 	CopyHeaders("From", resp, ackRequest)
 	CopyHeaders("To", resp, ackRequest)
 	CopyHeaders("Call-ID", resp, ackRequest)
-	responseCSeq, _ := resp.CSeq()
 	cseq := *responseCSeq
 	cseq.MethodName = method
 
@@ -112,7 +147,7 @@ func NewRequestFromResponse(method string, resp *Response) *Request {
 	ackRequest.AppendHeader(&cseq)
 	ackRequest.SetSource(resp.Destination())
 	ackRequest.SetDestination(resp.Source())
-	return ackRequest
+	return ackRequest, nil
 }
 
 // StartLine returns Request Line - RFC 2361 7.1.

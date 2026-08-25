@@ -209,10 +209,11 @@ func (g *GB28181API) startTalk(ctx context.Context, ch *Channel, in *VoiceInput)
 			return
 		}
 		if stream.Resp != nil {
-			req := sip.NewRequestFromResponse(sip.MethodBYE, stream.Resp)
-			req.SetDestination(ch.Source())
-			req.SetConnection(ch.Conn())
-			_, _ = g.svr.Request(req)
+			if req, requestErr := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp); requestErr == nil {
+				req.SetDestination(ch.Source())
+				req.SetConnection(ch.Conn())
+				_, _ = g.svr.Request(req)
+			}
 		}
 		_ = g.stopTalkSession(session, err)
 		g.streams.CompareAndDelete(key, stream)
@@ -474,10 +475,14 @@ func (g *GB28181API) stopVoiceNoLock(ch *Channel, in *StopVoiceInput) error {
 	}
 	var result error
 	if stream.Resp != nil {
-		req := sip.NewRequestFromResponse(sip.MethodBYE, stream.Resp)
-		req.SetDestination(ch.Source())
-		req.SetConnection(ch.Conn())
-		_, result = g.svr.Request(req)
+		req, requestErr := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp)
+		if requestErr != nil {
+			result = requestErr
+		} else {
+			req.SetDestination(ch.Source())
+			req.SetConnection(ch.Conn())
+			_, result = g.svr.Request(req)
+		}
 	}
 	if value, ok := g.talkSessions.Load(stream.StreamID); ok {
 		if session, ok := value.(*talkSession); ok {
@@ -760,5 +765,9 @@ func (g *GB28181API) sipInviteVoice(ch *Channel, in *VoiceInput, port int, strea
 	if callID, ok := resp.CallID(); ok {
 		stream.CallID = normalizeCallID(callID)
 	}
-	return tx.Request(sip.NewRequestFromResponse(sip.MethodACK, resp))
+	ack, err := sip.NewRequestFromResponseChecked(sip.MethodACK, resp)
+	if err != nil {
+		return err
+	}
+	return tx.Request(ack)
 }

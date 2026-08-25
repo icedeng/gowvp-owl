@@ -219,7 +219,11 @@ func (g *GB28181API) startCascadeVoiceSource(ctx context.Context, worker *cascad
 	source.callID = normalizeCallID(responseCallID)
 	source.response = response
 	g.cascadeVoiceDialogs.Store(source.callID, source)
-	ack := sip.NewRequestFromResponse(sip.MethodACK, response)
+	ack, err := sip.NewRequestFromResponseChecked(sip.MethodACK, response)
+	if err != nil {
+		_ = g.stopCascadeVoiceSource(source, false)
+		return nil, fmt.Errorf("build cascade Broadcast ACK: %w", err)
+	}
 	prepareCascadeDialogRequest(worker, ack)
 	if err := worker.send(ack); err != nil {
 		_ = g.stopCascadeVoiceSource(source, true)
@@ -338,15 +342,19 @@ func (g *GB28181API) stopCascadeVoiceSource(source *cascadeVoiceSourceSession, s
 			g.cascadeVoiceDialogs.CompareAndDelete(source.callID, source)
 		}
 		if sendBYE && !ended && response != nil && source.worker != nil {
-			bye := sip.NewRequestFromResponse(sip.MethodBYE, response)
-			prepareCascadeDialogRequest(source.worker, bye)
-			ctx, cancel := context.WithTimeout(context.Background(), defaultCascadeRequestTimeout)
-			resp, err := source.worker.exchange(ctx, bye)
-			cancel()
+			bye, err := sip.NewRequestFromResponseChecked(sip.MethodBYE, response)
 			if err != nil {
 				result = err
-			} else if resp == nil || resp.StatusCode() != http.StatusOK {
-				result = fmt.Errorf("cascade Broadcast source BYE failed")
+			} else {
+				prepareCascadeDialogRequest(source.worker, bye)
+				ctx, cancel := context.WithTimeout(context.Background(), defaultCascadeRequestTimeout)
+				resp, err := source.worker.exchange(ctx, bye)
+				cancel()
+				if err != nil {
+					result = err
+				} else if resp == nil || resp.StatusCode() != http.StatusOK {
+					result = fmt.Errorf("cascade Broadcast source BYE failed")
+				}
 			}
 		}
 		if opened && g.sms != nil && source.server != nil {

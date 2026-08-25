@@ -51,12 +51,15 @@ func (g *GB28181API) stopPlay(ch *Channel, in *StopPlayInput) error {
 		return nil
 	}
 
-	req := sip.NewRequestFromResponse(sip.MethodBYE, stream.Resp)
+	req, err := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp)
+	if err != nil {
+		return err
+	}
 	req.SetDestination(ch.Source())
 	req.SetConnection(ch.Conn())
 
 	// 忽略响应，此处必须尽快返回
-	_, err := g.svr.Request(req)
+	_, err = g.svr.Request(req)
 	return err
 }
 
@@ -303,7 +306,10 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 		stream.CallID = normalizeCallID(callID)
 	}
 
-	ackReq := sip.NewRequestFromResponse(sip.MethodACK, resp)
+	ackReq, err := sip.NewRequestFromResponseChecked(sip.MethodACK, resp)
+	if err != nil {
+		return err
+	}
 	return tx.Request(ackReq)
 }
 
@@ -484,7 +490,11 @@ func SipStopPlay(ssrc string) {
 			return
 		}
 		user := u.(Devices)
-		req := sip.NewRequestFromResponse(sip.MethodBYE, resp)
+		req, err := sip.NewRequestFromResponseChecked(sip.MethodBYE, resp)
+		if err != nil {
+			play.Msg = err.Error()
+			return
+		}
 		req.SetDestination(user.source)
 		tx, err := svr.Request(req)
 		if err != nil {

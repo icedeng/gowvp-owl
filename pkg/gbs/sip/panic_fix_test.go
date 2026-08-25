@@ -62,6 +62,53 @@ func TestNewRequestFromResponseFallsBackToToWithoutContact(t *testing.T) {
 	}
 }
 
+func TestNewRequestFromResponseCheckedRejectsMalformedResponse(t *testing.T) {
+	target, err := ParseURI("sip:34020000001320000001@192.0.2.10:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	validRequest := NewRequest("", MethodInvite, target, DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodInvite).
+		SetFrom(&Address{URI: target.Clone(), Params: NewParams()}).
+		SetTo(&Address{URI: target.Clone(), Params: NewParams()}).
+		AddVia(&ViaHop{Host: "192.0.2.20", Port: NewPort(5060), Params: NewParams()}).
+		Build(), nil)
+
+	tests := []struct {
+		name     string
+		response *Response
+	}{
+		{name: "nil response"},
+		{name: "missing target", response: NewResponse("", DefaultSipVersion, 200, "OK", nil, nil)},
+		{name: "missing Via", response: func() *Response {
+			response := NewResponseFromRequest("", validRequest, 200, "OK", nil)
+			response.RemoveHeader("Via")
+			return response
+		}()},
+		{name: "missing CSeq", response: func() *Response {
+			response := NewResponseFromRequest("", validRequest, 200, "OK", nil)
+			response.RemoveHeader("CSeq")
+			return response
+		}()},
+		{name: "missing Call-ID", response: func() *Response {
+			response := NewResponseFromRequest("", validRequest, 200, "OK", nil)
+			response.RemoveHeader("Call-ID")
+			return response
+		}()},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if request, err := NewRequestFromResponseChecked(MethodACK, test.response); err == nil || request != nil {
+				t.Fatalf("malformed response produced request %#v, error %v", request, err)
+			}
+			if request := NewRequestFromResponse(MethodACK, test.response); request != nil {
+				t.Fatalf("compatibility constructor returned request %#v", request)
+			}
+		})
+	}
+}
+
 func TestNewRequestFromResponseReversesRouteSetAndPreservesResponseCSeq(t *testing.T) {
 	target, err := ParseURI("sip:34020000001320000001@192.0.2.10:5060")
 	if err != nil {

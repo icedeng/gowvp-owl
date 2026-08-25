@@ -194,7 +194,10 @@ func (g *GB28181API) ControlHistory(_ context.Context, in *ControlHistoryInput) 
 	if err != nil {
 		return err
 	}
-	req := sip.NewRequestFromResponse(sip.MethodInfo, stream.Resp)
+	req, err := sip.NewRequestFromResponseChecked(sip.MethodInfo, stream.Resp)
+	if err != nil {
+		return err
+	}
 	req.SetBody([]byte(cmd), true)
 	req.AppendHeader(&sip.GenericHeader{HeaderName: "Content-Type", Contents: "Application/MANSRTSP"})
 	req.SetDestination(ch.Source())
@@ -291,14 +294,17 @@ func (g *GB28181API) sendHistoryBYE(ch *Channel, stream *Streams) error {
 	if ch == nil || stream == nil || stream.Resp == nil {
 		return nil
 	}
-	req := sip.NewRequestFromResponse(sip.MethodBYE, stream.Resp)
-	req.SetDestination(ch.Source())
-	req.SetConnection(ch.Conn())
-	tx, err := g.svr.Request(req)
-	if err != nil {
-		return err
+	req, responseErr := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp)
+	if responseErr == nil {
+		req.SetDestination(ch.Source())
+		req.SetConnection(ch.Conn())
+		tx, err := g.svr.Request(req)
+		if err != nil {
+			responseErr = err
+		} else {
+			_, responseErr = sipResponse(tx)
+		}
 	}
-	_, responseErr := sipResponse(tx)
 	if stream.mediaServer != nil && g.sms != nil {
 		_, closeErr := g.sms.CloseRTPServer(stream.mediaServer, zlm.CloseRTPServerRequest{StreamID: stream.StreamID})
 		if responseErr == nil {
@@ -455,7 +461,11 @@ func (g *GB28181API) sipInviteDirectTCPHistory(ch *Channel, in *HistoryInput, st
 	if stream.DirectSessionID == "" {
 		return directTCPDownloadOffer{}, fmt.Errorf("direct TCP download response missing Call-ID")
 	}
-	if err := tx.Request(sip.NewRequestFromResponse(sip.MethodACK, resp)); err != nil {
+	ack, err := sip.NewRequestFromResponseChecked(sip.MethodACK, resp)
+	if err != nil {
+		return directTCPDownloadOffer{}, err
+	}
+	if err := tx.Request(ack); err != nil {
 		return directTCPDownloadOffer{}, err
 	}
 	return offer, nil
@@ -569,12 +579,18 @@ func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, s
 	if in.Mode == historyModeDownload {
 		size, known, parseErr := parseRTPDownloadFileSize(resp.Body())
 		if parseErr != nil {
-			_ = tx.Request(sip.NewRequestFromResponse(sip.MethodACK, resp))
+			if ack, ackErr := sip.NewRequestFromResponseChecked(sip.MethodACK, resp); ackErr == nil {
+				_ = tx.Request(ack)
+			}
 			_ = g.sendHistoryBYE(ch, stream)
 			return parseErr
 		}
 		stream.FileSize = size
 		stream.FileSizeKnown = known
 	}
-	return tx.Request(sip.NewRequestFromResponse(sip.MethodACK, resp))
+	ack, err := sip.NewRequestFromResponseChecked(sip.MethodACK, resp)
+	if err != nil {
+		return err
+	}
+	return tx.Request(ack)
 }
