@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/conf"
@@ -39,7 +40,7 @@ func NewRecordingCore(
 	provider recording.SMSProvider,
 	ipcProvider recording.IPCProvider,
 	playProvider recording.PlayProvider,
-) recording.Core {
+) (recording.Core, func()) {
 	core := recording.NewCore(store,
 		recording.WithConfig(&cfg.Server.Recording),
 		recording.WithSMSProvider(provider),
@@ -47,13 +48,20 @@ func NewRecordingCore(
 		recording.WithPlayProvider(playProvider),
 	)
 
-	// 启动清理协程
-	go core.StartCleanupWorker()
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		core.StartCleanupWorker(ctx)
+	}()
+	syncDone := core.StartRecordingSyncLoop(ctx)
 
-	// 启动录制同步协程（平台重启/流中断恢复）
-	core.StartRecordingSyncLoop(context.Background())
-
-	return core
+	return core, func() {
+		cancel()
+		wg.Wait()
+		<-syncDone
+	}
 }
 
 func NewRecordingAPI(core recording.Core, conf *conf.Bootstrap) RecordingAPI {

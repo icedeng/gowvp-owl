@@ -270,17 +270,18 @@ func NewPlayProviderAdapter(smsCore sms.Core) recording.PlayProvider {
 	return adapter.NewPlayAdapter(smsCore)
 }
 
-// NewNotifier 创建 webhook 推送器，Targets 为空时返回 nil（不推送）
-func NewNotifier(conf *conf.Bootstrap) *push.Notifier {
+// NewNotifier 创建 webhook 推送器及清理器，Targets 为空时返回真正的 nil 接口。
+func NewNotifier(conf *conf.Bootstrap) (event.Dispatcher, func()) {
 	cfg := conf.Server.Webhook
 	if len(cfg.Targets) == 0 {
-		return nil
+		return nil, func() {}
 	}
-	return push.NewNotifier(cfg.Targets, cfg.MaxRetry, cfg.BufferSize)
+	notifier := push.NewNotifier(cfg.Targets, cfg.MaxRetry, cfg.BufferSize)
+	return notifier, notifier.Close
 }
 
 // NewEventCoreWithNotifier 在 NewEventCore 基础上注入 webhook 推送器
 // notifier 为 nil 时，CreateEventAndNotify 只入库不推送
-func NewEventCoreWithNotifier(conf *conf.Bootstrap, db *gorm.DB, notifier event.Dispatcher) event.Core {
+func NewEventCoreWithNotifier(conf *conf.Bootstrap, db *gorm.DB, notifier event.Dispatcher) (event.Core, func()) {
 	return NewEventCore(db, conf, notifier)
 }

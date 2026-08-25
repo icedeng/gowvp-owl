@@ -21,14 +21,17 @@ const (
 // StartRecordingSyncLoop 启动录制同步协程
 // 延迟 syncInitialDelay 后首次执行，之后每 syncInterval 同步一次
 // 确保录制状态与通道配置一致，覆盖平台重启、ZLM 重启、流中断等异常场景
-func (c Core) StartRecordingSyncLoop(ctx context.Context) {
+func (c Core) StartRecordingSyncLoop(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
 	if !c.IsEnabled() {
 		slog.Info("recording sync disabled (recording not enabled)")
-		return
+		close(done)
+		return done
 	}
 	if c.ipcProvider == nil || c.smsProvider == nil {
 		slog.Warn("recording sync disabled: ipcProvider or smsProvider not configured")
-		return
+		close(done)
+		return done
 	}
 
 	interval := c.syncInterval
@@ -39,10 +42,13 @@ func (c Core) StartRecordingSyncLoop(ctx context.Context) {
 	slog.Info("recording sync loop started", "initial_delay", syncInitialDelay.String(), "interval", interval.String())
 
 	go func() {
+		defer close(done)
+		initialTimer := time.NewTimer(syncInitialDelay)
 		select {
 		case <-ctx.Done():
+			initialTimer.Stop()
 			return
-		case <-time.After(syncInitialDelay):
+		case <-initialTimer.C:
 			c.syncRecordingTasks(ctx)
 		}
 
@@ -59,6 +65,7 @@ func (c Core) StartRecordingSyncLoop(ctx context.Context) {
 			}
 		}
 	}()
+	return done
 }
 
 // syncRecordingTasks 执行一次录制状态同步

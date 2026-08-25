@@ -13,15 +13,21 @@ import (
 	"gorm.io/gorm"
 )
 
-// StartCleanupWorker 启动定时清理协程，每天凌晨 3 点执行一次清理
+// StartCleanupWorker 启动可取消的定时清理协程。
 // days 参数指定保留的天数，超过该天数的事件将被删除
-func (c Core) StartCleanupWorker(days int) {
+func (c Core) StartCleanupWorker(ctx context.Context, days int) {
 	if days <= 0 {
 		slog.Info("event cleanup disabled", "days", days)
 		return
 	}
 
 	slog.Info("event cleanup worker started", "retain_days", days)
+
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
 
 	// 启动时先执行一次清理
 	c.cleanupExpiredEvents(days)
@@ -30,8 +36,13 @@ func (c Core) StartCleanupWorker(days int) {
 	ticker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		c.cleanupExpiredEvents(days)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.cleanupExpiredEvents(days)
+		}
 	}
 }
 

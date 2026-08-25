@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/gowvp/owl/internal/core/event"
@@ -35,6 +36,10 @@ type Dispatcher interface {
 // 每个目标独立维护一个 buffered channel 和一个 worker goroutine，互不阻塞
 type Notifier struct {
 	workers []*worker
+	mu      sync.RWMutex
+	closed  bool
+	close   sync.Once
+	wg      sync.WaitGroup
 }
 
 type worker struct {
@@ -73,7 +78,11 @@ func NewNotifier(targets []string, maxRetry, bufferSize int) *Notifier {
 			maxRetry: maxRetry,
 		}
 		n.workers = append(n.workers, w)
-		go w.run()
+		n.wg.Add(1)
+		go func() {
+			defer n.wg.Done()
+			w.run()
+		}()
 	}
 	return n
 }
@@ -95,6 +104,14 @@ func extractSecret(rawURL string) (cleanURL, secret string) {
 // Dispatch 非阻塞地将事件投递到每个 target 的缓冲队列
 // 若队列已满则丢弃并记录警告，不阻塞调用方
 func (n *Notifier) Dispatch(ctx context.Context, ev *event.Event) {
+	if n == nil || ev == nil {
+		return
+	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if n.closed {
+		return
+	}
 	for _, w := range n.workers {
 		select {
 		case w.ch <- ev:
@@ -106,9 +123,18 @@ func (n *Notifier) Dispatch(ctx context.Context, ev *event.Event) {
 
 // Close 关闭所有 worker channel，等待剩余事件处理后退出
 func (n *Notifier) Close() {
-	for _, w := range n.workers {
-		close(w.ch)
+	if n == nil {
+		return
 	}
+	n.close.Do(func() {
+		n.mu.Lock()
+		n.closed = true
+		for _, w := range n.workers {
+			close(w.ch)
+		}
+		n.mu.Unlock()
+		n.wg.Wait()
+	})
 }
 
 func (w *worker) run() {

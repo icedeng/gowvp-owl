@@ -16,9 +16,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// StartCleanupWorker 启动定时清理协程
+// StartCleanupWorker 启动可取消的定时清理协程
 // 常规每 10 分钟检查一次，磁盘超标时缩短到 2 分钟加速清理
-func (c Core) StartCleanupWorker() {
+func (c Core) StartCleanupWorker(ctx context.Context) {
 	if c.conf == nil || c.conf.Disabled {
 		slog.Info("recording cleanup disabled")
 		return
@@ -30,22 +30,35 @@ func (c Core) StartCleanupWorker() {
 		"storage_dir", c.conf.StorageDir,
 	)
 
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
 	// 程序启动时先执行一次清理
 	c.runCleanup()
 
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		// 磁盘超标时连续重试，间隔 2 分钟，直到达标或无录像可删
-		for {
-			needRetry := c.runCleanup()
-			if !needRetry {
-				break
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// 磁盘超标时连续重试，间隔 2 分钟，直到达标或无录像可删。
+			for c.runCleanup() {
+				slog.Warn("磁盘仍超标，2 分钟后重试清理", "threshold", c.conf.DiskUsageThreshold)
+				notify.Warn(fmt.Sprintf("磁盘使用率超标 (阈值: %.0f%%), 正在清理录像", c.conf.DiskUsageThreshold))
+				timer := time.NewTimer(2 * time.Minute)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
 			}
-			slog.Warn("磁盘仍超标，2 分钟后重试清理", "threshold", c.conf.DiskUsageThreshold)
-			notify.Warn(fmt.Sprintf("磁盘使用率超标 (阈值: %.0f%%), 正在清理录像", c.conf.DiskUsageThreshold))
-			time.Sleep(2 * time.Minute)
 		}
 	}
 }

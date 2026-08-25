@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,7 +25,7 @@ type EventAPI struct {
 	conf      *conf.Bootstrap
 }
 
-func NewEventCore(db *gorm.DB, conf *conf.Bootstrap, notifier event.Dispatcher) event.Core {
+func NewEventCore(db *gorm.DB, conf *conf.Bootstrap, notifier event.Dispatcher) (event.Core, func()) {
 	var store event.Storer
 	store = eventdb.NewDB(db).AutoMigrate(orm.GetEnabledAutoMigrate())
 	core := event.NewCore(store, notifier)
@@ -34,9 +35,17 @@ func NewEventCore(db *gorm.DB, conf *conf.Bootstrap, notifier event.Dispatcher) 
 	if days <= 0 {
 		days = 7
 	}
-	go core.StartCleanupWorker(days)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		core.StartCleanupWorker(ctx, days)
+	}()
 
-	return core
+	return core, func() {
+		cancel()
+		<-done
+	}
 }
 
 func NewEventAPI(core event.Core, conf *conf.Bootstrap) EventAPI {

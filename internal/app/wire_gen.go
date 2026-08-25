@@ -7,15 +7,14 @@
 package app
 
 import (
-	"log/slog"
-	"net/http"
-
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/internal/core/metadata/metadataapi"
 	"github.com/gowvp/owl/internal/data"
 	"github.com/gowvp/owl/internal/web/api"
 	"github.com/gowvp/owl/pkg/gbs"
 	"github.com/ixugo/goddd/domain/version/versionapi"
+	"log/slog"
+	"net/http"
 )
 
 // Injectors from wire.go:
@@ -27,7 +26,7 @@ func wireApp(bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error)
 	}
 	core := versionapi.NewVersionCore(db)
 	versionapiAPI := versionapi.New(core)
-	smsCore, smsCleanup, err := api.NewSMSCore(db, bc)
+	smsCore, cleanup, err := api.NewSMSCore(db, bc)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -35,9 +34,9 @@ func wireApp(bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error)
 	storer := api.NewIPCStore(db, bc)
 	uniqueidCore := api.NewUniqueID(db)
 	adapter := api.NewGBAdapter(storer, uniqueidCore)
-	server, cleanup, err := gbs.NewServer(bc, adapter, smsCore)
+	server, cleanup2, err := gbs.NewServer(bc, adapter, smsCore)
 	if err != nil {
-		smsCleanup()
+		cleanup()
 		return nil, nil, err
 	}
 	ipcBundle := api.NewIPCCoreWithProtocols(storer, uniqueidCore, adapter, smsCore, server, bc)
@@ -45,9 +44,9 @@ func wireApp(bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error)
 	smsProvider := api.NewSMSProviderAdapter(smsCore)
 	ipcProvider := api.NewIPCProviderAdapter(ipcBundle)
 	playProvider := api.NewPlayProviderAdapter(smsCore)
-	recordingCore := api.NewRecordingCore(recordingStorer, bc, smsProvider, ipcProvider, playProvider)
-	notifier := api.NewNotifier(bc)
-	eventCore := api.NewEventCoreWithNotifier(bc, db, notifier)
+	recordingCore, cleanup3 := api.NewRecordingCore(recordingStorer, bc, smsProvider, ipcProvider, playProvider)
+	dispatcher, cleanup4 := api.NewNotifier(bc)
+	eventCore, cleanup5 := api.NewEventCoreWithNotifier(bc, db, dispatcher)
 	webHookAPI := api.NewWebHookAPI(smsCore, bc, server, ipcBundle, recordingCore, eventCore)
 	ipcapi := api.NewIPCAPI(ipcBundle, recordingCore)
 	configAPI := api.NewConfigAPI(db, bc)
@@ -75,7 +74,10 @@ func wireApp(bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error)
 	}
 	handler := api.NewHTTPHandler(usecase)
 	return handler, func() {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
 		cleanup()
-		smsCleanup()
 	}, nil
 }
