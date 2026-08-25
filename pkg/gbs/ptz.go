@@ -102,7 +102,7 @@ func (g *GB28181API) PTZ(in *PTZInput) (*PTZOutput, error) {
 		return nil, errors.New("invalid ptz input")
 	}
 	ipc, ok := g.svr.memoryStorer.Load(in.DeviceID)
-	if !ok || !ipc.IsOnline {
+	if !ok || !ipc.IsOnlineNow() {
 		return nil, ErrDeviceOffline
 	}
 	ch, ok := g.svr.memoryStorer.GetChannel(in.DeviceID, in.ChannelID)

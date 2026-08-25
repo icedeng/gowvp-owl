@@ -95,7 +95,7 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	ch.device.playMutex.Lock()
 	defer ch.device.playMutex.Unlock()
 
-	if !ch.device.IsOnline {
+	if !ch.device.IsOnlineNow() {
 		return ErrDeviceOffline
 	}
 	if err := g.requireMediaTransport(in.Channel.DeviceID, in.StreamMode, "实时点播"); err != nil {

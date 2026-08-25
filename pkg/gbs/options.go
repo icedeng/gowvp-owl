@@ -33,7 +33,7 @@ func (g *GB28181API) ProbeOptions(ctx context.Context, in *OptionsProbeInput) er
 		return fmt.Errorf("invalid options probe request")
 	}
 	ipcDev, ok := g.svr.memoryStorer.Load(in.DeviceID)
-	if !ok || !ipcDev.IsOnline {
+	if !ok || !ipcDev.IsOnlineNow() {
 		return ErrDeviceOffline
 	}
 	tx, err := g.svr.wrapRequest(ipcDev, sip.MethodOptions, nil, nil)

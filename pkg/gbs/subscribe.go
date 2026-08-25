@@ -39,7 +39,7 @@ func (g *GB28181API) Subscribe(_ context.Context, in *SubscribeInput) error {
 		targetID = deviceID
 	}
 	ipc, ok := g.svr.memoryStorer.Load(deviceID)
-	if !ok || !ipc.IsOnline {
+	if !ok || !ipc.IsOnlineNow() {
 		return ErrDeviceOffline
 	}
 	var target Targeter = ipc

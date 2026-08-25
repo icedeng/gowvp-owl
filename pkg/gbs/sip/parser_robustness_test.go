@@ -16,6 +16,8 @@ func TestParseSipURIRejectsMalformedInputWithoutPanic(t *testing.T) {
 		"sip::5060",
 		"sip:example.com:",
 		"sip:[2001:db8::1",
+		"sip:device@example.com\r\nVia: injected",
+		"sip:device@example.com\x7f",
 	}
 
 	for _, input := range tests {

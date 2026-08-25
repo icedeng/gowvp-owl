@@ -72,7 +72,7 @@ func (g *GB28181API) forwardCascadeBroadcast(ctx context.Context, worker *cascad
 		return g.sendCascadeBroadcastResult(ctx, worker, request, "ERROR")
 	}
 	runtimeChannel, ok := g.svr.memoryStorer.GetChannel(channel.DeviceID, channel.ChannelID)
-	if !ok || runtimeChannel == nil || runtimeChannel.device == nil || !runtimeChannel.device.IsOnline {
+	if !ok || runtimeChannel == nil || runtimeChannel.device == nil || !runtimeChannel.device.IsOnlineNow() {
 		return g.sendCascadeBroadcastResult(ctx, worker, request, "ERROR")
 	}
 	if err := g.requireGBFeature(channel.DeviceID, "voice_broadcast", "级联语音广播", func(c GBCapabilities) bool {

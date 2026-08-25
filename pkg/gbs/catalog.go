@@ -127,6 +127,7 @@ func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 
 	for index := range msg.Item {
 		msg.Item[index].DeviceID = msg.DeviceID
+		msg.Item[index].ChannelID = strings.TrimSpace(msg.Item[index].ChannelID)
 	}
 	if g.catalogResponses != nil {
 		key := buildMultiResponseKey(ctx.DeviceID, "Catalog", msg.SN)
@@ -152,7 +153,7 @@ func (g *GB28181API) QueryCatalog(deviceID string) (err error) {
 	}()
 	slog.Debug("QueryCatalog", "deviceID", deviceID)
 	ipc, ok := g.svr.memoryStorer.Load(deviceID)
-	if !ok || !ipc.IsOnline {
+	if !ok || !ipc.IsOnlineNow() {
 		return ErrDeviceOffline
 	}
 
@@ -200,21 +201,34 @@ func (g *GB28181API) persistCatalogResult(deviceID string, result multiResponseR
 }
 
 func (g *GB28181API) saveCatalogChannels(deviceID string, items []Channels) {
+	for index := range items {
+		items[index].ChannelID = strings.TrimSpace(items[index].ChannelID)
+	}
 	cfg := g.configSnapshot()
 	domain := ""
 	if cfg != nil {
 		domain = cfg.GetDomain()
 	}
 	if device, ok := g.svr.memoryStorer.Load(deviceID); ok {
+		channelDomain := domain
+		if device.To() != nil && device.To().URI != nil && device.To().URI.Host() != "" {
+			channelDomain = device.To().URI.Host()
+		}
+		// 完整目录先整体校验，再替换运行时快照，避免中途失败造成部分提交。
+		for _, item := range items {
+			channel := &Channel{ChannelID: item.ChannelID, device: device}
+			if err := channel.init(channelDomain); err != nil {
+				slog.Warn("reject invalid GB28181 Catalog snapshot", "device_id", deviceID, "channel_id", item.ChannelID, "err", err)
+				return
+			}
+		}
 		seen := make(map[string]struct{}, len(items))
 		for _, item := range items {
 			seen[item.ChannelID] = struct{}{}
 			channel := &Channel{ChannelID: item.ChannelID, device: device}
-			channelDomain := domain
-			if device.To() != nil && device.To().URI != nil && device.To().URI.Host() != "" {
-				channelDomain = device.To().URI.Host()
+			if err := channel.init(channelDomain); err != nil {
+				return
 			}
-			channel.init(channelDomain)
 			device.Channels.Store(channel.ChannelID, channel)
 		}
 		device.Channels.Range(func(channelID string, _ *Channel) bool {
@@ -272,10 +286,43 @@ type gbVersioner interface {
 
 type RequestOption func(*sip.Request)
 
+func requestTargetSnapshot(target Targeter) (*sip.Address, sip.Connection, net.Addr) {
+	switch value := target.(type) {
+	case *Device:
+		state := value.runtimeSnapshot()
+		return state.To, state.Conn, state.Source
+	case *Channel:
+		if value == nil || value.device == nil {
+			return nil, nil, nil
+		}
+		state := value.device.runtimeSnapshot()
+		var to *sip.Address
+		if value.to != nil {
+			to = value.to.Clone()
+		}
+		return to, state.Conn, state.Source
+	default:
+		return target.To(), target.Conn(), target.Source()
+	}
+}
+
 func (s *Server) wrapRequest(t Targeter, method string, contentType *sip.ContentType, body []byte, opts ...RequestOption) (*sip.Transaction, error) {
-	to := t.To()
-	conn := t.Conn()
-	source := t.Source()
+	if s == nil || s.Server == nil || s.gb == nil {
+		return nil, fmt.Errorf("SIP server is unavailable")
+	}
+	if t == nil {
+		return nil, fmt.Errorf("SIP request target is unavailable")
+	}
+	to, conn, source := requestTargetSnapshot(t)
+	if to == nil || to.URI == nil || strings.TrimSpace(to.URI.Host()) == "" {
+		return nil, fmt.Errorf("SIP request target URI is unavailable")
+	}
+	if conn == nil {
+		return nil, fmt.Errorf("SIP request target connection is unavailable")
+	}
+	if source == nil {
+		return nil, fmt.Errorf("SIP request target address is unavailable")
+	}
 
 	hb := sip.NewHeaderBuilder().
 		SetTo(to).

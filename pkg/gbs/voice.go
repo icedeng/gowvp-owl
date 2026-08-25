@@ -151,7 +151,7 @@ func (g *GB28181API) StartVoice(ctx context.Context, in *VoiceInput) error {
 	if !ok {
 		return ErrChannelNotExist
 	}
-	if !ch.device.IsOnline {
+	if !ch.device.IsOnlineNow() {
 		return ErrDeviceOffline
 	}
 	switch in.Mode {

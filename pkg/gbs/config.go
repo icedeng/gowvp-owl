@@ -197,7 +197,7 @@ func NewBasicParamRequest(sn int32, deviceID string) []byte {
 func (g *GB28181API) QueryConfigDownloadBasic(deviceID string) error {
 	slog.Debug("QueryConfigDownloadBasic", "deviceID", deviceID)
 	ipc, ok := g.svr.memoryStorer.Load(deviceID)
-	if !ok || !ipc.IsOnline {
+	if !ok || !ipc.IsOnlineNow() {
 		return ErrDeviceOffline
 	}
 
@@ -267,7 +267,7 @@ func (g *GB28181API) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput)
 		return nil, err
 	}
 	device, ok := g.svr.memoryStorer.Load(deviceID)
-	if !ok || !device.IsOnline {
+	if !ok || !device.IsOnlineNow() {
 		return nil, ErrDeviceOffline
 	}
 	targetID := strings.TrimSpace(in.TargetID)
@@ -529,7 +529,7 @@ func (g *GB28181API) completeBasicParam(targetID string, device *Device, in Basi
 	out.SIPServerPort = cfg.Port
 	out.DomainName = strings.TrimSpace(cfg.GetDomain())
 	if device != nil {
-		out.Password = device.Password
+		out.Password = device.PasswordValue()
 	}
 	if out.Password == "" {
 		out.Password = cfg.Password
@@ -587,9 +587,13 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 		}
 		// 计算设备离线超时时间
 		if msg.BasicParam.HeartBeatInterval*msg.BasicParam.HeartBeatCount > 0 {
-			ipc.keepaliveInterval = uint16(msg.BasicParam.HeartBeatInterval) // nolint
-			ipc.keepaliveTimeout = uint16(msg.BasicParam.HeartBeatCount)     // nolint
-			ctx.Log.Debug("sipMessageConfigDownload update", "deviceID", ctx.DeviceID, "keepaliveInterval", ipc.keepaliveInterval, "keepaliveTimeout", ipc.keepaliveTimeout)
+			interval := uint16(msg.BasicParam.HeartBeatInterval) // nolint
+			timeout := uint16(msg.BasicParam.HeartBeatCount)     // nolint
+			ipc.UpdateRuntime(func(device *Device) {
+				device.keepaliveInterval = interval
+				device.keepaliveTimeout = timeout
+			})
+			ctx.Log.Debug("sipMessageConfigDownload update", "deviceID", ctx.DeviceID, "keepaliveInterval", interval, "keepaliveTimeout", timeout)
 		}
 	}
 

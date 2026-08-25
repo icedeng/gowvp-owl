@@ -833,6 +833,9 @@ func ParseURI(uriStr string) (uri *URI, err error) {
 func ParseSipURI(uriStr string) (uri URI, err error) {
 	// Store off the original URI in case we need to print it in an error.
 	uriStrCopy := uriStr
+	if strings.IndexFunc(uriStr, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return uri, fmt.Errorf("SIP uri contains control characters in %q", uriStrCopy)
+	}
 
 	scheme, remainder, ok := strings.Cut(uriStr, ":")
 	if !ok {

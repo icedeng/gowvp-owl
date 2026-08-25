@@ -80,7 +80,7 @@ func (g *GB28181API) sendCascadeDeviceControlDownstream(ctx context.Context, cha
 		return "ERROR", fmt.Errorf("cascade DeviceControl target is unavailable")
 	}
 	target, ok := g.svr.memoryStorer.GetChannel(channel.DeviceID, channel.ChannelID)
-	if !ok || target == nil || target.device == nil || !target.device.IsOnline {
+	if !ok || target == nil || target.device == nil || !target.device.IsOnlineNow() {
 		return "ERROR", ErrDeviceOffline
 	}
 	downstreamSN := g.nextControlSN()

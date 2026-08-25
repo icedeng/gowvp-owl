@@ -96,11 +96,11 @@ func targetSignalDigestSeed(target Targeter) string {
 	switch value := target.(type) {
 	case *Device:
 		if value != nil {
-			return value.Password
+			return value.PasswordValue()
 		}
 	case *Channel:
 		if value != nil && value.device != nil {
-			return value.device.Password
+			return value.device.PasswordValue()
 		}
 	}
 	return ""

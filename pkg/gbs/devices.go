@@ -25,6 +25,7 @@ type Device struct {
 	registerWithKeepaliveMutex sync.Mutex
 	// 播放互斥锁也可以移动到 channel 属性
 	playMutex sync.Mutex
+	stateMu   sync.RWMutex
 
 	IsOnline    bool
 	Address     string
@@ -45,6 +46,60 @@ type Device struct {
 	keepaliveInterval uint16
 	keepaliveTimeout  uint16
 }
+
+type deviceRuntimeState struct {
+	IsOnline          bool
+	Address           string
+	Password          string
+	Conn              sip.Connection
+	Source            net.Addr
+	To                *sip.Address
+	LastKeepaliveAt   time.Time
+	LastRegisterAt    time.Time
+	Expires           int
+	KeepaliveInterval uint16
+	KeepaliveTimeout  uint16
+}
+
+func (d *Device) runtimeSnapshot() deviceRuntimeState {
+	if d == nil {
+		return deviceRuntimeState{}
+	}
+	d.stateMu.RLock()
+	defer d.stateMu.RUnlock()
+	state := deviceRuntimeState{
+		IsOnline:          d.IsOnline,
+		Address:           d.Address,
+		Password:          d.Password,
+		Conn:              d.conn,
+		Source:            d.source,
+		LastKeepaliveAt:   d.LastKeepaliveAt,
+		LastRegisterAt:    d.LastRegisterAt,
+		Expires:           d.Expires,
+		KeepaliveInterval: d.keepaliveInterval,
+		KeepaliveTimeout:  d.keepaliveTimeout,
+	}
+	if d.to != nil {
+		state.To = d.to.Clone()
+	}
+	return state
+}
+
+// UpdateRuntime 串行更新设备的连接和在线运行态。
+func (d *Device) UpdateRuntime(update func(*Device)) {
+	if d == nil || update == nil {
+		return
+	}
+	d.stateMu.Lock()
+	update(d)
+	d.stateMu.Unlock()
+}
+
+// IsOnlineNow 返回并发安全的当前在线状态。
+func (d *Device) IsOnlineNow() bool { return d.runtimeSnapshot().IsOnline }
+
+// PasswordValue 返回并发安全的设备注册密码快照。
+func (d *Device) PasswordValue() string { return d.runtimeSnapshot().Password }
 
 func NewDevice(conn sip.Connection, d *ipc.Device) *Device {
 	uri, err := sip.ParseURI(fmt.Sprintf("sip:%s@%s", d.GetGB28181DeviceID(), d.Address))
@@ -118,12 +173,16 @@ func deviceProtocolVersion(ext ipc.DeviceExt) GBProtocolVersion {
 // CheckConnection 检查 udp 设备能否通信
 func (d *Device) CheckConnection() error {
 	const timeout = 2 * time.Second
+	state := d.runtimeSnapshot()
+	if state.Source == nil {
+		return fmt.Errorf("设备连接地址不可用")
+	}
 
-	if d.source.Network() == "tcp" {
+	if state.Source.Network() == "tcp" {
 		return nil
 	}
 	// 创建临时UDP连接进行检查
-	tempConn, err := net.DialTimeout("udp", d.source.String(), timeout)
+	tempConn, err := net.DialTimeout("udp", state.Source.String(), timeout)
 	if err != nil {
 		return fmt.Errorf("UDP连接失败: %w", err)
 	}
@@ -133,28 +192,34 @@ func (d *Device) CheckConnection() error {
 
 func (d *Device) LoadChannels(channels ...*ipc.Channel) {
 	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
 		ch := Channel{
 			ChannelID: channel.ChannelID,
 			device:    d,
 		}
-		ch.init(d.Address)
+		if err := ch.init(d.Address); err != nil {
+			slog.Warn("skip invalid persisted GB28181 channel", "channel_id", channel.ChannelID, "err", err)
+			continue
+		}
 		d.Channels.Store(channel.ChannelID, &ch)
 	}
 }
 
 // Conn implements Targeter.
 func (d *Device) Conn() sip.Connection {
-	return d.conn
+	return d.runtimeSnapshot().Conn
 }
 
 // Source implements Targeter.
 func (d *Device) Source() net.Addr {
-	return d.source
+	return d.runtimeSnapshot().Source
 }
 
 // To implements Targeter.
 func (d *Device) To() *sip.Address {
-	return d.to
+	return d.runtimeSnapshot().To
 }
 
 var _ Targeter = &Device{}
@@ -178,28 +243,50 @@ func (c *Channel) GBVersion() string {
 
 // Conn implements Targeter.
 func (c *Channel) Conn() sip.Connection {
-	return c.device.conn
+	if c == nil || c.device == nil {
+		return nil
+	}
+	return c.device.Conn()
 }
 
 // Source implements Targeter.
 func (c *Channel) Source() net.Addr {
-	return c.device.source
+	if c == nil || c.device == nil {
+		return nil
+	}
+	return c.device.Source()
 }
 
 // To implements Targeter.
 func (c *Channel) To() *sip.Address {
+	if c == nil {
+		return nil
+	}
 	return c.to
 }
 
 var _ Targeter = &Channel{}
 
-func (c *Channel) init(domain string) {
+func (c *Channel) init(domain string) error {
+	if c == nil {
+		return fmt.Errorf("GB28181 channel is nil")
+	}
+	c.ChannelID = strings.TrimSpace(c.ChannelID)
+	if c.ChannelID == "" {
+		c.to = nil
+		return fmt.Errorf("GB28181 channel code is empty")
+	}
 	c.uriStr = fmt.Sprintf("sip:%s@%s", c.ChannelID, domain)
-	uri, _ := sip.ParseURI(c.uriStr)
+	uri, err := sip.ParseURI(c.uriStr)
+	if err != nil {
+		c.to = nil
+		return fmt.Errorf("parse GB28181 channel URI %q: %w", c.uriStr, err)
+	}
 	c.to = &sip.Address{
 		URI:    uri,
 		Params: sip.NewParams(),
 	}
+	return nil
 }
 
 func newDevice(network, address string, conn sip.Connection) *Device {

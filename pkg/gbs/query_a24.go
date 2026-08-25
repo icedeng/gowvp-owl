@@ -94,7 +94,7 @@ func (g *GB28181API) DeviceQuery(_ context.Context, in *DeviceQueryInput) (*Devi
 	}
 	deviceID := strings.TrimSpace(in.DeviceID)
 	ipc, ok := g.svr.memoryStorer.Load(deviceID)
-	if !ok || !ipc.IsOnline {
+	if !ok || !ipc.IsOnlineNow() {
 		return nil, ErrDeviceOffline
 	}
 

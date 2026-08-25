@@ -58,7 +58,7 @@ func (d *Device) Update(ctx context.Context, dev *ipc.Device, changeFn func(*ipc
 	// TODO: 待重构
 	if dev.IsGB28181() && ok {
 		// 密码修改，设备需要重新注册
-		if dev2.Password != dev.Password && dev.Password != "" {
+		if dev2.PasswordValue() != dev.Password && dev.Password != "" {
 			slog.InfoContext(ctx, " 修改密码，设备离线")
 			d.Change(dev.GetGB28181DeviceID(), func(d *ipc.Device) error {
 				d.Password = dev.Password

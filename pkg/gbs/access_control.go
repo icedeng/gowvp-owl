@@ -273,10 +273,11 @@ type deviceCredential struct {
 func (g *GB28181API) lookupDeviceCredential(deviceID string) (*deviceCredential, error) {
 	if g != nil && g.svr != nil && g.svr.memoryStorer != nil {
 		if dev, ok := g.svr.memoryStorer.Load(deviceID); ok && dev != nil {
+			state := dev.runtimeSnapshot()
 			return &deviceCredential{
 				DeviceID: strings.TrimSpace(deviceID),
-				Password: strings.TrimSpace(dev.Password),
-				Address:  strings.TrimSpace(dev.Address),
+				Password: strings.TrimSpace(state.Password),
+				Address:  strings.TrimSpace(state.Address),
 			}, nil
 		}
 	}

@@ -19,7 +19,7 @@ func (g *GB28181API) SyncTime(_ context.Context, in *TimeSyncInput) error {
 		return ErrDeviceNotExist
 	}
 	ipc, ok := g.svr.memoryStorer.Load(in.DeviceID)
-	if !ok || !ipc.IsOnline {
+	if !ok || !ipc.IsOnlineNow() {
 		return ErrDeviceOffline
 	}
 	type timeSyncReq struct {

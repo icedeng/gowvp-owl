@@ -86,7 +86,7 @@ func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
 	if !ok {
 		return ErrChannelNotExist
 	}
-	if !ch.device.IsOnline {
+	if !ch.device.IsOnlineNow() {
 		return ErrDeviceOffline
 	}
 	transport := strings.ToLower(strings.TrimSpace(in.Transport))
