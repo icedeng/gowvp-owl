@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ixugo/goddd/pkg/conc"
 )
@@ -22,9 +23,10 @@ import (
 var bufferSize uint16 = 65535 - 20 - 8 // IPv4 max size - IPv4 Header size - UDP Header size
 
 const (
-	maxSIPHeaderLineBytes = 8 << 10
-	maxSIPHeaderBytes     = 64 << 10
-	maxSIPBodyBytes       = 1 << 20
+	maxSIPHeaderLineBytes  = 8 << 10
+	maxSIPHeaderBytes      = 64 << 10
+	maxSIPBodyBytes        = 1 << 20
+	sipTCPFrameReadTimeout = 30 * time.Second
 )
 
 // Server sip
@@ -365,7 +367,7 @@ func (s *Server) ProcessTCPConnection(conn Connection) {
 	go s.handlerListen(parser.out)
 
 	for {
-		message, err := readTCPMessage(reader)
+		message, err := readTCPMessageWithTimeout(conn, reader, sipTCPFrameReadTimeout)
 		if err != nil {
 			if err != io.EOF {
 				slog.Warn("reject SIP/TCP message", "err", err)
@@ -374,6 +376,34 @@ func (s *Server) ProcessTCPConnection(conn Connection) {
 		}
 		parser.in <- newPacket(message, conn.RemoteAddr(), conn)
 	}
+}
+
+func readTCPMessageWithTimeout(conn Connection, reader *bufio.Reader, timeout time.Duration) (message []byte, err error) {
+	if conn == nil {
+		return nil, fmt.Errorf("SIP/TCP connection is nil")
+	}
+	if reader == nil {
+		return nil, fmt.Errorf("SIP/TCP reader is nil")
+	}
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		return nil, fmt.Errorf("clear SIP/TCP read deadline: %w", err)
+	}
+	// 长连接可无限空闲；收到首字节后才启动整帧时限，防止慢速逐字节占用连接。
+	if _, err := reader.Peek(1); err != nil {
+		return nil, err
+	}
+	if timeout > 0 {
+		if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+			return nil, fmt.Errorf("set SIP/TCP frame deadline: %w", err)
+		}
+		defer func() {
+			clearErr := conn.SetReadDeadline(time.Time{})
+			if err == nil && clearErr != nil {
+				err = fmt.Errorf("clear SIP/TCP frame deadline: %w", clearErr)
+			}
+		}()
+	}
+	return readTCPMessage(reader)
 }
 
 func readTCPMessage(reader *bufio.Reader) ([]byte, error) {

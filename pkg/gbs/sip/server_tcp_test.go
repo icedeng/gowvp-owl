@@ -236,6 +236,66 @@ func TestServerCloseTerminatesActiveTCPConnections(t *testing.T) {
 	}
 }
 
+func TestTCPFrameTimeoutStartsAfterFirstByte(t *testing.T) {
+	newPipe := func() (Connection, net.Conn) {
+		serverPipe, clientPipe := net.Pipe()
+		connection := NewTCPConnection(&sipTestTCPConn{
+			Conn:   serverPipe,
+			local:  &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 5060},
+			remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 5060},
+		})
+		return connection, clientPipe
+	}
+
+	t.Run("idle connection", func(t *testing.T) {
+		connection, peer := newPipe()
+		defer connection.Close()
+		defer peer.Close()
+		reader := bufio.NewReaderSize(connection, maxSIPHeaderLineBytes+1)
+		result := make(chan error, 1)
+		go func() {
+			_, err := readTCPMessageWithTimeout(connection, reader, 20*time.Millisecond)
+			result <- err
+		}()
+		time.Sleep(50 * time.Millisecond)
+		message := "OPTIONS sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n"
+		if _, err := peer.Write([]byte(message)); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("idle connection timed out before first byte: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for framed message")
+		}
+	})
+
+	t.Run("slow frame", func(t *testing.T) {
+		connection, peer := newPipe()
+		defer connection.Close()
+		defer peer.Close()
+		reader := bufio.NewReaderSize(connection, maxSIPHeaderLineBytes+1)
+		result := make(chan error, 1)
+		go func() {
+			_, err := readTCPMessageWithTimeout(connection, reader, 20*time.Millisecond)
+			result <- err
+		}()
+		if _, err := peer.Write([]byte("O")); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-result:
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), "timeout") {
+				t.Fatalf("slow frame error = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("slow frame did not hit read deadline")
+		}
+	})
+}
+
 func TestServerUpdatesExistingTransactionToReconnectedTCPConnection(t *testing.T) {
 	localURI, err := ParseSipURI("sip:34020000002000000001@127.0.0.1")
 	if err != nil {
