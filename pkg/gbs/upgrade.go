@@ -11,7 +11,10 @@ import (
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
-const maxUpgradeStates = 1024
+const (
+	maxUpgradeStates = 1024
+	upgradeStateTTL  = 7 * 24 * time.Hour
+)
 
 type UpgradeInput struct {
 	DeviceID     string
@@ -239,10 +242,31 @@ func (g *GB28181API) UpgradeState(deviceID, sessionID string) (UpgradeState, boo
 	if g == nil {
 		return UpgradeState{}, false
 	}
-	g.upgradeStateMu.RLock()
-	state, ok := g.upgradeStates[upgradeStateKey(deviceID, sessionID)]
-	g.upgradeStateMu.RUnlock()
+	g.upgradeStateMu.Lock()
+	defer g.upgradeStateMu.Unlock()
+	key := upgradeStateKey(deviceID, sessionID)
+	state, ok := g.upgradeStates[key]
+	if ok && runtimeStateExpired(state.UpdatedAt, time.Now(), upgradeStateTTL) {
+		delete(g.upgradeStates, key)
+		return UpgradeState{}, false
+	}
 	return state, ok
+}
+
+func (g *GB28181API) cleanupUpgradeStates(now time.Time) {
+	if g == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	g.upgradeStateMu.Lock()
+	for key, state := range g.upgradeStates {
+		if runtimeStateExpired(state.UpdatedAt, now, upgradeStateTTL) {
+			delete(g.upgradeStates, key)
+		}
+	}
+	g.upgradeStateMu.Unlock()
 }
 
 // sipMessageDeviceUpgradeResult 处理 2022 A.2.5.9 设备软件升级最终结果通知。

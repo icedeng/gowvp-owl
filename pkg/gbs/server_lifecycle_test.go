@@ -36,6 +36,8 @@ func TestRuntimeStateCleanerRunsWithoutNewRequestsAndStops(t *testing.T) {
 	api := &GB28181API{lifecycleDone: make(chan struct{}), directDownloads: manager}
 	api.rtpDownloads.Store("expired", testRTPDownloadSession(gb10DeviceID, gb10ChannelID, now.Add(-rtpDownloadTerminalTTL-time.Second)))
 	api.queryStates.Store("expired", &QueryState{UpdatedAt: now.Add(-queryStateTTL - time.Second)})
+	api.storeUpgradeState(UpgradeState{DeviceID: gb10DeviceID, SessionID: "upgrade-expired-0000000000000001", UpdatedAt: now.Add(-upgradeStateTTL - time.Second)})
+	api.storeSnapshotState(SnapshotState{DeviceID: gb10DeviceID, SessionID: "snapshot-expired-000000000000001", UpdatedAt: now.Add(-snapshotStateTTL - time.Second)})
 	done := make(chan struct{})
 	go func() {
 		api.startRuntimeStateCleaner()
@@ -46,7 +48,13 @@ func TestRuntimeStateCleanerRunsWithoutNewRequestsAndStops(t *testing.T) {
 		_, directExists := manager.State("expired")
 		_, rtpExists := api.rtpDownloads.Load("expired")
 		_, queryExists := api.queryStates.Load("expired")
-		if !directExists && !rtpExists && !queryExists {
+		api.upgradeStateMu.RLock()
+		_, upgradeExists := api.upgradeStates[upgradeStateKey(gb10DeviceID, "upgrade-expired-0000000000000001")]
+		api.upgradeStateMu.RUnlock()
+		api.snapshotStateMu.RLock()
+		_, snapshotExists := api.snapshotStates[snapshotStateKey(gb10DeviceID, "snapshot-expired-000000000000001")]
+		api.snapshotStateMu.RUnlock()
+		if !directExists && !rtpExists && !queryExists && !upgradeExists && !snapshotExists {
 			break
 		}
 		time.Sleep(time.Millisecond)
@@ -59,6 +67,18 @@ func TestRuntimeStateCleanerRunsWithoutNewRequestsAndStops(t *testing.T) {
 	}
 	if _, ok := api.queryStates.Load("expired"); ok {
 		t.Fatal("background cleaner did not remove query state")
+	}
+	api.upgradeStateMu.RLock()
+	_, upgradeExists := api.upgradeStates[upgradeStateKey(gb10DeviceID, "upgrade-expired-0000000000000001")]
+	api.upgradeStateMu.RUnlock()
+	if upgradeExists {
+		t.Fatal("background cleaner did not remove upgrade state")
+	}
+	api.snapshotStateMu.RLock()
+	_, snapshotExists := api.snapshotStates[snapshotStateKey(gb10DeviceID, "snapshot-expired-000000000000001")]
+	api.snapshotStateMu.RUnlock()
+	if snapshotExists {
+		t.Fatal("background cleaner did not remove snapshot state")
 	}
 	api.close()
 	select {

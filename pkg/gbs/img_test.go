@@ -1,8 +1,11 @@
 package gbs
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
@@ -78,5 +81,51 @@ func TestSnapshotFinishedRequires2022(t *testing.T) {
 	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "snapshot-old-version", body, api.sipMessageSnapshotFinished)
 	if !strings.Contains(response, "SIP/2.0 400") {
 		t.Fatalf("2.0 snapshot finished response = %s", response)
+	}
+}
+
+func TestSnapshotStatesExpireAndRemainBounded(t *testing.T) {
+	api := &GB28181API{}
+	now := time.Now()
+	api.storeSnapshotState(SnapshotState{
+		DeviceID: gb10DeviceID, SessionID: "snapshot-expired-000000000000001",
+		Status: "completed", UpdatedAt: now.Add(-snapshotStateTTL - time.Second),
+	})
+	if _, ok := api.SnapshotState(gb10DeviceID, "snapshot-expired-000000000000001"); ok {
+		t.Fatal("expired snapshot state survived lazy cleanup")
+	}
+
+	for index := 0; index < maxSnapshotStates+5; index++ {
+		api.storeSnapshotState(SnapshotState{
+			DeviceID: gb10DeviceID, SessionID: fmt.Sprintf("snapshot-session-%019d", index),
+			Status: "completed", UpdatedAt: now.Add(time.Duration(index) * time.Nanosecond),
+		})
+	}
+	api.snapshotStateMu.RLock()
+	count := len(api.snapshotStates)
+	api.snapshotStateMu.RUnlock()
+	if count != maxSnapshotStates {
+		t.Fatalf("snapshot state count = %d; want %d", count, maxSnapshotStates)
+	}
+}
+
+func TestMarkSnapshotUploadedIsAtomicAndPreservesTerminalState(t *testing.T) {
+	api := &GB28181API{}
+	sessionID := "snapshot-concurrent-00000000000001"
+	api.storeSnapshotState(SnapshotState{
+		DeviceID: gb10DeviceID, SessionID: sessionID, Status: "completed", ExpectedCount: 200,
+	})
+	var uploads sync.WaitGroup
+	for index := 0; index < 200; index++ {
+		uploads.Add(1)
+		go func() {
+			defer uploads.Done()
+			api.MarkSnapshotUploaded(gb10DeviceID, sessionID)
+		}()
+	}
+	uploads.Wait()
+	state, ok := api.SnapshotState(gb10DeviceID, sessionID)
+	if !ok || state.ReceivedCount != 200 || state.Status != "completed" {
+		t.Fatalf("concurrent snapshot upload state = %+v, %v", state, ok)
 	}
 }

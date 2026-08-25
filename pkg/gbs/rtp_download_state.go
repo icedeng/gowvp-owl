@@ -216,9 +216,21 @@ func (g *GB28181API) cleanupRuntimeStates(now time.Time) {
 		g.directDownloads.Cleanup(now)
 	}
 	g.cleanupQueryStates(now)
+	g.cleanupUpgradeStates(now)
+	g.cleanupSnapshotStates(now)
 }
 
-// startRuntimeStateCleaner 的生命周期与 GB28181 服务一致，保证无新请求时也会回收终态、查询快照和过期文件。
+func runtimeStateExpired(updatedAt, now time.Time, ttl time.Duration) bool {
+	if updatedAt.IsZero() || ttl <= 0 {
+		return true
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return !updatedAt.After(now.Add(-ttl))
+}
+
+// startRuntimeStateCleaner 的生命周期与 GB28181 服务一致，保证无新请求时也会回收终态、查询/升级/抓拍快照和过期文件。
 func (g *GB28181API) startRuntimeStateCleaner() {
 	g.cleanupRuntimeStates(time.Now())
 	ticker := time.NewTicker(time.Hour)

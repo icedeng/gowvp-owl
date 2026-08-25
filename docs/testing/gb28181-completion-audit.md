@@ -31,7 +31,7 @@
 | AI-402 技术验证 | 完成 | `docs/adr/gb28181-2014-direct-tcp-download.md`，已采用 Owl 内置客户端 |
 | AI-403 裸 TCP 下载 | 完成（模拟器） | 独立 `tcp` SDP、文件客户端、进度/取消 API、SHA-256、原子落盘、大小/并发/超时/地址策略；终态按 `RetainDays` 和 4096 条上限回收，独立生命周期清理器保证无新下载时仍清理状态及文件，活动任务及其 `.part` 文件不会被过期清理误删；`direct_tcp_*_test.go`、`server_lifecycle_test.go` |
 | AI-404 媒体保活 | 完成 | ZLM/LALMAX 流事件收敛、MediaStatus/BYE 竞争；直播/历史 RTP 端口打开失败不再遗留占位流，停止未完成历史会话也会删除占位状态；GB28181 服务关闭会幂等释放普通直播、回放、下载、广播、对讲及级联媒体，不再只清理级联会话；普通 RTP 下载终态按 7 天及通道/独立会话容量上限回收，结构化查询快照按 7 天/4096 条回收。无持久化通道记录的 `cascade-*` 指定路径/语音级联流也能接收注册与注销事件并释放会话；LALMAX 新旧响应结构兼容，通过 `stat/group` 提供媒体源状态、轨道和下载进度，并通过 `stop_rtp_pub` 幂等释放 RTP 接收会话；`media_lifecycle_test.go`、`server_lifecycle_test.go`、`rtp_download_state_test.go`、`query_state_test.go`、`zlm_webhook_gb_test.go`、`driver_lalmax_test.go`、`pkg/lalmax/rtp_test.go`、`pkg/lalmax/stat_test.go` |
-| AI-501 2.0/3.0 回归 | 完成（自动化） | RTP over TCP、双向对讲 RTP；2022 升级覆盖 `DeviceUpgrade` 受理、`DeviceUpgradeResult` 最终结果和状态查询；抓拍覆盖 `SnapShotConfig`、受约束 HTTP 上传、`UploadSnapShotFinished` 最终通知和状态查询；另含 TargetTrack、PTZ 精准控制、存储卡、VideoUploadNotify、A.4、H.265/AAC SDP 及八类 2022 DeviceConfig 写入；`version_regression_test.go`、`upgrade_test.go`、`img_test.go`、`voice_talk_test.go` |
+| AI-501 2.0/3.0 回归 | 完成（自动化） | RTP over TCP、双向对讲 RTP；2022 升级覆盖 `DeviceUpgrade` 受理、`DeviceUpgradeResult` 最终结果和状态查询；抓拍覆盖 `SnapShotConfig`、受约束 HTTP 上传、`UploadSnapShotFinished` 最终通知和状态查询；升级/抓拍状态均按 7 天 TTL 和 1024 条上限回收，查询时也会惰性删除过期项；并发图片上传使用同一临界区原子累加，完成/失败终态不会被迟到上传回退。另含 TargetTrack、PTZ 精准控制、存储卡、VideoUploadNotify、A.4、H.265/AAC SDP 及八类 2022 DeviceConfig 写入；`version_regression_test.go`、`upgrade_test.go`、`img_test.go`、`voice_talk_test.go`、`server_lifecycle_test.go` |
 | AI-502 诊断/API | 完成 | 有效版本、来源、过滤后的能力、设备级 `gb_disabled_capabilities`、最近拒绝；手动版本设置/清除；下载状态、取消和灰度指标 API；SIP 配置写盘成功后才提交运行时快照，监听器/身份/TLS/日志字段明确要求重启，运行时读取和更新由并发快照隔离；`config_sip_test.go`、`config_reload_test.go` |
 | AI-503 真实设备矩阵 | 待外部执行 | `docs/testing/gb28181-device-matrix.md` 提供证据模板，`docs/testing/gb28181-interoperability-runbook.md` 提供逐步执行与回滚手册 |
 | AI-601 发布候选验证 | 完成（自动化） | 全仓 test/vet/race 和补丁检查通过；外部真实设备与部署验收归入 AI-503/AI-602 |
@@ -101,7 +101,7 @@ git diff --check
 | 数字证书双向认证、CRL | 未实现完整协议闭环 | 高安全级别专项，不能宣称支持 |
 | `Monitor-User-Identity` 跨域身份头 | 未实现完整生成、逐级追加和验证 | 与安全路由网关身份体系一起设计，不能仅做字符串透传后宣称完成 |
 | NTP 服务端/客户端 | 项目未内置 NTP 服务 | 标准要求 IP 接入设备通过 REGISTER `200 OK` 的 `Date` 校时，代码已实现；NTP 是可配置部署能力，不把非标准主动 `DeviceControl(Time)` 当成 NTP 完成证据 |
-| 升级/抓拍状态持久化 | 当前为有界内存状态 | 进程重启后可接收合法最终通知并重建终态，但重启前的 accepted/uploading 中间态不会恢复 |
+| 升级/抓拍状态持久化 | 当前为 7 天 TTL、1024 条上限的有界内存状态 | 小时清理器和查询惰性清理会回收过期会话；进程重启后可接收合法最终通知并重建终态，但重启前的 accepted/uploading 中间态不会恢复。若业务要求跨重启展示完整任务链，应设计独立任务表，不把多会话状态塞入单个设备 Ext JSON 造成写放大和并发覆盖 |
 | 真实设备、真实上级和三级路径 | 未执行 | 包括 `Date + Note` 的 Base64/hex、算法和 seed 协商互通；仍是生产完成阶段门，不得由模拟器结果替代 |
 
 ## 7. 生产完成所需证据

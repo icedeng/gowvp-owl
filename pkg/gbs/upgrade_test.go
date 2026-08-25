@@ -1,8 +1,11 @@
 package gbs
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
@@ -77,4 +80,61 @@ func TestDeviceUpgradeResultRequires2022AndValidSession(t *testing.T) {
 	if !strings.Contains(response, "SIP/2.0 400") {
 		t.Fatalf("invalid SessionID response = %s", response)
 	}
+}
+
+func TestUpgradeStatesExpireAndRemainBounded(t *testing.T) {
+	api := &GB28181API{}
+	now := time.Now()
+	api.storeUpgradeState(UpgradeState{
+		DeviceID: gb10DeviceID, SessionID: "upgrade-expired-0000000000000001",
+		Status: "completed", UpdatedAt: now.Add(-upgradeStateTTL - time.Second),
+	})
+	if _, ok := api.UpgradeState(gb10DeviceID, "upgrade-expired-0000000000000001"); ok {
+		t.Fatal("expired upgrade state survived lazy cleanup")
+	}
+
+	for index := 0; index < maxUpgradeStates+5; index++ {
+		api.storeUpgradeState(UpgradeState{
+			DeviceID: gb10DeviceID, SessionID: fmt.Sprintf("upgrade-session-%020d", index),
+			Status: "completed", UpdatedAt: now.Add(time.Duration(index) * time.Nanosecond),
+		})
+	}
+	api.upgradeStateMu.RLock()
+	count := len(api.upgradeStates)
+	api.upgradeStateMu.RUnlock()
+	if count != maxUpgradeStates {
+		t.Fatalf("upgrade state count = %d; want %d", count, maxUpgradeStates)
+	}
+}
+
+func TestUpgradeAndSnapshotStateCleanupConcurrent(t *testing.T) {
+	api := &GB28181API{}
+	now := time.Now()
+	var workers sync.WaitGroup
+	workers.Add(3)
+	go func() {
+		defer workers.Done()
+		for index := 0; index < 500; index++ {
+			sessionID := fmt.Sprintf("runtime-state-%020d", index)
+			updatedAt := now.Add(time.Duration(index) * time.Nanosecond)
+			api.storeUpgradeState(UpgradeState{DeviceID: gb10DeviceID, SessionID: sessionID, UpdatedAt: updatedAt})
+			api.storeSnapshotState(SnapshotState{DeviceID: gb10DeviceID, SessionID: sessionID, UpdatedAt: updatedAt})
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		for index := 0; index < 500; index++ {
+			sessionID := fmt.Sprintf("runtime-state-%020d", index)
+			_, _ = api.UpgradeState(gb10DeviceID, sessionID)
+			_, _ = api.SnapshotState(gb10DeviceID, sessionID)
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		for index := 0; index < 100; index++ {
+			api.cleanupUpgradeStates(now)
+			api.cleanupSnapshotStates(now)
+		}
+	}()
+	workers.Wait()
 }

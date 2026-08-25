@@ -11,7 +11,10 @@ import (
 	"github.com/ixugo/netpulse/ip"
 )
 
-const maxSnapshotStates = 1024
+const (
+	maxSnapshotStates = 1024
+	snapshotStateTTL  = 7 * 24 * time.Hour
+)
 
 type SnapshotState struct {
 	DeviceID      string    `json:"device_id"`
@@ -116,6 +119,11 @@ func (g *GB28181API) storeSnapshotState(state SnapshotState) {
 	}
 	state.FileIDs = append([]string(nil), state.FileIDs...)
 	g.snapshotStateMu.Lock()
+	g.storeSnapshotStateLocked(state)
+	g.snapshotStateMu.Unlock()
+}
+
+func (g *GB28181API) storeSnapshotStateLocked(state SnapshotState) {
 	if g.snapshotStates == nil {
 		g.snapshotStates = make(map[string]SnapshotState)
 	}
@@ -132,18 +140,38 @@ func (g *GB28181API) storeSnapshotState(state SnapshotState) {
 		}
 		delete(g.snapshotStates, oldestKey)
 	}
-	g.snapshotStateMu.Unlock()
 }
 
 func (g *GB28181API) SnapshotState(deviceID, sessionID string) (SnapshotState, bool) {
 	if g == nil {
 		return SnapshotState{}, false
 	}
-	g.snapshotStateMu.RLock()
-	state, ok := g.snapshotStates[snapshotStateKey(deviceID, sessionID)]
-	g.snapshotStateMu.RUnlock()
+	g.snapshotStateMu.Lock()
+	defer g.snapshotStateMu.Unlock()
+	key := snapshotStateKey(deviceID, sessionID)
+	state, ok := g.snapshotStates[key]
+	if ok && runtimeStateExpired(state.UpdatedAt, time.Now(), snapshotStateTTL) {
+		delete(g.snapshotStates, key)
+		return SnapshotState{}, false
+	}
 	state.FileIDs = append([]string(nil), state.FileIDs...)
 	return state, ok
+}
+
+func (g *GB28181API) cleanupSnapshotStates(now time.Time) {
+	if g == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	g.snapshotStateMu.Lock()
+	for key, state := range g.snapshotStates {
+		if runtimeStateExpired(state.UpdatedAt, now, snapshotStateTTL) {
+			delete(g.snapshotStates, key)
+		}
+	}
+	g.snapshotStateMu.Unlock()
 }
 
 // ValidateSnapshotUpload 校验公开上传回调只能写入平台已创建的抓拍会话。
@@ -159,16 +187,29 @@ func (g *GB28181API) ValidateSnapshotUpload(deviceID, coverKey, sessionID string
 }
 
 func (g *GB28181API) MarkSnapshotUploaded(deviceID, sessionID string) {
-	state, ok := g.SnapshotState(deviceID, sessionID)
+	if g == nil {
+		return
+	}
+	key := snapshotStateKey(deviceID, sessionID)
+	now := time.Now()
+	g.snapshotStateMu.Lock()
+	state, ok := g.snapshotStates[key]
 	if !ok {
+		g.snapshotStateMu.Unlock()
+		return
+	}
+	if runtimeStateExpired(state.UpdatedAt, now, snapshotStateTTL) {
+		delete(g.snapshotStates, key)
+		g.snapshotStateMu.Unlock()
 		return
 	}
 	state.ReceivedCount++
 	if state.Status != "completed" && state.Status != "failed" && state.Status != "partial_failed" {
 		state.Status = "uploading"
 	}
-	state.UpdatedAt = time.Now()
-	g.storeSnapshotState(state)
+	state.UpdatedAt = now
+	g.storeSnapshotStateLocked(state)
+	g.snapshotStateMu.Unlock()
 }
 
 // sipMessageSnapshotFinished 处理 2022 A.2.5.7 图像抓拍传输完成通知。
@@ -194,22 +235,24 @@ func (g *GB28181API) sipMessageSnapshotFinished(ctx *sip.Context) {
 			return
 		}
 	}
-	state, ok := g.SnapshotState(ctx.DeviceID, msg.SessionID)
-	if !ok {
-		state = SnapshotState{DeviceID: ctx.DeviceID, ChannelID: msg.DeviceID, SessionID: msg.SessionID}
-	}
-	state.FileIDs = state.FileIDs[:0]
+	fileIDs := make([]string, 0, len(msg.FileIDs))
 	seen := make(map[string]struct{}, len(msg.FileIDs))
 	for _, fileID := range msg.FileIDs {
 		fileID = strings.TrimSpace(fileID)
 		if !validSnapshotFileID(fileID, msg.DeviceID) {
 			continue
 		}
-		if _, ok := seen[fileID]; !ok && len(state.FileIDs) < 10 {
+		if _, ok := seen[fileID]; !ok && len(fileIDs) < 10 {
 			seen[fileID] = struct{}{}
-			state.FileIDs = append(state.FileIDs, fileID)
+			fileIDs = append(fileIDs, fileID)
 		}
 	}
+	g.snapshotStateMu.Lock()
+	state, ok := g.snapshotStates[snapshotStateKey(ctx.DeviceID, msg.SessionID)]
+	if !ok || runtimeStateExpired(state.UpdatedAt, time.Now(), snapshotStateTTL) {
+		state = SnapshotState{DeviceID: ctx.DeviceID, ChannelID: msg.DeviceID, SessionID: msg.SessionID}
+	}
+	state.FileIDs = fileIDs
 	state.UpdatedAt = time.Now()
 	switch {
 	case len(state.FileIDs) == 0:
@@ -219,7 +262,8 @@ func (g *GB28181API) sipMessageSnapshotFinished(ctx *sip.Context) {
 	default:
 		state.Status = "completed"
 	}
-	g.storeSnapshotState(state)
+	g.storeSnapshotStateLocked(state)
+	g.snapshotStateMu.Unlock()
 	ctx.String(200, "OK")
 }
 
