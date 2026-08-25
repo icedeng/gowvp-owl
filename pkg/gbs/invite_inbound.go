@@ -392,7 +392,7 @@ func (g *GB28181API) handleOutboundBYE(ctx *sip.Context, callID string) bool {
 	var endedStream *Streams
 	endedDownload := false
 	g.streams.Range(func(key string, stream *Streams) bool {
-		if stream == nil || stream.DeviceID != ctx.DeviceID || normalizeStoredCallID(stream.CallID) != callID {
+		if stream == nil || stream.DeviceID != ctx.DeviceID || normalizeStoredCallID(stream.CallID) != callID || !outboundDialogTagsMatch(stream.Resp, ctx.Request) {
 			return true
 		}
 		if !g.streams.CompareAndDelete(key, stream) {
@@ -615,6 +615,29 @@ func sipResponseToTag(response *sip.Response) string {
 		return ""
 	}
 	return sipParamsTag(to.Params)
+}
+
+func sipResponseFromTag(response *sip.Response) string {
+	if response == nil {
+		return ""
+	}
+	from, ok := response.From()
+	if !ok || from == nil {
+		return ""
+	}
+	return sipParamsTag(from.Params)
+}
+
+func outboundDialogTagsMatch(response *sip.Response, request *sip.Request) bool {
+	if request == nil {
+		return false
+	}
+	if response == nil {
+		// 兼容内部旧调用构造的无响应流；协议入口建立的会话始终保存 2xx 响应。
+		return true
+	}
+	return sipRequestFromTag(request) == sipResponseToTag(response) &&
+		sipRequestToTag(request) == sipResponseFromTag(response)
 }
 
 func sipParamsTag(params sip.Params) string {

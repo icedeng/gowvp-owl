@@ -68,6 +68,7 @@ go test ./... -count=1
 - 无持久化通道记录的 `cascade-*` 指定路径/语音级联媒体流注册、注销及断流会话释放；
 - 两个已注册上级之间的级联对话所有权隔离，非会话所属上级的 ACK/CANCEL/BYE 不得改变或终止会话；
 - 同一已注册上级或设备复用 Call-ID 但改变远端 From tag 或本地 To tag 时，ACK/CANCEL/BYE/INFO 不得改变或终止原级联/广播对话；
+- 普通设备直播/回放/下载/对讲及级联语音源收到 BYE 时校验 2xx 建立的双向 tag；同设备或上级复用 Call-ID 但改变 tag 不能终止原出向媒体对话；
 - Catalog 查询和订阅均支持平台根或单个共享通道目标；1.0 变化通知使用 `Response` 根，1.1+ 使用 `Notify` 根；目录快照只产生 ADD/DEL/ON/OFF/UPDATE 增量，分包中 `SumNum` 与本包 `DeviceList Num` 一致；同一订阅并发触发不重复发送，任一分包失败时不提交快照并在下次重试；
 - 1.1+ 域间目录初始订阅只通知离线/异常目录，刷新订阅保留 NOTIFY CSeq；续订与过期清理并发时由续订保留有效会话，过期会话释放下级引用；空消息体 terminated NOTIFY 返回 200 并清理/按引用重建下级订阅；未重复携带 X-GB-Ver 的上级 SUBSCRIBE 复用注册协商版本；Alarm/MobilePosition 和 1.0 目录订阅不误发初始 Catalog；Alarm 订阅按级别、方式、类型和时间过滤，兼容 2011 `StartTime/EndTime` 示例别名；
 - 设备与上级事件订阅键包含订阅方身份；复用相同 Call-ID、From tag、事件类型和目标的其他订阅方不能覆盖、续订或取消原会话；

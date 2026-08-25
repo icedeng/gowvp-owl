@@ -422,7 +422,7 @@ func (g *GB28181API) authorizeCascadeVoiceSource(source *cascadeVoiceSourceSessi
 		return false
 	}
 	state := source.worker.snapshot()
-	return state.Registered && source.worker.remoteAddressMatches(ctx.Source)
+	return state.Registered && source.worker.remoteAddressMatches(ctx.Source) && outboundDialogTagsMatch(source.response, ctx.Request)
 }
 
 func (g *GB28181API) terminateCascadeVoiceSource(streamID string) {

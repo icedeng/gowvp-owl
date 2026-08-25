@@ -254,6 +254,31 @@ func applyInboundDialogTags(t *testing.T, request *sip.Request, dialog *inboundI
 	request.AppendHeader(&sip.ToHeader{DisplayName: toAddress.DisplayName, Address: toAddress.URI, Params: toAddress.Params})
 }
 
+func applyOutboundDialogTags(t *testing.T, request *sip.Request, response *sip.Response) {
+	t.Helper()
+	if request == nil || response == nil {
+		t.Fatal("outbound dialog tag test input is nil")
+	}
+	from, ok := request.From()
+	if !ok || from == nil || from.Address == nil {
+		t.Fatal("outbound dialog request From is unavailable")
+	}
+	to, ok := request.To()
+	if !ok || to == nil || to.Address == nil {
+		t.Fatal("outbound dialog request To is unavailable")
+	}
+	request.RemoveHeader("From")
+	request.AppendHeader(&sip.FromHeader{
+		DisplayName: from.DisplayName, Address: from.Address.Clone(),
+		Params: sip.NewParams().Add("tag", sip.String{Str: sipResponseToTag(response)}),
+	})
+	request.RemoveHeader("To")
+	request.AppendHeader(&sip.ToHeader{
+		DisplayName: to.DisplayName, Address: to.Address.Clone(),
+		Params: sip.NewParams().Add("tag", sip.String{Str: sipResponseFromTag(response)}),
+	})
+}
+
 func TestCascadeBroadcast2011ReturnsBusinessError(t *testing.T) {
 	worker := newCascadeWorker(nil, testSharedCascadePlatform(t))
 	worker.mu.Lock()
@@ -483,6 +508,117 @@ func TestCascadeBroadcastUpstreamBYEStopsReceiverSession(t *testing.T) {
 	media.mu.Unlock()
 	if closed.StreamID != source.streamID {
 		t.Fatalf("upstream BYE closed receiver = %+v", closed)
+	}
+}
+
+func TestCascadeVoiceBYERejectsMismatchedDialogTags(t *testing.T) {
+	connection := newFlowConnection()
+	connection.remote = &net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060}
+	worker := newCascadeWorker(nil, testSharedCascadePlatform(t))
+	worker.updateStatus(func(state *CascadePlatformStatus) { state.Registered = true })
+	remote := mustFlowAddress(t, "sip:"+worker.platform.serverID+"@remote.example")
+	local := mustFlowAddress(t, "sip:"+worker.platform.localID+"@local.example")
+	callID := sip.CallID("cascade-voice-tags")
+	invite := sip.NewRequest("", sip.MethodInvite, remote.URI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetFrom(local).SetTo(remote).SetMethod(sip.MethodInvite).SetCallID(&callID).Build(), nil)
+	response := sip.NewResponseFromRequest("", invite, http.StatusOK, "OK", nil)
+	source := &cascadeVoiceSourceSession{worker: worker, callID: string(callID), sourceID: worker.platform.serverID, response: response}
+	api := &GB28181API{}
+	api.cascadeVoiceDialogs.Store(source.callID, source)
+	makeBYE := func() *sip.Request {
+		request := sip.NewRequest("", sip.MethodBYE, local.URI, sip.DefaultSipVersion,
+			sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodBYE).SetCallID(&callID).Build(), nil)
+		request.SetConnection(connection)
+		request.SetSource(connection.remote)
+		request.SetDestination(connection.local)
+		return request
+	}
+	wrong := makeBYE()
+	api.sipByeGeneric(&sip.Context{
+		Request: wrong, Tx: sip.NewTransaction("cascade-voice-tags-wrong", connection),
+		DeviceID: worker.platform.serverID, Source: connection.remote, Log: slog.Default(),
+	})
+	select {
+	case payload := <-connection.writes:
+		if !strings.Contains(string(payload), "SIP/2.0 403") {
+			t.Fatalf("mismatched cascade voice BYE response: %s", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("mismatched cascade voice BYE response timeout")
+	}
+	if _, ok := api.cascadeVoiceDialogs.Load(source.callID); !ok {
+		t.Fatal("mismatched cascade voice BYE removed dialog")
+	}
+
+	correct := makeBYE()
+	applyOutboundDialogTags(t, correct, response)
+	api.sipByeGeneric(&sip.Context{
+		Request: correct, Tx: sip.NewTransaction("cascade-voice-tags-correct", connection),
+		DeviceID: worker.platform.serverID, Source: connection.remote, Log: slog.Default(),
+	})
+	select {
+	case payload := <-connection.writes:
+		if !strings.Contains(string(payload), "SIP/2.0 200 OK") {
+			t.Fatalf("owner cascade voice BYE response: %s", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("owner cascade voice BYE response timeout")
+	}
+	if _, ok := api.cascadeVoiceDialogs.Load(source.callID); ok {
+		t.Fatal("owner cascade voice BYE left dialog")
+	}
+}
+
+func TestOutboundDeviceBYERejectsMismatchedDialogTags(t *testing.T) {
+	connection := newFlowConnection()
+	remote := mustFlowAddress(t, "sip:"+gb10DeviceID+"@remote.example")
+	local := mustFlowAddress(t, "sip:"+gb10PlatformID+"@local.example")
+	callID := sip.CallID("device-outbound-tags")
+	invite := sip.NewRequest("", sip.MethodInvite, remote.URI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetFrom(local).SetTo(remote).SetMethod(sip.MethodInvite).SetCallID(&callID).Build(), nil)
+	response := sip.NewResponseFromRequest("", invite, http.StatusOK, "OK", nil)
+	api := &GB28181API{streams: &conc.Map[string, *Streams]{}}
+	streamKey := "history:Playback:" + gb10DeviceID + ":" + gb10ChannelID
+	stream := &Streams{DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, StreamID: "outbound-tags", CallID: string(callID), Resp: response}
+	api.streams.Store(streamKey, stream)
+	makeBYE := func() *sip.Request {
+		request := sip.NewRequest("", sip.MethodBYE, local.URI, sip.DefaultSipVersion,
+			sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodBYE).SetCallID(&callID).Build(), nil)
+		request.SetConnection(connection)
+		request.SetSource(connection.remote)
+		request.SetDestination(connection.local)
+		return request
+	}
+	wrong := makeBYE()
+	api.sipByeGeneric(&sip.Context{
+		Request: wrong, Tx: sip.NewTransaction("device-outbound-tags-wrong", connection),
+		DeviceID: gb10DeviceID, Source: connection.remote, Log: slog.Default(),
+	})
+	select {
+	case payload := <-connection.writes:
+		if !strings.Contains(string(payload), "SIP/2.0 481") {
+			t.Fatalf("mismatched device BYE response: %s", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("mismatched device BYE response timeout")
+	}
+	if _, ok := api.streams.Load(streamKey); !ok {
+		t.Fatal("mismatched device BYE removed stream")
+	}
+
+	correct := makeBYE()
+	applyOutboundDialogTags(t, correct, response)
+	api.sipByeGeneric(&sip.Context{
+		Request: correct, Tx: sip.NewTransaction("device-outbound-tags-correct", connection),
+		DeviceID: gb10DeviceID, Source: connection.remote, Log: slog.Default(),
+	})
+	select {
+	case payload := <-connection.writes:
+		if !strings.Contains(string(payload), "SIP/2.0 200 OK") {
+			t.Fatalf("owner device BYE response: %s", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("owner device BYE response timeout")
 	}
 }
 
