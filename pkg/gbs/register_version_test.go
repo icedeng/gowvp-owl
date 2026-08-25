@@ -191,6 +191,51 @@ func TestUnknownDeviceUnregisterDoesNotBypassAuthentication(t *testing.T) {
 	}
 }
 
+func TestRegisterOperationLockSerializesOnlySameDevice(t *testing.T) {
+	api := &GB28181API{}
+	unlockFirst := api.lockRegisterOperation(gb10DeviceID)
+
+	sameEntered := make(chan struct{})
+	sameDone := make(chan struct{})
+	go func() {
+		unlock := api.lockRegisterOperation(gb10DeviceID)
+		close(sameEntered)
+		unlock()
+		close(sameDone)
+	}()
+	select {
+	case <-sameEntered:
+		t.Fatal("same-device REGISTER operation was not serialized")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	otherDeviceID := "34020000001320000009"
+	otherEntered := make(chan struct{})
+	go func() {
+		unlock := api.lockRegisterOperation(otherDeviceID)
+		close(otherEntered)
+		unlock()
+	}()
+	select {
+	case <-otherEntered:
+	case <-time.After(time.Second):
+		t.Fatal("unrelated device REGISTER operation was blocked")
+	}
+
+	unlockFirst()
+	select {
+	case <-sameDone:
+	case <-time.After(time.Second):
+		t.Fatal("same-device REGISTER operation did not resume")
+	}
+	api.registerOperationMu.Lock()
+	remaining := len(api.registerOperations)
+	api.registerOperationMu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("REGISTER operation locks retained %d entries", remaining)
+	}
+}
+
 type registerHandlerTestMemory struct {
 	*flowMemory
 	changeErr        error

@@ -76,7 +76,14 @@ func (g Adapter) GetDeviceByDeviceID(gbDeviceID string) (*Device, error) {
 		}
 		d.init(g.uni.UniqueID(bz.IDPrefixGB), gbDeviceID)
 		if err := g.store.Device().Create(ctx, &d); err != nil {
-			return nil, err
+			if !orm.IsDuplicatedKey(err) {
+				return nil, err
+			}
+			// 多实例或并发首次 REGISTER 可能同时建档；唯一键冲突后读取胜出记录并保持幂等。
+			d = Device{}
+			if err := g.store.Device().Get(ctx, &d, orm.Where("device_id=?", gbDeviceID)); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return &d, nil

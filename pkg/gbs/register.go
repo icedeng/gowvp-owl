@@ -52,6 +52,9 @@ type GB28181API struct {
 	// REGISTER Digest nonce 由服务端签发并绑定设备和源 IP，避免接受任意或永久可重放的 nonce。
 	registerNonceMu sync.Mutex
 	registerNonces  map[string]registerNonceState
+	// registerOperations 按设备串行化 REGISTER 的查询、自动建档和状态提交，不同设备仍可并行。
+	registerOperationMu sync.Mutex
+	registerOperations  map[string]*keyedOperationLock
 	// MESSAGE/NOTIFY 兼容 Digest nonce 独立维护，按设备、源 IP 和 nc 防重放。
 	messageNonceMu sync.Mutex
 	messageNonces  map[string]messageNonceState
@@ -474,6 +477,8 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		_ = ctx.Tx.Respond(resp)
 		return
 	}
+	unlockRegister := g.lockRegisterOperation(ctx.DeviceID)
+	defer unlockRegister()
 	respFn := func() {
 		g.metrics.registerSuccess.Add(1)
 		resp := g.newRegisterResponse(ctx, http.StatusOK, "OK")
@@ -599,6 +604,7 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	// ctx.Log.Debug("device info", "source", ctx.Source, "host", ctx.Host)
 
 	respFn()
+	unlockRegister()
 	// 注册历史不是 REGISTER 成功事务的一部分，避免其查询、写入和清理延迟 200 OK。
 	if history := g.core.DeviceHistory(); history != nil {
 		if err := history.Record(context.TODO(), ctx.DeviceID, ipc.DeviceHistoryRegister, ctx.Source.String(), "online", time.Now()); err != nil {
@@ -611,6 +617,35 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	_ = g.QueryCatalog(dev.GetGB28181DeviceID())
 	if effectiveVersion.Capabilities().ConfigQuery {
 		_ = g.QueryConfigDownloadBasic(dev.GetGB28181DeviceID())
+	}
+}
+
+func (g *GB28181API) lockRegisterOperation(deviceID string) func() {
+	g.registerOperationMu.Lock()
+	if g.registerOperations == nil {
+		g.registerOperations = make(map[string]*keyedOperationLock)
+	}
+	entry := g.registerOperations[deviceID]
+	if entry == nil {
+		entry = &keyedOperationLock{}
+		g.registerOperations[deviceID] = entry
+	}
+	entry.refs++
+	g.registerOperationMu.Unlock()
+	entry.mutex.Lock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			entry.mutex.Unlock()
+			g.registerOperationMu.Lock()
+			if g.registerOperations[deviceID] == entry {
+				entry.refs--
+				if entry.refs == 0 {
+					delete(g.registerOperations, deviceID)
+				}
+			}
+			g.registerOperationMu.Unlock()
+		})
 	}
 }
 
