@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -225,11 +226,11 @@ func (g *GB28181API) sipNotifyCatalog(ctx *sip.Context) {
 		return
 	}
 	deviceID := strings.TrimSpace(ctx.DeviceID)
-	go func() {
-		if err := g.QueryCatalog(deviceID); err != nil {
+	g.startLifecycleTask(context.Background(), func(taskCtx context.Context) {
+		if err := g.QueryCatalogContext(taskCtx, deviceID); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Warn("refresh Catalog after NOTIFY failed", "device_id", deviceID, "err", err)
 		}
-	}()
+	})
 }
 
 // sipNotifyMobilePosition 处理位置订阅通知，结构化保存并转发给本级订阅方。

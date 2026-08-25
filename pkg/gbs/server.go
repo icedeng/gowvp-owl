@@ -248,7 +248,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	return &c, cleanup, nil
 }
 
-// Close 先注销并停止上级级联，再关闭底层 SIP 监听器。
+// Close 先收敛 GB28181 业务任务，再注销上级级联并关闭底层 SIP 监听器。
 func (s *Server) Close() {
 	if s == nil {
 		return

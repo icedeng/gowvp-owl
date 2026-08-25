@@ -767,9 +767,15 @@ func (g *GB28181API) close() {
 		return
 	}
 	g.closeOnce.Do(func() {
+		g.lifecycleMu.Lock()
+		g.lifecycleClosed = true
 		if g.lifecycleDone != nil {
 			close(g.lifecycleDone)
 		}
+		if g.lifecycleCancel != nil {
+			g.lifecycleCancel()
+		}
+		g.lifecycleMu.Unlock()
 		g.lifecycleWG.Wait()
 		g.catalogResponses.Close()
 		g.recordResponses.Close()

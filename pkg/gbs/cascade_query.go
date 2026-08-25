@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -193,11 +194,11 @@ func (g *GB28181API) sipCascadeMessageMiddleware(ctx *sip.Context) {
 		ctx.Abort()
 		body := query
 		identityCtx := monitorUserIdentityContext(ctx)
-		go func() {
-			if err := g.forwardCascadeBroadcast(identityCtx, worker, body); err != nil {
+		g.startLifecycleTask(identityCtx, func(taskCtx context.Context) {
+			if err := g.forwardCascadeBroadcast(taskCtx, worker, body); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("forward cascade Broadcast failed", "upstream", worker.platform.name, "sn", body.SN, "err", err)
 			}
-		}()
+		})
 		return
 	}
 	if strings.TrimSpace(query.DeviceID) == "" {
@@ -212,7 +213,10 @@ func (g *GB28181API) sipCascadeMessageMiddleware(ctx *sip.Context) {
 		ctx.String(200, "OK")
 		ctx.Abort()
 		body := append([]byte(nil), ctx.Request.Body()...)
-		go g.forwardCascadeDeviceControl(worker, body, monitorUserIdentityContext(ctx))
+		identityCtx := monitorUserIdentityContext(ctx)
+		g.startLifecycleTask(identityCtx, func(taskCtx context.Context) {
+			g.forwardCascadeDeviceControl(worker, body, taskCtx)
+		})
 		return
 	}
 	if query.XMLName.Local != "Query" {
@@ -226,7 +230,10 @@ func (g *GB28181API) sipCascadeMessageMiddleware(ctx *sip.Context) {
 
 	ctx.String(200, "OK")
 	ctx.Abort()
-	go g.respondCascadeQuery(worker, query, monitorUserIdentityContext(ctx))
+	identityCtx := monitorUserIdentityContext(ctx)
+	g.startLifecycleTask(identityCtx, func(taskCtx context.Context) {
+		g.respondCascadeQuery(worker, query, taskCtx)
+	})
 }
 
 func (g *GB28181API) respondCascadeQuery(worker *cascadeWorker, query cascadeQueryEnvelope, parents ...context.Context) {
@@ -475,11 +482,14 @@ func (g *GB28181API) respondCascadeCatalog(ctx context.Context, worker *cascadeW
 	return nil
 }
 
-func (g *GB28181API) notifyCascadeCatalog() {
+func (g *GB28181API) notifyCascadeCatalog(ctx context.Context) {
 	if g == nil {
 		return
 	}
-	reconcileCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	reconcileCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	g.reconcileCascadeDownstreamSubscriptions(reconcileCtx)
 	cancel()
 	now := time.Now()
@@ -501,13 +511,15 @@ func (g *GB28181API) notifyCascadeCatalog() {
 		if cascade == nil || !strings.EqualFold(cmdType, "Catalog") {
 			return true
 		}
-		go func(subscription *eventSubscription, upstream string) {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		subscription := sub
+		upstream := cascade.platform.name
+		g.startLifecycleTask(ctx, func(taskCtx context.Context) {
+			notifyCtx, cancel := context.WithTimeout(taskCtx, 30*time.Second)
 			defer cancel()
-			if err := g.sendCascadeCatalogNotify(ctx, subscription); err != nil {
+			if err := g.sendCascadeCatalogNotify(notifyCtx, subscription); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Warn("send cascade Catalog NOTIFY failed", "upstream", upstream, "err", err)
 			}
-		}(sub, cascade.platform.name)
+		})
 		return true
 	})
 }
@@ -568,7 +580,7 @@ func (g *GB28181API) sendCascadeCatalogNotifyMode(ctx context.Context, sub *even
 		if err != nil {
 			return err
 		}
-		if err := g.sendEventNotify(sub, "Catalog", body); err != nil {
+		if err := g.sendEventNotifyContext(ctx, sub, "Catalog", body); err != nil {
 			return err
 		}
 		sub.mu.Lock()
@@ -582,7 +594,7 @@ func (g *GB28181API) sendCascadeCatalogNotifyMode(ctx context.Context, sub *even
 		if err != nil {
 			return err
 		}
-		if err := g.sendEventNotify(sub, "Catalog", body); err != nil {
+		if err := g.sendEventNotifyContext(ctx, sub, "Catalog", body); err != nil {
 			return err
 		}
 	}

@@ -78,6 +78,48 @@ func TestRemovingCascadeSubscriptionDoesNotWaitForNotifyResponse(t *testing.T) {
 	}
 }
 
+func TestCascadeEventNotifyHonorsCallerCancellation(t *testing.T) {
+	platform := testSharedCascadePlatform(t)
+	local := mustFlowAddress(t, "sip:"+platform.localID+"@local.example")
+	remote := mustFlowAddress(t, "sip:"+platform.serverID+"@remote.example")
+	callID := sip.CallID("cascade-notify-caller-cancel")
+	request := sip.NewRequest("", sip.MethodSubscribe, local.URI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodSubscribe).SetCallID(&callID).
+			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
+	response := sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil)
+	worker := newCascadeWorker(&Server{}, platform)
+	started := make(chan struct{})
+	worker.exchange = func(ctx context.Context, _ *sip.Request) (*sip.Response, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	sub := &eventSubscription{
+		Key: "cascade-notify-caller-cancel", CmdType: "Catalog", DeviceID: platform.localID,
+		ExpiresAt: time.Now().Add(time.Minute), To: remote, GBVersion: string(GBVersion30),
+		Event: "Catalog", Response: response, Cascade: worker,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- (&GB28181API{}).sendCascadeEventNotifyContext(ctx, sub, "Catalog", []byte(`<Notify><CmdType>Catalog</CmdType></Notify>`))
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("cascade NOTIFY did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled cascade NOTIFY error = %v; want %v", err, context.Canceled)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("caller cancellation did not stop cascade NOTIFY")
+	}
+}
+
 func TestCascadeDownstreamSubscriptionDoesNotBlockUnrelatedKey(t *testing.T) {
 	api := &GB28181API{cascadeSubscriptions: make(map[string]*cascadeDownstreamSubscription)}
 	firstStarted := make(chan struct{})

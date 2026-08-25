@@ -272,7 +272,7 @@ func (g *GB28181API) saveCatalogChannels(deviceID string, items []Channels) {
 				slog.Error("reset Catalog channel count", "device_id", deviceID, "err", err)
 			}
 		}
-		go g.notifyCascadeCatalog()
+		g.startLifecycleTask(context.Background(), g.notifyCascadeCatalog)
 		return
 	}
 	out := make([]*ipc.Channel, 0, len(items))
@@ -292,7 +292,7 @@ func (g *GB28181API) saveCatalogChannels(deviceID string, items []Channels) {
 			slog.Error("SaveChannels", "err", err)
 		}
 	}
-	go g.notifyCascadeCatalog()
+	g.startLifecycleTask(context.Background(), g.notifyCascadeCatalog)
 }
 
 type Targeter interface {

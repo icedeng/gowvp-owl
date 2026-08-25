@@ -61,6 +61,59 @@ func TestCloseWaitsForLifecycleWorkers(t *testing.T) {
 	}
 }
 
+func TestCloseCancelsAndWaitsForLifecycleTasks(t *testing.T) {
+	api := &GB28181API{lifecycleDone: make(chan struct{})}
+	started := make(chan struct{})
+	exited := make(chan struct{})
+	if !api.startLifecycleTask(context.Background(), func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(exited)
+	}) {
+		t.Fatal("lifecycle task was rejected before close")
+	}
+	<-started
+
+	api.close()
+	select {
+	case <-exited:
+	default:
+		t.Fatal("close returned before lifecycle task observed cancellation")
+	}
+	if api.startLifecycleTask(context.Background(), func(context.Context) {
+		t.Error("task started after GB28181 close")
+	}) {
+		t.Fatal("lifecycle task was accepted after close")
+	}
+}
+
+func TestLifecycleTaskStartAndCloseAreRaceSafe(t *testing.T) {
+	for range 50 {
+		api := &GB28181API{lifecycleDone: make(chan struct{})}
+		start := make(chan struct{})
+		var callers sync.WaitGroup
+		for range 20 {
+			callers.Add(1)
+			go func() {
+				defer callers.Done()
+				<-start
+				api.startLifecycleTask(context.Background(), func(ctx context.Context) {
+					<-ctx.Done()
+				})
+			}()
+		}
+		callers.Add(1)
+		go func() {
+			defer callers.Done()
+			<-start
+			api.close()
+		}()
+		close(start)
+		callers.Wait()
+		api.close()
+	}
+}
+
 func TestOfflineCheckDoesNotOverrideNewKeepalive(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-time.Minute)

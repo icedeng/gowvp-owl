@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -339,13 +340,13 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 		return
 	}
 	if initial && shouldSendCascadeInitialCatalogNotify(cascade, cmdType) {
-		go func() {
-			initialCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		g.startLifecycleTask(context.Background(), func(taskCtx context.Context) {
+			initialCtx, cancel := context.WithTimeout(taskCtx, 30*time.Second)
 			defer cancel()
-			if err := g.sendCascadeInitialCatalogNotify(initialCtx, sub); err != nil {
+			if err := g.sendCascadeInitialCatalogNotify(initialCtx, sub); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Warn("send initial cascade Catalog NOTIFY failed", "upstream", cascade.platform.name, "err", err)
 			}
-		}()
+		})
 	} else if initial && cascade != nil && strings.EqualFold(cmdType, "Catalog") {
 		seedCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := g.seedCascadeCatalogSnapshot(seedCtx, sub); err != nil {
@@ -402,13 +403,15 @@ func (g *GB28181API) removeOutgoingSubscriptionDialog(request *sip.Request) {
 		dialog.mu.Unlock()
 		if matches {
 			g.outgoingSubscriptions.Delete(key)
-			go g.renewTerminatedCascadeSubscription(key)
+			g.startLifecycleTask(context.Background(), func(taskCtx context.Context) {
+				g.renewTerminatedCascadeSubscription(key, taskCtx)
+			})
 		}
 		return true
 	})
 }
 
-func (g *GB28181API) renewTerminatedCascadeSubscription(key any) {
+func (g *GB28181API) renewTerminatedCascadeSubscription(key any, parents ...context.Context) {
 	if g == nil {
 		return
 	}
@@ -416,7 +419,11 @@ func (g *GB28181API) renewTerminatedCascadeSubscription(key any) {
 	if !ok || keyString == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	parent := context.Background()
+	if len(parents) > 0 && parents[0] != nil {
+		parent = parents[0]
+	}
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	unlock, err := g.lockCascadeSubscriptionOperation(ctx, keyString)
 	if err != nil {
@@ -788,6 +795,13 @@ func rewriteCascadeEventBodyForDevice(platform cascadePlatform, body []byte, sou
 }
 
 func (g *GB28181API) sendEventNotify(sub *eventSubscription, cmdType string, body []byte) error {
+	return g.sendEventNotifyContext(context.Background(), sub, cmdType, body)
+}
+
+func (g *GB28181API) sendEventNotifyContext(ctx context.Context, sub *eventSubscription, cmdType string, body []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if sub == nil {
 		return fmt.Errorf("subscription is unavailable")
 	}
@@ -795,7 +809,7 @@ func (g *GB28181API) sendEventNotify(sub *eventSubscription, cmdType string, bod
 	cascade := sub.Cascade
 	sub.mu.Unlock()
 	if cascade != nil {
-		return g.sendCascadeEventNotify(sub, cmdType, body)
+		return g.sendCascadeEventNotifyContext(ctx, sub, cmdType, body)
 	}
 	sub.mu.Lock()
 	to := sub.To.Clone()
@@ -834,11 +848,18 @@ func (g *GB28181API) sendEventNotify(sub *eventSubscription, cmdType string, bod
 	if err != nil {
 		return err
 	}
-	_, err = sipResponse(tx)
+	_, err = sipResponseContext(ctx, tx)
 	return err
 }
 
 func (g *GB28181API) sendCascadeEventNotify(sub *eventSubscription, cmdType string, body []byte) error {
+	return g.sendCascadeEventNotifyContext(context.Background(), sub, cmdType, body)
+}
+
+func (g *GB28181API) sendCascadeEventNotifyContext(ctx context.Context, sub *eventSubscription, cmdType string, body []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	sub.notifyMu.Lock()
 	defer sub.notifyMu.Unlock()
 
@@ -916,7 +937,7 @@ func (g *GB28181API) sendCascadeEventNotify(sub *eventSubscription, cmdType stri
 		&sip.GenericHeader{HeaderName: "Subscription-State", Contents: state},
 	)
 	request := sip.NewRequest("", sip.MethodNotify, to.URI.Clone(), sip.DefaultSipVersion, headers, body)
-	identityCtx := withMonitorUserIdentity(context.Background(), identity)
+	identityCtx := withMonitorUserIdentity(ctx, identity)
 	if err := cascade.platform.monitorUserIdentity.apply(identityCtx, request); err != nil {
 		return err
 	}
@@ -925,10 +946,13 @@ func (g *GB28181API) sendCascadeEventNotify(sub *eventSubscription, cmdType stri
 		request.SetConnection(g.svr.UDPConn())
 		request.SetSource(g.svr.UDPConn().LocalAddr())
 	}
-	exchangeCtx := cascade.ctx
-	if exchangeCtx == nil {
-		exchangeCtx = context.Background()
+	exchangeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopCascadeCancel := func() bool { return false }
+	if cascade.ctx != nil {
+		stopCascadeCancel = context.AfterFunc(cascade.ctx, cancel)
 	}
+	defer stopCascadeCancel()
 	response, err := cascade.exchange(exchangeCtx, request)
 	if err != nil {
 		return err

@@ -140,7 +140,11 @@ type GB28181API struct {
 	directPolicy    directTCPRuntimePolicy
 	metrics         GBMetrics
 	closeOnce       sync.Once
+	lifecycleMu     sync.Mutex
 	lifecycleDone   chan struct{}
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
+	lifecycleClosed bool
 	lifecycleWG     sync.WaitGroup
 
 	svr *Server
@@ -150,6 +154,7 @@ type GB28181API struct {
 
 func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager) *GB28181API {
 	sipConfig := cfg.Sip
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	g := GB28181API{
 		cfg:  &sipConfig,
 		boot: cfg,
@@ -170,6 +175,8 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 		snapshotStates:       make(map[string]SnapshotState),
 		directDownloads:      NewDirectTCPDownloadManager(directTCPDownloadOptions(cfg.Sip.DirectTCPDownload)),
 		lifecycleDone:        make(chan struct{}),
+		lifecycleCtx:         lifecycleCtx,
+		lifecycleCancel:      lifecycleCancel,
 	}
 	g.controlSN.Store(uint32(sip.RandInt(100000, 999999)))
 	g.querySN.Store(uint32(sip.RandInt(100000, 999999)))
@@ -180,15 +187,54 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 	return &g
 }
 
-func (g *GB28181API) startLifecycleWorker(worker func()) {
+func (g *GB28181API) startLifecycleWorker(worker func()) bool {
 	if g == nil || worker == nil {
-		return
+		return false
+	}
+	g.lifecycleMu.Lock()
+	if g.lifecycleClosed {
+		g.lifecycleMu.Unlock()
+		return false
 	}
 	g.lifecycleWG.Add(1)
+	g.lifecycleMu.Unlock()
 	go func() {
 		defer g.lifecycleWG.Done()
 		worker()
 	}()
+	return true
+}
+
+// startLifecycleTask 启动随 GB28181 服务取消并由 close 等待的短任务。
+// lifecycleMu 保证 WaitGroup.Add 不会和 close 中的 Wait 并发。
+func (g *GB28181API) startLifecycleTask(parent context.Context, task func(context.Context)) bool {
+	if g == nil || task == nil {
+		return false
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	g.lifecycleMu.Lock()
+	if g.lifecycleClosed {
+		g.lifecycleMu.Unlock()
+		return false
+	}
+	if g.lifecycleCtx == nil {
+		g.lifecycleCtx, g.lifecycleCancel = context.WithCancel(context.Background())
+	}
+	lifecycleCtx := g.lifecycleCtx
+	g.lifecycleWG.Add(1)
+	g.lifecycleMu.Unlock()
+
+	taskCtx, cancel := context.WithCancel(parent)
+	stopLifecycleCancel := context.AfterFunc(lifecycleCtx, cancel)
+	go func() {
+		defer g.lifecycleWG.Done()
+		defer stopLifecycleCancel()
+		defer cancel()
+		task(taskCtx)
+	}()
+	return true
 }
 
 func (g *GB28181API) serviceDone() <-chan struct{} {
@@ -199,16 +245,13 @@ func (g *GB28181API) serviceDone() <-chan struct{} {
 }
 
 func (g *GB28181API) serviceStopped() bool {
-	done := g.serviceDone()
-	if done == nil {
+	if g == nil {
 		return false
 	}
-	select {
-	case <-done:
-		return true
-	default:
-		return false
-	}
+	g.lifecycleMu.Lock()
+	stopped := g.lifecycleClosed
+	g.lifecycleMu.Unlock()
+	return stopped
 }
 
 func (g *GB28181API) configSnapshot() *conf.SIP {
