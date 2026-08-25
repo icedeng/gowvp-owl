@@ -221,12 +221,24 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
+	msg.CmdType = strings.TrimSpace(msg.CmdType)
+	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	if !strings.EqualFold(msg.CmdType, "DeviceConfig") {
+		ctx.String(400, "invalid DeviceConfig response")
+		return
+	}
+	if err := g.validateGenericDeviceQueryResponse(ctx, genericDeviceQueryResponse{
+		XMLName: msg.XMLName, CmdType: msg.CmdType, SN: msg.SN, DeviceID: msg.DeviceID, Result: msg.Result,
+	}); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 	msg.RawXML = string(ctx.Request.Body())
 
 	state := &DeviceConfigState{
-		CmdType:  strings.TrimSpace(msg.CmdType),
+		CmdType:  msg.CmdType,
 		SN:       msg.SN,
-		DeviceID: strings.TrimSpace(msg.DeviceID),
+		DeviceID: msg.DeviceID,
 		Result:   strings.TrimSpace(msg.Result),
 		SnapShot: msg.SnapShotConfig,
 		RawXML:   msg.RawXML,
@@ -582,8 +594,21 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
+	msg.CmdType = strings.TrimSpace(msg.CmdType)
+	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	if !strings.EqualFold(msg.CmdType, CMDTypeConfigDownload) {
+		ctx.String(400, "invalid ConfigDownload response")
+		return
+	}
+	if err := g.validateGenericDeviceQueryResponse(ctx, genericDeviceQueryResponse{
+		XMLName: msg.XMLName, CmdType: msg.CmdType, SN: msg.SN, DeviceID: msg.DeviceID, Result: msg.Result,
+	}); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 
-	if msg.BasicParam != nil {
+	resultOK := strings.TrimSpace(msg.Result) == "" || strings.EqualFold(strings.TrimSpace(msg.Result), "OK")
+	if msg.BasicParam != nil && msg.DeviceID == strings.TrimSpace(ctx.DeviceID) && resultOK {
 		ipc, ok := g.svr.memoryStorer.Load(ctx.DeviceID)
 		if !ok {
 			ctx.Log.Debug("sipMessageConfigDownload", "deviceID", ctx.DeviceID, "err", "device offline")

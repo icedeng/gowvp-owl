@@ -120,8 +120,10 @@ func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 		ctx.String(400, "xml err")
 		return
 	}
-	if msg.SumNum < 0 {
-		ctx.String(200, "OK")
+	msg.CmdType = strings.TrimSpace(msg.CmdType)
+	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	if err := validateCatalogEnvelope(msg); err != nil {
+		ctx.String(400, err.Error())
 		return
 	}
 
@@ -135,12 +137,28 @@ func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 	}
 
 	// 命中通用查询等待队列（A.2.4 Catalog 查询等待）。
-	stateDeviceID := firstNonEmpty(strings.TrimSpace(msg.DeviceID), strings.TrimSpace(ctx.DeviceID))
+	stateDeviceID := firstNonEmpty(msg.DeviceID, strings.TrimSpace(ctx.DeviceID))
 	decoded := g.decodeAndStoreQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body())
 	g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, "", ctx.Request.Body(), msg.DeviceID, decoded)
 
 	ctx.String(200, "OK")
 	g.persistDecodedQuery(stateDeviceID, msg.CmdType, decoded)
+}
+
+func validateCatalogEnvelope(msg MessageDeviceListResponse) error {
+	if msg.XMLName.Local != "Response" && msg.XMLName.Local != "Notify" {
+		return fmt.Errorf("Catalog root must be Response or Notify")
+	}
+	if !strings.EqualFold(strings.TrimSpace(msg.CmdType), "Catalog") {
+		return fmt.Errorf("invalid Catalog command")
+	}
+	if msg.SN <= 0 || !isGBDeviceIdentifier(strings.TrimSpace(msg.DeviceID)) {
+		return fmt.Errorf("Catalog requires positive SN and 20-digit DeviceID")
+	}
+	if msg.SumNum < 0 {
+		return fmt.Errorf("Catalog SumNum must not be negative")
+	}
+	return nil
 }
 
 // QueryCatalog 设备目录查询或订阅请求

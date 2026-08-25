@@ -246,7 +246,8 @@ func TestAppendixA4HandlersAcknowledgeBeforePersistence(t *testing.T) {
 				release:      make(chan struct{}),
 			}
 			store := &queryTestStore{Storer: base.Store(), device: deviceStore}
-			api := &GB28181API{core: ipc.NewAdapter(store, uniqueid.Core{})}
+			api, _ := newVersionGateAPI(GBVersion11)
+			api.core = ipc.NewAdapter(store, uniqueid.Core{})
 			conn := newFlowConnection()
 			request := newFlowRequest(t, conn, test.method, "appendix-a4-ack-"+test.name, test.body)
 			to := mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000")

@@ -85,6 +85,40 @@ func TestDeviceConfig11VideoAudioAndSVACRequest(t *testing.T) {
 	}
 }
 
+func TestDeviceConfigResponseRejectsInvalidEnvelopeBeforeStateAndWait(t *testing.T) {
+	api, memory := newVersionGateAPI(GBVersion10)
+	pending := &pendingDeviceConfig{wait: make(chan *DeviceConfigResponse, 1)}
+	api.pendingDeviceConfig.Store(buildPendingDeviceConfigKey(gb10DeviceID, 31), pending)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "unsupported version", body: `<Response><CmdType>DeviceConfig</CmdType><SN>31</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
+		{name: "wrong command", body: `<Response><CmdType>DeviceStatus</CmdType><SN>31</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
+		{name: "non-positive SN", body: `<Response><CmdType>DeviceConfig</CmdType><SN>0</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
+		{name: "unknown target", body: `<Response><CmdType>DeviceConfig</CmdType><SN>31</SN><DeviceID>34020000001320000009</DeviceID><Result>OK</Result></Response>`},
+	}
+	for index, test := range tests {
+		if index == 1 {
+			memory.device.setGBVersion(GBVersion11)
+		}
+		t.Run(test.name, func(t *testing.T) {
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "device-config-invalid-"+test.name, []byte(test.body), api.handleDeviceConfig)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("invalid DeviceConfig response = %s", response)
+			}
+		})
+	}
+	select {
+	case response := <-pending.wait:
+		t.Fatalf("invalid DeviceConfig resolved wait: %+v", response)
+	default:
+	}
+	if state, ok := api.GetQueryState(gb10DeviceID); ok && state.DeviceConfig != nil {
+		t.Fatalf("invalid DeviceConfig changed state: %+v", state.DeviceConfig)
+	}
+}
+
 func TestDeviceConfig11RejectsIncompleteAndUnsafeSections(t *testing.T) {
 	api := &GB28181API{}
 	tests := []struct {
@@ -166,7 +200,7 @@ func TestHandleDeviceConfig11StoresRawXML(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn := newFlowConnection()
-	api := &GB28181API{}
+	api, _ := newVersionGateAPI(GBVersion11)
 	pending := &pendingDeviceConfig{wait: make(chan *DeviceConfigResponse, 1)}
 	api.pendingDeviceConfig.Store(buildPendingDeviceConfigKey(gb10DeviceID, 31), pending)
 	response := runFlowHandler(t, conn, api, sip.MethodMessage, "config-1", body, api.handleDeviceConfig)
@@ -220,6 +254,49 @@ func TestConfigDownload11DecodesVideoAndAudioParameters(t *testing.T) {
 		!strings.Contains(state.AudioParamOpt.InnerXML, "AudioFormatOpt") ||
 		!strings.Contains(state.AudioParamConfig.InnerXML, "AudioFormat") {
 		t.Fatalf("ConfigDownload raw parameter data lost: %+v", state)
+	}
+}
+
+func TestConfigDownloadResponseValidatesBeforeRuntimeUpdate(t *testing.T) {
+	api, memory := newVersionGateAPI(GBVersion11)
+	initial := memory.device.runtimeSnapshot()
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "wrong command", body: `<Response><CmdType>DeviceStatus</CmdType><SN>1</SN><DeviceID>device</DeviceID><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
+		{name: "non-positive SN", body: `<Response><CmdType>ConfigDownload</CmdType><SN>0</SN><DeviceID>device</DeviceID><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
+		{name: "unknown target", body: `<Response><CmdType>ConfigDownload</CmdType><SN>1</SN><DeviceID>34020000001320000009</DeviceID><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "config-download-invalid-"+test.name, []byte(test.body), api.sipMessageConfigDownload)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("invalid ConfigDownload response = %s", response)
+			}
+			state := memory.device.runtimeSnapshot()
+			if state.KeepaliveInterval != initial.KeepaliveInterval || state.KeepaliveTimeout != initial.KeepaliveTimeout {
+				t.Fatalf("invalid ConfigDownload changed runtime: %+v", state)
+			}
+		})
+	}
+}
+
+func TestConfigDownloadFailureAndChildBasicParamDoNotChangeParentRuntime(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion11)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	for _, body := range []string{
+		`<Response><CmdType>ConfigDownload</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>ERROR</Result><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`,
+		`<Response><CmdType>ConfigDownload</CmdType><SN>2</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>OK</Result><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`,
+	} {
+		response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "config-download-no-parent-update", []byte(body), api.sipMessageConfigDownload)
+		assertFlowOK(t, response)
+	}
+	state := memory.runtime.runtimeSnapshot()
+	if state.KeepaliveInterval != 0 || state.KeepaliveTimeout != 0 {
+		t.Fatalf("failed/child ConfigDownload changed parent runtime: %+v", state)
 	}
 }
 

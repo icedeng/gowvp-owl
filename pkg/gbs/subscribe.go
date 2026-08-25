@@ -216,7 +216,9 @@ func (g *GB28181API) sipNotifyCatalog(ctx *sip.Context) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
-	if !strings.EqualFold(strings.TrimSpace(msg.CmdType), "Catalog") {
+	msg.CmdType = strings.TrimSpace(msg.CmdType)
+	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	if err := validateCatalogEnvelope(msg); err != nil {
 		ctx.String(400, "invalid catalog notify")
 		return
 	}

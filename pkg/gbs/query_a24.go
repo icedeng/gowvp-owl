@@ -620,7 +620,7 @@ func genericQueryResponseMinimumVersion(cmdType string) (GBProtocolVersion, bool
 	switch cmdType {
 	case "DeviceStatus":
 		return GBVersion10, true
-	case "PresetQuery", "ConfigDownload":
+	case "PresetQuery", "ConfigDownload", "DeviceConfig":
 		return GBVersion11, true
 	case "HomePositionQuery", "MobilePosition":
 		return GBVersion20, true

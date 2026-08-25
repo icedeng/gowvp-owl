@@ -99,6 +99,35 @@ func TestCatalogNotify11AcceptsNotifyRootAndEvent(t *testing.T) {
 	assertFlowOK(t, response)
 }
 
+func TestCatalogResponseRejectsInvalidEnvelopeBeforeAggregation(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion10)
+	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}
+	api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "Catalog", 9), pending)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "wrong command", body: `<Response><CmdType>DeviceStatus</CmdType><SN>9</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>0</SumNum></Response>`},
+		{name: "non-positive SN", body: `<Response><CmdType>Catalog</CmdType><SN>0</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>0</SumNum></Response>`},
+		{name: "missing device", body: `<Response><CmdType>Catalog</CmdType><SN>9</SN><SumNum>0</SumNum></Response>`},
+		{name: "negative sum", body: `<Response><CmdType>Catalog</CmdType><SN>9</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>-1</SumNum></Response>`},
+		{name: "invalid target", body: `<Response><CmdType>Catalog</CmdType><SN>9</SN><DeviceID>invalid</DeviceID><SumNum>0</SumNum></Response>`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "catalog-invalid-"+test.name, []byte(test.body), api.sipMessageCatalog)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("invalid Catalog response = %s", response)
+			}
+		})
+	}
+	select {
+	case out := <-pending.wait:
+		t.Fatalf("invalid Catalog resolved pending query: %+v", out)
+	default:
+	}
+}
+
 func TestCatalogPartialResultDoesNotReplaceSnapshot(t *testing.T) {
 	memory := newFlowMemory(gb10DeviceID)
 	memory.runtime.Channels.Store("existing-channel", &Channel{ChannelID: "existing-channel", device: memory.runtime})
