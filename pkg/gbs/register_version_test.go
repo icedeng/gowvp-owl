@@ -230,4 +230,18 @@ func TestRegisterDigestUsesDomainDerivedFromPlatformID(t *testing.T) {
 	if err := api.validateRegisterAuthorization(ctx, &sip.GenericHeader{HeaderName: "Authorization", Contents: auth.String()}, gb10DeviceID, password); err != nil {
 		t.Fatalf("REGISTER Digest using derived domain rejected: %v", err)
 	}
+
+	wrongNonce := api.issueRegisterNonce(gb10DeviceID, registerNonceSourceIP(ctx))
+	wrong := sip.AuthFromValue(fmt.Sprintf(`Digest realm="%s",nonce="%s",algorithm=MD5,qop="auth"`, cfg.GetDomain(), wrongNonce)).
+		SetUsername(gb10DeviceID).
+		SetPassword("wrong").
+		SetMethod(sip.MethodRegister).
+		SetURI(request.Recipient().String()).
+		SetClientNonce("00000001", "client-nonce")
+	if _, err := wrong.CalcResponseChecked(); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.validateRegisterAuthorization(ctx, &sip.GenericHeader{HeaderName: "Authorization", Contents: wrong.String()}, gb10DeviceID, password); err == nil || !strings.Contains(err.Error(), "response mismatch") {
+		t.Fatalf("wrong REGISTER Digest password result = %v", err)
+	}
 }

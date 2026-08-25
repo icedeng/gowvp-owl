@@ -51,6 +51,9 @@ type GB28181API struct {
 	// REGISTER Digest nonce 由服务端签发并绑定设备和源 IP，避免接受任意或永久可重放的 nonce。
 	registerNonceMu sync.Mutex
 	registerNonces  map[string]registerNonceState
+	// MESSAGE/NOTIFY 兼容 Digest nonce 独立维护，按设备、源 IP 和 nc 防重放。
+	messageNonceMu sync.Mutex
+	messageNonces  map[string]messageNonceState
 
 	// TODO: 待替换成 redis
 	streams *conc.Map[string, *Streams]
@@ -136,6 +139,7 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 			return item.DeviceID + "\x00" + item.FilePath + "\x00" + item.StartTime + "\x00" + item.EndTime
 		}),
 		registerNonces:       make(map[string]registerNonceState),
+		messageNonces:        make(map[string]messageNonceState),
 		streams:              &conc.Map[string, *Streams]{},
 		cascadeSources:       make(map[string]*cascadeSourceRef),
 		cascadeSubscriptions: make(map[string]*cascadeDownstreamSubscription),
@@ -348,12 +352,15 @@ func (g *GB28181API) validateRegisterAuthorization(ctx *sip.Context, header sip.
 	if err := g.validateRegisterNonce(auth.Get("nonce"), username, registerNonceSourceIP(ctx)); err != nil {
 		return err
 	}
+	provided := strings.ToLower(strings.TrimSpace(auth.Get("response")))
+	if provided == "" {
+		return fmt.Errorf("Digest response is missing")
+	}
 	auth.SetPassword(password).SetUsername(username).SetMethod(ctx.Request.Method()).SetURI(requestURI)
 	calculated, err := auth.CalcResponseChecked()
 	if err != nil {
 		return err
 	}
-	provided := strings.ToLower(strings.TrimSpace(auth.Get("response")))
 	if len(provided) != len(calculated) || subtle.ConstantTimeCompare([]byte(provided), []byte(calculated)) != 1 {
 		return fmt.Errorf("Digest response mismatch")
 	}
