@@ -60,12 +60,14 @@ func (d *Device) Update(ctx context.Context, dev *ipc.Device, changeFn func(*ipc
 		// 密码修改，设备需要重新注册
 		if dev2.PasswordValue() != dev.Password && dev.Password != "" {
 			slog.InfoContext(ctx, " 修改密码，设备离线")
-			d.Change(dev.GetGB28181DeviceID(), func(d *ipc.Device) error {
+			if err := d.Change(dev.GetGB28181DeviceID(), func(d *ipc.Device) error {
 				d.Password = dev.Password
 				d.IsOnline = false
 				return nil
 			}, func(d *gbs.Device) {
-			})
+			}); err != nil {
+				return err
+			}
 		}
 	}
 

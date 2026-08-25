@@ -2,6 +2,7 @@ package ipccache_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -112,4 +113,58 @@ func TestLoadDeviceToMemoryMarksRestoredTCPDeviceAndChannelsOffline(t *testing.T
 	if _, ok := cache.Load(device.DeviceID); ok {
 		t.Fatal("restored TCP device unexpectedly retained an unusable runtime connection")
 	}
+}
+
+func TestPasswordChangeReturnsRuntimeOfflinePersistenceFailure(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := ipcdb.NewDB(db).AutoMigrate(true)
+	device := &ipc.Device{
+		ID: "GB_password", DeviceID: "34020000001320000004", Type: ipc.TypeGB28181,
+		Password: "old-password", IsOnline: true,
+	}
+	if err := base.Device().Create(context.Background(), device); err != nil {
+		t.Fatal(err)
+	}
+	failingDevice := &failSecondDeviceUpdateStore{DeviceStorer: base.Device()}
+	store := &overrideDeviceStore{Storer: base, device: failingDevice}
+	cache := ipccache.NewCache(store)
+	runtime := &gbs.Device{Password: "old-password", IsOnline: true}
+	cache.LoadOrStore(device.DeviceID, runtime)
+
+	var updated ipc.Device
+	err = cache.Device().Update(context.Background(), &updated, func(current *ipc.Device) error {
+		current.Password = "new-password"
+		return nil
+	}, orm.Where("device_id = ?", device.DeviceID))
+	if err == nil || !errors.Is(err, errSecondDeviceUpdate) {
+		t.Fatalf("password change result = %v", err)
+	}
+	if runtime.PasswordValue() != "old-password" || !runtime.IsOnlineNow() {
+		t.Fatalf("failed offline persistence changed runtime = password:%q online:%v", runtime.PasswordValue(), runtime.IsOnlineNow())
+	}
+}
+
+var errSecondDeviceUpdate = errors.New("second device update failed")
+
+type overrideDeviceStore struct {
+	ipc.Storer
+	device ipc.DeviceStorer
+}
+
+func (s *overrideDeviceStore) Device() ipc.DeviceStorer { return s.device }
+
+type failSecondDeviceUpdateStore struct {
+	ipc.DeviceStorer
+	updates int
+}
+
+func (s *failSecondDeviceUpdateStore) Update(ctx context.Context, device *ipc.Device, change func(*ipc.Device) error, opts ...orm.QueryOption) error {
+	s.updates++
+	if s.updates == 2 {
+		return errSecondDeviceUpdate
+	}
+	return s.DeviceStorer.Update(ctx, device, change, opts...)
 }
