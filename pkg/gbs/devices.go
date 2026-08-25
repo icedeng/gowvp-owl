@@ -17,7 +17,6 @@ import (
 var (
 	// sip服务用户信息
 	_serverDevices Devices
-	svr            *sip.Server
 )
 
 type Device struct {

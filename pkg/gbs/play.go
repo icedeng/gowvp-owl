@@ -500,7 +500,12 @@ func SipStopPlay(ssrc string) {
 			return
 		}
 		req.SetDestination(user.source)
-		tx, err := svr.Request(req)
+		server := defaultSIPServer.Load()
+		if server == nil {
+			play.Msg = "SIP server is unavailable"
+			return
+		}
+		tx, err := server.Request(req)
 		if err != nil {
 			// logrus.Warningln("sipStopPlay bye fail.id:", play.DeviceID, play.ChannelID, "err:", err)
 		}

@@ -32,7 +32,10 @@ func wireApp(bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error)
 	storer := api.NewIPCStore(db, bc)
 	uniqueidCore := api.NewUniqueID(db)
 	adapter := api.NewGBAdapter(storer, uniqueidCore)
-	server, cleanup := gbs.NewServer(bc, adapter, smsCore)
+	server, cleanup, err := gbs.NewServer(bc, adapter, smsCore)
+	if err != nil {
+		return nil, nil, err
+	}
 	ipcBundle := api.NewIPCCoreWithProtocols(storer, uniqueidCore, adapter, smsCore, server, bc)
 	recordingStorer := api.NewRecordingStore(db)
 	smsProvider := api.NewSMSProviderAdapter(smsCore)

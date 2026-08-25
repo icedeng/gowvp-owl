@@ -160,24 +160,50 @@ func (s *Server) UDPConn() Connection {
 }
 
 // ListenUDPServer ListenUDPServer
-func (s *Server) ListenUDPServer(addr string) {
+func (s *Server) ListenUDPServer(addr string) error {
+	if err := s.bindUDP(addr); err != nil {
+		return err
+	}
+	return s.serveUDP(s.udpConn)
+}
+
+// StartUDPServer 同步完成端口绑定，成功后在后台处理 UDP 报文。
+func (s *Server) StartUDPServer(addr string) error {
+	if err := s.bindUDP(addr); err != nil {
+		return err
+	}
+	conn := s.udpConn
+	go func() {
+		if err := s.serveUDP(conn); err != nil {
+			slog.Error("SIP UDP server stopped", "addr", addr, "err", err)
+		}
+	}()
+	return nil
+}
+
+func (s *Server) bindUDP(addr string) error {
 	udpaddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
-		panic(fmt.Errorf("net.ResolveUDPAddr err[%w]", err))
+		return fmt.Errorf("net.ResolveUDPAddr err[%w]", err)
 	}
 	s.port = NewPort(udpaddr.Port)
 	s.host, err = ResolveSelfIP()
 	if err != nil {
-		panic(fmt.Errorf("net.ListenUDP resolveip err[%w]", err))
+		return fmt.Errorf("resolve SIP UDP self IP: %w", err)
 	}
 	udp, err := net.ListenUDP("udp", udpaddr)
 	if err != nil {
-		panic(fmt.Errorf("net.ListenUDP err[%w]", err))
+		return fmt.Errorf("net.ListenUDP err[%w]", err)
 	}
 	s.udpConn = NewUDPConnection(udp)
+	return nil
+}
+
+func (s *Server) serveUDP(conn Connection) error {
 	var (
 		raddr net.Addr
 		num   int
+		err   error
 	)
 	buf := make([]byte, bufferSize)
 	parser := newParser()
@@ -186,54 +212,70 @@ func (s *Server) ListenUDPServer(addr string) {
 	for {
 		select {
 		case <-s.ctx.Done():
-			return
+			return nil
 		default:
-			num, raddr, err = s.udpConn.ReadFrom(buf)
+			num, raddr, err = conn.ReadFrom(buf)
 			if err != nil {
-				slog.Error("udp.ReadFromUDP", "err", err)
+				if s.ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+					return nil
+				}
+				slog.Warn("SIP UDP read failed", "err", err)
 				continue
 			}
-			parser.in <- newPacket(append([]byte{}, buf[:num]...), raddr, s.udpConn)
+			parser.in <- newPacket(append([]byte{}, buf[:num]...), raddr, conn)
 		}
 	}
 }
 
 // ListenTCPServer 启动 TCP 服务器并监听指定地址。
-func (s *Server) ListenTCPServer(addr string) {
-	// 解析传入的地址为 TCP 地址
+func (s *Server) ListenTCPServer(addr string) error {
+	if err := s.bindTCP(addr); err != nil {
+		return err
+	}
+	return s.serveTCP(s.tcpListener, addr)
+}
+
+// StartTCPServer 同步完成端口绑定，成功后在后台接受 TCP 连接。
+func (s *Server) StartTCPServer(addr string) error {
+	if err := s.bindTCP(addr); err != nil {
+		return err
+	}
+	listener := s.tcpListener
+	go func() {
+		if err := s.serveTCP(listener, addr); err != nil {
+			slog.Error("SIP TCP server stopped", "addr", addr, "err", err)
+		}
+	}()
+	return nil
+}
+
+func (s *Server) bindTCP(addr string) error {
 	tcpaddr, err := net.ResolveTCPAddr("tcp", addr)
-	// 如果解析地址失败，则抛出错误
 	if err != nil {
-		panic(fmt.Errorf("net.ResolveUDPAddr err[%w]", err))
+		return fmt.Errorf("net.ResolveTCPAddr err[%w]", err)
 	}
-	// 保存解析后的 TCP 地址到服务器结构体
 	s.tcpaddr = tcpaddr
-	// 创建新的端口实例并保存到服务器结构体
 	s.tcpPort = NewPort(tcpaddr.Port)
-
-	// 创建 TCP 监听器
 	tcp, err := net.ListenTCP("tcp", tcpaddr)
-	// 如果创建监听器失败，则抛出错误
 	if err != nil {
-		panic(fmt.Errorf("net.ListenUDP err[%w]", err))
+		return fmt.Errorf("net.ListenTCP err[%w]", err)
 	}
-	// 确保在方法退出时关闭 TCP 监听器
-	// 当这个关闭时 所有的设备的socket都会被关闭
-	// defer tcp.Close()
-	// 保存 TCP 监听器到服务器结构体
 	s.tcpListener = tcp
-	// 无限循环接受连接
+	return nil
+}
 
+func (s *Server) serveTCP(listener *net.TCPListener, addr string) error {
 	for {
 		select {
 		case <-s.ctx.Done():
-			slog.Info("ListenTCPServer Has Been Exits")
-			return
+			return nil
 		default:
-			conn, err := tcp.AcceptTCP()
+			conn, err := listener.AcceptTCP()
 			if err != nil {
-				slog.Error("net.ListenTCP", "err", err, "addr", addr)
-				return
+				if s.ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+					return nil
+				}
+				return fmt.Errorf("accept SIP TCP connection: %w", err)
 			}
 			go s.ProcessTcpConn(conn)
 		}
@@ -242,6 +284,27 @@ func (s *Server) ListenTCPServer(addr string) {
 
 // ListenTLSServer 启动 TLS 服务器并监听指定地址。
 func (s *Server) ListenTLSServer(addr, certFile, keyFile string) error {
+	if err := s.bindTLS(addr, certFile, keyFile); err != nil {
+		return err
+	}
+	return s.serveTLS(s.tlsListener, addr)
+}
+
+// StartTLSServer 同步完成证书加载和端口绑定，成功后在后台接受 TLS 连接。
+func (s *Server) StartTLSServer(addr, certFile, keyFile string) error {
+	if err := s.bindTLS(addr, certFile, keyFile); err != nil {
+		return err
+	}
+	listener := s.tlsListener
+	go func() {
+		if err := s.serveTLS(listener, addr); err != nil {
+			slog.Error("SIP TLS server stopped", "addr", addr, "err", err)
+		}
+	}()
+	return nil
+}
+
+func (s *Server) bindTLS(addr, certFile, keyFile string) error {
 	tcpaddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("net.ResolveTCPAddr err[%w]", err)
@@ -260,16 +323,21 @@ func (s *Server) ListenTLSServer(addr, certFile, keyFile string) error {
 	}
 
 	s.tlsListener = ln
+	return nil
+}
+
+func (s *Server) serveTLS(listener net.Listener, addr string) error {
 	for {
 		select {
 		case <-s.ctx.Done():
-			slog.Info("ListenTLSServer Has Been Exits")
 			return nil
 		default:
-			conn, err := ln.Accept()
+			conn, err := listener.Accept()
 			if err != nil {
-				slog.Error("tls.Accept", "err", err, "addr", addr)
-				return err
+				if s.ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+					return nil
+				}
+				return fmt.Errorf("accept SIP TLS connection: %w", err)
 			}
 			go s.ProcessTcpConn(conn)
 		}
@@ -286,15 +354,12 @@ func (s *Server) Close() {
 		}
 		if s.udpConn != nil {
 			_ = s.udpConn.Close()
-			s.udpConn = nil
 		}
 		if s.tcpListener != nil {
 			_ = s.tcpListener.Close()
-			s.tcpListener = nil
 		}
 		if s.tlsListener != nil {
 			_ = s.tlsListener.Close()
-			s.tlsListener = nil
 		}
 		s.closeActiveConnections()
 		if s.txs != nil {

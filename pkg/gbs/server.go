@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gowvp/owl/internal/conf"
@@ -17,9 +18,11 @@ import (
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/pkg/gbs/m"
 	"github.com/gowvp/owl/pkg/gbs/sip"
-	"github.com/ixugo/goddd/pkg/conc"
 	"github.com/ixugo/netpulse/ip"
 )
+
+// defaultSIPServer 仅供保留的旧版包级停止接口使用；核心流程均使用 Server 实例。
+var defaultSIPServer atomic.Pointer[sip.Server]
 
 type MemoryStorer interface {
 	LoadOrStore(deviceID string, value *Device)
@@ -78,18 +81,28 @@ func resolveHost(host string) string {
 	return addrs[0]
 }
 
-func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, func()) {
-	api := NewGB28181API(cfg, store, sc.NodeManager)
-
+func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, func(), error) {
+	if cfg == nil {
+		return nil, nil, fmt.Errorf("GB28181 configuration is unavailable")
+	}
+	if err := conf.ValidateSIPConfig(cfg.Sip); err != nil {
+		return nil, nil, err
+	}
+	memoryStorer, ok := store.Store().(MemoryStorer)
+	if !ok || memoryStorer == nil {
+		return nil, nil, fmt.Errorf("GB28181 memory store is unavailable")
+	}
 	iip := ip.InternalIP()
-	uri, _ := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s:%d", cfg.Sip.ID, iip, cfg.Sip.Port))
+	uri, err := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s:%d", cfg.Sip.ID, iip, cfg.Sip.Port))
+	if err != nil {
+		return nil, nil, fmt.Errorf("build GB28181 server URI: %w", err)
+	}
 	from := sip.Address{
 		DisplayName: sip.String{Str: "gowvp/owl"},
 		URI:         &uri,
 		Params:      sip.NewParams(),
 	}
 
-	svr = sip.NewServer(&from)
 	sipTrafficLogger, err := sip.NewTrafficLogger(sip.TrafficLogConfig{
 		Enabled:      cfg.Sip.Log.Enabled,
 		Dir:          filepath.Join(cfg.ConfigDir, cfg.Sip.Log.Dir),
@@ -98,15 +111,12 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 		RotationSize: cfg.Sip.Log.RotationSize * 1024 * 1024,
 	})
 	if err != nil {
-		slog.Error("init sip traffic logger failed", "err", err)
-	} else {
-		previous := sip.SetTrafficLogger(sipTrafficLogger)
-		if previous != nil {
-			_ = previous.Close()
-		}
+		return nil, nil, fmt.Errorf("init SIP traffic logger: %w", err)
 	}
-	svr.Register(api.handlerRegister)
-	msg := svr.Message(api.sipAccessControlMiddleware, api.sipCascadeMessageMiddleware)
+	api := NewGB28181API(cfg, store, sc.NodeManager)
+	sipServer := sip.NewServer(&from)
+	sipServer.Register(api.handlerRegister)
+	msg := sipServer.Message(api.sipAccessControlMiddleware, api.sipCascadeMessageMiddleware)
 	msg.Handle("Keepalive", api.sipMessageKeepalive)
 	msg.Handle("Catalog", api.sipMessageCatalog)
 	msg.Handle("DeviceInfo", api.sipMessageDeviceInfo)
@@ -120,7 +130,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	msg.Handle("VideoUploadNotify", api.sipMessageVideoUploadNotify)
 
 	// 报警既可能由 MESSAGE 上报，也可能由 NOTIFY 上报，二者均接入。
-	notify := svr.Notify(api.sipAccessControlMiddleware, api.sipNotifySubscriptionState)
+	notify := sipServer.Notify(api.sipAccessControlMiddleware, api.sipNotifySubscriptionState)
 	notify.Handle("Alarm", api.sipNotifyAlarm)
 	notify.Handle("Catalog", api.sipNotifyCatalog)
 	notify.Handle("MobilePosition", api.sipNotifyMobilePosition)
@@ -139,15 +149,15 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	msg.Handle("Alarm", api.sipMessageAlarm)
 
 	// 9.11 事件源侧：接收上级订阅请求（SUBSCRIBE）。
-	svr.Subscribe(api.sipAccessControlMiddleware, api.sipSubscribeEvent)
+	sipServer.Subscribe(api.sipAccessControlMiddleware, api.sipSubscribeEvent)
 	// 9.2 被叫侧会话兼容：接收入向 INVITE/BYE/ACK。
-	svr.Handle(sip.MethodInvite, api.sipInviteGeneric)
-	svr.Handle(sip.MethodCancel, api.sipCancelGeneric)
-	svr.Handle(sip.MethodBYE, api.sipByeGeneric)
-	svr.Handle(sip.MethodACK, api.sipAckGeneric)
-	svr.Handle(sip.MethodInfo, api.sipInfoGeneric)
+	sipServer.Handle(sip.MethodInvite, api.sipInviteGeneric)
+	sipServer.Handle(sip.MethodCancel, api.sipCancelGeneric)
+	sipServer.Handle(sip.MethodBYE, api.sipByeGeneric)
+	sipServer.Handle(sip.MethodACK, api.sipAckGeneric)
+	sipServer.Handle(sip.MethodInfo, api.sipInfoGeneric)
 	// OPTIONS 探测（入向）兼容。
-	svr.Handle(sip.MethodOptions, api.sipOptionsGeneric)
+	sipServer.Handle(sip.MethodOptions, api.sipOptionsGeneric)
 
 	// A.2.4 查询响应补齐：注册缺失查询命令响应处理。
 	msg.Handle("DeviceStatus", api.sipMessageQueryGeneric)
@@ -162,46 +172,64 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	msg.Handle("Broadcast", api.sipMessageBroadcastResponse)
 
 	c := Server{
-		Server:       svr,
+		Server:       sipServer,
 		mediaService: sc,
 		fromAddress:  from,
 		gb:           api,
-		memoryStorer: store.Store().(MemoryStorer),
+		memoryStorer: memoryStorer,
 	}
 	api.svr = &c
-	svr.SetRequestSecurityResolver(api.resolveSignalDigestSecurity)
+	sipServer.SetRequestSecurityResolver(api.resolveSignalDigestSecurity)
+	var (
+		cleanupOnce     sync.Once
+		loggerInstalled bool
+	)
+	cleanup := func() {
+		cleanupOnce.Do(func() {
+			c.Close()
+			defaultSIPServer.CompareAndSwap(sipServer, nil)
+			if loggerInstalled {
+				if previous := sip.SetTrafficLogger(nil); previous != nil {
+					_ = previous.Close()
+				}
+			} else if sipTrafficLogger != nil {
+				_ = sipTrafficLogger.Close()
+			}
+		})
+	}
 
 	listenPlan := buildSIPListenPlan(cfg.Sip)
-	go svr.ListenUDPServer(fmt.Sprintf(":%d", cfg.Sip.Port))
+	listenAddr := fmt.Sprintf(":%d", cfg.Sip.Port)
+	if err := sipServer.StartUDPServer(listenAddr); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("start SIP UDP listener: %w", err)
+	}
 	if listenPlan.PlainTCP {
-		go svr.ListenTCPServer(fmt.Sprintf(":%d", cfg.Sip.Port))
+		if err := sipServer.StartTCPServer(listenAddr); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("start SIP TCP listener: %w", err)
+		}
 	}
 	if listenPlan.TLS {
-		go func() {
-			if err := svr.ListenTLSServer(fmt.Sprintf(":%d", listenPlan.TLSPort), cfg.Sip.TLSCert, cfg.Sip.TLSKey); err != nil {
-				slog.Error("listen tls server failed", "port", listenPlan.TLSPort, "err", err)
-			}
-		}()
+		if err := sipServer.StartTLSServer(fmt.Sprintf(":%d", listenPlan.TLSPort), cfg.Sip.TLSCert, cfg.Sip.TLSKey); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("start SIP TLS listener: %w", err)
+		}
+	}
+	previous := sip.SetTrafficLogger(sipTrafficLogger)
+	loggerInstalled = true
+	if previous != nil {
+		_ = previous.Close()
 	}
 	go c.startTickerCheck()
-	// 等待 UDP 连接
-	for {
-		time.Sleep(50 * time.Millisecond)
-		if svr.UDPConn() != nil {
-			c.memoryStorer.LoadDeviceToMemory(svr.UDPConn())
-			break
-		}
-	}
+	defaultSIPServer.Store(sipServer)
+	c.memoryStorer.LoadDeviceToMemory(sipServer.UDPConn())
 	c.cascade = NewCascadeManager(&c)
 	if err := c.cascade.Apply(cfg.Sip, cfg.Sip.Upstreams); err != nil {
-		slog.Error("init GB28181 cascade upstreams failed", "err", err)
+		cleanup()
+		return nil, nil, fmt.Errorf("initialize GB28181 cascade upstreams: %w", err)
 	}
-	return &c, func() {
-		c.Close()
-		if previous := sip.SetTrafficLogger(nil); previous != nil {
-			_ = previous.Close()
-		}
-	}
+	return &c, cleanup, nil
 }
 
 // Close 先注销并停止上级级联，再关闭底层 SIP 监听器。
@@ -278,7 +306,17 @@ func (s *Server) ValidateCascadeConfig(cfg conf.SIP) error {
 
 // startTickerCheck 定时检查离线，通过心跳超时判断设备是否离线
 func (s *Server) startTickerCheck() {
-	conc.Timer(context.Background(), 60*time.Second, time.Second, func() {
+	if s == nil || s.gb == nil || s.gb.lifecycleDone == nil {
+		return
+	}
+	timer := time.NewTimer(60 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case <-s.gb.lifecycleDone:
+			return
+		case <-timer.C:
+		}
 		now := time.Now()
 		s.memoryStorer.RangeDevices(func(key string, dev *Device) bool {
 			if !dev.IsOnline {
@@ -341,7 +379,8 @@ func (s *Server) startTickerCheck() {
 			}
 			return true
 		})
-	})
+		timer.Reset(time.Second)
+	}
 }
 
 // MODDEBUG MODDEBUG

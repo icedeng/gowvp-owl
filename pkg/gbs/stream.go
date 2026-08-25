@@ -177,7 +177,12 @@ func CheckStreams() {
 			StreamList.Response.Delete(stream.StreamID)
 			StreamList.Succ.Delete(stream.ChannelID)
 
-			tx, err := svr.Request(req)
+			server := defaultSIPServer.Load()
+			if server == nil {
+				stream.Msg = "SIP server is unavailable"
+				continue
+			}
+			tx, err := server.Request(req)
 			if err != nil {
 				// logrus.Warningln("checkStreamClosedFail", stream.StreamID, err)
 				stream.Msg = err.Error()
