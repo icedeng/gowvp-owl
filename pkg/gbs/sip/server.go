@@ -53,6 +53,10 @@ type Server struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	closeOnce    sync.Once
+	connectionMu sync.Mutex
+	connections  map[Connection]struct{}
+
 	from *Address
 }
 
@@ -64,10 +68,11 @@ func NewServer(form *Address) *Server {
 	txs := &transacionts{txs: map[string]*Transaction{}, rwm: &sync.RWMutex{}}
 	ctx, cancel := context.WithCancel(context.TODO())
 	srv := &Server{
-		txs:    txs,
-		ctx:    ctx,
-		cancel: cancel,
-		from:   form,
+		txs:         txs,
+		ctx:         ctx,
+		cancel:      cancel,
+		connections: make(map[Connection]struct{}),
+		from:        form,
 	}
 	return srv
 }
@@ -270,24 +275,69 @@ func (s *Server) ListenTLSServer(addr, certFile, keyFile string) error {
 }
 
 func (s *Server) Close() {
-	if s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
+	if s == nil {
+		return
 	}
-	if s.udpConn != nil {
-		s.udpConn.Close()
-		s.udpConn = nil
+	s.closeOnce.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		if s.udpConn != nil {
+			_ = s.udpConn.Close()
+			s.udpConn = nil
+		}
+		if s.tcpListener != nil {
+			_ = s.tcpListener.Close()
+			s.tcpListener = nil
+		}
+		if s.tlsListener != nil {
+			_ = s.tlsListener.Close()
+			s.tlsListener = nil
+		}
+		s.closeActiveConnections()
+		if s.txs != nil {
+			s.txs.close()
+		}
+	})
+}
+
+func (s *Server) trackConnection(conn Connection) bool {
+	if s == nil || conn == nil {
+		return false
 	}
-	if s.tcpListener != nil {
-		s.tcpListener.Close()
-		s.tcpListener = nil
+	s.connectionMu.Lock()
+	defer s.connectionMu.Unlock()
+	select {
+	case <-s.ctx.Done():
+		return false
+	default:
 	}
-	if s.tlsListener != nil {
-		s.tlsListener.Close()
-		s.tlsListener = nil
+	if s.connections == nil {
+		s.connections = make(map[Connection]struct{})
 	}
-	if s.txs != nil {
-		s.txs.close()
+	s.connections[conn] = struct{}{}
+	return true
+}
+
+func (s *Server) untrackConnection(conn Connection) {
+	if s == nil || conn == nil {
+		return
+	}
+	s.connectionMu.Lock()
+	delete(s.connections, conn)
+	s.connectionMu.Unlock()
+}
+
+func (s *Server) closeActiveConnections() {
+	s.connectionMu.Lock()
+	connections := make([]Connection, 0, len(s.connections))
+	for conn := range s.connections {
+		connections = append(connections, conn)
+		delete(s.connections, conn)
+	}
+	s.connectionMu.Unlock()
+	for _, conn := range connections {
+		_ = conn.Close()
 	}
 }
 
@@ -302,7 +352,12 @@ func (s *Server) ProcessTCPConnection(conn Connection) {
 	if conn == nil {
 		return
 	}
+	if !s.trackConnection(conn) {
+		_ = conn.Close()
+		return
+	}
 	defer conn.Close()
+	defer s.untrackConnection(conn)
 	reader := bufio.NewReaderSize(conn, maxSIPHeaderLineBytes+1)
 
 	parser := newParser()

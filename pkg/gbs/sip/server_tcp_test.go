@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -181,6 +182,57 @@ func TestContentLengthLimitsApplyToTCPAndPacketParser(t *testing.T) {
 	packet := Packet{bodylength: maxSIPBodyBytes + 1}
 	if _, err := packet.getBody(); err == nil {
 		t.Fatal("oversized packet body allocation was accepted")
+	}
+}
+
+func TestServerCloseTerminatesActiveTCPConnections(t *testing.T) {
+	server := NewServer(&Address{})
+	serverPipe, clientPipe := net.Pipe()
+	defer clientPipe.Close()
+	connection := NewTCPConnection(&sipTestTCPConn{
+		Conn:   serverPipe,
+		local:  &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 5060},
+		remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 5060},
+	})
+	done := make(chan struct{})
+	go func() {
+		server.ProcessTCPConnection(connection)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		server.connectionMu.Lock()
+		tracked := len(server.connections) == 1
+		server.connectionMu.Unlock()
+		if tracked {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("TCP connection was not tracked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	var wait sync.WaitGroup
+	for range 8 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			server.Close()
+		}()
+	}
+	wait.Wait()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("active TCP read loop survived Server.Close")
+	}
+	server.connectionMu.Lock()
+	remaining := len(server.connections)
+	server.connectionMu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("tracked TCP connections after close = %d", remaining)
 	}
 }
 
