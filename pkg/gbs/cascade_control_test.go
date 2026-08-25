@@ -53,6 +53,22 @@ func TestValidateCascadeDeviceControlVersionAndScope(t *testing.T) {
 	if err := validateCascadeDeviceControl(&precise, GBVersion30, GBVersion30); err != nil {
 		t.Fatalf("3.0 precise PTZ rejected: %v", err)
 	}
+	track := base
+	track.PTZCmd = ""
+	track.TargetTrack = "Manual"
+	track.DeviceID2 = track.DeviceID
+	track.TargetArea = &deviceControlA23DragZoom{Length: 1920, Width: 1080, MidPointX: 960, MidPointY: 540, LengthX: 300, LengthY: 200}
+	if err := validateCascadeDeviceControl(&track, GBVersion30, GBVersion20); err == nil {
+		t.Fatal("2.0 downstream accepted 3.0 TargetTrack")
+	}
+	if err := validateCascadeDeviceControl(&track, GBVersion30, GBVersion30); err != nil {
+		t.Fatalf("3.0 TargetTrack rejected: %v", err)
+	}
+	crossChannelTrack := track
+	crossChannelTrack.DeviceID2 = gb10ChannelID
+	if err := validateCascadeDeviceControl(&crossChannelTrack, GBVersion30, GBVersion30); err == nil {
+		t.Fatal("cascade TargetTrack accepted an unshared DeviceID2")
+	}
 	reboot := base
 	reboot.PTZCmd = ""
 	reboot.TeleBoot = "Boot"

@@ -159,14 +159,22 @@ type BasicParamConfigInput struct {
 
 // DeviceConfigInput 是 2014 修改补充文件定义的统一设备配置写入请求。
 type DeviceConfigInput struct {
-	DeviceID         string
-	TargetID         string
-	Timeout          time.Duration
-	BasicParam       *BasicParam
-	VideoParamConfig *VideoParamConfigWrite
-	AudioParamConfig *AudioParamConfigWrite
-	SVACEncodeConfig *SVACEncodeConfig
-	SVACDecodeConfig *SVACDecodeConfig
+	DeviceID            string
+	TargetID            string
+	Timeout             time.Duration
+	BasicParam          *BasicParam
+	VideoParamConfig    *VideoParamConfigWrite
+	AudioParamConfig    *AudioParamConfigWrite
+	SVACEncodeConfig    *SVACEncodeConfig
+	SVACDecodeConfig    *SVACDecodeConfig
+	VideoParamAttribute *VideoParamAttribute
+	VideoRecordPlan     *VideoRecordPlan
+	VideoAlarmRecord    *VideoAlarmRecord
+	PictureMask         *PictureMask
+	FrameMirror         *FrameMirror
+	AlarmReport         *AlarmReport
+	OSDConfig           *OSDConfig
+	SnapShotConfig      *SnapShot
 }
 
 type pendingDeviceConfig struct {
@@ -375,10 +383,90 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 		request.SVACDecodeConfig = &config
 		configured = true
 	}
+	sections2022 := []struct {
+		name    string
+		value   string
+		present bool
+		set     func(string)
+	}{
+		{"VideoParamAttribute", innerXML(in.VideoParamAttribute), in.VideoParamAttribute != nil, func(value string) { request.VideoParamAttribute = &VideoParamAttribute{InnerXML: value} }},
+		{"VideoRecordPlan", innerXML(in.VideoRecordPlan), in.VideoRecordPlan != nil, func(value string) { request.VideoRecordPlan = &VideoRecordPlan{InnerXML: value} }},
+		{"VideoAlarmRecord", innerXML(in.VideoAlarmRecord), in.VideoAlarmRecord != nil, func(value string) { request.VideoAlarmRecord = &VideoAlarmRecord{InnerXML: value} }},
+		{"PictureMask", innerXML(in.PictureMask), in.PictureMask != nil, func(value string) { request.PictureMask = &PictureMask{InnerXML: value} }},
+		{"FrameMirror", innerXML(in.FrameMirror), in.FrameMirror != nil, func(value string) { request.FrameMirror = &FrameMirror{InnerXML: value} }},
+		{"AlarmReport", innerXML(in.AlarmReport), in.AlarmReport != nil, func(value string) { request.AlarmReport = &AlarmReport{InnerXML: value} }},
+		{"OSDConfig", innerXML(in.OSDConfig), in.OSDConfig != nil, func(value string) { request.OSDConfig = &OSDConfig{InnerXML: value} }},
+	}
+	for _, section := range sections2022 {
+		if !section.present {
+			continue
+		}
+		if err := g.requireGBVersionAtLeast(in.DeviceID, gbVersion2022, "设备配置("+section.name+")"); err != nil {
+			return nil, err
+		}
+		if err := validateDeviceConfigXMLFragment(section.name, section.value); err != nil {
+			return nil, err
+		}
+		section.set(section.value)
+		configured = true
+	}
+	if in.SnapShotConfig != nil {
+		if err := g.requireGBVersionAtLeast(in.DeviceID, gbVersion2022, "设备配置(SnapShotConfig)"); err != nil {
+			return nil, err
+		}
+		if err := g.requireGBFeature(in.DeviceID, "snapshot", "设备配置(SnapShotConfig)", func(c GBCapabilities) bool { return c.Snapshot }); err != nil {
+			return nil, err
+		}
+		config := *in.SnapShotConfig
+		if config.SnapNum < 1 || config.SnapNum > 10 || config.Interval < 1 || strings.TrimSpace(config.UploadURL) == "" {
+			return nil, fmt.Errorf("SnapShotConfig requires snap_num 1~10, interval >= 1 and upload_url")
+		}
+		if err := validateGBSessionID(strings.TrimSpace(config.SessionID)); err != nil {
+			return nil, fmt.Errorf("SnapShotConfig: %w", err)
+		}
+		config.UploadURL = strings.TrimSpace(config.UploadURL)
+		config.SessionID = strings.TrimSpace(config.SessionID)
+		request.SnapShotConfig = &config
+		configured = true
+	}
 	if !configured {
 		return nil, fmt.Errorf("DeviceConfig requires at least one configuration section")
 	}
 	return request, nil
+}
+
+func innerXML(value any) string {
+	switch section := value.(type) {
+	case *VideoParamAttribute:
+		if section != nil {
+			return strings.TrimSpace(section.InnerXML)
+		}
+	case *VideoRecordPlan:
+		if section != nil {
+			return strings.TrimSpace(section.InnerXML)
+		}
+	case *VideoAlarmRecord:
+		if section != nil {
+			return strings.TrimSpace(section.InnerXML)
+		}
+	case *PictureMask:
+		if section != nil {
+			return strings.TrimSpace(section.InnerXML)
+		}
+	case *FrameMirror:
+		if section != nil {
+			return strings.TrimSpace(section.InnerXML)
+		}
+	case *AlarmReport:
+		if section != nil {
+			return strings.TrimSpace(section.InnerXML)
+		}
+	case *OSDConfig:
+		if section != nil {
+			return strings.TrimSpace(section.InnerXML)
+		}
+	}
+	return ""
 }
 
 func validateVideoParamConfig(config *VideoParamConfigWrite) error {

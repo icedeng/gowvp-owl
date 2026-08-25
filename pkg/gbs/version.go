@@ -49,8 +49,10 @@ type GBCapabilities struct {
 	CruiseTrackQuery  bool
 	SDCard            bool
 	H265              bool
+	AAC               bool
 	Snapshot          bool
 	Upgrade           bool
+	TargetTrack       bool
 }
 
 // ParseGBProtocolVersion 同时兼容附录 I 版本号和项目历史年份值。
@@ -183,8 +185,10 @@ func (v GBProtocolVersion) Capabilities() GBCapabilities {
 			CruiseTrackQuery: true,
 			SDCard:           true,
 			H265:             true,
+			AAC:              true,
 			Snapshot:         true,
 			Upgrade:          true,
+			TargetTrack:      true,
 		}
 	default:
 		return GBCapabilities{}
@@ -217,8 +221,10 @@ func (v GBProtocolVersion) CapabilityNames() []string {
 		{"cruise_track_query", c.CruiseTrackQuery},
 		{"sdcard", c.SDCard},
 		{"h265", c.H265},
+		{"aac", c.AAC},
 		{"snapshot", c.Snapshot},
 		{"upgrade", c.Upgrade},
+		{"target_track", c.TargetTrack},
 	}
 	out := make([]string, 0, len(checks))
 	for _, check := range checks {

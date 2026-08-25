@@ -16,7 +16,8 @@ func TestCapabilityNamesByVersion(t *testing.T) {
 	if names := GBVersion20.CapabilityNames(); !slices.Contains(names, "rtp_over_tcp") || slices.Contains(names, "snapshot") {
 		t.Fatalf("2.0 capabilities = %v", names)
 	}
-	if names := GBVersion30.CapabilityNames(); !slices.Contains(names, "snapshot") || !slices.Contains(names, "upgrade") {
+	if names := GBVersion30.CapabilityNames(); !slices.Contains(names, "snapshot") || !slices.Contains(names, "upgrade") ||
+		!slices.Contains(names, "aac") || !slices.Contains(names, "target_track") {
 		t.Fatalf("3.0 capabilities = %v", names)
 	}
 }

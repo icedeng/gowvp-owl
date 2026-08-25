@@ -10,16 +10,23 @@ const snapShotConfig = "SnapShotConfig" // 图像抓拍配置
 
 // 设备配置 A.2.3.2.1
 type DeviceConfigRequest struct {
-	XMLName          xml.Name               `xml:"Control"`
-	CmdType          string                 `xml:"CmdType"`  // 命令类型：设备配置查询(必选)
-	SN               int32                  `xml:"SN"`       // 命令序列号(必选)
-	DeviceID         string                 `xml:"DeviceID"` // 目标设备编码(必选)
-	BasicParam       *BasicParam            `xml:"BasicParam,omitempty"`
-	VideoParamConfig *VideoParamConfigWrite `xml:"VideoParamConfig,omitempty"`
-	AudioParamConfig *AudioParamConfigWrite `xml:"AudioParamConfig,omitempty"`
-	SVACEncodeConfig *SVACEncodeConfig      `xml:"SVACEncodeConfig,omitempty"`
-	SVACDecodeConfig *SVACDecodeConfig      `xml:"SVACDecodeConfig,omitempty"`
-	SnapShotConfig   *SnapShot              `xml:"SnapShotConfig"`
+	XMLName             xml.Name               `xml:"Control"`
+	CmdType             string                 `xml:"CmdType"`  // 命令类型：设备配置查询(必选)
+	SN                  int32                  `xml:"SN"`       // 命令序列号(必选)
+	DeviceID            string                 `xml:"DeviceID"` // 目标设备编码(必选)
+	BasicParam          *BasicParam            `xml:"BasicParam,omitempty"`
+	VideoParamConfig    *VideoParamConfigWrite `xml:"VideoParamConfig,omitempty"`
+	AudioParamConfig    *AudioParamConfigWrite `xml:"AudioParamConfig,omitempty"`
+	SVACEncodeConfig    *SVACEncodeConfig      `xml:"SVACEncodeConfig,omitempty"`
+	SVACDecodeConfig    *SVACDecodeConfig      `xml:"SVACDecodeConfig,omitempty"`
+	VideoParamAttribute *VideoParamAttribute   `xml:"VideoParamAttribute,omitempty"`
+	VideoRecordPlan     *VideoRecordPlan       `xml:"VideoRecordPlan,omitempty"`
+	VideoAlarmRecord    *VideoAlarmRecord      `xml:"VideoAlarmRecord,omitempty"`
+	PictureMask         *PictureMask           `xml:"PictureMask,omitempty"`
+	FrameMirror         *FrameMirror           `xml:"FrameMirror,omitempty"`
+	AlarmReport         *AlarmReport           `xml:"AlarmReport,omitempty"`
+	OSDConfig           *OSDConfig             `xml:"OSDConfig,omitempty"`
+	SnapShotConfig      *SnapShot              `xml:"SnapShotConfig,omitempty"`
 }
 
 type VideoParamConfigWrite struct {

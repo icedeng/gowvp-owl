@@ -115,6 +115,8 @@
   RequireMessageAuth = false
   # 是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理
   PTZWeakConfirm = false
+  # GB/T 28181-2022 注册重定向目标 SIP URI；为空不重定向，仅对声明 3.0 的设备生效
+  RegisterRedirect = ''
 
   # 设备心跳与注册历史保留策略；两个条件同时生效，0 表示不限制
   [Sip.DeviceHistory]

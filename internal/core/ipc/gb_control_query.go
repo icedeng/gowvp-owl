@@ -80,7 +80,9 @@ func (c Core) GBDeviceQuery(ctx context.Context, deviceID string, in *GBDeviceQu
 
 // GBDeviceConfig 下发 GB/T 28181-2014 设备配置。
 func (c Core) GBDeviceConfig(ctx context.Context, deviceID string, in *GBDeviceConfigInput) (*GBDeviceConfigOutput, error) {
-	if in == nil || (in.BasicParam == nil && in.VideoParamConfig == nil && in.AudioParamConfig == nil && in.SVACEncodeConfig == nil && in.SVACDecodeConfig == nil) {
+	if in == nil || (in.BasicParam == nil && in.VideoParamConfig == nil && in.AudioParamConfig == nil && in.SVACEncodeConfig == nil && in.SVACDecodeConfig == nil &&
+		in.VideoParamAttribute == nil && in.VideoRecordPlan == nil && in.VideoAlarmRecord == nil && in.PictureMask == nil &&
+		in.FrameMirror == nil && in.AlarmReport == nil && in.OSDConfig == nil && in.SnapShotConfig == nil) {
 		return nil, reason.ErrBadRequest.SetMsg("at least one device config section is required")
 	}
 	dev, err := c.GetDevice(ctx, deviceID)

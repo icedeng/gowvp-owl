@@ -27,6 +27,7 @@ type QueryState struct {
 	PTZPosition    *PTZPositionData     `json:"ptz_position,omitempty"`
 	SDCards        []SDCardItemData     `json:"sd_cards,omitempty"`
 	MobilePosition *MobilePositionData  `json:"mobile_position,omitempty"`
+	VideoUpload    *VideoUploadData     `json:"video_upload,omitempty"`
 	ConfigDownload *ConfigDownloadState `json:"config_download,omitempty"`
 	DeviceConfig   *DeviceConfigState   `json:"device_config,omitempty"`
 	// AppendixA4 保存附录 A.4 扩展对象结构化快照。
@@ -104,6 +105,13 @@ type MobilePositionData struct {
 	Altitude  *float64 `json:"altitude,omitempty"`
 }
 
+// VideoUploadData 是 2022 A.2.5.8 设备实时视音频回传通知。
+type VideoUploadData struct {
+	Time      string   `json:"time"`
+	Longitude *float64 `json:"longitude,omitempty"`
+	Latitude  *float64 `json:"latitude,omitempty"`
+}
+
 // ConfigDownloadState 是配置查询结果快照。
 type ConfigDownloadState struct {
 	CmdType             string               `json:"cmd_type"`
@@ -178,6 +186,8 @@ func (g *GB28181API) decodeAndStoreQueryData(deviceID, cmdType string, body []by
 		data = decodeSDCardStatusData(body)
 	case "MobilePosition":
 		data = decodeMobilePositionData(body)
+	case "VideoUploadNotify":
+		data = decodeVideoUploadData(body)
 	case "ConfigDownload":
 		data = decodeConfigDownloadState(body)
 	default:
@@ -237,6 +247,10 @@ func (g *GB28181API) storeQueryState(deviceID, cmdType string, data any) {
 	case "MobilePosition":
 		if s, ok := data.(*MobilePositionData); ok {
 			state.MobilePosition = s
+		}
+	case "VideoUploadNotify":
+		if s, ok := data.(*VideoUploadData); ok {
+			state.VideoUpload = s
 		}
 	case "ConfigDownload":
 		if s, ok := data.(*ConfigDownloadState); ok {
@@ -592,6 +606,26 @@ func decodeMobilePositionData(body []byte) *MobilePositionData {
 		Direction: msg.Direction,
 		Altitude:  msg.Altitude,
 	}
+}
+
+func decodeVideoUploadData(body []byte) *VideoUploadData {
+	var msg struct {
+		Time      string   `xml:"Time"`
+		Longitude *float64 `xml:"Longitude"`
+		Latitude  *float64 `xml:"Latitude"`
+	}
+	if err := sip.XMLDecode(body, &msg); err != nil || strings.TrimSpace(msg.Time) == "" {
+		return nil
+	}
+	return &VideoUploadData{Time: strings.TrimSpace(msg.Time), Longitude: msg.Longitude, Latitude: msg.Latitude}
+}
+
+func (g *GB28181API) sipMessageVideoUploadNotify(ctx *sip.Context) {
+	if err := g.requireGBVersionAtLeast(ctx.DeviceID, gbVersion2022, "设备实时视音频回传通知(A.2.5.8)"); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
+	g.sipMessageQueryGeneric(ctx)
 }
 
 func decodeConfigDownloadState(body []byte) *ConfigDownloadState {

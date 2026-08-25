@@ -10,19 +10,41 @@ import (
 	"github.com/ixugo/netpulse/ip"
 )
 
-func (g *GB28181API) QuerySnapshot(deviceID, targetID, coverKey string) error {
+const maxSnapshotStates = 1024
+
+type SnapshotState struct {
+	DeviceID      string    `json:"device_id"`
+	ChannelID     string    `json:"channel_id,omitempty"`
+	CoverKey      string    `json:"cover_key,omitempty"`
+	SessionID     string    `json:"session_id"`
+	Status        string    `json:"status"`
+	ExpectedCount int       `json:"expected_count"`
+	ReceivedCount int       `json:"received_count"`
+	FileIDs       []string  `json:"file_ids,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type snapshotFinishedNotify struct {
+	CmdType   string   `xml:"CmdType"`
+	SN        int      `xml:"SN"`
+	DeviceID  string   `xml:"DeviceID"`
+	SessionID string   `xml:"SessionID"`
+	FileIDs   []string `xml:"SnapShotList>SnapShotFileID"`
+}
+
+func (g *GB28181API) QuerySnapshot(deviceID, targetID, coverKey string) (*SnapshotState, error) {
 	slog.Debug("QuerySnapshot", "deviceID", deviceID)
 	if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "图像抓拍(9.14)"); err != nil {
-		return err
+		return nil, err
 	}
 	if err := g.requireGBFeature(deviceID, "snapshot", "图像抓拍(9.14)", func(c GBCapabilities) bool {
 		return c.Snapshot
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	ipc, ok := g.svr.memoryStorer.Load(deviceID)
 	if !ok {
-		return ErrDeviceOffline
+		return nil, ErrDeviceOffline
 	}
 
 	sn := int32(g.nextControlSN())
@@ -41,10 +63,10 @@ func (g *GB28181API) QuerySnapshot(deviceID, targetID, coverKey string) error {
 
 	tx, err := g.svr.wrapRequest(ipc, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if _, err = sipResponse(tx); err != nil {
-		return err
+		return nil, err
 	}
 
 	timer := time.NewTimer(8 * time.Second)
@@ -52,12 +74,149 @@ func (g *GB28181API) QuerySnapshot(deviceID, targetID, coverKey string) error {
 	select {
 	case resp := <-pending.wait:
 		if strings.ToUpper(strings.TrimSpace(resp.Result)) == "OK" || strings.TrimSpace(resp.Result) == "" {
-			return nil
+			state := SnapshotState{
+				DeviceID: deviceID, ChannelID: targetID, CoverKey: coverKey, SessionID: sessionID,
+				Status: "accepted", ExpectedCount: 1, UpdatedAt: time.Now(),
+			}
+			g.storeSnapshotState(state)
+			return &state, nil
 		}
-		return fmt.Errorf("snapshot config failed: %s", resp.Result)
+		return nil, fmt.Errorf("snapshot config failed: %s", resp.Result)
 	case <-timer.C:
-		return fmt.Errorf("wait snapshot response timeout")
+		return nil, fmt.Errorf("wait snapshot response timeout")
 	}
+}
+
+func snapshotStateKey(deviceID, sessionID string) string {
+	return strings.TrimSpace(deviceID) + ":" + strings.TrimSpace(sessionID)
+}
+
+func (g *GB28181API) storeSnapshotState(state SnapshotState) {
+	if g == nil || strings.TrimSpace(state.DeviceID) == "" || strings.TrimSpace(state.SessionID) == "" {
+		return
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now()
+	}
+	state.FileIDs = append([]string(nil), state.FileIDs...)
+	g.snapshotStateMu.Lock()
+	if g.snapshotStates == nil {
+		g.snapshotStates = make(map[string]SnapshotState)
+	}
+	key := snapshotStateKey(state.DeviceID, state.SessionID)
+	g.snapshotStates[key] = state
+	if len(g.snapshotStates) > maxSnapshotStates {
+		oldestKey := ""
+		oldestAt := state.UpdatedAt
+		for candidateKey, candidate := range g.snapshotStates {
+			if candidateKey != key && (oldestKey == "" || candidate.UpdatedAt.Before(oldestAt)) {
+				oldestKey = candidateKey
+				oldestAt = candidate.UpdatedAt
+			}
+		}
+		delete(g.snapshotStates, oldestKey)
+	}
+	g.snapshotStateMu.Unlock()
+}
+
+func (g *GB28181API) SnapshotState(deviceID, sessionID string) (SnapshotState, bool) {
+	if g == nil {
+		return SnapshotState{}, false
+	}
+	g.snapshotStateMu.RLock()
+	state, ok := g.snapshotStates[snapshotStateKey(deviceID, sessionID)]
+	g.snapshotStateMu.RUnlock()
+	state.FileIDs = append([]string(nil), state.FileIDs...)
+	return state, ok
+}
+
+// ValidateSnapshotUpload 校验公开上传回调只能写入平台已创建的抓拍会话。
+func (g *GB28181API) ValidateSnapshotUpload(deviceID, coverKey, sessionID string) error {
+	state, ok := g.SnapshotState(deviceID, sessionID)
+	if !ok {
+		return fmt.Errorf("snapshot session not found")
+	}
+	if state.CoverKey != "" && strings.TrimSpace(coverKey) != state.CoverKey {
+		return fmt.Errorf("snapshot cover key mismatch")
+	}
+	return nil
+}
+
+func (g *GB28181API) MarkSnapshotUploaded(deviceID, sessionID string) {
+	state, ok := g.SnapshotState(deviceID, sessionID)
+	if !ok {
+		return
+	}
+	state.ReceivedCount++
+	if state.Status != "completed" && state.Status != "failed" && state.Status != "partial_failed" {
+		state.Status = "uploading"
+	}
+	state.UpdatedAt = time.Now()
+	g.storeSnapshotState(state)
+}
+
+// sipMessageSnapshotFinished 处理 2022 A.2.5.7 图像抓拍传输完成通知。
+func (g *GB28181API) sipMessageSnapshotFinished(ctx *sip.Context) {
+	if err := g.requireGBVersionAtLeast(ctx.DeviceID, gbVersion2022, "图像抓拍完成通知(A.2.5.7)"); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
+	var msg snapshotFinishedNotify
+	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
+		ctx.String(400, ErrXMLDecode.Error())
+		return
+	}
+	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	msg.SessionID = strings.TrimSpace(msg.SessionID)
+	if msg.DeviceID == "" || validateGBSessionID(msg.SessionID) != nil {
+		ctx.String(400, "invalid UploadSnapShotFinished notification")
+		return
+	}
+	if msg.DeviceID != ctx.DeviceID {
+		if _, ok := g.svr.memoryStorer.GetChannel(ctx.DeviceID, msg.DeviceID); !ok {
+			ctx.String(400, "UploadSnapShotFinished target mismatch")
+			return
+		}
+	}
+	state, ok := g.SnapshotState(ctx.DeviceID, msg.SessionID)
+	if !ok {
+		state = SnapshotState{DeviceID: ctx.DeviceID, ChannelID: msg.DeviceID, SessionID: msg.SessionID}
+	}
+	state.FileIDs = state.FileIDs[:0]
+	seen := make(map[string]struct{}, len(msg.FileIDs))
+	for _, fileID := range msg.FileIDs {
+		fileID = strings.TrimSpace(fileID)
+		if !validSnapshotFileID(fileID, msg.DeviceID) {
+			continue
+		}
+		if _, ok := seen[fileID]; !ok && len(state.FileIDs) < 10 {
+			seen[fileID] = struct{}{}
+			state.FileIDs = append(state.FileIDs, fileID)
+		}
+	}
+	state.UpdatedAt = time.Now()
+	switch {
+	case len(state.FileIDs) == 0:
+		state.Status = "failed"
+	case state.ExpectedCount > 0 && len(state.FileIDs) < state.ExpectedCount:
+		state.Status = "partial_failed"
+	default:
+		state.Status = "completed"
+	}
+	g.storeSnapshotState(state)
+	ctx.String(200, "OK")
+}
+
+func validSnapshotFileID(value, deviceID string) bool {
+	if len(value) != 41 || !strings.HasPrefix(value, strings.TrimSpace(deviceID)+"02") {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < '0' || value[index] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // buildSnapshotUploadURL 生成抓拍回传地址，避免硬编码固定地址。

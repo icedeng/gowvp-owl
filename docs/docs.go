@@ -663,7 +663,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/api.SwaggerMessageResponse"
+                            "$ref": "#/definitions/ipc.UpgradeOutput"
                         }
                     },
                     "400": {
@@ -1915,6 +1915,52 @@ const docTemplate = `{
                 }
             }
         },
+        "/channels/{id}/snapshot/{session_id}/status": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Channel"
+                ],
+                "summary": "查询 GB28181 图像抓拍状态",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "通道ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "抓拍会话ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/gbs.SnapshotState"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/channels/{id}/upgrade": {
             "post": {
                 "security": [
@@ -1955,6 +2001,53 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/api.SwaggerMessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/channels/{id}/upgrade/{session_id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "accepted 仅表示设备已接受升级命令；completed/failed 为设备上报的最终状态。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Channel"
+                ],
+                "summary": "查询设备升级状态",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "通道ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "升级会话ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/gbs.UpgradeState"
                         }
                     },
                     "400": {
@@ -2600,7 +2693,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "下发 GB/T 28181-2014 DeviceConfig；支持 BasicParam、VideoParamConfig、AudioParamConfig、SVACEncodeConfig 和 SVACDecodeConfig，可在一次请求中组合多个配置段。\nSVAC 的 ` + "`" + `inner_xml` + "`" + ` 只填写配置节点内部的标准 XML；服务端会校验 XML 完整性并拒绝指令/DOCTYPE。",
+                "description": "下发 DeviceConfig；支持 2014 的 BasicParam、VideoParamConfig、AudioParamConfig、SVAC，以及 2022 的视频属性、录像计划、报警录像、遮挡、翻转、报警上报、OSD 和抓拍配置。\nXML 配置的 ` + "`" + `inner_xml` + "`" + ` 只填写配置节点内部的标准 XML；服务端会校验 XML 完整性并拒绝指令/DOCTYPE。2022 扩展仅允许有效版本 3.0。",
                 "consumes": [
                     "application/json"
                 ],
@@ -2652,7 +2745,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "执行 GB/T 28181 附录 A.2.3 统一设备控制命令。\n常见 ` + "`" + `action` + "`" + `：` + "`" + `ptz_cmd` + "`" + `、` + "`" + `teleboot` + "`" + `、` + "`" + `record_cmd` + "`" + `、` + "`" + `guard_cmd` + "`" + `、` + "`" + `alarm_cmd` + "`" + `、` + "`" + `ifame_cmd` + "`" + `、` + "`" + `drag_zoom_in` + "`" + `、` + "`" + `drag_zoom_out` + "`" + `、` + "`" + `home_position` + "`" + `、` + "`" + `ptz_precise` + "`" + `。\n` + "`" + `ptz_cmd` + "`" + ` 常见值：` + "`" + `stop` + "`" + `、` + "`" + `left` + "`" + `、` + "`" + `right` + "`" + `、` + "`" + `up` + "`" + `、` + "`" + `down` + "`" + `、` + "`" + `left_up` + "`" + `、` + "`" + `left_down` + "`" + `、` + "`" + `right_up` + "`" + `、` + "`" + `right_down` + "`" + `、` + "`" + `zoom_in` + "`" + `、` + "`" + `zoom_out` + "`" + `、` + "`" + `focus_near` + "`" + `、` + "`" + `focus_far` + "`" + `、` + "`" + `iris_open` + "`" + `、` + "`" + `iris_close` + "`" + `、` + "`" + `preset_set` + "`" + `、` + "`" + `preset_call` + "`" + `、` + "`" + `preset_delete` + "`" + `、` + "`" + `cruise_add` + "`" + `、` + "`" + `cruise_del` + "`" + `、` + "`" + `cruise_speed` + "`" + `、` + "`" + `cruise_stay` + "`" + `、` + "`" + `cruise_start` + "`" + `、` + "`" + `scan_start` + "`" + `、` + "`" + `scan_left` + "`" + `、` + "`" + `scan_right` + "`" + `、` + "`" + `scan_speed` + "`" + `、` + "`" + `aux_on` + "`" + `、` + "`" + `aux_off` + "`" + `。\n调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 所选动作受设备能力和协议版本支持。\n失败场景：1. ` + "`" + `action` + "`" + ` 或 ` + "`" + `ptz_cmd` + "`" + ` 非法；2. 2016/2022 差异导致设备不支持；3. 设备离线；4. 等待 Response 超时。\nPTZCmd 示例：` + "`" + `{ \"target_id\": \"34020000001320000001\", \"action\": \"ptz_cmd\", \"ptz_cmd\": \"preset_call\", \"timeout\": 5 }` + "`" + `\n精确 PTZ 示例：` + "`" + `{ \"action\": \"ptz_precise\", \"ptz_precise\": { \"pan\": 10.5, \"tilt\": 5.2, \"zoom\": 2.0 }, \"timeout\": 5 }` + "`" + `\n成功响应示例：` + "`" + `{ \"sn\": 12, \"device_id\": \"34020000002000000001\", \"target_id\": \"34020000001320000001\", \"result\": \"OK\" }` + "`" + `",
+                "description": "执行 GB/T 28181 附录 A.2.3 统一设备控制命令。\n常见 ` + "`" + `action` + "`" + `：` + "`" + `ptz_cmd` + "`" + `、` + "`" + `teleboot` + "`" + `、` + "`" + `record_cmd` + "`" + `、` + "`" + `guard_cmd` + "`" + `、` + "`" + `alarm_cmd` + "`" + `、` + "`" + `ifame_cmd` + "`" + `、` + "`" + `drag_zoom_in` + "`" + `、` + "`" + `drag_zoom_out` + "`" + `、` + "`" + `home_position` + "`" + `、` + "`" + `ptz_precise` + "`" + `、` + "`" + `target_track` + "`" + `。\n` + "`" + `ptz_cmd` + "`" + ` 常见值：` + "`" + `stop` + "`" + `、` + "`" + `left` + "`" + `、` + "`" + `right` + "`" + `、` + "`" + `up` + "`" + `、` + "`" + `down` + "`" + `、` + "`" + `left_up` + "`" + `、` + "`" + `left_down` + "`" + `、` + "`" + `right_up` + "`" + `、` + "`" + `right_down` + "`" + `、` + "`" + `zoom_in` + "`" + `、` + "`" + `zoom_out` + "`" + `、` + "`" + `focus_near` + "`" + `、` + "`" + `focus_far` + "`" + `、` + "`" + `iris_open` + "`" + `、` + "`" + `iris_close` + "`" + `、` + "`" + `preset_set` + "`" + `、` + "`" + `preset_call` + "`" + `、` + "`" + `preset_delete` + "`" + `、` + "`" + `cruise_add` + "`" + `、` + "`" + `cruise_del` + "`" + `、` + "`" + `cruise_speed` + "`" + `、` + "`" + `cruise_stay` + "`" + `、` + "`" + `cruise_start` + "`" + `、` + "`" + `scan_start` + "`" + `、` + "`" + `scan_left` + "`" + `、` + "`" + `scan_right` + "`" + `、` + "`" + `scan_speed` + "`" + `、` + "`" + `aux_on` + "`" + `、` + "`" + `aux_off` + "`" + `。\n调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 所选动作受设备能力和协议版本支持。\n失败场景：1. ` + "`" + `action` + "`" + ` 或 ` + "`" + `ptz_cmd` + "`" + ` 非法；2. 2016/2022 差异导致设备不支持；3. 设备离线；4. 等待 Response 超时。\nPTZCmd 示例：` + "`" + `{ \"target_id\": \"34020000001320000001\", \"action\": \"ptz_cmd\", \"ptz_cmd\": \"preset_call\", \"timeout\": 5 }` + "`" + `\n精确 PTZ 示例：` + "`" + `{ \"action\": \"ptz_precise\", \"ptz_precise\": { \"pan\": 10.5, \"tilt\": 5.2, \"zoom\": 2.0 }, \"timeout\": 5 }` + "`" + `\n手动目标跟踪示例：` + "`" + `{ \"action\": \"target_track\", \"target_track\": { \"mode\": \"Manual\", \"target_area\": { \"length\": 1920, \"width\": 1080, \"mid_point_x\": 960, \"mid_point_y\": 540, \"length_x\": 300, \"length_y\": 200 } } }` + "`" + `\n成功响应示例：` + "`" + `{ \"sn\": 12, \"device_id\": \"34020000002000000001\", \"target_id\": \"34020000001320000001\", \"result\": \"OK\" }` + "`" + `",
                 "consumes": [
                     "application/json"
                 ],
@@ -4089,11 +4182,26 @@ const docTemplate = `{
         "api.SwaggerGBDeviceConfigInput": {
             "type": "object",
             "properties": {
+                "alarm_report": {
+                    "$ref": "#/definitions/api.SwaggerGBXMLConfigInput"
+                },
                 "audio_param_config": {
                     "$ref": "#/definitions/api.SwaggerGBAudioParamConfigInput"
                 },
                 "basic_param": {
                     "$ref": "#/definitions/api.SwaggerGBBasicParamInput"
+                },
+                "frame_mirror": {
+                    "$ref": "#/definitions/api.SwaggerGBXMLConfigInput"
+                },
+                "osd_config": {
+                    "$ref": "#/definitions/api.SwaggerGBXMLConfigInput"
+                },
+                "picture_mask": {
+                    "$ref": "#/definitions/api.SwaggerGBXMLConfigInput"
+                },
+                "snapshot_config": {
+                    "$ref": "#/definitions/api.SwaggerGBSnapshotConfigInput"
                 },
                 "svac_decode_config": {
                     "$ref": "#/definitions/api.SwaggerGBXMLConfigInput"
@@ -4109,8 +4217,17 @@ const docTemplate = `{
                     "type": "integer",
                     "example": 8
                 },
+                "video_alarm_record": {
+                    "$ref": "#/definitions/api.SwaggerGBXMLConfigInput"
+                },
+                "video_param_attribute": {
+                    "$ref": "#/definitions/api.SwaggerGBXMLConfigInput"
+                },
                 "video_param_config": {
                     "$ref": "#/definitions/api.SwaggerGBVideoParamConfigInput"
+                },
+                "video_record_plan": {
+                    "$ref": "#/definitions/api.SwaggerGBXMLConfigInput"
                 }
             }
         },
@@ -4207,6 +4324,14 @@ const docTemplate = `{
                     "description": "目标设备或通道国标编码；为空时默认当前设备",
                     "type": "string",
                     "example": "34020000001320000001"
+                },
+                "target_track": {
+                    "description": "2022 目标跟踪参数",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/api.SwaggerGBTargetTrackInput"
+                        }
+                    ]
                 },
                 "timeout": {
                     "description": "等待设备响应超时时间，单位秒",
@@ -4439,6 +4564,43 @@ const docTemplate = `{
                     "description": "精确变倍值",
                     "type": "number",
                     "example": 2
+                }
+            }
+        },
+        "api.SwaggerGBSnapshotConfigInput": {
+            "type": "object",
+            "properties": {
+                "interval": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "session_id": {
+                    "type": "string",
+                    "example": "snapshot-session-0000000000000001"
+                },
+                "snap_num": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "upload_url": {
+                    "type": "string",
+                    "example": "https://example.com/gb28181/snapshot"
+                }
+            }
+        },
+        "api.SwaggerGBTargetTrackInput": {
+            "type": "object",
+            "properties": {
+                "device_id2": {
+                    "type": "string",
+                    "example": "34020000001320000002"
+                },
+                "mode": {
+                    "type": "string",
+                    "example": "Manual"
+                },
+                "target_area": {
+                    "$ref": "#/definitions/api.SwaggerGBDragZoomInput"
                 }
             }
         },
@@ -5671,9 +5833,9 @@ const docTemplate = `{
                     "example": "Hikvision"
                 },
                 "session_id": {
-                    "description": "升级流程会话 ID",
+                    "description": "升级流程会话 ID；空值由平台生成，长度 32~128",
                     "type": "string",
-                    "example": "upgrade-session-001"
+                    "example": "upgrade-session-0000000000000001"
                 },
                 "timeout": {
                     "description": "等待设备应答超时时间，单位秒",
@@ -5796,6 +5958,73 @@ const docTemplate = `{
                 },
                 "started_at": {
                     "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "gbs.SnapshotState": {
+            "type": "object",
+            "properties": {
+                "channel_id": {
+                    "type": "string"
+                },
+                "cover_key": {
+                    "type": "string"
+                },
+                "device_id": {
+                    "type": "string"
+                },
+                "expected_count": {
+                    "type": "integer"
+                },
+                "file_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "received_count": {
+                    "type": "integer"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "gbs.UpgradeState": {
+            "type": "object",
+            "properties": {
+                "channel_id": {
+                    "type": "string"
+                },
+                "device_id": {
+                    "type": "string"
+                },
+                "failed_reason": {
+                    "type": "string"
+                },
+                "firmware": {
+                    "type": "string"
+                },
+                "result": {
+                    "type": "string"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "sn": {
+                    "type": "integer"
                 },
                 "status": {
                     "type": "string"
@@ -6499,6 +6728,26 @@ const docTemplate = `{
                 },
                 "transport": {
                     "description": "拉流方式 (0:tcp, 1:udp)",
+                    "type": "integer"
+                }
+            }
+        },
+        "ipc.UpgradeOutput": {
+            "type": "object",
+            "properties": {
+                "channel_id": {
+                    "type": "string"
+                },
+                "device_id": {
+                    "type": "string"
+                },
+                "result": {
+                    "type": "string"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "sn": {
                     "type": "integer"
                 }
             }

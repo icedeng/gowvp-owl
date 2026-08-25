@@ -1,8 +1,10 @@
 package gbs
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
@@ -33,6 +35,37 @@ func TestRegisterResponseIncludesPlatformVersion(t *testing.T) {
 		if len(headers) != 1 || headers[0].String() != "X-GB-Ver: 3.0" {
 			t.Fatalf("status %d X-GB-Ver headers = %#v", status, headers)
 		}
+	}
+}
+
+func TestRegisterRedirectUsesTrustedServerConfiguration(t *testing.T) {
+	cfg := &conf.SIP{
+		ID: gb10PlatformID, Domain: "3402000000",
+		RegisterRedirect: "sip:" + gb10PlatformID + "@192.0.2.31:5070",
+	}
+	api := &GB28181API{cfg: cfg}
+	request := newFlowRequest(t, newFlowConnection(), sip.MethodRegister, "register-redirect", nil)
+	request.RemoveHeader("X-GB-Ver")
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "X-GB-Ver", Contents: string(GBVersion30)})
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "X-GB-Redirect", Contents: "sip:" + gb10PlatformID + "@203.0.113.99:5090"})
+	connection := newFlowConnection()
+	request.SetConnection(connection)
+	request.SetSource(connection.remote)
+	request.SetDestination(connection.local)
+	ctx := &sip.Context{
+		Request: request, Tx: sip.NewTransaction("register-redirect", connection), DeviceID: gb10DeviceID,
+		Source: connection.remote, To: mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000"), XGBVer: string(GBVersion30),
+	}
+	api.handlerRegister(ctx)
+	select {
+	case payload := <-connection.writes:
+		text := string(payload)
+		if !strings.Contains(text, "SIP/2.0 302 Moved Temporarily") ||
+			!strings.Contains(text, "192.0.2.31:5070") || strings.Contains(text, "203.0.113.99") {
+			t.Fatalf("REGISTER redirect response = %s", text)
+		}
+	default:
+		t.Fatal("REGISTER redirect response missing")
 	}
 }
 

@@ -137,8 +137,9 @@ func TestGBProtocolVersionCapabilities(t *testing.T) {
 		t.Fatal("2.0 must enable IFrame control")
 	}
 	if !GBVersion30.Capabilities().Snapshot || !GBVersion30.Capabilities().Upgrade || !GBVersion30.Capabilities().PTZPosition ||
-		!GBVersion30.Capabilities().CruiseTrackQuery || !GBVersion30.Capabilities().SDCard {
-		t.Fatal("3.0 must enable 2022 snapshot, upgrade, PTZ, cruise and SD card capabilities")
+		!GBVersion30.Capabilities().CruiseTrackQuery || !GBVersion30.Capabilities().SDCard ||
+		!GBVersion30.Capabilities().AAC || !GBVersion30.Capabilities().TargetTrack {
+		t.Fatal("3.0 must enable 2022 snapshot, upgrade, PTZ, cruise, SD card, AAC and target track capabilities")
 	}
 	if GBVersion20.Capabilities().PTZPosition {
 		t.Fatal("2.0 must not enable the 3.0 PTZ position event")

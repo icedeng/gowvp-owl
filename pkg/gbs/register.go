@@ -54,6 +54,12 @@ type GB28181API struct {
 	cascadeSubscribe      func(context.Context, *SubscribeInput) error
 	// key=deviceID:sn，用于等待 DeviceConfig 业务应答（9.7/9.14）。
 	pendingDeviceConfig sync.Map
+	// 设备软件升级状态（2022 9.13/A.2.5.9），key=deviceID:sessionID。
+	upgradeStateMu sync.RWMutex
+	upgradeStates  map[string]UpgradeState
+	// 图像抓拍状态（2022 9.14/A.2.5.7），key=deviceID:sessionID。
+	snapshotStateMu sync.RWMutex
+	snapshotStates  map[string]SnapshotState
 	// key=TargetID:SN，用于等待 2014 Broadcast 业务应答。
 	pendingBroadcast sync.Map
 	// key=目标通道 ID/设备 ID，保存等待接收端主动 INVITE 的 2014 广播会话。
@@ -113,6 +119,8 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 		streams:              &conc.Map[string, *Streams]{},
 		cascadeSources:       make(map[string]*cascadeSourceRef),
 		cascadeSubscriptions: make(map[string]*cascadeDownstreamSubscription),
+		upgradeStates:        make(map[string]UpgradeState),
+		snapshotStates:       make(map[string]SnapshotState),
 		directDownloads:      NewDirectTCPDownloadManager(directTCPDownloadOptions(cfg)),
 		lifecycleDone:        make(chan struct{}),
 	}
@@ -211,9 +219,9 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		return
 	}
 
-	// 9.1.2.3 注册重定向：当网关层注入 X-GB-Redirect 时返回 302。
+	// 9.1.2.3 注册重定向。目标只读取服务端配置，不能信任设备请求头，避免形成开放重定向。
 	// 示例值：sip:34020000002000000001@10.0.0.8:5060
-	if redirect := strings.TrimSpace(ctx.GetHeader("X-GB-Redirect")); redirect != "" {
+	if redirect := strings.TrimSpace(g.cfg.RegisterRedirect); redirect != "" && ctx.XGBVer == string(GBVersion30) {
 		uri, err := sip.ParseSipURI(redirect)
 		if err != nil {
 			g.respondRegister(ctx, http.StatusBadRequest, "invalid redirect uri")

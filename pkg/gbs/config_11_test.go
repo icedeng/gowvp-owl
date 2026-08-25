@@ -106,6 +106,60 @@ func TestDeviceConfig11RejectsIncompleteAndUnsafeSections(t *testing.T) {
 	}
 }
 
+func TestDeviceConfig30WritesAll2022Sections(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	request, err := api.buildDeviceConfigRequest("device", nil, &DeviceConfigInput{
+		DeviceID:            "device",
+		VideoParamAttribute: &VideoParamAttribute{InnerXML: `<Item><StreamNumber>0</StreamNumber><VideoFormat>H.265</VideoFormat><Resolution>1920x1080</Resolution><FrameRate>25</FrameRate><BitRateType>1</BitRateType></Item>`},
+		VideoRecordPlan:     &VideoRecordPlan{InnerXML: `<RecordPlan>1</RecordPlan>`},
+		VideoAlarmRecord:    &VideoAlarmRecord{InnerXML: `<RecordEnable>1</RecordEnable><StreamNumber>0</StreamNumber>`},
+		PictureMask:         &PictureMask{InnerXML: `<Enable>1</Enable><SumNum>0</SumNum>`},
+		FrameMirror:         &FrameMirror{InnerXML: `1`},
+		AlarmReport:         &AlarmReport{InnerXML: `<MotionDetection>1</MotionDetection><FieldDetection>1</FieldDetection>`},
+		OSDConfig:           &OSDConfig{InnerXML: `<Length>1920</Length><Width>1080</Width><TimeX>10</TimeX><TimeY>10</TimeY><SumNum>0</SumNum>`},
+		SnapShotConfig: &SnapShot{
+			SnapNum: 1, Interval: 1, UploadURL: "https://example.invalid/snapshot",
+			SessionID: "snapshot-session-0000000000000001",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SetSN(33)
+	body, err := sip.XMLEncode(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, required := range []string{
+		"<VideoParamAttribute>", "<VideoRecordPlan>", "<VideoAlarmRecord>", "<PictureMask>",
+		"<FrameMirror>1</FrameMirror>", "<AlarmReport>", "<OSDConfig>", "<SnapShotConfig>",
+		"<SessionID>snapshot-session-0000000000000001</SessionID>",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("2022 DeviceConfig request missing %q: %s", required, text)
+		}
+	}
+}
+
+func TestDeviceConfig2022SectionsAreVersionGatedAndValidated(t *testing.T) {
+	api, memory := newVersionGateAPI(GBVersion20)
+	input := &DeviceConfigInput{DeviceID: "device", FrameMirror: &FrameMirror{InnerXML: `1`}}
+	if _, err := api.buildDeviceConfigRequest("device", nil, input); err == nil || !strings.Contains(err.Error(), "2022") {
+		t.Fatalf("2.0 FrameMirror error = %v", err)
+	}
+	memory.device.setGBVersion(GBVersion30)
+	input.FrameMirror.InnerXML = `<!DOCTYPE test><Value>1</Value>`
+	if _, err := api.buildDeviceConfigRequest("device", nil, input); err == nil {
+		t.Fatal("unsafe 2022 DeviceConfig XML was accepted")
+	}
+	input.FrameMirror = nil
+	input.SnapShotConfig = &SnapShot{SnapNum: 11, Interval: 0, SessionID: "short"}
+	if _, err := api.buildDeviceConfigRequest("device", nil, input); err == nil {
+		t.Fatal("invalid SnapShotConfig was accepted")
+	}
+}
+
 func TestHandleDeviceConfig11StoresRawXML(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("testdata", "gb28181", "1.1", "device-config-basic-response.xml"))
 	if err != nil {

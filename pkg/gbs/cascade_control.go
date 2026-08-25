@@ -65,6 +65,7 @@ func (g *GB28181API) validateCascadeDeviceControlOverrides(deviceID string, requ
 		{name: "drag_zoom_control", on: request.DragZoomIn != nil || request.DragZoomOut != nil},
 		{name: "home_position", on: request.HomePosition != nil},
 		{name: "ptz_position", on: request.PTZPreciseCtrl != nil},
+		{name: "target_track", on: strings.TrimSpace(request.TargetTrack) != ""},
 	}
 	for _, check := range checks {
 		if check.on && g.isDeviceCapabilityDisabled(deviceID, check.name) {
@@ -85,7 +86,11 @@ func (g *GB28181API) sendCascadeDeviceControlDownstream(ctx context.Context, cha
 	downstreamSN := g.nextControlSN()
 	downstream := *request
 	downstream.SN = downstreamSN
+	upstreamTargetID := downstream.DeviceID
 	downstream.DeviceID = channel.ChannelID
+	if strings.TrimSpace(downstream.DeviceID2) == upstreamTargetID {
+		downstream.DeviceID2 = channel.ChannelID
+	}
 	body, err := sip.XMLEncode(downstream)
 	if err != nil {
 		return "ERROR", err
@@ -168,6 +173,25 @@ func validateCascadeDeviceControl(request *deviceControlA23Request, upstream, do
 		actions++
 		if !upstream.AtLeast(GBVersion30) || !downstream.AtLeast(GBVersion30) {
 			return fmt.Errorf("PTZPreciseCtrl requires protocol 3.0")
+		}
+	}
+	if strings.TrimSpace(request.TargetTrack) != "" {
+		actions++
+		if !upstream.Capabilities().TargetTrack || !downstream.Capabilities().TargetTrack {
+			return fmt.Errorf("TargetTrack requires protocol 3.0")
+		}
+		mode := strings.ToLower(strings.TrimSpace(request.TargetTrack))
+		if mode != "auto" && mode != "manual" && mode != "stop" {
+			return fmt.Errorf("unsupported TargetTrack mode")
+		}
+		if request.DeviceID2 != "" && request.DeviceID2 != request.DeviceID {
+			return fmt.Errorf("cascade TargetTrack DeviceID2 must reference the shared channel")
+		}
+		if mode == "manual" && request.TargetArea == nil {
+			return fmt.Errorf("manual TargetTrack requires TargetArea")
+		}
+		if request.TargetArea != nil && (request.TargetArea.Length <= 0 || request.TargetArea.Width <= 0 || request.TargetArea.LengthX <= 0 || request.TargetArea.LengthY <= 0) {
+			return fmt.Errorf("invalid TargetTrack TargetArea")
 		}
 	}
 	if strings.TrimSpace(request.TeleBoot) != "" || strings.TrimSpace(request.GuardCmd) != "" || strings.TrimSpace(request.AlarmCmd) != "" || request.FormatSDCard != nil {

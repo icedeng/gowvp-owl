@@ -251,6 +251,7 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 		StreamMode:   in.StreamMode,
 		SSRC:         ssrc,
 		H265Disabled: g.isDeviceCapabilityDisabled(in.Channel.DeviceID, "h265"),
+		AACDisabled:  g.isDeviceCapabilityDisabled(in.Channel.DeviceID, "aac"),
 	})
 	if err != nil {
 		return err

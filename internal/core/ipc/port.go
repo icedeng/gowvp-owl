@@ -92,7 +92,14 @@ type GBDeviceControlInput struct {
 	DragZoom     *GBDragZoomInput
 	HomePosition *GBHomePositionInput
 	PTZPrecise   *GBPTZPreciseInput
+	TargetTrack  *GBTargetTrackInput
 	SDCardID     int
+}
+
+type GBTargetTrackInput struct {
+	Mode       string
+	DeviceID2  string
+	TargetArea *GBDragZoomInput
 }
 
 type GBDragZoomInput struct {
@@ -168,13 +175,21 @@ type GBBasicParamInput struct {
 }
 
 type GBDeviceConfigInput struct {
-	TargetID         string                   `json:"target_id"`
-	Timeout          int                      `json:"timeout"`
-	BasicParam       *GBBasicParamInput       `json:"basic_param"`
-	VideoParamConfig *GBVideoParamConfigInput `json:"video_param_config"`
-	AudioParamConfig *GBAudioParamConfigInput `json:"audio_param_config"`
-	SVACEncodeConfig *GBXMLConfigInput        `json:"svac_encode_config"`
-	SVACDecodeConfig *GBXMLConfigInput        `json:"svac_decode_config"`
+	TargetID            string                   `json:"target_id"`
+	Timeout             int                      `json:"timeout"`
+	BasicParam          *GBBasicParamInput       `json:"basic_param"`
+	VideoParamConfig    *GBVideoParamConfigInput `json:"video_param_config"`
+	AudioParamConfig    *GBAudioParamConfigInput `json:"audio_param_config"`
+	SVACEncodeConfig    *GBXMLConfigInput        `json:"svac_encode_config"`
+	SVACDecodeConfig    *GBXMLConfigInput        `json:"svac_decode_config"`
+	VideoParamAttribute *GBXMLConfigInput        `json:"video_param_attribute"`
+	VideoRecordPlan     *GBXMLConfigInput        `json:"video_record_plan"`
+	VideoAlarmRecord    *GBXMLConfigInput        `json:"video_alarm_record"`
+	PictureMask         *GBXMLConfigInput        `json:"picture_mask"`
+	FrameMirror         *GBXMLConfigInput        `json:"frame_mirror"`
+	AlarmReport         *GBXMLConfigInput        `json:"alarm_report"`
+	OSDConfig           *GBXMLConfigInput        `json:"osd_config"`
+	SnapShotConfig      *GBSnapshotConfigInput   `json:"snapshot_config"`
 }
 
 type GBVideoParamConfigInput struct {
@@ -203,6 +218,13 @@ type GBAudioParamItemInput struct {
 
 type GBXMLConfigInput struct {
 	InnerXML string `json:"inner_xml"`
+}
+
+type GBSnapshotConfigInput struct {
+	SnapNum   int    `json:"snap_num"`
+	Interval  int    `json:"interval"`
+	UploadURL string `json:"upload_url"`
+	SessionID string `json:"session_id"`
 }
 
 type GBDeviceConfigOutput struct {
@@ -273,8 +295,16 @@ type UpgradeInput struct {
 	Timeout      int // seconds
 }
 
+type UpgradeOutput struct {
+	SN        int    `json:"sn"`
+	DeviceID  string `json:"device_id"`
+	ChannelID string `json:"channel_id"`
+	SessionID string `json:"session_id"`
+	Result    string `json:"result"`
+}
+
 type UpgradeCapable interface {
-	Upgrade(ctx context.Context, device *Device, channel *Channel, in *UpgradeInput) error
+	Upgrade(ctx context.Context, device *Device, channel *Channel, in *UpgradeInput) (*UpgradeOutput, error)
 }
 
 type HistoryControlInput struct {

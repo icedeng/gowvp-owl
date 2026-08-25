@@ -28,6 +28,7 @@ type gbSDPInput struct {
 	DownloadSpeed    int
 	DirectTCP        bool
 	H265Disabled     bool
+	AACDisabled      bool
 }
 
 // buildGBSDP 按设备的协议档案生成直播、回放或下载 SDP。
@@ -158,8 +159,13 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 		body = append(body, in.MediaDescription...)
 		body = append(body, '\r', '\n')
 	} else if in.SessionName == historyModePlay && !in.DirectTCP {
-		// 上游设备兼容修复：声明 G.711 A-law 音频参数，未提供视频描述时使用直播默认值。
-		body = append(body, "f=v/////a/1/8/1\r\n"...)
+		// 2022 新增 AAC。未指定媒体描述时不锁定内部音频编码，由设备在 G.711/SVAC/AAC 中选择；
+		// 旧版本继续声明 G.711 A-law，保持既有设备兼容。
+		if version.Capabilities().AAC && !in.AACDisabled {
+			body = append(body, "f=v/////a///\r\n"...)
+		} else {
+			body = append(body, "f=v/////a/1/8/1\r\n"...)
+		}
 	}
 	return body, nil
 }

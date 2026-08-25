@@ -357,10 +357,20 @@ definitions:
     type: object
   api.SwaggerGBDeviceConfigInput:
     properties:
+      alarm_report:
+        $ref: '#/definitions/api.SwaggerGBXMLConfigInput'
       audio_param_config:
         $ref: '#/definitions/api.SwaggerGBAudioParamConfigInput'
       basic_param:
         $ref: '#/definitions/api.SwaggerGBBasicParamInput'
+      frame_mirror:
+        $ref: '#/definitions/api.SwaggerGBXMLConfigInput'
+      osd_config:
+        $ref: '#/definitions/api.SwaggerGBXMLConfigInput'
+      picture_mask:
+        $ref: '#/definitions/api.SwaggerGBXMLConfigInput'
+      snapshot_config:
+        $ref: '#/definitions/api.SwaggerGBSnapshotConfigInput'
       svac_decode_config:
         $ref: '#/definitions/api.SwaggerGBXMLConfigInput'
       svac_encode_config:
@@ -371,8 +381,14 @@ definitions:
       timeout:
         example: 8
         type: integer
+      video_alarm_record:
+        $ref: '#/definitions/api.SwaggerGBXMLConfigInput'
+      video_param_attribute:
+        $ref: '#/definitions/api.SwaggerGBXMLConfigInput'
       video_param_config:
         $ref: '#/definitions/api.SwaggerGBVideoParamConfigInput'
+      video_record_plan:
+        $ref: '#/definitions/api.SwaggerGBXMLConfigInput'
     type: object
   api.SwaggerGBDeviceConfigOutput:
     properties:
@@ -437,6 +453,10 @@ definitions:
         description: 目标设备或通道国标编码；为空时默认当前设备
         example: "34020000001320000001"
         type: string
+      target_track:
+        allOf:
+        - $ref: '#/definitions/api.SwaggerGBTargetTrackInput'
+        description: 2022 目标跟踪参数
       timeout:
         description: 等待设备响应超时时间，单位秒
         example: 5
@@ -608,6 +628,32 @@ definitions:
         description: 精确变倍值
         example: 2
         type: number
+    type: object
+  api.SwaggerGBSnapshotConfigInput:
+    properties:
+      interval:
+        example: 1
+        type: integer
+      session_id:
+        example: snapshot-session-0000000000000001
+        type: string
+      snap_num:
+        example: 1
+        type: integer
+      upload_url:
+        example: https://example.com/gb28181/snapshot
+        type: string
+    type: object
+  api.SwaggerGBTargetTrackInput:
+    properties:
+      device_id2:
+        example: "34020000001320000002"
+        type: string
+      mode:
+        example: Manual
+        type: string
+      target_area:
+        $ref: '#/definitions/api.SwaggerGBDragZoomInput'
     type: object
   api.SwaggerGBVideoParamConfigInput:
     properties:
@@ -1522,8 +1568,8 @@ definitions:
         example: Hikvision
         type: string
       session_id:
-        description: 升级流程会话 ID
-        example: upgrade-session-001
+        description: 升级流程会话 ID；空值由平台生成，长度 32~128
+        example: upgrade-session-0000000000000001
         type: string
       timeout:
         description: 等待设备应答超时时间，单位秒
@@ -1610,6 +1656,50 @@ definitions:
         type: string
       started_at:
         type: string
+      status:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  gbs.SnapshotState:
+    properties:
+      channel_id:
+        type: string
+      cover_key:
+        type: string
+      device_id:
+        type: string
+      expected_count:
+        type: integer
+      file_ids:
+        items:
+          type: string
+        type: array
+      received_count:
+        type: integer
+      session_id:
+        type: string
+      status:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  gbs.UpgradeState:
+    properties:
+      channel_id:
+        type: string
+      device_id:
+        type: string
+      failed_reason:
+        type: string
+      firmware:
+        type: string
+      result:
+        type: string
+      session_id:
+        type: string
+      sn:
+        type: integer
       status:
         type: string
       updated_at:
@@ -2105,6 +2195,19 @@ definitions:
         type: integer
       transport:
         description: 拉流方式 (0:tcp, 1:udp)
+        type: integer
+    type: object
+  ipc.UpgradeOutput:
+    properties:
+      channel_id:
+        type: string
+      device_id:
+        type: string
+      result:
+        type: string
+      session_id:
+        type: string
+      sn:
         type: integer
     type: object
   ipc.Zone:
@@ -2755,6 +2858,35 @@ paths:
       summary: 刷新通道快照
       tags:
       - Channel
+  /channels/{id}/snapshot/{session_id}/status:
+    get:
+      parameters:
+      - description: 通道ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 抓拍会话ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/gbs.SnapshotState'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 查询 GB28181 图像抓拍状态
+      tags:
+      - Channel
   /channels/{id}/upgrade:
     post:
       consumes:
@@ -2785,6 +2917,36 @@ paths:
       security:
       - BearerAuth: []
       summary: 设备升级
+      tags:
+      - Channel
+  /channels/{id}/upgrade/{session_id}:
+    get:
+      description: accepted 仅表示设备已接受升级命令；completed/failed 为设备上报的最终状态。
+      parameters:
+      - description: 通道ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 升级会话ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/gbs.UpgradeState'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 查询设备升级状态
       tags:
       - Channel
   /channels/{id}/voice/start:
@@ -3207,7 +3369,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/api.SwaggerMessageResponse'
+            $ref: '#/definitions/ipc.UpgradeOutput'
         "400":
           description: Bad Request
           schema:
@@ -3810,8 +3972,8 @@ paths:
       consumes:
       - application/json
       description: |-
-        下发 GB/T 28181-2014 DeviceConfig；支持 BasicParam、VideoParamConfig、AudioParamConfig、SVACEncodeConfig 和 SVACDecodeConfig，可在一次请求中组合多个配置段。
-        SVAC 的 `inner_xml` 只填写配置节点内部的标准 XML；服务端会校验 XML 完整性并拒绝指令/DOCTYPE。
+        下发 DeviceConfig；支持 2014 的 BasicParam、VideoParamConfig、AudioParamConfig、SVAC，以及 2022 的视频属性、录像计划、报警录像、遮挡、翻转、报警上报、OSD 和抓拍配置。
+        XML 配置的 `inner_xml` 只填写配置节点内部的标准 XML；服务端会校验 XML 完整性并拒绝指令/DOCTYPE。2022 扩展仅允许有效版本 3.0。
       parameters:
       - description: 设备内部ID或设备编号(device_id)
         in: path
@@ -3846,12 +4008,13 @@ paths:
       - application/json
       description: |-
         执行 GB/T 28181 附录 A.2.3 统一设备控制命令。
-        常见 `action`：`ptz_cmd`、`teleboot`、`record_cmd`、`guard_cmd`、`alarm_cmd`、`ifame_cmd`、`drag_zoom_in`、`drag_zoom_out`、`home_position`、`ptz_precise`。
+        常见 `action`：`ptz_cmd`、`teleboot`、`record_cmd`、`guard_cmd`、`alarm_cmd`、`ifame_cmd`、`drag_zoom_in`、`drag_zoom_out`、`home_position`、`ptz_precise`、`target_track`。
         `ptz_cmd` 常见值：`stop`、`left`、`right`、`up`、`down`、`left_up`、`left_down`、`right_up`、`right_down`、`zoom_in`、`zoom_out`、`focus_near`、`focus_far`、`iris_open`、`iris_close`、`preset_set`、`preset_call`、`preset_delete`、`cruise_add`、`cruise_del`、`cruise_speed`、`cruise_stay`、`cruise_start`、`scan_start`、`scan_left`、`scan_right`、`scan_speed`、`aux_on`、`aux_off`。
         调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 所选动作受设备能力和协议版本支持。
         失败场景：1. `action` 或 `ptz_cmd` 非法；2. 2016/2022 差异导致设备不支持；3. 设备离线；4. 等待 Response 超时。
         PTZCmd 示例：`{ "target_id": "34020000001320000001", "action": "ptz_cmd", "ptz_cmd": "preset_call", "timeout": 5 }`
         精确 PTZ 示例：`{ "action": "ptz_precise", "ptz_precise": { "pan": 10.5, "tilt": 5.2, "zoom": 2.0 }, "timeout": 5 }`
+        手动目标跟踪示例：`{ "action": "target_track", "target_track": { "mode": "Manual", "target_area": { "length": 1920, "width": 1080, "mid_point_x": 960, "mid_point_y": 540, "length_x": 300, "length_y": 200 } } }`
         成功响应示例：`{ "sn": 12, "device_id": "34020000002000000001", "target_id": "34020000001320000001", "result": "OK" }`
       parameters:
       - description: 设备内部ID或设备编号(device_id)

@@ -155,8 +155,8 @@ func (a *Adapter) QueryRecords(ctx context.Context, device *ipc.Device, channel 
 	return ret, nil
 }
 
-func (a *Adapter) Upgrade(ctx context.Context, device *ipc.Device, channel *ipc.Channel, in *ipc.UpgradeInput) error {
-	_, err := a.gbs.Upgrade(ctx, &gbs.UpgradeInput{
+func (a *Adapter) Upgrade(ctx context.Context, device *ipc.Device, channel *ipc.Channel, in *ipc.UpgradeInput) (*ipc.UpgradeOutput, error) {
+	out, err := a.gbs.Upgrade(ctx, &gbs.UpgradeInput{
 		DeviceID:     device.DeviceID,
 		ChannelID:    channel.ChannelID,
 		Firmware:     in.Firmware,
@@ -165,7 +165,12 @@ func (a *Adapter) Upgrade(ctx context.Context, device *ipc.Device, channel *ipc.
 		SessionID:    in.SessionID,
 		Timeout:      time.Duration(in.Timeout) * time.Second,
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return &ipc.UpgradeOutput{
+		SN: out.SN, DeviceID: out.DeviceID, ChannelID: out.Channel, SessionID: out.SessionID, Result: out.Result,
+	}, nil
 }
 
 func (a *Adapter) StartHistory(ctx context.Context, device *ipc.Device, channel *ipc.Channel, in *ipc.HistoryControlInput) error {
@@ -298,6 +303,7 @@ func (a *Adapter) DeviceControl(ctx context.Context, device *ipc.Device, in *ipc
 		DragZoom:     toGBDragZoom(in.DragZoom),
 		HomePosition: toGBHomePosition(in.HomePosition),
 		PTZPrecise:   toGBPTZPrecise(in.PTZPrecise),
+		TargetTrack:  toGBTargetTrack(in.TargetTrack),
 	})
 	if err != nil {
 		return nil, err
@@ -308,6 +314,13 @@ func (a *Adapter) DeviceControl(ctx context.Context, device *ipc.Device, in *ipc
 		TargetID: out.TargetID,
 		Result:   out.Result,
 	}, nil
+}
+
+func toGBTargetTrack(in *ipc.GBTargetTrackInput) *gbs.TargetTrackParam {
+	if in == nil {
+		return nil
+	}
+	return &gbs.TargetTrackParam{Mode: in.Mode, DeviceID2: in.DeviceID2, TargetArea: toGBDragZoom(in.TargetArea)}
 }
 
 func (a *Adapter) DeviceQuery(ctx context.Context, device *ipc.Device, in *ipc.GBDeviceQueryInput) (*ipc.GBDeviceQueryOutput, error) {
@@ -390,6 +403,33 @@ func toGBDeviceConfigInput(deviceID string, in *ipc.GBDeviceConfigInput) *gbs.De
 	}
 	if in.SVACDecodeConfig != nil {
 		input.SVACDecodeConfig = &gbs.SVACDecodeConfig{InnerXML: in.SVACDecodeConfig.InnerXML}
+	}
+	if in.VideoParamAttribute != nil {
+		input.VideoParamAttribute = &gbs.VideoParamAttribute{InnerXML: in.VideoParamAttribute.InnerXML}
+	}
+	if in.VideoRecordPlan != nil {
+		input.VideoRecordPlan = &gbs.VideoRecordPlan{InnerXML: in.VideoRecordPlan.InnerXML}
+	}
+	if in.VideoAlarmRecord != nil {
+		input.VideoAlarmRecord = &gbs.VideoAlarmRecord{InnerXML: in.VideoAlarmRecord.InnerXML}
+	}
+	if in.PictureMask != nil {
+		input.PictureMask = &gbs.PictureMask{InnerXML: in.PictureMask.InnerXML}
+	}
+	if in.FrameMirror != nil {
+		input.FrameMirror = &gbs.FrameMirror{InnerXML: in.FrameMirror.InnerXML}
+	}
+	if in.AlarmReport != nil {
+		input.AlarmReport = &gbs.AlarmReport{InnerXML: in.AlarmReport.InnerXML}
+	}
+	if in.OSDConfig != nil {
+		input.OSDConfig = &gbs.OSDConfig{InnerXML: in.OSDConfig.InnerXML}
+	}
+	if in.SnapShotConfig != nil {
+		input.SnapShotConfig = &gbs.SnapShot{
+			SnapNum: in.SnapShotConfig.SnapNum, Interval: in.SnapShotConfig.Interval,
+			UploadURL: in.SnapShotConfig.UploadURL, SessionID: in.SnapShotConfig.SessionID,
+		}
 	}
 	return input
 }

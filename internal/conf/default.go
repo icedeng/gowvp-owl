@@ -55,6 +55,7 @@ func DefaultConfig() Bootstrap {
 			StrictSourceCheck:  false,
 			RequireMessageAuth: false,
 			PTZWeakConfirm:     false,
+			RegisterRedirect:   "",
 			DeviceHistory:      DeviceHistoryConfig{MaxRecords: 1000, MaxDays: 30},
 			DirectTCPDownload: SIPDirectTCPDownload{
 				Enabled:              false,

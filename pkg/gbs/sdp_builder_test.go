@@ -181,6 +181,28 @@ func TestBuildGBSDPCanDisableH265ForDeviceFirmware(t *testing.T) {
 	}
 }
 
+func TestBuildGBSDP30DoesNotLockAudioToG711(t *testing.T) {
+	in := gbSDPInput{
+		Version: GBVersion30, SessionName: historyModePlay,
+		ChannelID: gb10DeviceID, IP: "192.0.2.20", Port: 30000, SSRC: "0100000001",
+	}
+	body, err := buildGBSDP(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "f=v/////a///\r\n") {
+		t.Fatalf("3.0 SDP did not leave G.711/SVAC/AAC open:\n%s", body)
+	}
+	in.AACDisabled = true
+	body, err = buildGBSDP(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "f=v/////a/1/8/1\r\n") {
+		t.Fatalf("AAC-disabled SDP did not fall back to G.711:\n%s", body)
+	}
+}
+
 func TestBuildGBInviteSubject(t *testing.T) {
 	got := buildGBInviteSubject("34020000001320000002", "0100000001", "34020000002000000001")
 	want := "34020000001320000002:0100000001,34020000002000000001:0"

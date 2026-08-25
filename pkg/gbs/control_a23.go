@@ -24,6 +24,7 @@ const (
 	deviceControlActionHomePosition  = "home_position"
 	deviceControlActionPTZPrecise    = "ptz_precise"
 	deviceControlActionFormatSDCard  = "format_sdcard"
+	deviceControlActionTargetTrack   = "target_track"
 )
 
 // DeviceControlInput 是附录 A.2.3 设备控制命令输入。
@@ -56,6 +57,8 @@ type DeviceControlInput struct {
 	PTZPrecise *PTZPreciseParam
 	// FormatSDCard 参数（0 表示全部格式化）。
 	SDCardID int
+	// TargetTrack 参数（2022 A.2.3.1.14）。
+	TargetTrack *TargetTrackParam
 }
 
 // DeviceControlOutput 是设备控制统一返回。
@@ -88,6 +91,13 @@ type PTZPreciseParam struct {
 	Pan  *float64 `json:"pan,omitempty"`
 	Tilt *float64 `json:"tilt,omitempty"`
 	Zoom *float64 `json:"zoom,omitempty"`
+}
+
+// TargetTrackParam 对应全景摄像机目标自动/手动跟踪参数。
+type TargetTrackParam struct {
+	Mode       string         `json:"mode"`
+	DeviceID2  string         `json:"device_id2,omitempty"`
+	TargetArea *DragZoomParam `json:"target_area,omitempty"`
 }
 
 // PTZCmdParam 对应 A.2.3.1.2 PTZCmdParams 可选参数。
@@ -125,6 +135,10 @@ type deviceControlA23Request struct {
 	PTZPreciseCtrl *deviceControlA23PTZPrecise `xml:"PTZPreciseCtrl,omitempty"`
 
 	FormatSDCard *int `xml:"FormatSDCard,omitempty"`
+
+	TargetTrack string                    `xml:"TargetTrack,omitempty"`
+	DeviceID2   string                    `xml:"DeviceID2,omitempty"`
+	TargetArea  *deviceControlA23DragZoom `xml:"TargetArea,omitempty"`
 }
 
 type deviceControlA23Info struct {
@@ -263,6 +277,8 @@ func normalizeDeviceControlAction(action string) string {
 		return deviceControlActionPTZPrecise
 	case "format_sd_card":
 		return deviceControlActionFormatSDCard
+	case "target_tracking", "track_target":
+		return deviceControlActionTargetTrack
 	default:
 		return a
 	}
@@ -412,6 +428,44 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		}
 		sd := in.SDCardID
 		req.FormatSDCard = &sd
+	case deviceControlActionTargetTrack:
+		if err := g.requireGBFeature(deviceID, "target_track", "目标跟踪控制(TargetTrack)", func(c GBCapabilities) bool {
+			return c.TargetTrack
+		}); err != nil {
+			return err
+		}
+		if in.TargetTrack == nil {
+			return fmt.Errorf("target_track requires target_track params")
+		}
+		var mode string
+		switch strings.ToLower(strings.TrimSpace(in.TargetTrack.Mode)) {
+		case "auto":
+			mode = "Auto"
+		case "manual":
+			mode = "Manual"
+		case "stop":
+			mode = "Stop"
+		default:
+			return fmt.Errorf("target_track mode must be Auto, Manual or Stop")
+		}
+		req.TargetTrack = mode
+		req.DeviceID2 = strings.TrimSpace(in.TargetTrack.DeviceID2)
+		if req.DeviceID2 != "" && !isGBDeviceIdentifier(req.DeviceID2) {
+			return fmt.Errorf("target_track device_id2 must be 20 digits")
+		}
+		if mode == "Manual" && in.TargetTrack.TargetArea == nil {
+			return fmt.Errorf("manual target_track requires target_area")
+		}
+		if in.TargetTrack.TargetArea != nil {
+			area := in.TargetTrack.TargetArea
+			if area.Length <= 0 || area.Width <= 0 || area.LengthX <= 0 || area.LengthY <= 0 {
+				return fmt.Errorf("target_area dimensions must be positive")
+			}
+			req.TargetArea = &deviceControlA23DragZoom{
+				Length: area.Length, Width: area.Width, MidPointX: area.MidPointX, MidPointY: area.MidPointY,
+				LengthX: area.LengthX, LengthY: area.LengthY,
+			}
+		}
 	default:
 		return fmt.Errorf("unsupported device control action: %s", action)
 	}

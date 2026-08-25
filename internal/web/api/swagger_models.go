@@ -292,6 +292,12 @@ type SwaggerGBPTZCmdParamInput struct {
 	CruiseTrackName string `json:"cruise_track_name" example:"白天巡航"` // 巡航路线名称
 }
 
+type SwaggerGBTargetTrackInput struct {
+	Mode       string                  `json:"mode" example:"Manual"`
+	DeviceID2  string                  `json:"device_id2" example:"34020000001320000002"`
+	TargetArea *SwaggerGBDragZoomInput `json:"target_area"`
+}
+
 // SwaggerGBDeviceControlInput 是 GB 统一控制请求体。
 type SwaggerGBDeviceControlInput struct {
 	TargetID     string                      `json:"target_id" example:"34020000001320000001"` // 目标设备或通道国标编码；为空时默认当前设备
@@ -305,6 +311,7 @@ type SwaggerGBDeviceControlInput struct {
 	DragZoom     *SwaggerGBDragZoomInput     `json:"drag_zoom"`                                // 拉框放大/缩小参数
 	HomePosition *SwaggerGBHomePositionInput `json:"home_position"`                            // 看守位控制参数
 	PTZPrecise   *SwaggerGBPTZPreciseInput   `json:"ptz_precise"`                              // 精确 PTZ 参数
+	TargetTrack  *SwaggerGBTargetTrackInput  `json:"target_track"`                             // 2022 目标跟踪参数
 	SDCardID     int                         `json:"sdcard_id" example:"1"`                    // SD 卡编号
 }
 
@@ -343,13 +350,21 @@ type SwaggerGBDeviceQueryOutput struct {
 
 // SwaggerGBDeviceConfigInput 是 2014 DeviceConfig 写入请求。
 type SwaggerGBDeviceConfigInput struct {
-	TargetID         string                          `json:"target_id" example:"34020000001320000001"`
-	Timeout          int                             `json:"timeout" example:"8"`
-	BasicParam       *SwaggerGBBasicParamInput       `json:"basic_param,omitempty"`
-	VideoParamConfig *SwaggerGBVideoParamConfigInput `json:"video_param_config,omitempty"`
-	AudioParamConfig *SwaggerGBAudioParamConfigInput `json:"audio_param_config,omitempty"`
-	SVACEncodeConfig *SwaggerGBXMLConfigInput        `json:"svac_encode_config,omitempty"`
-	SVACDecodeConfig *SwaggerGBXMLConfigInput        `json:"svac_decode_config,omitempty"`
+	TargetID            string                          `json:"target_id" example:"34020000001320000001"`
+	Timeout             int                             `json:"timeout" example:"8"`
+	BasicParam          *SwaggerGBBasicParamInput       `json:"basic_param,omitempty"`
+	VideoParamConfig    *SwaggerGBVideoParamConfigInput `json:"video_param_config,omitempty"`
+	AudioParamConfig    *SwaggerGBAudioParamConfigInput `json:"audio_param_config,omitempty"`
+	SVACEncodeConfig    *SwaggerGBXMLConfigInput        `json:"svac_encode_config,omitempty"`
+	SVACDecodeConfig    *SwaggerGBXMLConfigInput        `json:"svac_decode_config,omitempty"`
+	VideoParamAttribute *SwaggerGBXMLConfigInput        `json:"video_param_attribute,omitempty"`
+	VideoRecordPlan     *SwaggerGBXMLConfigInput        `json:"video_record_plan,omitempty"`
+	VideoAlarmRecord    *SwaggerGBXMLConfigInput        `json:"video_alarm_record,omitempty"`
+	PictureMask         *SwaggerGBXMLConfigInput        `json:"picture_mask,omitempty"`
+	FrameMirror         *SwaggerGBXMLConfigInput        `json:"frame_mirror,omitempty"`
+	AlarmReport         *SwaggerGBXMLConfigInput        `json:"alarm_report,omitempty"`
+	OSDConfig           *SwaggerGBXMLConfigInput        `json:"osd_config,omitempty"`
+	SnapShotConfig      *SwaggerGBSnapshotConfigInput   `json:"snapshot_config,omitempty"`
 }
 
 type SwaggerGBBasicParamInput struct {
@@ -385,6 +400,13 @@ type SwaggerGBAudioParamItemInput struct {
 
 type SwaggerGBXMLConfigInput struct {
 	InnerXML string `json:"inner_xml" example:"<SVCParam><SVCFlag>1</SVCFlag></SVCParam>"`
+}
+
+type SwaggerGBSnapshotConfigInput struct {
+	SnapNum   int    `json:"snap_num" example:"1"`
+	Interval  int    `json:"interval" example:"1"`
+	UploadURL string `json:"upload_url" example:"https://example.com/gb28181/snapshot"`
+	SessionID string `json:"session_id" example:"snapshot-session-0000000000000001"`
 }
 
 type SwaggerGBDeviceConfigOutput struct {

@@ -26,6 +26,10 @@ func TestGB20And30FeatureRegression(t *testing.T) {
 	if err := api.fillDeviceControlRequest("device", deviceControlActionFormatSDCard, &DeviceControlInput{SDCardID: 1}, &deviceControlA23Request{}); err == nil {
 		t.Fatal("2.0 must reject 3.0 SD card formatting")
 	}
+	track := &DeviceControlInput{TargetTrack: &TargetTrackParam{Mode: "Manual", TargetArea: &DragZoomParam{Length: 1920, Width: 1080, MidPointX: 960, MidPointY: 540, LengthX: 300, LengthY: 200}}}
+	if err := api.fillDeviceControlRequest("device", deviceControlActionTargetTrack, track, &deviceControlA23Request{}); err == nil {
+		t.Fatal("2.0 must reject 3.0 target tracking")
+	}
 	for _, action := range []string{deviceQueryActionPTZPosition, deviceQueryActionSDCardStatus, deviceQueryActionCruiseTrackList, deviceQueryActionCruiseTrack} {
 		if _, err := api.resolveDeviceQueryCmdType("device", action, ""); err == nil {
 			t.Fatalf("2.0 must reject 3.0 query %s", action)
@@ -46,6 +50,11 @@ func TestGB20And30FeatureRegression(t *testing.T) {
 	sdRequest := &deviceControlA23Request{}
 	if err := api.fillDeviceControlRequest("device", deviceControlActionFormatSDCard, &DeviceControlInput{SDCardID: 1}, sdRequest); err != nil || sdRequest.FormatSDCard == nil || *sdRequest.FormatSDCard != 1 {
 		t.Fatalf("3.0 SD card request = %+v, err = %v", sdRequest, err)
+	}
+	trackRequest := &deviceControlA23Request{}
+	if err := api.fillDeviceControlRequest("device", deviceControlActionTargetTrack, track, trackRequest); err != nil ||
+		trackRequest.TargetTrack != "Manual" || trackRequest.TargetArea == nil {
+		t.Fatalf("3.0 target track request = %+v, err = %v", trackRequest, err)
 	}
 	for action, want := range map[string]string{
 		deviceQueryActionPTZPosition:     "PTZPosition",
@@ -117,6 +126,24 @@ func TestGB30PTZPositionNotifyStoresStructuredState(t *testing.T) {
 	if !ok || state.PTZPosition == nil || state.PTZPosition.Pan == nil || *state.PTZPosition.Pan != 12.5 ||
 		state.PTZPosition.Tilt == nil || *state.PTZPosition.Tilt != -3.25 || state.PTZPosition.Zoom == nil || *state.PTZPosition.Zoom != 2 {
 		t.Fatalf("PTZPosition state = %+v", state)
+	}
+}
+
+func TestGB30VideoUploadNotifyStoresStructuredState(t *testing.T) {
+	api, memory := newVersionGateAPI(GBVersion30)
+	body := []byte(`<Notify><CmdType>VideoUploadNotify</CmdType><SN>108</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><Time>2026-08-25T08:48:00</Time><Longitude>120.12</Longitude><Latitude>30.28</Latitude></Notify>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "video-upload-notify", body, api.sipMessageVideoUploadNotify)
+	assertFlowOK(t, response)
+	state, ok := api.GetQueryState(gb10DeviceID)
+	if !ok || state.VideoUpload == nil || state.VideoUpload.Time != "2026-08-25T08:48:00" ||
+		state.VideoUpload.Longitude == nil || *state.VideoUpload.Longitude != 120.12 {
+		t.Fatalf("VideoUploadNotify state = %+v, %v", state, ok)
+	}
+	memory.device.setGBVersion(GBVersion20)
+	response = runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "video-upload-old", body, api.sipMessageVideoUploadNotify)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("2.0 VideoUploadNotify response = %s", response)
 	}
 }
 

@@ -115,6 +115,9 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	msg.Handle("DeviceControl", api.sipMessageDeviceControl)
 	msg.Handle("RecordInfo", api.sipMessageRecordInfo)
 	msg.Handle("MediaStatus", api.sipMessageMediaStatus)
+	msg.Handle("DeviceUpgradeResult", api.sipMessageDeviceUpgradeResult)
+	msg.Handle("UploadSnapShotFinished", api.sipMessageSnapshotFinished)
+	msg.Handle("VideoUploadNotify", api.sipMessageVideoUploadNotify)
 
 	// 报警既可能由 MESSAGE 上报，也可能由 NOTIFY 上报，二者均接入。
 	notify := svr.Notify(api.sipAccessControlMiddleware, api.sipNotifySubscriptionState)
@@ -130,6 +133,9 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	notify.Handle("CruiseTrackQuery", api.sipMessageQueryGeneric)
 	notify.Handle("SDCardStatus", api.sipMessageQueryGeneric)
 	notify.Handle("ConfigDownload", api.sipMessageQueryGeneric)
+	notify.Handle("DeviceUpgradeResult", api.sipMessageDeviceUpgradeResult)
+	notify.Handle("UploadSnapShotFinished", api.sipMessageSnapshotFinished)
+	notify.Handle("VideoUploadNotify", api.sipMessageVideoUploadNotify)
 	msg.Handle("Alarm", api.sipMessageAlarm)
 
 	// 9.11 事件源侧：接收上级订阅请求（SUBSCRIBE）。
@@ -490,6 +496,14 @@ func (s *Server) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOutput,
 	return s.gb.Upgrade(ctx, in)
 }
 
+// UpgradeState 返回 2022 设备软件升级会话的最新状态。
+func (s *Server) UpgradeState(deviceID, sessionID string) (UpgradeState, bool) {
+	if s == nil || s.gb == nil {
+		return UpgradeState{}, false
+	}
+	return s.gb.UpgradeState(deviceID, sessionID)
+}
+
 func (s *Server) StartHistory(ctx context.Context, in *HistoryInput) error {
 	s.gb.metrics.mediaRequests.Add(1)
 	err := s.gb.StartHistory(ctx, in)
@@ -563,6 +577,26 @@ func (s *Server) StopVoice(ctx context.Context, in *StopVoiceInput) error {
 }
 
 // QuerySnapshot 厂商实现抓图的少，sip 层已实现，先搁置
-func (s *Server) QuerySnapshot(deviceID, targetID, coverKey string) error {
+func (s *Server) QuerySnapshot(deviceID, targetID, coverKey string) (*SnapshotState, error) {
 	return s.gb.QuerySnapshot(deviceID, targetID, coverKey)
+}
+
+func (s *Server) SnapshotState(deviceID, sessionID string) (SnapshotState, bool) {
+	if s == nil || s.gb == nil {
+		return SnapshotState{}, false
+	}
+	return s.gb.SnapshotState(deviceID, sessionID)
+}
+
+func (s *Server) ValidateSnapshotUpload(deviceID, coverKey, sessionID string) error {
+	if s == nil || s.gb == nil {
+		return fmt.Errorf("GB28181 server is unavailable")
+	}
+	return s.gb.ValidateSnapshotUpload(deviceID, coverKey, sessionID)
+}
+
+func (s *Server) MarkSnapshotUploaded(deviceID, sessionID string) {
+	if s != nil && s.gb != nil {
+		s.gb.MarkSnapshotUploaded(deviceID, sessionID)
+	}
 }
