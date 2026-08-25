@@ -96,3 +96,47 @@ func TestTransactionStoreDeduplicatesConcurrentKey(t *testing.T) {
 	}
 	expected.Close()
 }
+
+func TestTransactionKeySeparatesRequestsWithinSameDialog(t *testing.T) {
+	first := newSignalDigestTestRequest(t, MethodMessage, nil)
+	callID := CallID("same-dialog@example")
+	first.RemoveHeader("Call-ID")
+	first.AppendHeader(&callID)
+
+	second := first.Clone().(*Request)
+	second.RemoveHeader("CSeq")
+	second.AppendHeader(&CSeq{SeqNo: 2, MethodName: MethodMessage})
+
+	cancel := first.Clone().(*Request)
+	cancel.SetMethod(MethodCancel)
+	cancel.RemoveHeader("CSeq")
+	cancel.AppendHeader(&CSeq{SeqNo: 1, MethodName: MethodCancel})
+
+	firstKey := getTXKey(first)
+	secondKey := getTXKey(second)
+	cancelKey := getTXKey(cancel)
+	if firstKey == secondKey || firstKey == cancelKey || secondKey == cancelKey {
+		t.Fatalf("dialog transaction keys collided: %q %q %q", firstKey, secondKey, cancelKey)
+	}
+	if got := getTXKey(NewResponseFromRequest("", first, 200, "OK", nil)); got != firstKey {
+		t.Fatalf("first response key = %q, want %q", got, firstKey)
+	}
+	if got := getTXKey(NewResponseFromRequest("", second, 200, "OK", nil)); got != secondKey {
+		t.Fatalf("second response key = %q, want %q", got, secondKey)
+	}
+	if got := getTXKey(NewResponseFromRequest("", cancel, 200, "OK", nil)); got != cancelKey {
+		t.Fatalf("CANCEL response key = %q, want %q", got, cancelKey)
+	}
+}
+
+func TestTransactionKeyFallsBackToCallIDWithoutCSeq(t *testing.T) {
+	request := newSignalDigestTestRequest(t, MethodMessage, nil)
+	request.RemoveHeader("CSeq")
+	callID, ok := request.CallID()
+	if !ok || callID == nil {
+		t.Fatal("test request is missing Call-ID")
+	}
+	if got := getTXKey(request); got != callID.String() {
+		t.Fatalf("legacy transaction key = %q, want %q", got, callID.String())
+	}
+}

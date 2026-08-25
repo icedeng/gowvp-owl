@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -295,8 +297,10 @@ func getTXKey(msg Message) (key string) {
 	callid, ok := msg.CallID()
 	if ok {
 		key = callid.String()
-	} else {
-		key = RandString(10)
+		if cseq, exists := msg.CSeq(); exists && cseq != nil {
+			key = strconv.Itoa(len(key)) + ":" + key + ":" + strconv.FormatUint(uint64(cseq.SeqNo), 10) + ":" + strings.ToUpper(strings.TrimSpace(cseq.MethodName))
+		}
+		return key
 	}
-	return
+	return RandString(10)
 }
