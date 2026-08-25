@@ -109,6 +109,25 @@ DeviceAllowlist = ["34020000001320000001"]
 3. 开启 Required，确认缺失 Note、错误 seed、正文篡改和超出时间窗的 Date 被拒绝；合法响应正常解除事务等待。
 4. 确认 REGISTER 请求/响应保持免签，`RequireMessageAuth` 的 RFC Digest 与 `Date + Note` 没有被混为同一开关。
 
+### 5.4 证书 REGISTER 与 CRL
+
+该项只在目标设备或上级明确支持 2016 `Authorization: Capability/Asymmetric` 时启用，且必须和 SIP-TLS 客户端证书分开记录：
+
+1. 记录平台证书、设备证书、签发 CA、CRL 的序列号、有效期和指纹；私钥、注册随机秘密和完整 Authorization 不得进入证据库。
+2. 先在非 Required 模式完成 `Capability/Asymmetric` 双向挑战，核对两段 Base64 nonce、协商算法、平台身份证明、设备秘密解密和最终 response。
+3. 开启 Required，分别使用未知设备证书、错误设备 ID 映射、过期证书、已吊销证书、错误平台签名、过期/重放 nonce 和声明算法不一致报文，确认均被拒绝且不会回退到口令 Digest。
+4. 设备侧和级联侧各完成一轮成功与失败用例；归档脱敏 SIP 报文、CA/CRL 版本、拒绝原因和服务端日志关联 ID。
+
+### 5.5 `Monitor-User-Identity` 跨域身份
+
+搭建“真实上级用户目录 → 直接上级 211 网关 → Owl 211 网关 → 下级”链路，每个上级使用独立策略：
+
+1. 配置真实用户 ID、机构、类别、职级，本域发起查询、控制、直播、回放/下载、广播和订阅，确认下行请求及事务响应携带同一身份。
+2. 从上级发送已验证外域身份，确认 Owl 只在原值最前面追加本地网关 ID；续订、终止重建和退订必须保留身份，不同用户不得复用同一条下级订阅。
+3. 分别构造缺失头、重复头、非法分段、非 `211` 网关、非 `300-499` 用户编码、直接网关不匹配、未知/重复网关、超出 MaxHops、路由环和机构/类别/职级越权，确认 Required 策略在发送下级信令前拒绝。
+4. TLS 场景确认身份绑定已验证连接；UDP/TCP 明文场景必须记录 IPsec 或等价可信边界。没有该网络证据时，不得把仅源 IP 匹配记为通过。
+5. 保存脱敏 `Monitor-User-Identity` 报文、授权目录快照版本、网关拓扑和每个拒绝用例的审计记录。
+
 ## 6. 证据归档
 
 每台设备使用以下目录：
@@ -138,6 +157,9 @@ docs/testing/evidence/gb28181/platforms/<version>/<vendor>-<platform>/
 ├── subscribe.sip.txt
 ├── voice.sip.txt
 ├── signal-digest.md
+├── certificate-register.sip.txt
+├── monitor-user-identity.sip.txt
+├── security.md
 ├── route-path.sip.txt
 └── result.md
 ```

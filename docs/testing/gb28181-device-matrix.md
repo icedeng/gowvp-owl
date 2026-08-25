@@ -43,6 +43,9 @@
 - 四版本真实上级分别完成 REGISTER（401/Digest/200）、Keepalive、Catalog、DeviceInfo/DeviceStatus、直播、回放、下载、INFO 控制、BYE 和资源释放；1.1+ 再执行订阅，2.0/3.0 再执行 RTP over TCP 与语音流程。
 - 3.0 三级路径分别执行直播、回放和下载：上级发送 `X-PreferredPath`，每一跳只消费本级编码并向下转发剩余路径，响应 `X-RoutePath` 顺序与实际路径一致；错误首跳、重复节点、下级确认不匹配和路由环必须被拒绝。
 - `Date + Note` 先以关闭状态建立兼容基线，再分别验证 Enabled 和 Required；至少覆盖双方约定 seed、Base64 与 hex、一个传统摘要算法和 SM3，并保存缺失签名、正文篡改和超时 Date 的拒绝证据。REGISTER 不应被该摘要要求误拦截。
+- 对支持 2016 `Capability/Asymmetric` 的设备及上级分别验证证书 REGISTER：有效证书成功，未知设备证书、错误设备 ID 绑定、过期证书、吊销证书、错误平台证明、重放 nonce 和算法不一致必须失败；Required 模式不得降级到口令 Digest。保存脱敏挑战/应答、证书序列号、CA/CRL 版本和校验结论，不保存私钥或随机秘密。
+- 使用真实用户目录和至少两级类型码 `211` 的安全路由网关验证 `Monitor-User-Identity`：本域身份生成、逐级前置、直接网关绑定、用户类型码 `300-499`、机构/类别/职级授权、缺失/重复头、未知网关、重复网关、超跳和路由环拒绝。UDP/TCP 场景必须同时保存 IPsec 或等价可信网络边界证据；否则只验证 TLS 绑定场景，不得把源 IP 记作密码学身份。
+- 2022 高安全级别应用按 GB 35114 建立独立验收项；SIP-TLS、证书 REGISTER、`Date + Note` 和 `Monitor-User-Identity` 的通过结果不能替代该专项。
 
 ## 3. 版本专项
 
@@ -128,6 +131,9 @@ docs/testing/evidence/gb28181/platforms/<version>/<vendor>-<platform>/
 ├── subscribe.sip.txt
 ├── voice.sip.txt
 ├── signal-digest.md
+├── certificate-register.sip.txt
+├── monitor-user-identity.sip.txt
+├── security.md
 ├── route-path.sip.txt
 └── result.md
 ```
