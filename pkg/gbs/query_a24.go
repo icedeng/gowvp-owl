@@ -618,7 +618,7 @@ func (g *GB28181API) validateGenericDeviceQueryResponse(ctx *sip.Context, msg ge
 
 func genericQueryResponseMinimumVersion(cmdType string) (GBProtocolVersion, bool) {
 	switch cmdType {
-	case "DeviceStatus":
+	case "DeviceInfo", "DeviceStatus":
 		return GBVersion10, true
 	case "PresetQuery", "ConfigDownload", "DeviceConfig":
 		return GBVersion11, true

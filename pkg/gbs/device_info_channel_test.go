@@ -68,6 +68,34 @@ func TestDeviceInfoResponseAcceptsKnownChildChannel(t *testing.T) {
 	}
 }
 
+func TestDeviceInfoResponseRejectsInvalidEnvelopeBeforeWait(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion10)
+	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}
+	api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "DeviceInfo", 903), pending)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "wrong root", body: `<Query><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Query>`},
+		{name: "wrong command", body: `<Response><CmdType>DeviceStatus</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
+		{name: "non-positive SN", body: `<Response><CmdType>DeviceInfo</CmdType><SN>0</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
+		{name: "unknown target", body: `<Response><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>34020000001320000009</DeviceID><Result>OK</Result></Response>`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "device-info-invalid-"+test.name, []byte(test.body), api.sipMessageDeviceInfo)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("invalid DeviceInfo response = %s", response)
+			}
+		})
+	}
+	select {
+	case output := <-pending.wait:
+		t.Fatalf("invalid DeviceInfo resolved pending query: %+v", output)
+	default:
+	}
+}
+
 func TestDeviceInfoErrorResolvesPendingQuery(t *testing.T) {
 	adapter, persistentDevice, _ := newCascadeMediaCore(t)
 	connection := newFlowConnection()

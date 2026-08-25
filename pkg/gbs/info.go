@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"encoding/xml"
 	"strings"
 
 	"github.com/gowvp/owl/internal/core/ipc"
@@ -25,6 +26,7 @@ func (g *GB28181API) QueryDeviceInfo(ctx *sip.Context) {
 
 // MessageDeviceInfoResponse 设备信息查询应答结构
 type MessageDeviceInfoResponse struct {
+	XMLName      xml.Name
 	CmdType      string `xml:"CmdType"`
 	SN           int    `xml:"SN"`
 	DeviceID     string `xml:"DeviceID"`     // 目标设备的编码(必选)
@@ -52,20 +54,20 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 		return
 	}
 
+	msg.CmdType = strings.TrimSpace(msg.CmdType)
 	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
 	ctx.DeviceID = strings.TrimSpace(ctx.DeviceID)
-	isChannelResponse := false
-	// NVR 可代表其子通道返回 DeviceInfo。仅接受当前注册设备内已知通道，防止越权覆盖其他设备。
-	if msg.DeviceID != "" && msg.DeviceID != ctx.DeviceID {
-		if g.svr != nil && g.svr.memoryStorer != nil {
-			_, isChannelResponse = g.svr.memoryStorer.GetChannel(ctx.DeviceID, msg.DeviceID)
-		}
-	}
-	if msg.DeviceID != "" && msg.DeviceID != ctx.DeviceID && !isChannelResponse {
-		ctx.Log.Error("sipMessageDeviceInfo device id mismatch", "body_device_id", msg.DeviceID, "ctx_device_id", ctx.DeviceID)
-		ctx.String(400, "device id mismatch")
+	if !strings.EqualFold(msg.CmdType, "DeviceInfo") {
+		ctx.String(400, "invalid DeviceInfo response")
 		return
 	}
+	if err := g.validateGenericDeviceQueryResponse(ctx, genericDeviceQueryResponse{
+		XMLName: msg.XMLName, CmdType: msg.CmdType, SN: msg.SN, DeviceID: msg.DeviceID, Result: msg.Result,
+	}); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
+	isChannelResponse := msg.DeviceID != ctx.DeviceID
 
 	// 为什么: Result 非 OK 代表设备端查询失败，可选字段可能为空或旧值，不应覆盖数据库，避免清空已有厂商/型号等信息。
 	if !msg.isResultOK() {
