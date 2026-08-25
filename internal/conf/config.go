@@ -158,7 +158,7 @@ type SIPSignalDigest struct {
 	Enabled         bool     `comment:"是否为出站请求和响应添加 Date+Note" json:"enabled"`
 	Required        bool     `comment:"强制模式；同时启用出站签名，并拒绝未携带或校验失败的 Date+Note 入站消息" json:"required"`
 	Seed            string   `comment:"设备未配置密码时使用的全局摘要 seed" json:"seed,omitempty"`
-	Algorithm       string   `comment:"摘要算法：MD5/SHA-1/SHA-256" json:"algorithm"`
+	Algorithm       string   `comment:"摘要算法：MD5/SHA-1/SHA-256/SM3" json:"algorithm"`
 	Encoding        string   `comment:"nonce 编码：base64/hex" json:"encoding"`
 	AcceptLegacyHex bool     `comment:"base64 模式下是否兼容接收厂商十六进制 nonce" json:"accept_legacy_hex"`
 	Window          Duration `comment:"Date 允许的时间偏差，缺省 10 分钟" json:"window"`
@@ -169,9 +169,9 @@ type SIPSignalDigest struct {
 func ValidateSignalDigestConfig(config SIPSignalDigest) error {
 	algorithm := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(config.Algorithm), "_", "-"))
 	switch algorithm {
-	case "MD5", "SHA-1", "SHA1", "SHA-256", "SHA256":
+	case "MD5", "SHA-1", "SHA1", "SHA-256", "SHA256", "SM3":
 	default:
-		return fmt.Errorf("不支持的信令摘要算法 %q，仅支持 MD5、SHA-1、SHA-256", config.Algorithm)
+		return fmt.Errorf("不支持的信令摘要算法 %q，仅支持 MD5、SHA-1、SHA-256、SM3", config.Algorithm)
 	}
 
 	switch strings.ToLower(strings.TrimSpace(config.Encoding)) {

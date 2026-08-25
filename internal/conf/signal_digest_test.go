@@ -10,7 +10,7 @@ import (
 
 func TestValidateSignalDigestConfig(t *testing.T) {
 	valid := SIPSignalDigest{Algorithm: "MD5", Encoding: "base64", Window: Duration(10 * time.Minute)}
-	for _, algorithm := range []string{"MD5", "sha-1", "SHA1", "sha_256"} {
+	for _, algorithm := range []string{"MD5", "sha-1", "SHA1", "sha_256", "sm3"} {
 		config := valid
 		config.Algorithm = algorithm
 		if err := ValidateSignalDigestConfig(config); err != nil {
@@ -29,7 +29,7 @@ func TestValidateSignalDigestConfig(t *testing.T) {
 		name   string
 		change func(*SIPSignalDigest)
 	}{
-		{name: "unsupported algorithm", change: func(config *SIPSignalDigest) { config.Algorithm = "SM3" }},
+		{name: "unsupported algorithm", change: func(config *SIPSignalDigest) { config.Algorithm = "SM4" }},
 		{name: "unsupported encoding", change: func(config *SIPSignalDigest) { config.Encoding = "raw" }},
 		{name: "window too small", change: func(config *SIPSignalDigest) { config.Window = Duration(time.Millisecond) }},
 		{name: "window too large", change: func(config *SIPSignalDigest) { config.Window = Duration(25 * time.Hour) }},
@@ -63,7 +63,7 @@ func TestSetupConfigRejectsInvalidSignalDigest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	body := strings.Join([]string{
 		"[Sip.SignalDigest]",
-		"Algorithm = 'SM3'",
+		"Algorithm = 'SM4'",
 		"Encoding = 'base64'",
 		"Window = '10m'",
 	}, "\n")

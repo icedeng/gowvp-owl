@@ -1,6 +1,7 @@
 package sip
 
 import (
+	"encoding/hex"
 	"net"
 	"strings"
 	"testing"
@@ -36,6 +37,37 @@ func TestSignalDigestSignsAndVerifiesRequestAndResponse(t *testing.T) {
 	}
 	if err := security.Verify(response); err != nil {
 		t.Fatalf("signed response verification failed: %v", err)
+	}
+}
+
+func TestSignalDigestSM3KnownVectorAndRoundTrip(t *testing.T) {
+	newHash, err := signalDigestHashFactory("SM3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasher := newHash()
+	_, _ = hasher.Write([]byte("abc"))
+	if got := hex.EncodeToString(hasher.Sum(nil)); got != "66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0" {
+		t.Fatalf("SM3(abc) = %s", got)
+	}
+
+	now := time.Date(2024, 4, 1, 4, 5, 6, 0, time.UTC)
+	security, err := NewSignalDigestSecurity(SignalDigestOptions{
+		Seed: "shared-seed", Algorithm: "SM3", Encoding: SignalDigestEncodingBase64,
+		Required: true, Window: 10 * time.Minute, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := newSignalDigestTestRequest(t, MethodMessage, []byte("SM3 payload"))
+	if err := security.Sign(request); err != nil {
+		t.Fatal(err)
+	}
+	if note := request.GetHeaders("Note"); len(note) != 1 || !strings.Contains(note[0].String(), "algorithm=SM3") {
+		t.Fatalf("SM3 Note = %#v", note)
+	}
+	if err := security.Verify(request); err != nil {
+		t.Fatalf("SM3 signed request rejected: %v", err)
 	}
 }
 

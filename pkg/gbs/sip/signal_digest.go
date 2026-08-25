@@ -5,8 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"strings"
 	"time"
+
+	"github.com/emmansun/gmsm/sm3"
 )
 
 const (
@@ -52,7 +55,7 @@ func NewSignalDigestSecurity(options SignalDigestOptions) (*SignalDigestSecurity
 		return nil, fmt.Errorf("signal Digest seed is required")
 	}
 	algorithm := canonicalDigestAlgorithm(options.Algorithm)
-	if _, err := digestHashFactory(algorithm); err != nil {
+	if _, err := signalDigestHashFactory(algorithm); err != nil {
 		return nil, err
 	}
 	encoding := strings.ToLower(strings.TrimSpace(options.Encoding))
@@ -89,6 +92,8 @@ func canonicalDigestAlgorithm(value string) string {
 		return "SHA-1"
 	case "SHA-256", "SHA256":
 		return "SHA-256"
+	case "SM3":
+		return "SM3"
 	default:
 		return strings.TrimSpace(value)
 	}
@@ -174,7 +179,7 @@ func (security *SignalDigestSecurity) calculate(message Message, date string) ([
 	if err != nil || !ok {
 		return nil, fmt.Errorf("signal Digest requires one Call-ID header")
 	}
-	newHash, err := digestHashFactory(security.algorithm)
+	newHash, err := signalDigestHashFactory(security.algorithm)
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +191,13 @@ func (security *SignalDigestSecurity) calculate(message Message, date string) ([
 	_, _ = hasher.Write([]byte(security.seed))
 	_, _ = hasher.Write(message.Body())
 	return hasher.Sum(nil), nil
+}
+
+func signalDigestHashFactory(algorithm string) (func() hash.Hash, error) {
+	if strings.EqualFold(strings.TrimSpace(algorithm), "SM3") {
+		return sm3.New, nil
+	}
+	return digestHashFactory(algorithm)
 }
 
 func (security *SignalDigestSecurity) encode(value []byte) string {

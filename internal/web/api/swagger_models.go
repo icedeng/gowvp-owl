@@ -96,7 +96,7 @@ type SwaggerSIPSignalDigest struct {
 	Enabled         bool   `json:"enabled" example:"false"`
 	Required        bool   `json:"required" example:"false"` // 强制模式；同时启用出站签名并拒绝缺失或验签失败的入站报文
 	Seed            string `json:"seed" example:"shared-secret"`
-	Algorithm       string `json:"algorithm" example:"MD5"`
+	Algorithm       string `json:"algorithm" example:"MD5"` // MD5、SHA-1、SHA-256 或 SM3
 	Encoding        string `json:"encoding" example:"base64"`
 	AcceptLegacyHex bool   `json:"accept_legacy_hex" example:"true"`
 	Window          int64  `json:"window" example:"600000000000"` // 纳秒

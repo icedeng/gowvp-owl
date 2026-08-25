@@ -49,7 +49,7 @@ func TestResolveSignalDigestSecurityUsesDevicePasswordAcrossVersions(t *testing.
 	}
 }
 
-func TestSignalDigestSeedResolutionAndInvalidAlgorithm(t *testing.T) {
+func TestSignalDigestSeedResolutionAndAlgorithms(t *testing.T) {
 	device := &Device{Password: "device-seed"}
 	channel := &Channel{device: device}
 	if got := targetSignalDigestSeed(device); got != "device-seed" {
@@ -68,10 +68,14 @@ func TestSignalDigestSeedResolutionAndInvalidAlgorithm(t *testing.T) {
 	}
 
 	api := &GB28181API{cfg: &conf.SIP{SignalDigest: conf.SIPSignalDigest{
-		Enabled: true, Seed: "seed", Algorithm: "SM3", Encoding: "base64",
+		Enabled: true, Seed: "seed", Algorithm: "SM3", Encoding: "base64", Window: conf.Duration(time.Minute),
 	}}}
+	if _, err := api.newSignalDigestSecurity(""); err != nil {
+		t.Fatalf("SM3 signal Digest was rejected: %v", err)
+	}
+	api.cfg.SignalDigest.Algorithm = "SM4"
 	if _, err := api.newSignalDigestSecurity(""); err == nil {
-		t.Fatal("unsupported SM3 signal Digest was accepted")
+		t.Fatal("unsupported SM4 signal Digest was accepted")
 	}
 }
 

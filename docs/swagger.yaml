@@ -913,6 +913,7 @@ definitions:
         example: true
         type: boolean
       algorithm:
+        description: MD5、SHA-1、SHA-256 或 SM3
         example: MD5
         type: string
       enabled:

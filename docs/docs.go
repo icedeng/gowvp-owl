@@ -4960,6 +4960,7 @@ const docTemplate = `{
                     "example": true
                 },
                 "algorithm": {
+                    "description": "MD5、SHA-1、SHA-256 或 SM3",
                     "type": "string",
                     "example": "MD5"
                 },

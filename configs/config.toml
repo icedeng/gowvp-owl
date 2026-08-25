@@ -126,7 +126,7 @@
     Required = false
     # 设备没有独立密码、或上级没有 SignalDigestSeed 时使用的共享 seed
     Seed = ''
-    # 当前支持 MD5、SHA-1、SHA-256；2022 推荐的 SM3 尚需国密实现专项
+    # 当前支持 MD5、SHA-1、SHA-256、SM3；默认 MD5 保持旧设备兼容
     Algorithm = 'MD5'
     # 标准文本规定 base64；hex 用于兼容部分厂商示例
     Encoding = 'base64'
