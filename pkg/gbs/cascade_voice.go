@@ -29,6 +29,7 @@ type cascadeVoiceSourceSession struct {
 	broadcast   *broadcastSession
 	opened      bool
 	upstreamEnd bool
+	identity    *monitorUserIdentity
 
 	mu       sync.Mutex
 	stopOnce sync.Once
@@ -170,6 +171,7 @@ func (g *GB28181API) startCascadeVoiceSource(ctx context.Context, worker *cascad
 	streamID := cascadeSourceStreamID("voice\x00" + worker.platform.name + "\x00" + request.SourceID + "\x00" + request.TargetID + "\x00" + strconv.Itoa(request.SN) + "\x00" + sip.RandString(12))
 	source := &cascadeVoiceSourceSession{
 		worker: worker, server: server, streamID: streamID, ssrc: ssrc, sourceID: strings.TrimSpace(request.SourceID),
+		identity: monitorUserIdentityFromContext(ctx),
 	}
 	opened, err := g.sms.OpenRTPServer(server, zlm.OpenRTPServerRequest{TCPMode: 0, StreamID: streamID, SSRC: ssrcNumber})
 	if err != nil {
@@ -187,6 +189,10 @@ func (g *GB28181API) startCascadeVoiceSource(ctx context.Context, worker *cascad
 	}
 	callID := sip.CallID("cascade-voice-" + sip.RandString(24))
 	invite := newCascadeVoiceInvite(worker, request.SourceID, request.TargetID, offer, &callID, 1, nil, ssrc)
+	if err := worker.platform.monitorUserIdentity.apply(ctx, invite); err != nil {
+		_ = g.stopCascadeVoiceSource(source, false)
+		return nil, err
+	}
 	response, err := worker.exchange(ctx, invite)
 	if err != nil {
 		_ = g.stopCascadeVoiceSource(source, false)
@@ -199,6 +205,10 @@ func (g *GB28181API) startCascadeVoiceSource(ctx context.Context, worker *cascad
 			return nil, authErr
 		}
 		invite = newCascadeVoiceInvite(worker, request.SourceID, request.TargetID, offer, &callID, 2, auth, ssrc)
+		if err := worker.platform.monitorUserIdentity.apply(ctx, invite); err != nil {
+			_ = g.stopCascadeVoiceSource(source, false)
+			return nil, err
+		}
 		response, err = worker.exchange(ctx, invite)
 		if err != nil {
 			_ = g.stopCascadeVoiceSource(source, false)
@@ -227,6 +237,10 @@ func (g *GB28181API) startCascadeVoiceSource(ctx context.Context, worker *cascad
 		return nil, fmt.Errorf("build cascade Broadcast ACK: %w", err)
 	}
 	prepareCascadeDialogRequest(worker, ack)
+	if err := worker.platform.monitorUserIdentity.apply(ctx, ack); err != nil {
+		_ = g.stopCascadeVoiceSource(source, true)
+		return nil, err
+	}
 	if err := worker.send(ack); err != nil {
 		_ = g.stopCascadeVoiceSource(source, true)
 		return nil, fmt.Errorf("ack cascade Broadcast source: %w", err)
@@ -351,7 +365,12 @@ func (g *GB28181API) stopCascadeVoiceSource(source *cascadeVoiceSourceSession, s
 				result = err
 			} else {
 				prepareCascadeDialogRequest(source.worker, bye)
-				ctx, cancel := context.WithTimeout(context.Background(), defaultCascadeRequestTimeout)
+				identityCtx := withMonitorUserIdentity(context.Background(), source.identity)
+				if err := source.worker.platform.monitorUserIdentity.apply(identityCtx, bye); err != nil {
+					result = err
+					return
+				}
+				ctx, cancel := context.WithTimeout(identityCtx, defaultCascadeRequestTimeout)
 				resp, err := source.worker.exchange(ctx, bye)
 				cancel()
 				if err != nil {

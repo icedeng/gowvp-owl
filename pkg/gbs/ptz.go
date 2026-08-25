@@ -150,7 +150,7 @@ func (g *GB28181API) PTZContext(ctx context.Context, in *PTZInput) (*PTZOutput, 
 	g.pendingDeviceControl.Store(waitKey, pending)
 	defer g.pendingDeviceControl.Delete(waitKey)
 
-	tx, err := g.svr.wrapRequest(ch, sip.MethodMessage, &sip.ContentTypeXML, body)
+	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
 		return nil, err
 	}

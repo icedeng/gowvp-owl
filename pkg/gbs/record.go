@@ -62,7 +62,7 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 	defer g.recordResponseAliases.Delete(aliasKey)
 
 	// 按 GB28181 A.2.4.9 发送 RecordInfo 查询命令。
-	tx, err := g.svr.wrapRequest(ch, sip.MethodMessage, &sip.ContentTypeXML, sip.GetRecordInfoXML(in.ChannelID, sn, in.Start, in.End))
+	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodMessage, &sip.ContentTypeXML, sip.GetRecordInfoXML(in.ChannelID, sn, in.Start, in.End))
 	if err != nil {
 		g.recordResponses.Cancel(recordKey)
 		return nil, err

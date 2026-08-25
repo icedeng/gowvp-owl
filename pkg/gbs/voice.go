@@ -409,7 +409,7 @@ func (g *GB28181API) startBroadcastNotification(ctx context.Context, ch *Channel
 	pending := &pendingBroadcastResponse{wait: make(chan *broadcastResponse, 1)}
 	g.pendingBroadcast.Store(key, pending)
 	defer g.pendingBroadcast.Delete(key)
-	tx, err := g.svr.wrapRequest(ch, sip.MethodMessage, &sip.ContentTypeXML, body)
+	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
 		return err
 	}
@@ -781,7 +781,7 @@ func (g *GB28181API) sipInviteVoice(ctx context.Context, ch *Channel, in *VoiceI
 	}
 	body := msg.Append(nil).AppendTo(nil)
 	body = append(body, "f=v/////a/1/8/1\r\n"...)
-	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
+	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, cfg.ID)})
 	})
 	if err != nil {

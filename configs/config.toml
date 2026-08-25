@@ -182,6 +182,27 @@
     # 地址不一致时必须同时匹配以下 CIDR；空列表保持拒绝
     AllowedAddressCIDRs = []
 
+  # 跨域 Monitor-User-Identity 配置属于具体上级平台，不是全局字符串。
+  # 以下为字段示例；请放入对应的 [[Sip.Upstreams]] 表中，默认关闭：
+  # [Sip.Upstreams.MonitorUserIdentity]
+  #   Enabled = false
+  #   Required = false
+  #   # 本地和直接上级网关必须为类型码 211 的 20 位国标编码。
+  #   LocalGatewayID = '34020000002110000001'
+  #   RemoteGatewayID = '34030000002110000001'
+  #   # 本域用户必须为类型码 300-499 的 20 位国标编码。
+  #   LocalUserID = '34020000003000000001'
+  #   LocalOrganization = '340200'
+  #   LocalCategory = 'operator'
+  #   LocalRank = 'level1'
+  #   TrustedGatewayIDs = []
+  #   # 以下白名单为空表示不按对应属性限制；Required 模式建议至少配置一项授权规则。
+  #   AllowedUserIDs = []
+  #   AllowedOrganizations = []
+  #   AllowedCategories = []
+  #   AllowedRanks = []
+  #   MaxHops = 8
+
   [Sip.Log]
     # 是否启用 SIP 报文日志落盘
     Enabled = false

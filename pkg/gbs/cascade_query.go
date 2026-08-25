@@ -192,8 +192,9 @@ func (g *GB28181API) sipCascadeMessageMiddleware(ctx *sip.Context) {
 		ctx.String(200, "OK")
 		ctx.Abort()
 		body := query
+		identityCtx := monitorUserIdentityContext(ctx)
 		go func() {
-			if err := g.forwardCascadeBroadcast(context.Background(), worker, body); err != nil {
+			if err := g.forwardCascadeBroadcast(identityCtx, worker, body); err != nil {
 				slog.Error("forward cascade Broadcast failed", "upstream", worker.platform.name, "sn", body.SN, "err", err)
 			}
 		}()
@@ -211,7 +212,7 @@ func (g *GB28181API) sipCascadeMessageMiddleware(ctx *sip.Context) {
 		ctx.String(200, "OK")
 		ctx.Abort()
 		body := append([]byte(nil), ctx.Request.Body()...)
-		go g.forwardCascadeDeviceControl(worker, body)
+		go g.forwardCascadeDeviceControl(worker, body, monitorUserIdentityContext(ctx))
 		return
 	}
 	if query.XMLName.Local != "Query" {
@@ -225,11 +226,15 @@ func (g *GB28181API) sipCascadeMessageMiddleware(ctx *sip.Context) {
 
 	ctx.String(200, "OK")
 	ctx.Abort()
-	go g.respondCascadeQuery(worker, query)
+	go g.respondCascadeQuery(worker, query, monitorUserIdentityContext(ctx))
 }
 
-func (g *GB28181API) respondCascadeQuery(worker *cascadeWorker, query cascadeQueryEnvelope) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func (g *GB28181API) respondCascadeQuery(worker *cascadeWorker, query cascadeQueryEnvelope, parents ...context.Context) {
+	parent := context.Background()
+	if len(parents) > 0 && parents[0] != nil {
+		parent = parents[0]
+	}
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	var err error
 	switch query.CmdType {

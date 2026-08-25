@@ -64,6 +64,7 @@ type cascadePlatform struct {
 	mediaAllowedCIDRs       []*net.IPNet
 	tlsConfig               *tls.Config
 	registerCertificateAuth *cascadeRegisterCertificateAuthenticator
+	monitorUserIdentity     *monitorUserIdentityPolicy
 }
 
 type cascadeTLSAddr struct {
@@ -118,6 +119,10 @@ func normalizeCascadePlatform(in conf.SIPUpstream, local conf.SIP, fallbackHost 
 	registerCertificateAuth, err := newCascadeRegisterCertificateAuthenticator(in.RegisterCertificateAuth)
 	if err != nil {
 		return cascadePlatform{}, fmt.Errorf("upstream certificate REGISTER authentication: %w", err)
+	}
+	monitorUserIdentity, err := newMonitorUserIdentityPolicy(in.MonitorUserIdentity)
+	if err != nil {
+		return cascadePlatform{}, fmt.Errorf("upstream Monitor-User-Identity: %w", err)
 	}
 	switch transport {
 	case "udp":
@@ -278,7 +283,7 @@ func normalizeCascadePlatform(in conf.SIPUpstream, local conf.SIP, fallbackHost 
 		version: version, expires: expires, keepaliveInterval: keepalive,
 		sharedChannels: sharedChannels, channelIDMap: channelIDMap,
 		exposedChannelMap: exposedChannelMap, mediaAllowedCIDRs: mediaAllowedCIDRs,
-		tlsConfig: tlsConfig, registerCertificateAuth: registerCertificateAuth,
+		tlsConfig: tlsConfig, registerCertificateAuth: registerCertificateAuth, monitorUserIdentity: monitorUserIdentity,
 	}, nil
 }
 
@@ -611,6 +616,9 @@ func (w *cascadeWorker) keepalive(ctx context.Context) error {
 		return err
 	}
 	request := w.newKeepaliveRequest(body)
+	if err := w.platform.monitorUserIdentity.apply(ctx, request); err != nil {
+		return fmt.Errorf("cascade Keepalive Monitor-User-Identity: %w", err)
+	}
 	response, err := w.exchange(ctx, request)
 	if err != nil {
 		return fmt.Errorf("cascade Keepalive: %w", err)
@@ -711,6 +719,9 @@ func (w *cascadeWorker) targetURIForUser(user string) *sip.URI {
 
 func (w *cascadeWorker) sendMessage(ctx context.Context, body []byte) error {
 	request := w.newKeepaliveRequest(body)
+	if err := w.platform.monitorUserIdentity.apply(ctx, request); err != nil {
+		return fmt.Errorf("cascade MESSAGE Monitor-User-Identity: %w", err)
+	}
 	response, err := w.exchange(ctx, request)
 	if err != nil {
 		return fmt.Errorf("cascade MESSAGE: %w", err)

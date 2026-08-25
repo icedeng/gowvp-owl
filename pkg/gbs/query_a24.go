@@ -191,7 +191,7 @@ func (g *GB28181API) DeviceQuery(ctx context.Context, in *DeviceQueryInput) (*De
 	g.pendingDeviceQuery.Store(waitKey, pending)
 	defer g.pendingDeviceQuery.Delete(waitKey)
 
-	tx, err := g.svr.wrapRequest(target, sip.MethodMessage, &sip.ContentTypeXML, body)
+	tx, err := g.svr.wrapRequestContext(ctx, target, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
 		return nil, err
 	}

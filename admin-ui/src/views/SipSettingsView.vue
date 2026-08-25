@@ -24,6 +24,12 @@ type EditableUpstream = SipUpstream & {
   shared_channels_input: string;
   channel_id_map_input: string;
   media_allowed_cidrs_input: string;
+  monitor_user_identity: NonNullable<SipUpstream["monitor_user_identity"]>;
+  trusted_gateway_ids_input: string;
+  allowed_user_ids_input: string;
+  allowed_organizations_input: string;
+  allowed_categories_input: string;
+  allowed_ranks_input: string;
 };
 
 const ui = useUiStore();
@@ -68,6 +74,14 @@ function durationSeconds(value?: number) {
   return duration > 3_600 ? Math.max(1, Math.round(duration / 1_000_000_000)) : duration;
 }
 
+function listInput(values?: string[]) {
+  return (values || []).join("\n");
+}
+
+function parseListInput(value: string) {
+  return value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
+}
+
 function editableUpstream(item: Partial<SipUpstream> = {}): EditableUpstream {
   return {
     name: item.name || "",
@@ -87,6 +101,29 @@ function editableUpstream(item: Partial<SipUpstream> = {}): EditableUpstream {
     local_port: item.local_port || 0,
     password: item.password || "",
     password_input: "",
+    register_certificate_auth: item.register_certificate_auth ? { ...item.register_certificate_auth } : undefined,
+    signal_digest_seed: item.signal_digest_seed || "",
+    monitor_user_identity: {
+      enabled: item.monitor_user_identity?.enabled ?? false,
+      required: item.monitor_user_identity?.required ?? false,
+      local_gateway_id: item.monitor_user_identity?.local_gateway_id || "",
+      remote_gateway_id: item.monitor_user_identity?.remote_gateway_id || "",
+      local_user_id: item.monitor_user_identity?.local_user_id || "",
+      local_organization: item.monitor_user_identity?.local_organization || "",
+      local_category: item.monitor_user_identity?.local_category || "",
+      local_rank: item.monitor_user_identity?.local_rank || "",
+      trusted_gateway_ids: item.monitor_user_identity?.trusted_gateway_ids || [],
+      allowed_user_ids: item.monitor_user_identity?.allowed_user_ids || [],
+      allowed_organizations: item.monitor_user_identity?.allowed_organizations || [],
+      allowed_categories: item.monitor_user_identity?.allowed_categories || [],
+      allowed_ranks: item.monitor_user_identity?.allowed_ranks || [],
+      max_hops: item.monitor_user_identity?.max_hops || 8,
+    },
+    trusted_gateway_ids_input: listInput(item.monitor_user_identity?.trusted_gateway_ids),
+    allowed_user_ids_input: listInput(item.monitor_user_identity?.allowed_user_ids),
+    allowed_organizations_input: listInput(item.monitor_user_identity?.allowed_organizations),
+    allowed_categories_input: listInput(item.monitor_user_identity?.allowed_categories),
+    allowed_ranks_input: listInput(item.monitor_user_identity?.allowed_ranks),
     version: item.version || "1.0",
     expires: item.expires || 3600,
     keepalive_interval: item.keepalive_interval || 0,
@@ -134,6 +171,24 @@ function upstreamPayload(item: EditableUpstream): SipUpstream {
     local_host: item.local_host?.trim(),
     local_port: item.local_port || undefined,
     password: item.password_input || item.password || "",
+    register_certificate_auth: item.register_certificate_auth ? { ...item.register_certificate_auth } : undefined,
+    signal_digest_seed: item.signal_digest_seed?.trim(),
+    monitor_user_identity: {
+      enabled: Boolean(item.monitor_user_identity.enabled),
+      required: Boolean(item.monitor_user_identity.required),
+      local_gateway_id: item.monitor_user_identity.local_gateway_id?.trim(),
+      remote_gateway_id: item.monitor_user_identity.remote_gateway_id?.trim(),
+      local_user_id: item.monitor_user_identity.local_user_id?.trim(),
+      local_organization: item.monitor_user_identity.local_organization?.trim(),
+      local_category: item.monitor_user_identity.local_category?.trim(),
+      local_rank: item.monitor_user_identity.local_rank?.trim(),
+      trusted_gateway_ids: parseListInput(item.trusted_gateway_ids_input),
+      allowed_user_ids: parseListInput(item.allowed_user_ids_input),
+      allowed_organizations: parseListInput(item.allowed_organizations_input),
+      allowed_categories: parseListInput(item.allowed_categories_input),
+      allowed_ranks: parseListInput(item.allowed_ranks_input),
+      max_hops: item.monitor_user_identity.max_hops || 8,
+    },
     version: item.version,
     expires: item.expires,
     keepalive_interval: Math.round(item.keepalive_seconds * 1_000_000_000),
@@ -371,6 +426,29 @@ onUnmounted(() => {
             <label class="form-group"><span class="form-label">新注册密码</span><input v-model="item.password_input" class="input plain w-full" type="password" autocomplete="new-password" placeholder="留空保留当前密码" /></label>
             <label class="form-group"><span class="form-label">注册有效期（秒）</span><input v-model.number="item.expires" class="input plain w-full" type="number" min="60" max="86400" :required="item.enabled" /></label>
             <label class="form-group"><span class="form-label">心跳间隔（秒）</span><input v-model.number="item.keepalive_seconds" class="input plain w-full" type="number" min="5" max="3600" :required="item.enabled" /></label>
+            <label class="form-group full"><span class="form-label">Date + Note 独立 seed</span><input v-model.trim="item.signal_digest_seed" class="input plain w-full mono" type="password" autocomplete="new-password" placeholder="留空依次使用上级密码和全局 seed" /></label>
+            <label class="toggle-row full">
+              <span><strong>Monitor-User-Identity 跨域身份</strong><small>生成、逐级追加并验证安全路由网关和用户属性；默认关闭</small></span>
+              <span class="switch"><input v-model="item.monitor_user_identity.enabled" type="checkbox" /><span class="slider" /></span>
+            </label>
+            <template v-if="item.monitor_user_identity.enabled || item.monitor_user_identity.required">
+              <label class="toggle-row full">
+                <span><strong>强制身份与属性授权</strong><small>拒绝缺失/非法身份头；必须至少填写一项允许用户或属性</small></span>
+                <span class="switch"><input v-model="item.monitor_user_identity.required" type="checkbox" /><span class="slider" /></span>
+              </label>
+              <label class="form-group"><span class="form-label">本地安全路由网关 ID</span><input v-model.trim="item.monitor_user_identity.local_gateway_id" class="input plain w-full mono" pattern="[0-9]{10}211[0-9]{7}" maxlength="20" required /></label>
+              <label class="form-group"><span class="form-label">直接上级安全路由网关 ID</span><input v-model.trim="item.monitor_user_identity.remote_gateway_id" class="input plain w-full mono" pattern="[0-9]{10}211[0-9]{7}" maxlength="20" required /></label>
+              <label class="form-group"><span class="form-label">本域用户 ID</span><input v-model.trim="item.monitor_user_identity.local_user_id" class="input plain w-full mono" pattern="[0-9]{20}" maxlength="20" required /></label>
+              <label class="form-group"><span class="form-label">最大网关跳数</span><input v-model.number="item.monitor_user_identity.max_hops" class="input plain w-full" type="number" min="2" max="32" required /></label>
+              <label class="form-group"><span class="form-label">本域用户机构</span><input v-model.trim="item.monitor_user_identity.local_organization" class="input plain w-full" required /><span class="form-help">属性值不得包含连字符。</span></label>
+              <label class="form-group"><span class="form-label">本域用户类别</span><input v-model.trim="item.monitor_user_identity.local_category" class="input plain w-full" required /></label>
+              <label class="form-group"><span class="form-label">本域用户职级</span><input v-model.trim="item.monitor_user_identity.local_rank" class="input plain w-full" required /></label>
+              <label class="form-group full"><span class="form-label">可信中间网关 ID</span><textarea v-model="item.trusted_gateway_ids_input" class="input plain w-full cascade-textarea mono" placeholder="每行一个类型码 211 的网关 ID；不含直接上级和本地网关" /></label>
+              <label class="form-group full"><span class="form-label">允许用户 ID</span><textarea v-model="item.allowed_user_ids_input" class="input plain w-full cascade-textarea mono" placeholder="每行一个类型码 300-499 的用户 ID；空表示不按用户 ID 限制" /></label>
+              <label class="form-group"><span class="form-label">允许机构</span><textarea v-model="item.allowed_organizations_input" class="input plain w-full cascade-textarea" placeholder="每行一个机构属性" /></label>
+              <label class="form-group"><span class="form-label">允许用户类别</span><textarea v-model="item.allowed_categories_input" class="input plain w-full cascade-textarea" placeholder="每行一个类别属性" /></label>
+              <label class="form-group full"><span class="form-label">允许用户职级</span><textarea v-model="item.allowed_ranks_input" class="input plain w-full cascade-textarea" placeholder="每行一个职级属性" /></label>
+            </template>
             <label class="form-group full">
               <span class="form-label">共享通道国标 ID</span>
               <textarea v-model="item.shared_channels_input" class="input plain w-full cascade-textarea mono" placeholder="每行一个 20 位通道编码；空列表表示不向该上级共享通道" />

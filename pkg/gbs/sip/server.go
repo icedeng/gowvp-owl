@@ -615,15 +615,15 @@ func (s *Server) handlerRequest(msg *Request) {
 	if resolver := s.requestSecurityResolver(); resolver != nil {
 		security, err := resolver(msg)
 		if err != nil {
-			slog.Warn("resolve SIP signal Digest security failed", "method", msg.Method(), "err", err)
-			_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusForbidden, "signal Digest unavailable", nil))
+			slog.Warn("resolve SIP request security failed", "method", msg.Method(), "err", err)
+			_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusForbidden, "request security unavailable", nil))
 			return
 		}
 		tx.SetMessageSecurity(security)
 		if security != nil {
 			if err := security.Verify(msg); err != nil {
-				slog.Warn("reject SIP request with invalid signal Digest", "method", msg.Method(), "err", err)
-				_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusForbidden, "invalid signal Digest", nil))
+				slog.Warn("reject SIP request with invalid security proof", "method", msg.Method(), "err", err)
+				_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusForbidden, "invalid request security", nil))
 				return
 			}
 		}

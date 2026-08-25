@@ -3,6 +3,7 @@ package conf
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -201,12 +202,146 @@ type SIPUpstream struct {
 	Password                string                             `json:"password" comment:"上级平台注册密码"`
 	RegisterCertificateAuth SIPUpstreamRegisterCertificateAuth `json:"register_certificate_auth" comment:"向上级注册时使用 Capability/Asymmetric 数字证书认证"`
 	SignalDigestSeed        string                             `json:"signal_digest_seed,omitempty" comment:"与该上级约定的 Note 摘要 seed；为空时使用 Password 或 Sip.SignalDigest.Seed"`
+	MonitorUserIdentity     SIPMonitorUserIdentity             `json:"monitor_user_identity" comment:"跨域 Monitor-User-Identity 身份和访问控制策略"`
 	Version                 string                             `json:"version" comment:"级联档案版本：1.0/1.1/2.0/3.0"`
 	Expires                 int                                `json:"expires" comment:"注册有效期秒数"`
 	KeepaliveInterval       Duration                           `json:"keepalive_interval" comment:"心跳间隔"`
 	SharedChannels          []string                           `json:"shared_channels,omitempty" comment:"共享给该上级的本地国标通道编码；空列表表示不共享"`
 	ChannelIDMap            map[string]string                  `json:"channel_id_map,omitempty" comment:"本地通道编码到上级可见国标编码的映射"`
 	MediaAllowedCIDRs       []string                           `json:"media_allowed_cidrs,omitempty" comment:"除上级信令 IP 外允许接收级联媒体的 IP/CIDR 白名单"`
+}
+
+// SIPMonitorUserIdentity 控制 GB/T 28181 8.3/8.5 规定的跨域用户身份头。
+// 各上级可以使用独立的安全路由网关和访问控制策略，避免把某个平台的信任关系复用于其他平台。
+type SIPMonitorUserIdentity struct {
+	Enabled              bool     `json:"enabled" comment:"是否生成并校验 Monitor-User-Identity；Required 会隐式启用"`
+	Required             bool     `json:"required" comment:"是否拒绝上级缺失 Monitor-User-Identity 的跨域请求"`
+	LocalGatewayID       string   `json:"local_gateway_id" comment:"本地信令安全路由网关 20 位国标编码，类型码必须为 211"`
+	RemoteGatewayID      string   `json:"remote_gateway_id" comment:"直接相连上级信令安全路由网关 20 位国标编码，类型码必须为 211"`
+	LocalUserID          string   `json:"local_user_id" comment:"本域发起信令使用的 20 位用户编码，类型码应在 300-499"`
+	LocalOrganization    string   `json:"local_organization" comment:"本域用户隶属机构属性，不得包含连字符"`
+	LocalCategory        string   `json:"local_category" comment:"本域用户类别属性，不得包含连字符"`
+	LocalRank            string   `json:"local_rank" comment:"本域用户职级属性，不得包含连字符"`
+	TrustedGatewayIDs    []string `json:"trusted_gateway_ids,omitempty" comment:"除直接上级外允许出现在身份路径中的 211 类型网关编码"`
+	AllowedUserIDs       []string `json:"allowed_user_ids,omitempty" comment:"允许跨域访问的用户编码白名单；空表示不按该属性限制"`
+	AllowedOrganizations []string `json:"allowed_organizations,omitempty" comment:"允许跨域访问的机构属性白名单；空表示不按该属性限制"`
+	AllowedCategories    []string `json:"allowed_categories,omitempty" comment:"允许跨域访问的用户类别白名单；空表示不按该属性限制"`
+	AllowedRanks         []string `json:"allowed_ranks,omitempty" comment:"允许跨域访问的用户职级白名单；空表示不按该属性限制"`
+	MaxHops              int      `json:"max_hops" comment:"身份路径允许的最大安全路由网关跳数；0 使用缺省值 8"`
+}
+
+func (config SIPMonitorUserIdentity) Active() bool {
+	return config.Enabled || config.Required
+}
+
+// ValidateMonitorUserIdentityConfig 校验跨域身份配置。
+// 标准以连字符分段，因此所有属性都禁止连字符和控制字符，避免产生歧义或头注入。
+func ValidateMonitorUserIdentityConfig(config SIPMonitorUserIdentity) error {
+	if !config.Active() {
+		return nil
+	}
+	if !isGBDeviceType(config.LocalGatewayID, "211") {
+		return fmt.Errorf("Monitor-User-Identity 本地安全路由网关 ID 必须是类型码 211 的 20 位国标编码")
+	}
+	if !isGBDeviceType(config.RemoteGatewayID, "211") {
+		return fmt.Errorf("Monitor-User-Identity 上级安全路由网关 ID 必须是类型码 211 的 20 位国标编码")
+	}
+	if strings.TrimSpace(config.LocalGatewayID) == strings.TrimSpace(config.RemoteGatewayID) {
+		return fmt.Errorf("Monitor-User-Identity 本地和上级安全路由网关 ID 不能相同")
+	}
+	if !isGBUserCode(config.LocalUserID) {
+		return fmt.Errorf("Monitor-User-Identity 本域用户 ID 必须是类型码 300-499 的 20 位国标编码")
+	}
+	for name, value := range map[string]string{
+		"用户隶属机构": config.LocalOrganization,
+		"用户类别":   config.LocalCategory,
+		"用户职级":   config.LocalRank,
+	} {
+		if err := validateMonitorIdentityAttribute(value); err != nil {
+			return fmt.Errorf("Monitor-User-Identity %s属性无效: %w", name, err)
+		}
+	}
+	maxHops := config.MaxHops
+	if maxHops == 0 {
+		maxHops = 8
+	}
+	if maxHops < 2 || maxHops > 32 {
+		return fmt.Errorf("Monitor-User-Identity max_hops 应在 2-32 之间；0 表示缺省值 8")
+	}
+	if config.Required && len(config.AllowedUserIDs) == 0 && len(config.AllowedOrganizations) == 0 &&
+		len(config.AllowedCategories) == 0 && len(config.AllowedRanks) == 0 {
+		return fmt.Errorf("Monitor-User-Identity Required 模式必须配置至少一项用户或身份属性白名单")
+	}
+	seenGateways := map[string]struct{}{strings.TrimSpace(config.RemoteGatewayID): {}}
+	for _, gatewayID := range config.TrustedGatewayIDs {
+		gatewayID = strings.TrimSpace(gatewayID)
+		if !isGBDeviceType(gatewayID, "211") {
+			return fmt.Errorf("Monitor-User-Identity 可信网关 %q 必须是类型码 211 的 20 位国标编码", gatewayID)
+		}
+		if gatewayID == strings.TrimSpace(config.LocalGatewayID) {
+			return fmt.Errorf("Monitor-User-Identity 可信网关不能包含本地网关 ID")
+		}
+		if _, exists := seenGateways[gatewayID]; exists {
+			return fmt.Errorf("Monitor-User-Identity 可信网关重复: %s", gatewayID)
+		}
+		seenGateways[gatewayID] = struct{}{}
+	}
+	for _, userID := range config.AllowedUserIDs {
+		if !isGBUserCode(userID) {
+			return fmt.Errorf("Monitor-User-Identity 允许用户 %q 必须是类型码 300-499 的 20 位国标编码", userID)
+		}
+	}
+	for name, values := range map[string][]string{
+		"允许机构": config.AllowedOrganizations,
+		"允许类别": config.AllowedCategories,
+		"允许职级": config.AllowedRanks,
+	} {
+		seen := make(map[string]struct{}, len(values))
+		for _, value := range values {
+			if err := validateMonitorIdentityAttribute(value); err != nil {
+				return fmt.Errorf("Monitor-User-Identity %s %q 无效: %w", name, value, err)
+			}
+			value = strings.TrimSpace(value)
+			if _, exists := seen[value]; exists {
+				return fmt.Errorf("Monitor-User-Identity %s重复: %s", name, value)
+			}
+			seen[value] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validateMonitorIdentityAttribute(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("不能为空")
+	}
+	if len(value) > 64 {
+		return fmt.Errorf("长度不能超过 64 字节")
+	}
+	if strings.Contains(value, "-") {
+		return fmt.Errorf("不能包含分段符号 -")
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("不能包含控制字符")
+		}
+	}
+	return nil
+}
+
+func isGBDeviceType(value, deviceType string) bool {
+	value = strings.TrimSpace(value)
+	return isDigitCode(value, 20) && len(deviceType) == 3 && value[10:13] == deviceType
+}
+
+func isGBUserCode(value string) bool {
+	value = strings.TrimSpace(value)
+	if !isDigitCode(value, 20) {
+		return false
+	}
+	deviceType, err := strconv.Atoi(value[10:13])
+	return err == nil && deviceType >= 300 && deviceType <= 499
 }
 
 // SIPUpstreamRegisterCertificateAuth 控制本平台作为 SIP UA 向上级注册时使用的

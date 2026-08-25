@@ -71,6 +71,65 @@ func (g *GB28181API) resolveSignalDigestSecurity(request *sip.Request) (sip.Mess
 	return newSignalDigestSecurity(cfg, credential.Password)
 }
 
+type combinedMessageSecurity struct {
+	items []sip.MessageSecurity
+}
+
+func (security combinedMessageSecurity) Verify(message sip.Message) error {
+	for _, item := range security.items {
+		if item != nil {
+			if err := item.Verify(message); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (security combinedMessageSecurity) Sign(message sip.Message) error {
+	for _, item := range security.items {
+		if item != nil {
+			if err := item.Sign(message); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func combineMessageSecurity(items ...sip.MessageSecurity) sip.MessageSecurity {
+	active := make([]sip.MessageSecurity, 0, len(items))
+	for _, item := range items {
+		if item != nil {
+			active = append(active, item)
+		}
+	}
+	switch len(active) {
+	case 0:
+		return nil
+	case 1:
+		return active[0]
+	default:
+		return combinedMessageSecurity{items: active}
+	}
+}
+
+func (g *GB28181API) resolveRequestSecurity(request *sip.Request) (sip.MessageSecurity, error) {
+	digest, err := g.resolveSignalDigestSecurity(request)
+	if err != nil {
+		return nil, err
+	}
+	var identity sip.MessageSecurity
+	if request != nil && !strings.EqualFold(request.Method(), sip.MethodRegister) && g != nil && g.svr != nil && g.svr.cascade != nil {
+		deviceID := signalDigestRequestDeviceID(request)
+		if worker, ok := g.svr.cascade.matchRegistered(deviceID, request.Source(), request.GetConnection()); ok &&
+			worker != nil && worker.platform.monitorUserIdentity != nil {
+			identity = &monitorUserIdentityMessageSecurity{policy: worker.platform.monitorUserIdentity}
+		}
+	}
+	return combineMessageSecurity(identity, digest), nil
+}
+
 func signalDigestRequestDeviceID(request *sip.Request) string {
 	if request == nil {
 		return ""

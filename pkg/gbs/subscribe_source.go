@@ -49,8 +49,10 @@ type eventSubscriptionFilter struct {
 }
 
 type cascadeDownstreamSubscription struct {
-	Input SubscribeInput
-	Refs  int
+	Input          SubscribeInput
+	Refs           int
+	Identity       *monitorUserIdentity
+	LocalGatewayID string
 }
 
 type keyedOperationLock struct {
@@ -74,14 +76,16 @@ type eventSubscription struct {
 	Source net.Addr
 	Conn   sip.Connection
 
-	GBVersion string
-	Event     string
-	Response  *sip.Response
-	Contact   *sip.Address
-	CSeq      uint32
-	Cascade   *cascadeWorker
-	Filter    eventSubscriptionFilter
-	Interval  int
+	GBVersion      string
+	Event          string
+	Response       *sip.Response
+	Contact        *sip.Address
+	CSeq           uint32
+	Cascade        *cascadeWorker
+	Identity       *monitorUserIdentity
+	LocalGatewayID string
+	Filter         eventSubscriptionFilter
+	Interval       int
 
 	// DownstreamKeys 记录本级为该上级订阅自动建立的下级订阅，用于续订、退订和超时释放。
 	DownstreamKeys  []string
@@ -233,7 +237,8 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 
 	dialogID, fromTag := parseSubscribeDialog(ctx)
 	key := buildEventSubscriptionKey(dialogID, fromTag, cmdType, deviceID)
-	unlockSubscription, err := g.lockEventSubscriptionOperation(context.Background(), key)
+	identityCtx := monitorUserIdentityContext(ctx)
+	unlockSubscription, err := g.lockEventSubscriptionOperation(identityCtx, key)
 	if err != nil {
 		ctx.String(503, err.Error())
 		return
@@ -261,28 +266,35 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 			existing.mu.Unlock()
 		}
 	}
-	desired, err := g.desiredCascadeDownstreamSubscriptions(context.Background(), cascade, req, cmdType, deviceID, expires)
+	desired, err := g.desiredCascadeDownstreamSubscriptions(identityCtx, cascade, req, cmdType, deviceID, expires)
 	if err != nil {
 		ctx.String(502, err.Error())
 		return
 	}
-	downstreamKeys, err := g.syncCascadeDownstreamSubscriptions(context.Background(), previousKeys, desired)
+	downstreamKeys, err := g.syncCascadeDownstreamSubscriptions(identityCtx, previousKeys, desired)
 	if err != nil {
 		ctx.String(502, err.Error())
 		return
 	}
 
 	sub := &eventSubscription{
-		Key:            key,
-		CmdType:        cmdType,
-		DeviceID:       deviceID,
-		ExpiresAt:      time.Now().Add(time.Duration(expires) * time.Second),
-		To:             targetAddr.Clone(),
-		Source:         ctx.Source,
-		Conn:           ctx.Request.GetConnection(),
-		GBVersion:      ctx.XGBVer,
-		Event:          eventValue,
-		Cascade:        cascade,
+		Key:       key,
+		CmdType:   cmdType,
+		DeviceID:  deviceID,
+		ExpiresAt: time.Now().Add(time.Duration(expires) * time.Second),
+		To:        targetAddr.Clone(),
+		Source:    ctx.Source,
+		Conn:      ctx.Request.GetConnection(),
+		GBVersion: ctx.XGBVer,
+		Event:     eventValue,
+		Cascade:   cascade,
+		Identity:  monitorUserIdentityFromContext(monitorUserIdentityContext(ctx)),
+		LocalGatewayID: func() string {
+			if cascade != nil && cascade.platform.monitorUserIdentity != nil {
+				return cascade.platform.monitorUserIdentity.localGatewayID
+			}
+			return ""
+		}(),
 		Filter:         subscriptionFilterFromRequest(req),
 		Interval:       subscribeRequestInterval(req),
 		DownstreamKeys: downstreamKeys,
@@ -305,6 +317,8 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 			existing.Response = sub.Response
 			existing.Contact = sub.Contact
 			existing.Cascade = sub.Cascade
+			existing.Identity = sub.Identity.clone()
+			existing.LocalGatewayID = sub.LocalGatewayID
 			existing.Filter = sub.Filter
 			existing.Interval = sub.Interval
 			existing.DownstreamKeys = append(existing.DownstreamKeys[:0], sub.DownstreamKeys...)
@@ -416,7 +430,10 @@ func (g *GB28181API) renewTerminatedCascadeSubscription(key any) {
 		return
 	}
 	input := state.Input
+	identity := state.Identity.clone()
+	localGatewayID := state.LocalGatewayID
 	g.cascadeSubscriptionMu.Unlock()
+	ctx = withMonitorUserIdentityRoute(ctx, identity, localGatewayID)
 	if err := g.invokeCascadeSubscribe(ctx, &input); err != nil {
 		slog.Warn("renew terminated cascade subscription failed", "event", input.Event, "device_id", input.DeviceID, "target_id", input.TargetID, "err", err)
 	}
@@ -849,6 +866,7 @@ func (g *GB28181API) sendCascadeEventNotify(sub *eventSubscription, cmdType stri
 	event := sub.Event
 	deviceID := sub.DeviceID
 	expiresAt := sub.ExpiresAt
+	identity := sub.Identity.clone()
 	local, localOK := dialogResponse.To()
 	remote, remoteOK := dialogResponse.From()
 	callID, callIDOK := dialogResponse.CallID()
@@ -898,6 +916,10 @@ func (g *GB28181API) sendCascadeEventNotify(sub *eventSubscription, cmdType stri
 		&sip.GenericHeader{HeaderName: "Subscription-State", Contents: state},
 	)
 	request := sip.NewRequest("", sip.MethodNotify, to.URI.Clone(), sip.DefaultSipVersion, headers, body)
+	identityCtx := withMonitorUserIdentity(context.Background(), identity)
+	if err := cascade.platform.monitorUserIdentity.apply(identityCtx, request); err != nil {
+		return err
+	}
 	request.SetDestination(cascade.remoteDestination())
 	if g != nil && g.svr != nil && g.svr.UDPConn() != nil {
 		request.SetConnection(g.svr.UDPConn())

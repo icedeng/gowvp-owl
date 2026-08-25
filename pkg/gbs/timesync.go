@@ -50,7 +50,7 @@ func (g *GB28181API) SyncTime(ctx context.Context, in *TimeSyncInput) error {
 	if err != nil {
 		return err
 	}
-	tx, err := g.svr.wrapRequest(ipc, sip.MethodMessage, &sip.ContentTypeXML, body)
+	tx, err := g.svr.wrapRequestContext(ctx, ipc, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
 		return err
 	}

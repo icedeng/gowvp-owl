@@ -4963,6 +4963,77 @@
                 }
             }
         },
+        "api.SwaggerSIPMonitorUserIdentity": {
+            "type": "object",
+            "properties": {
+                "allowed_categories": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "allowed_organizations": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "allowed_ranks": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "allowed_user_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "local_category": {
+                    "type": "string",
+                    "example": "operator"
+                },
+                "local_gateway_id": {
+                    "type": "string",
+                    "example": "34020000002110000001"
+                },
+                "local_organization": {
+                    "type": "string",
+                    "example": "340200"
+                },
+                "local_rank": {
+                    "type": "string",
+                    "example": "level1"
+                },
+                "local_user_id": {
+                    "type": "string",
+                    "example": "34020000003000000001"
+                },
+                "max_hops": {
+                    "type": "integer",
+                    "example": 8
+                },
+                "remote_gateway_id": {
+                    "type": "string",
+                    "example": "34030000002110000001"
+                },
+                "required": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "trusted_gateway_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "api.SwaggerSIPRegisterCertificateAuth": {
             "type": "object",
             "properties": {
@@ -5088,6 +5159,9 @@
                     "example": [
                         "198.51.100.0/24"
                     ]
+                },
+                "monitor_user_identity": {
+                    "$ref": "#/definitions/api.SwaggerSIPMonitorUserIdentity"
                 },
                 "name": {
                     "type": "string",

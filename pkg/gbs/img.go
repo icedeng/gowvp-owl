@@ -97,7 +97,7 @@ func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetI
 	g.pendingDeviceConfig.Store(waitKey, pending)
 	defer g.pendingDeviceConfig.Delete(waitKey)
 
-	tx, err := g.svr.wrapRequest(target, sip.MethodMessage, &sip.ContentTypeXML, body)
+	tx, err := g.svr.wrapRequestContext(ctx, target, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
 		g.deleteSnapshotState(deviceID, sessionID)
 		return nil, err

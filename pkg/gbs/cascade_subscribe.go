@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -219,12 +220,23 @@ func (g *GB28181API) desiredCascadeDownstreamSubscriptions(ctx context.Context, 
 		}
 		input := copyCascadeSubscribeInput(req, channel.DeviceID, targetID, cmdType, expires)
 		key := buildOutgoingSubscriptionKey(input.DeviceID, input.TargetID, cmdType, &input)
+		key += monitorUserIdentitySubscriptionKey(ctx)
 		desired[key] = input
 	}
 	if localTarget != "" && len(desired) == 0 {
 		return nil, fmt.Errorf("shared cascade channel is unavailable")
 	}
 	return desired, nil
+}
+
+func monitorUserIdentitySubscriptionKey(ctx context.Context) string {
+	identity := monitorUserIdentityFromContext(ctx)
+	if identity == nil {
+		return ""
+	}
+	localGatewayID, _ := ctx.Value(monitorUserIdentityGatewayContextKey{}).(string)
+	sum := sha256.Sum256([]byte(strings.TrimSpace(localGatewayID) + "\x00" + identity.String()))
+	return fmt.Sprintf("|identity=%x", sum[:8])
 }
 
 func (g *GB28181API) invokeCascadeSubscribe(ctx context.Context, input *SubscribeInput) error {
@@ -381,7 +393,10 @@ func (g *GB28181API) syncCascadeDownstreamSubscriptionsMode(ctx context.Context,
 			continue
 		}
 		// 先登记占位，使关闭路径能发现并等待在途创建。
-		state = &cascadeDownstreamSubscription{Input: input}
+		localGatewayID, _ := ctx.Value(monitorUserIdentityGatewayContextKey{}).(string)
+		state = &cascadeDownstreamSubscription{
+			Input: input, Identity: monitorUserIdentityFromContext(ctx), LocalGatewayID: strings.TrimSpace(localGatewayID),
+		}
 		g.cascadeSubscriptions[key] = state
 		g.cascadeSubscriptionMu.Unlock()
 		if err := g.invokeCascadeSubscribe(ctx, &input); err != nil {
@@ -439,6 +454,8 @@ func (g *GB28181API) reconcileCascadeDownstreamSubscriptions(ctx context.Context
 		}
 		sub.mu.Lock()
 		worker := sub.Cascade
+		identity := sub.Identity.clone()
+		localGatewayID := sub.LocalGatewayID
 		cmdType := sub.CmdType
 		deviceID := sub.DeviceID
 		expiresAt := sub.ExpiresAt
@@ -462,12 +479,13 @@ func (g *GB28181API) reconcileCascadeDownstreamSubscriptions(ctx context.Context
 		if interval > 0 {
 			request.Interval = &interval
 		}
-		desired, err := g.desiredCascadeDownstreamSubscriptions(ctx, worker, request, cmdType, deviceID, expires)
+		identityCtx := withMonitorUserIdentityRoute(ctx, identity, localGatewayID)
+		desired, err := g.desiredCascadeDownstreamSubscriptions(identityCtx, worker, request, cmdType, deviceID, expires)
 		if err != nil {
 			slog.Warn("reconcile cascade downstream subscriptions failed", "upstream", worker.platform.name, "event", cmdType, "err", err)
 			return true
 		}
-		keys, err := g.syncCascadeDownstreamSubscriptionsMode(ctx, previous, desired, false)
+		keys, err := g.syncCascadeDownstreamSubscriptionsMode(identityCtx, previous, desired, false)
 		if err != nil {
 			slog.Warn("reconcile cascade downstream subscriptions failed", "upstream", worker.platform.name, "event", cmdType, "err", err)
 			return true
@@ -504,9 +522,12 @@ func (g *GB28181API) releaseCascadeDownstreamSubscription(ctx context.Context, k
 	}
 	delete(g.cascadeSubscriptions, key)
 	cancel := state.Input
+	identity := state.Identity.clone()
+	localGatewayID := state.LocalGatewayID
 	g.cascadeSubscriptionMu.Unlock()
 	cancel.Cancel = true
 	cancel.Expires = 0
+	ctx = withMonitorUserIdentityRoute(ctx, identity, localGatewayID)
 	if err = g.invokeCascadeSubscribe(ctx, &cancel); err != nil {
 		slog.Warn("cancel downstream cascade subscription failed", "device_id", cancel.DeviceID, "target_id", cancel.TargetID, "event", cancel.Event, "err", err)
 	}
@@ -539,7 +560,8 @@ func (g *GB28181API) closeCascadeDownstreamSubscriptions() {
 				input := state.Input
 				input.Cancel = true
 				input.Expires = 0
-				if err := g.invokeCascadeSubscribe(context.Background(), &input); err != nil {
+				ctx := withMonitorUserIdentityRoute(context.Background(), state.Identity, state.LocalGatewayID)
+				if err := g.invokeCascadeSubscribe(ctx, &input); err != nil {
 					slog.Warn("cancel downstream cascade subscription during close failed", "device_id", input.DeviceID, "target_id", input.TargetID, "event", input.Event, "err", err)
 				}
 			}

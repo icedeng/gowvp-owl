@@ -315,7 +315,7 @@ func (g *GB28181API) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput)
 	g.pendingDeviceConfig.Store(waitKey, pending)
 	defer g.pendingDeviceConfig.Delete(waitKey)
 
-	tx, err := g.svr.wrapRequest(target, sip.MethodMessage, &sip.ContentTypeXML, body)
+	tx, err := g.svr.wrapRequestContext(ctx, target, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
 		return nil, err
 	}

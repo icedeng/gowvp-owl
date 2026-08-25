@@ -473,7 +473,7 @@ func (g *GB28181API) sipInviteDirectTCPHistory(ctx context.Context, ch *Channel,
 	if err != nil {
 		return directTCPDownloadOffer{}, err
 	}
-	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
+	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, cfg.ID)})
 	})
 	if err != nil {
@@ -590,7 +590,7 @@ func (g *GB28181API) sipInviteHistory(ctx context.Context, ch *Channel, in *Hist
 	if err != nil {
 		return err
 	}
-	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
+	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, cfg.ID)})
 		if in.preferredPath != "" {
 			r.AppendHeader(&sip.GenericHeader{HeaderName: cascadePreferredPathHeader, Contents: in.preferredPath})

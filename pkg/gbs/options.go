@@ -42,7 +42,7 @@ func (g *GB28181API) ProbeOptions(ctx context.Context, in *OptionsProbeInput) er
 	if !ok || !ipcDev.IsOnlineNow() {
 		return ErrDeviceOffline
 	}
-	tx, err := g.svr.wrapRequest(ipcDev, sip.MethodOptions, nil, nil)
+	tx, err := g.svr.wrapRequestContext(ctx, ipcDev, sip.MethodOptions, nil, nil)
 	if err != nil {
 		return err
 	}

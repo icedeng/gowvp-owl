@@ -140,7 +140,7 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 	}
 
 	var request *sip.Request
-	tx, err := g.svr.wrapRequest(target, sip.MethodSubscribe, &sip.ContentTypeXML, body, func(r *sip.Request) {
+	tx, err := g.svr.wrapRequestContext(ctx, target, sip.MethodSubscribe, &sip.ContentTypeXML, body, func(r *sip.Request) {
 		request = r
 		if dialog.response != nil {
 			applyOutgoingSubscriptionDialog(r, dialog)

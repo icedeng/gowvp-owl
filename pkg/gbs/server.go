@@ -124,6 +124,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	api := NewGB28181API(cfg, store, sc.NodeManager)
 	api.registerCertificateAuth = registerCertificateAuth
 	sipServer := sip.NewServer(&from)
+	sipServer.Use(api.sipMonitorUserIdentityMiddleware)
 	sipServer.Register(api.handlerRegister)
 	msg := sipServer.Message(api.sipAccessControlMiddleware, api.sipCascadeMessageMiddleware)
 	msg.Handle("Keepalive", api.sipMessageKeepalive)
@@ -188,7 +189,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 		memoryStorer: memoryStorer,
 	}
 	api.svr = &c
-	sipServer.SetRequestSecurityResolver(api.resolveSignalDigestSecurity)
+	sipServer.SetRequestSecurityResolver(api.resolveRequestSecurity)
 	var (
 		cleanupOnce     sync.Once
 		loggerInstalled bool

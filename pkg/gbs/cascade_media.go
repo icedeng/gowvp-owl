@@ -279,7 +279,7 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 		}
 	}
 
-	sessionCtx, cancel := context.WithCancel(context.Background())
+	sessionCtx, cancel := context.WithCancel(monitorUserIdentityContext(ctx))
 	session := &cascadeMediaSession{worker: worker, ssrc: offer.SSRC, vhost: cascadeSourceVHost, app: cascadeSourceApp, cancel: cancel}
 	dialog := &inboundInviteDialog{
 		CallID: callID, DeviceID: ctx.DeviceID, CreatedAt: time.Now(), UpdatedAt: time.Now(),

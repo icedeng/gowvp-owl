@@ -183,7 +183,7 @@ func (g *GB28181API) QueryCatalogContext(ctx context.Context, deviceID string) (
 		g.catalogResponses.Cancel(key)
 		return err
 	}
-	tx, err := g.svr.wrapRequest(ipc, sip.MethodMessage, &sip.ContentTypeXML, body)
+	tx, err := g.svr.wrapRequestContext(ctx, ipc, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
 		g.catalogResponses.Cancel(key)
 		return err
@@ -328,6 +328,10 @@ func requestTargetSnapshot(target Targeter) (*sip.Address, sip.Connection, net.A
 }
 
 func (s *Server) wrapRequest(t Targeter, method string, contentType *sip.ContentType, body []byte, opts ...RequestOption) (*sip.Transaction, error) {
+	return s.wrapRequestContext(context.Background(), t, method, contentType, body, opts...)
+}
+
+func (s *Server) wrapRequestContext(ctx context.Context, t Targeter, method string, contentType *sip.ContentType, body []byte, opts ...RequestOption) (*sip.Transaction, error) {
 	if s == nil || s.Server == nil || s.gb == nil {
 		return nil, fmt.Errorf("SIP server is unavailable")
 	}
@@ -374,6 +378,9 @@ func (s *Server) wrapRequest(t Targeter, method string, contentType *sip.Content
 
 	for _, opt := range opts {
 		opt(req)
+	}
+	if err := applyForwardedMonitorUserIdentity(ctx, req); err != nil {
+		return nil, err
 	}
 
 	security, err := s.gb.newSignalDigestSecurity(targetSignalDigestSeed(t))

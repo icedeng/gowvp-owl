@@ -139,12 +139,30 @@ type SwaggerSIPUpstream struct {
 	Password                string                                    `json:"password" example:"123456"`
 	RegisterCertificateAuth SwaggerSIPUpstreamRegisterCertificateAuth `json:"register_certificate_auth"`
 	SignalDigestSeed        string                                    `json:"signal_digest_seed" example:"upstream-shared-secret"`
+	MonitorUserIdentity     SwaggerSIPMonitorUserIdentity             `json:"monitor_user_identity"`
 	Version                 string                                    `json:"version" example:"1.1"`
 	Expires                 int                                       `json:"expires" example:"3600"`
 	KeepaliveInterval       int64                                     `json:"keepalive_interval" example:"60000000000"` // 纳秒，与配置 API 的 Duration 数值一致
 	SharedChannels          []string                                  `json:"shared_channels"`
 	ChannelIDMap            map[string]string                         `json:"channel_id_map"`
 	MediaAllowedCIDRs       []string                                  `json:"media_allowed_cidrs" example:"198.51.100.0/24"`
+}
+
+type SwaggerSIPMonitorUserIdentity struct {
+	Enabled              bool     `json:"enabled" example:"false"`
+	Required             bool     `json:"required" example:"false"`
+	LocalGatewayID       string   `json:"local_gateway_id" example:"34020000002110000001"`
+	RemoteGatewayID      string   `json:"remote_gateway_id" example:"34030000002110000001"`
+	LocalUserID          string   `json:"local_user_id" example:"34020000003000000001"`
+	LocalOrganization    string   `json:"local_organization" example:"340200"`
+	LocalCategory        string   `json:"local_category" example:"operator"`
+	LocalRank            string   `json:"local_rank" example:"level1"`
+	TrustedGatewayIDs    []string `json:"trusted_gateway_ids"`
+	AllowedUserIDs       []string `json:"allowed_user_ids"`
+	AllowedOrganizations []string `json:"allowed_organizations"`
+	AllowedCategories    []string `json:"allowed_categories"`
+	AllowedRanks         []string `json:"allowed_ranks"`
+	MaxHops              int      `json:"max_hops" example:"8"`
 }
 
 type SwaggerSIPUpstreamRegisterCertificateAuth struct {

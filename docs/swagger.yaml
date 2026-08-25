@@ -919,6 +919,56 @@ definitions:
         example: 43200000000000
         type: integer
     type: object
+  api.SwaggerSIPMonitorUserIdentity:
+    properties:
+      allowed_categories:
+        items:
+          type: string
+        type: array
+      allowed_organizations:
+        items:
+          type: string
+        type: array
+      allowed_ranks:
+        items:
+          type: string
+        type: array
+      allowed_user_ids:
+        items:
+          type: string
+        type: array
+      enabled:
+        example: false
+        type: boolean
+      local_category:
+        example: operator
+        type: string
+      local_gateway_id:
+        example: "34020000002110000001"
+        type: string
+      local_organization:
+        example: "340200"
+        type: string
+      local_rank:
+        example: level1
+        type: string
+      local_user_id:
+        example: "34020000003000000001"
+        type: string
+      max_hops:
+        example: 8
+        type: integer
+      remote_gateway_id:
+        example: "34030000002110000001"
+        type: string
+      required:
+        example: false
+        type: boolean
+      trusted_gateway_ids:
+        items:
+          type: string
+        type: array
+    type: object
   api.SwaggerSIPRegisterCertificateAuth:
     properties:
       crl:
@@ -1011,6 +1061,8 @@ definitions:
         items:
           type: string
         type: array
+      monitor_user_identity:
+        $ref: '#/definitions/api.SwaggerSIPMonitorUserIdentity'
       name:
         example: provincial
         type: string

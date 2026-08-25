@@ -227,7 +227,7 @@ func (g *GB28181API) DeviceControl(ctx context.Context, in *DeviceControlInput) 
 	g.pendingDeviceControl.Store(waitKey, pending)
 	defer g.pendingDeviceControl.Delete(waitKey)
 
-	tx, err := g.svr.wrapRequest(target, sip.MethodMessage, &sip.ContentTypeXML, body)
+	tx, err := g.svr.wrapRequestContext(ctx, target, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
 		return nil, err
 	}

@@ -14,8 +14,12 @@ import (
 
 const cascadeDeviceControlTimeout = 6 * time.Second
 
-func (g *GB28181API) forwardCascadeDeviceControl(worker *cascadeWorker, body []byte) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (g *GB28181API) forwardCascadeDeviceControl(worker *cascadeWorker, body []byte, parents ...context.Context) {
+	parent := context.Background()
+	if len(parents) > 0 && parents[0] != nil {
+		parent = parents[0]
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	var request deviceControlA23Request
 	if err := sip.XMLDecode(body, &request); err != nil {
@@ -101,7 +105,7 @@ func (g *GB28181API) sendCascadeDeviceControlDownstream(ctx context.Context, cha
 		return "ERROR", fmt.Errorf("cascade DeviceControl sequence collision")
 	}
 	defer g.pendingDeviceControl.Delete(waitKey)
-	tx, err := g.svr.wrapRequest(target, sip.MethodMessage, &sip.ContentTypeXML, body)
+	tx, err := g.svr.wrapRequestContext(ctx, target, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
 		return "ERROR", err
 	}

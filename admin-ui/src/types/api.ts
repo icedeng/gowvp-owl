@@ -238,6 +238,23 @@ export interface SipUpstream {
     server_ca?: string
     crl?: string
   }
+  signal_digest_seed?: string
+  monitor_user_identity?: {
+    enabled?: boolean
+    required?: boolean
+    local_gateway_id?: string
+    remote_gateway_id?: string
+    local_user_id?: string
+    local_organization?: string
+    local_category?: string
+    local_rank?: string
+    trusted_gateway_ids?: string[]
+    allowed_user_ids?: string[]
+    allowed_organizations?: string[]
+    allowed_categories?: string[]
+    allowed_ranks?: string[]
+    max_hops?: number
+  }
   version: "1.0" | "1.1" | "2.0" | "3.0"
   expires: number
   keepalive_interval: number

@@ -132,7 +132,7 @@ func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOut
 	g.pendingDeviceControl.Store(waitKey, pending)
 	defer g.pendingDeviceControl.Delete(waitKey)
 
-	tx, err := g.svr.wrapRequest(ch, sip.MethodMessage, &sip.ContentTypeXML, body)
+	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
 		return nil, err
 	}

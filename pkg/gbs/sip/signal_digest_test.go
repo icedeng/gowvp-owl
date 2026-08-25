@@ -325,7 +325,7 @@ func TestRequestSecurityResolverRejectsUnsignedRequestWithSignedResponse(t *test
 		t.Fatal(err)
 	}
 	payload := string(buffer[:n])
-	if !strings.Contains(payload, "SIP/2.0 403 invalid signal Digest") ||
+	if !strings.Contains(payload, "SIP/2.0 403 invalid request security") ||
 		!strings.Contains(payload, "Date: 2024-04-01T12:05:06") || !strings.Contains(payload, "Note: Digest nonce=") {
 		t.Fatalf("secured rejection payload = %s", payload)
 	}
