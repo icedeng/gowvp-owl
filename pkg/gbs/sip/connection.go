@@ -55,12 +55,8 @@ func (p *Packet) getBody() ([]byte, error) {
 	body := make([]byte, p.bodylength)
 	if p.bodylength > 0 {
 		n, err := io.ReadFull(p.reader, body)
-		if err != nil && err != io.ErrUnexpectedEOF {
-			return body, err
-		}
-		if n != p.bodylength {
-			// logrus.Warningf("body length err,%d!=%d,body:%s", n, p.bodylength, string(body))
-			return body[:n], nil
+		if err != nil {
+			return body[:n], fmt.Errorf("read SIP body: got %d of %d bytes: %w", n, p.bodylength, err)
 		}
 	}
 	return body, nil

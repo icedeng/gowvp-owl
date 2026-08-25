@@ -681,10 +681,18 @@ func (p *parser) start() {
 		for _, header := range headers {
 			msg.AppendHeader(header)
 		}
+		contentLengthHeaders := msg.GetHeaders("Content-Length")
+		if len(contentLengthHeaders) > 1 {
+			slog.Warn("reject SIP packet with multiple Content-Length headers")
+			continue
+		}
 		if length, ok := msg.ContentLength(); ok {
-			if int(*length) > packet.bodylength {
-				packet.bodylength = int(*length)
+			declared := int(*length)
+			if packet.bodylength < 0 || declared != packet.bodylength {
+				slog.Warn("reject SIP packet with mismatched Content-Length", "declared", declared, "available", packet.bodylength)
+				continue
 			}
+			packet.bodylength = declared
 		}
 		body, err := packet.getBody()
 		if err != nil {

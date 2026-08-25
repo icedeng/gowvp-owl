@@ -183,6 +183,32 @@ func TestContentLengthLimitsApplyToTCPAndPacketParser(t *testing.T) {
 	if _, err := packet.getBody(); err == nil {
 		t.Fatal("oversized packet body allocation was accepted")
 	}
+	truncated := Packet{reader: bufio.NewReader(strings.NewReader("abc")), bodylength: 5}
+	if _, err := truncated.getBody(); err == nil || !strings.Contains(err.Error(), "got 3 of 5") {
+		t.Fatalf("truncated packet body error = %v", err)
+	}
+}
+
+func TestPacketParserRejectsMismatchedAndDuplicateContentLength(t *testing.T) {
+	parser := newParser()
+	defer parser.stop()
+	base, peer := net.Pipe()
+	defer base.Close()
+	defer peer.Close()
+	connection := NewTCPConnection(base)
+	tests := []string{
+		"MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: 5\r\n\r\nabc",
+		"MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\nabc",
+		"MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: 3\r\nl: 3\r\n\r\nabc",
+	}
+	for _, input := range tests {
+		parser.in <- newPacket([]byte(input), &net.TCPAddr{}, connection)
+		select {
+		case message := <-parser.out:
+			t.Fatalf("invalid packet was dispatched: %v", message)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 func TestServerCloseTerminatesActiveTCPConnections(t *testing.T) {
