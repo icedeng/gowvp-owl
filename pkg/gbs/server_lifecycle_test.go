@@ -12,6 +12,7 @@ import (
 
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/sms"
+	"github.com/gowvp/owl/pkg/gbs/sip"
 	"github.com/ixugo/goddd/pkg/conc"
 	"github.com/ixugo/goddd/pkg/orm"
 )
@@ -84,6 +85,51 @@ func TestCloseCancelsAndWaitsForLifecycleTasks(t *testing.T) {
 		t.Error("task started after GB28181 close")
 	}) {
 		t.Fatal("lifecycle task was accepted after close")
+	}
+}
+
+func TestCloseWaitsForAcceptedSIPRequestAndRejectsNewRequests(t *testing.T) {
+	api := &GB28181API{lifecycleDone: make(chan struct{})}
+	requestDone, ok := api.beginLifecycleRequest()
+	if !ok {
+		t.Fatal("SIP request was rejected before close")
+	}
+	closeDone := make(chan struct{})
+	go func() {
+		api.close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+		t.Fatal("close returned while accepted SIP request was active")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if done, accepted := api.beginLifecycleRequest(); accepted {
+		done()
+		t.Fatal("SIP request was accepted after close started")
+	}
+	requestDone()
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("close did not return after accepted SIP request exited")
+	}
+}
+
+func TestSIPLifecycleMiddlewareRejectsRequestAfterClose(t *testing.T) {
+	api := &GB28181API{lifecycleDone: make(chan struct{})}
+	api.close()
+	conn := newFlowConnection()
+	request := newFlowRequest(t, conn, sip.MethodMessage, "after-close", nil)
+	tx := sip.NewTransaction("after-close-tx", conn)
+	api.sipLifecycleMiddleware(&sip.Context{Request: request, Tx: tx})
+	select {
+	case response := <-conn.writes:
+		if !strings.Contains(string(response), "SIP/2.0 503") {
+			t.Fatalf("closed lifecycle response = %q", response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("closed lifecycle request was not rejected")
 	}
 }
 

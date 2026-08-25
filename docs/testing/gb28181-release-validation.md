@@ -1,6 +1,6 @@
 # GB/T 28181 1.0/1.1 开发验证报告
 
-记录时间：2026-08-25（Asia/Shanghai）
+记录时间：2026-08-26（Asia/Shanghai）
 
 ## 1. 当前结论
 
@@ -24,7 +24,7 @@ go test ./... -count=1
 
 - 四版本 REGISTER、SIP/XML/SDP 夹具；
 - SIP/TCP 大小写不敏感 `Content-Length`、紧凑头 `l`、同连接连续报文分帧；对话路由集反转 `Record-Route` 及响应 CSeq 不变性；
-- SIP UDP/TCP/TLS 监听器、活动连接、parser/handler、请求处理器和事务 watcher 在关闭时全部等待退出；关闭后拒绝新连接、新 handler 和出向请求。GB 离线检查、订阅、INVITE 对话与运行状态 cleaner 同样随服务生命周期停止；
+- SIP UDP/TCP/TLS 监听器、活动连接、parser/handler、请求处理器和事务 watcher 在关闭时全部等待退出；关闭后拒绝新连接、新 handler 和出向请求。GB 全局生命周期门禁还会拒绝停服起点后的 REGISTER/MESSAGE/NOTIFY/SUBSCRIBE/INVITE 等新业务，并等待此前已接纳请求；两阶段关闭先取消业务，再关闭 SIP 解除事务等待，最后清理 GB 会话，避免清理后状态复写和关闭互锁。GB 离线检查、订阅、INVITE 对话与运行状态 cleaner 同样随服务生命周期停止；
 - REGISTER 同时携带 Contact `expires` 与全局 `Expires` 时，以 Contact 绑定参数为准，包括 `expires=0` 注销语义；
 - 版本解析、协商、持久化、手动覆盖和下行版本；
 - 1.0 功能门禁、直播/回放/下载 SDP golden；

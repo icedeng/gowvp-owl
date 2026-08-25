@@ -124,6 +124,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	api := NewGB28181API(cfg, store, sc.NodeManager)
 	api.registerCertificateAuth = registerCertificateAuth
 	sipServer := sip.NewServer(&from)
+	sipServer.Use(api.sipLifecycleMiddleware)
 	sipServer.Use(api.sipMonitorUserIdentityMiddleware)
 	sipServer.Register(api.handlerRegister)
 	msg := sipServer.Message(api.sipAccessControlMiddleware, api.sipCascadeMessageMiddleware)
@@ -254,13 +255,16 @@ func (s *Server) Close() {
 		return
 	}
 	if s.gb != nil {
-		s.gb.close()
+		s.gb.beginClose()
 	}
 	if s.cascade != nil {
 		s.cascade.Close()
 	}
 	if s.Server != nil {
 		s.Server.Close()
+	}
+	if s.gb != nil {
+		s.gb.close()
 	}
 }
 

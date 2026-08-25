@@ -139,6 +139,7 @@ type GB28181API struct {
 	directPolicyMu  sync.RWMutex
 	directPolicy    directTCPRuntimePolicy
 	metrics         GBMetrics
+	closeBeginOnce  sync.Once
 	closeOnce       sync.Once
 	lifecycleMu     sync.Mutex
 	lifecycleDone   chan struct{}
@@ -146,6 +147,7 @@ type GB28181API struct {
 	lifecycleCancel context.CancelFunc
 	lifecycleClosed bool
 	lifecycleWG     sync.WaitGroup
+	requestWG       sync.WaitGroup
 
 	svr *Server
 
@@ -203,6 +205,40 @@ func (g *GB28181API) startLifecycleWorker(worker func()) bool {
 		worker()
 	}()
 	return true
+}
+
+func (g *GB28181API) beginLifecycleRequest() (func(), bool) {
+	if g == nil {
+		return nil, false
+	}
+	g.lifecycleMu.Lock()
+	if g.lifecycleClosed {
+		g.lifecycleMu.Unlock()
+		return nil, false
+	}
+	g.requestWG.Add(1)
+	g.lifecycleMu.Unlock()
+	var once sync.Once
+	return func() { once.Do(g.requestWG.Done) }, true
+}
+
+// sipLifecycleMiddleware 将已接纳的入向 SIP 请求纳入 GB28181 关闭等待，
+// 并在停服开始后拒绝新业务，避免清理完成后又写回会话或订阅状态。
+func (g *GB28181API) sipLifecycleMiddleware(ctx *sip.Context) {
+	if ctx == nil {
+		return
+	}
+	done, ok := g.beginLifecycleRequest()
+	if !ok {
+		if ctx.Request != nil && ctx.Request.Method() == sip.MethodACK {
+			ctx.Abort()
+			return
+		}
+		ctx.AbortString(http.StatusServiceUnavailable, ErrServiceStopped.Error())
+		return
+	}
+	defer done()
+	ctx.Next()
 }
 
 // startLifecycleTask 启动随 GB28181 服务取消并由 close 等待的短任务。

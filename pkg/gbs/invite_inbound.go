@@ -766,17 +766,10 @@ func (g *GB28181API) close() {
 	if g == nil {
 		return
 	}
+	g.beginClose()
+	g.lifecycleWG.Wait()
+	g.requestWG.Wait()
 	g.closeOnce.Do(func() {
-		g.lifecycleMu.Lock()
-		g.lifecycleClosed = true
-		if g.lifecycleDone != nil {
-			close(g.lifecycleDone)
-		}
-		if g.lifecycleCancel != nil {
-			g.lifecycleCancel()
-		}
-		g.lifecycleMu.Unlock()
-		g.lifecycleWG.Wait()
 		g.catalogResponses.Close()
 		g.recordResponses.Close()
 		g.pendingDeviceControl.Clear()
@@ -794,6 +787,23 @@ func (g *GB28181API) close() {
 			g.directDownloads.Shutdown()
 		}
 		g.closeRemainingMediaSessions()
+	})
+}
+
+func (g *GB28181API) beginClose() {
+	if g == nil {
+		return
+	}
+	g.closeBeginOnce.Do(func() {
+		g.lifecycleMu.Lock()
+		g.lifecycleClosed = true
+		if g.lifecycleDone != nil {
+			close(g.lifecycleDone)
+		}
+		if g.lifecycleCancel != nil {
+			g.lifecycleCancel()
+		}
+		g.lifecycleMu.Unlock()
 	})
 }
 
