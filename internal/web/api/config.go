@@ -3,6 +3,7 @@ package api
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -111,12 +112,13 @@ func sipAccessInfo(cfg conf.SIP, fallbackHost string) SIPAccessInfo {
 
 type updateSIPInput struct {
 	conf.SIP
-	TLSClientCA          *string                   `json:"tls_client_ca"`
-	TLSRequireClientCert *bool                     `json:"tls_require_client_cert"`
-	DeviceHistory        *conf.DeviceHistoryConfig `json:"device_history"`
-	SignalDigest         *conf.SIPSignalDigest     `json:"signal_digest"`
-	Upstreams            *[]conf.SIPUpstream       `json:"upstreams"`
-	Log                  *conf.SIPLog              `json:"log"`
+	TLSClientCA             *string                          `json:"tls_client_ca"`
+	TLSRequireClientCert    *bool                            `json:"tls_require_client_cert"`
+	RegisterCertificateAuth *conf.SIPRegisterCertificateAuth `json:"register_certificate_auth"`
+	DeviceHistory           *conf.DeviceHistoryConfig        `json:"device_history"`
+	SignalDigest            *conf.SIPSignalDigest            `json:"signal_digest"`
+	Upstreams               *[]conf.SIPUpstream              `json:"upstreams"`
+	Log                     *conf.SIPLog                     `json:"log"`
 }
 
 // getConfigInfo godoc
@@ -218,7 +220,7 @@ func applyHotSIPConfig(target *conf.SIP, next conf.SIP) {
 }
 
 func sipRestartRequiredFields(current, next conf.SIP) []string {
-	fields := make([]string, 0, 11)
+	fields := make([]string, 0, 12)
 	if current.Host != next.Host {
 		fields = append(fields, "Host")
 	}
@@ -249,6 +251,9 @@ func sipRestartRequiredFields(current, next conf.SIP) []string {
 	if current.TLSRequireClientCert != next.TLSRequireClientCert {
 		fields = append(fields, "TLSRequireClientCert")
 	}
+	if !reflect.DeepEqual(current.RegisterCertificateAuth, next.RegisterCertificateAuth) {
+		fields = append(fields, "RegisterCertificateAuth")
+	}
 	if current.Log != next.Log {
 		fields = append(fields, "Log")
 	}
@@ -269,6 +274,12 @@ func mergeSIPUpdate(current conf.SIP, in *updateSIPInput) conf.SIP {
 		next.TLSRequireClientCert = current.TLSRequireClientCert
 	} else {
 		next.TLSRequireClientCert = *in.TLSRequireClientCert
+	}
+	if in.RegisterCertificateAuth == nil {
+		next.RegisterCertificateAuth = current.RegisterCertificateAuth
+	} else {
+		next.RegisterCertificateAuth = *in.RegisterCertificateAuth
+		next.RegisterCertificateAuth.DeviceCertificates = cloneStringMap(in.RegisterCertificateAuth.DeviceCertificates)
 	}
 	if in.DeviceHistory == nil {
 		next.DeviceHistory = current.DeviceHistory
@@ -291,4 +302,15 @@ func mergeSIPUpdate(current conf.SIP, in *updateSIPInput) conf.SIP {
 		next.Log = *in.Log
 	}
 	return next
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }

@@ -56,6 +56,11 @@ func DefaultConfig() Bootstrap {
 			RequireMessageAuth: false,
 			PTZWeakConfirm:     false,
 			RegisterRedirect:   "",
+			RegisterCertificateAuth: SIPRegisterCertificateAuth{
+				Enabled:            false,
+				Required:           false,
+				DeviceCertificates: map[string]string{},
+			},
 			SignalDigest: SIPSignalDigest{
 				Enabled:         false,
 				Required:        false,

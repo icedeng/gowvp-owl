@@ -73,25 +73,36 @@ type SwaggerConfigInfoOutput struct {
 
 // SwaggerSIPConfig 是 Swagger 友好的 SIP 配置模型。
 type SwaggerSIPConfig struct {
-	Host                 string                         `json:"host" example:"192.0.2.20"`                           // 对设备和上级宣告的 SIP 地址
-	Port                 int                            `json:"port" example:"5060"`                                 // SIP TCP/UDP 监听端口
-	ID                   string                         `json:"id" example:"34020000002000000001"`                   // 平台 20 位国标编码
-	Domain               string                         `json:"domain" example:"3402000000"`                         // SIP 域
-	Password             string                         `json:"password" example:"123456"`                           // 注册鉴权密码
-	EnableTLS            bool                           `json:"enable_tls" example:"false"`                          // 是否启用 SIP-TLS
-	TLSPort              int                            `json:"tls_port" example:"5061"`                             // SIP-TLS 监听端口
-	TLSCert              string                         `json:"tls_cert" example:"configs/certs/sip.crt"`            // TLS 证书路径
-	TLSKey               string                         `json:"tls_key" example:"configs/certs/sip.key"`             // TLS 私钥路径
-	TLSClientCA          string                         `json:"tls_client_ca" example:"configs/certs/client-ca.crt"` // TLS 客户端 CA 路径
-	TLSRequireClientCert bool                           `json:"tls_require_client_cert" example:"false"`             // 是否强制校验客户端证书
-	StrictSourceCheck    bool                           `json:"strict_source_check" example:"true"`                  // 是否严格校验源 IP
-	RequireMessageAuth   bool                           `json:"require_message_auth" example:"false"`                // 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
-	PTZWeakConfirm       bool                           `json:"ptz_weak_confirm" example:"false"`                    // 是否启用 PTZ 弱确认模式
-	SignalDigest         SwaggerSIPSignalDigest         `json:"signal_digest"`                                       // Date+Note 信令数字摘要配置
-	DeviceHistory        SwaggerDeviceHistoryConfig     `json:"device_history"`                                      // 设备注册与心跳历史保留策略
-	DirectTCPDownload    SwaggerDirectTCPDownloadConfig `json:"direct_tcp_download"`                                 // 2014 附录 O 裸 TCP 下载配置
-	Upstreams            []SwaggerSIPUpstream           `json:"upstreams"`                                           // 上级 GB/T 28181 平台配置
-	Log                  SwaggerSIPLog                  `json:"log"`                                                 // SIP 报文日志配置；更新时可省略以保留当前值
+	Host                    string                            `json:"host" example:"192.0.2.20"`                           // 对设备和上级宣告的 SIP 地址
+	Port                    int                               `json:"port" example:"5060"`                                 // SIP TCP/UDP 监听端口
+	ID                      string                            `json:"id" example:"34020000002000000001"`                   // 平台 20 位国标编码
+	Domain                  string                            `json:"domain" example:"3402000000"`                         // SIP 域
+	Password                string                            `json:"password" example:"123456"`                           // 注册鉴权密码
+	EnableTLS               bool                              `json:"enable_tls" example:"false"`                          // 是否启用 SIP-TLS
+	TLSPort                 int                               `json:"tls_port" example:"5061"`                             // SIP-TLS 监听端口
+	TLSCert                 string                            `json:"tls_cert" example:"configs/certs/sip.crt"`            // TLS 证书路径
+	TLSKey                  string                            `json:"tls_key" example:"configs/certs/sip.key"`             // TLS 私钥路径
+	TLSClientCA             string                            `json:"tls_client_ca" example:"configs/certs/client-ca.crt"` // TLS 客户端 CA 路径
+	TLSRequireClientCert    bool                              `json:"tls_require_client_cert" example:"false"`             // 是否强制校验客户端证书
+	RegisterCertificateAuth SwaggerSIPRegisterCertificateAuth `json:"register_certificate_auth"`                           // Capability/Asymmetric 数字证书 REGISTER 认证
+	StrictSourceCheck       bool                              `json:"strict_source_check" example:"true"`                  // 是否严格校验源 IP
+	RequireMessageAuth      bool                              `json:"require_message_auth" example:"false"`                // 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
+	PTZWeakConfirm          bool                              `json:"ptz_weak_confirm" example:"false"`                    // 是否启用 PTZ 弱确认模式
+	SignalDigest            SwaggerSIPSignalDigest            `json:"signal_digest"`                                       // Date+Note 信令数字摘要配置
+	DeviceHistory           SwaggerDeviceHistoryConfig        `json:"device_history"`                                      // 设备注册与心跳历史保留策略
+	DirectTCPDownload       SwaggerDirectTCPDownloadConfig    `json:"direct_tcp_download"`                                 // 2014 附录 O 裸 TCP 下载配置
+	Upstreams               []SwaggerSIPUpstream              `json:"upstreams"`                                           // 上级 GB/T 28181 平台配置
+	Log                     SwaggerSIPLog                     `json:"log"`                                                 // SIP 报文日志配置；更新时可省略以保留当前值
+}
+
+type SwaggerSIPRegisterCertificateAuth struct {
+	Enabled            bool              `json:"enabled" example:"false"`
+	Required           bool              `json:"required" example:"false"`
+	PlatformCert       string            `json:"platform_cert" example:"configs/certs/gb-platform.crt"`
+	PlatformKey        string            `json:"platform_key" example:"configs/certs/gb-platform.key"`
+	DeviceCA           string            `json:"device_ca" example:"configs/certs/gb-device-ca.crt"`
+	CRL                string            `json:"crl" example:"configs/certs/gb-device.crl"`
+	DeviceCertificates map[string]string `json:"device_certificates"`
 }
 
 type SwaggerSIPSignalDigest struct {
@@ -110,29 +121,40 @@ type SwaggerDeviceHistoryConfig struct {
 }
 
 type SwaggerSIPUpstream struct {
-	Name              string            `json:"name" example:"provincial"`
-	Enabled           bool              `json:"enabled" example:"true"`
-	ServerID          string            `json:"server_id" example:"34020000002000000001"`
-	Domain            string            `json:"domain" example:"3402000000"`
-	Host              string            `json:"host" example:"192.0.2.30"`
-	Port              int               `json:"port" example:"5060"`
-	Transport         string            `json:"transport" example:"tls"`
-	TLSCA             string            `json:"tls_ca" example:"configs/certs/upstream-ca.crt"`
-	TLSCert           string            `json:"tls_cert" example:"configs/certs/cascade-client.crt"`
-	TLSKey            string            `json:"tls_key" example:"configs/certs/cascade-client.key"`
-	TLSServerName     string            `json:"tls_server_name" example:"sip.example.com"`
-	LocalID           string            `json:"local_id" example:"34020000002000000002"`
-	LocalDomain       string            `json:"local_domain" example:"3402000000"`
-	LocalHost         string            `json:"local_host" example:"192.0.2.20"`
-	LocalPort         int               `json:"local_port" example:"5061"`
-	Password          string            `json:"password" example:"123456"`
-	SignalDigestSeed  string            `json:"signal_digest_seed" example:"upstream-shared-secret"`
-	Version           string            `json:"version" example:"1.1"`
-	Expires           int               `json:"expires" example:"3600"`
-	KeepaliveInterval int64             `json:"keepalive_interval" example:"60000000000"` // 纳秒，与配置 API 的 Duration 数值一致
-	SharedChannels    []string          `json:"shared_channels"`
-	ChannelIDMap      map[string]string `json:"channel_id_map"`
-	MediaAllowedCIDRs []string          `json:"media_allowed_cidrs" example:"198.51.100.0/24"`
+	Name                    string                                    `json:"name" example:"provincial"`
+	Enabled                 bool                                      `json:"enabled" example:"true"`
+	ServerID                string                                    `json:"server_id" example:"34020000002000000001"`
+	Domain                  string                                    `json:"domain" example:"3402000000"`
+	Host                    string                                    `json:"host" example:"192.0.2.30"`
+	Port                    int                                       `json:"port" example:"5060"`
+	Transport               string                                    `json:"transport" example:"tls"`
+	TLSCA                   string                                    `json:"tls_ca" example:"configs/certs/upstream-ca.crt"`
+	TLSCert                 string                                    `json:"tls_cert" example:"configs/certs/cascade-client.crt"`
+	TLSKey                  string                                    `json:"tls_key" example:"configs/certs/cascade-client.key"`
+	TLSServerName           string                                    `json:"tls_server_name" example:"sip.example.com"`
+	LocalID                 string                                    `json:"local_id" example:"34020000002000000002"`
+	LocalDomain             string                                    `json:"local_domain" example:"3402000000"`
+	LocalHost               string                                    `json:"local_host" example:"192.0.2.20"`
+	LocalPort               int                                       `json:"local_port" example:"5061"`
+	Password                string                                    `json:"password" example:"123456"`
+	RegisterCertificateAuth SwaggerSIPUpstreamRegisterCertificateAuth `json:"register_certificate_auth"`
+	SignalDigestSeed        string                                    `json:"signal_digest_seed" example:"upstream-shared-secret"`
+	Version                 string                                    `json:"version" example:"1.1"`
+	Expires                 int                                       `json:"expires" example:"3600"`
+	KeepaliveInterval       int64                                     `json:"keepalive_interval" example:"60000000000"` // 纳秒，与配置 API 的 Duration 数值一致
+	SharedChannels          []string                                  `json:"shared_channels"`
+	ChannelIDMap            map[string]string                         `json:"channel_id_map"`
+	MediaAllowedCIDRs       []string                                  `json:"media_allowed_cidrs" example:"198.51.100.0/24"`
+}
+
+type SwaggerSIPUpstreamRegisterCertificateAuth struct {
+	Enabled    bool   `json:"enabled" example:"false"`
+	Required   bool   `json:"required" example:"false"`
+	LocalCert  string `json:"local_cert" example:"configs/certs/cascade-register.crt"`
+	LocalKey   string `json:"local_key" example:"configs/certs/cascade-register.key"`
+	ServerCert string `json:"server_cert" example:"configs/certs/upstream-register.crt"`
+	ServerCA   string `json:"server_ca" example:"configs/certs/upstream-register-ca.crt"`
+	CRL        string `json:"crl" example:"configs/certs/upstream-register.crl"`
 }
 
 type SwaggerSIPLog struct {

@@ -195,6 +195,15 @@ export interface SipConfig {
   tls_key?: string
   tls_client_ca?: string
   tls_require_client_cert?: boolean
+  register_certificate_auth?: {
+    enabled?: boolean
+    required?: boolean
+    platform_cert?: string
+    platform_key?: string
+    device_ca?: string
+    crl?: string
+    device_certificates?: Record<string, string>
+  }
   strict_source_check?: boolean
   require_message_auth?: boolean
   ptz_weak_confirm?: boolean
@@ -220,6 +229,15 @@ export interface SipUpstream {
   local_host?: string
   local_port?: number
   password?: string
+  register_certificate_auth?: {
+    enabled?: boolean
+    required?: boolean
+    local_cert?: string
+    local_key?: string
+    server_cert?: string
+    server_ca?: string
+    crl?: string
+  }
   version: "1.0" | "1.1" | "2.0" | "3.0"
   expires: number
   keepalive_interval: number

@@ -436,6 +436,12 @@ func TestRegisterDigestRequiresIssuedNonceAndRejectsReplay(t *testing.T) {
 	if err := api.validateRegisterAuthorization(ctx, header, gb10DeviceID, password); err != nil {
 		t.Fatalf("exact REGISTER retransmission rejected: %v", err)
 	}
+	modifiedRequest := request.Clone().(*sip.Request)
+	modifiedRequest.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "0"})
+	modifiedCtx := &sip.Context{Request: modifiedRequest, DeviceID: gb10DeviceID, Source: connection.remote}
+	if err := api.validateRegisterAuthorization(modifiedCtx, header, gb10DeviceID, password); err == nil || !strings.Contains(err.Error(), "replay") {
+		t.Fatalf("header-modified Digest nonce replay result = %v", err)
+	}
 
 	replayed := newFlowRequest(t, connection, sip.MethodRegister, "register-auth-2", nil)
 	replayCtx := &sip.Context{Request: replayed, DeviceID: gb10DeviceID, Source: connection.remote}

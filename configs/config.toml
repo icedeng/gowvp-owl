@@ -118,6 +118,21 @@
   # GB/T 28181-2022 注册重定向目标 SIP URI；为空不重定向，仅对声明 3.0 的设备生效
   RegisterRedirect = ''
 
+  # GB/T 28181-2016 9.1.2.2 Capability/Asymmetric 数字证书 REGISTER 认证。
+  # 与 SIP-TLS 证书用途相互独立；修改后需要重启服务。
+  [Sip.RegisterCertificateAuth]
+    Enabled = false
+    # 强制模式会隐式启用，并拒绝 Digest/免密码降级。
+    Required = false
+    PlatformCert = ''
+    PlatformKey = ''
+    # DeviceCA 为空时按下方设备证书固定信任；配置 CRL 时必须设置 DeviceCA。
+    DeviceCA = ''
+    CRL = ''
+
+    [Sip.RegisterCertificateAuth.DeviceCertificates]
+      # '34020000001320000001' = './configs/certs/device-34020000001320000001.crt'
+
   # GB/T 28181 附录 H / 2022 版 8.3 Date + Note 信令数字摘要；默认关闭以保持旧设备兼容
   [Sip.SignalDigest]
     # 开启后为除 REGISTER 外的出站 SIP 请求和响应添加 Date、Note

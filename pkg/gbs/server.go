@@ -114,7 +114,15 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	if err != nil {
 		return nil, nil, fmt.Errorf("init SIP traffic logger: %w", err)
 	}
+	registerCertificateAuth, err := newRegisterCertificateAuthenticator(cfg.Sip.RegisterCertificateAuth)
+	if err != nil {
+		if sipTrafficLogger != nil {
+			_ = sipTrafficLogger.Close()
+		}
+		return nil, nil, fmt.Errorf("init certificate REGISTER authentication: %w", err)
+	}
 	api := NewGB28181API(cfg, store, sc.NodeManager)
+	api.registerCertificateAuth = registerCertificateAuth
 	sipServer := sip.NewServer(&from)
 	sipServer.Register(api.handlerRegister)
 	msg := sipServer.Message(api.sipAccessControlMiddleware, api.sipCascadeMessageMiddleware)

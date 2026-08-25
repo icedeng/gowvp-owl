@@ -42,27 +42,28 @@ type CascadePlatformStatus struct {
 }
 
 type cascadePlatform struct {
-	name              string
-	serverID          string
-	remoteDomain      string
-	remote            net.Addr
-	transport         string
-	localID           string
-	localDomain       string
-	localHost         string
-	localPort         int
-	localTLSPort      int
-	localTLSEnabled   bool
-	password          string
-	signalDigestSeed  string
-	version           GBProtocolVersion
-	expires           int
-	keepaliveInterval time.Duration
-	sharedChannels    []string
-	channelIDMap      map[string]string
-	exposedChannelMap map[string]string
-	mediaAllowedCIDRs []*net.IPNet
-	tlsConfig         *tls.Config
+	name                    string
+	serverID                string
+	remoteDomain            string
+	remote                  net.Addr
+	transport               string
+	localID                 string
+	localDomain             string
+	localHost               string
+	localPort               int
+	localTLSPort            int
+	localTLSEnabled         bool
+	password                string
+	signalDigestSeed        string
+	version                 GBProtocolVersion
+	expires                 int
+	keepaliveInterval       time.Duration
+	sharedChannels          []string
+	channelIDMap            map[string]string
+	exposedChannelMap       map[string]string
+	mediaAllowedCIDRs       []*net.IPNet
+	tlsConfig               *tls.Config
+	registerCertificateAuth *cascadeRegisterCertificateAuthenticator
 }
 
 type cascadeTLSAddr struct {
@@ -113,6 +114,10 @@ func normalizeCascadePlatform(in conf.SIPUpstream, local conf.SIP, fallbackHost 
 	tlsConfig, err := cascadeTLSClientConfig(in, host)
 	if err != nil {
 		return cascadePlatform{}, err
+	}
+	registerCertificateAuth, err := newCascadeRegisterCertificateAuthenticator(in.RegisterCertificateAuth)
+	if err != nil {
+		return cascadePlatform{}, fmt.Errorf("upstream certificate REGISTER authentication: %w", err)
 	}
 	switch transport {
 	case "udp":
@@ -273,7 +278,7 @@ func normalizeCascadePlatform(in conf.SIPUpstream, local conf.SIP, fallbackHost 
 		version: version, expires: expires, keepaliveInterval: keepalive,
 		sharedChannels: sharedChannels, channelIDMap: channelIDMap,
 		exposedChannelMap: exposedChannelMap, mediaAllowedCIDRs: mediaAllowedCIDRs,
-		tlsConfig: tlsConfig,
+		tlsConfig: tlsConfig, registerCertificateAuth: registerCertificateAuth,
 	}, nil
 }
 
@@ -491,11 +496,12 @@ func (w *cascadeWorker) register(ctx context.Context, expires int) error {
 		state.LastError = ""
 	})
 	targetURI, target := w.remoteTarget()
-	request := w.newRegisterRequest(expires, nil)
+	request := w.newInitialRegisterRequest(expires)
 	applyCascadeRequestTarget(request, targetURI, target)
 	var response *sip.Response
 	redirects := 0
 	authAttempts := 0
+	certificateChallengeCompleted := false
 	for {
 		var err error
 		response, err = w.exchange(ctx, request)
@@ -513,19 +519,45 @@ func (w *cascadeWorker) register(ctx context.Context, expires int) error {
 			}
 			redirects++
 			authAttempts = 0
-			request = w.newRegisterRequest(expires, nil)
+			certificateChallengeCompleted = false
+			request = w.newInitialRegisterRequest(expires)
 			applyCascadeRequestTarget(request, targetURI, target)
 			continue
 		case http.StatusUnauthorized:
 			if authAttempts > 0 {
 				return fmt.Errorf("cascade REGISTER authentication failed after challenge")
 			}
-			auth, err := cascadeDigestAuthorization(response, request, w.platform.localID, w.platform.password)
+			scheme, challenge, err := cascadeRegisterChallenge(response, w.platform.registerCertificateAuth != nil)
+			if err != nil {
+				return err
+			}
+			var authorization string
+			switch scheme {
+			case "asymmetric":
+				if w.platform.registerCertificateAuth == nil {
+					return fmt.Errorf("cascade REGISTER received Asymmetric challenge without certificate authentication configuration")
+				}
+				authorization, err = w.platform.registerCertificateAuth.asymmetricAuthorization(challenge)
+				if err == nil {
+					certificateChallengeCompleted = true
+				}
+			case "digest":
+				if w.platform.registerCertificateAuth != nil && w.platform.registerCertificateAuth.required {
+					return fmt.Errorf("cascade REGISTER refused certificate-to-Digest authentication downgrade")
+				}
+				var auth *sip.Authorization
+				auth, err = cascadeDigestAuthorizationFromChallenge(challenge, request, w.platform.localID, w.platform.password)
+				if err == nil {
+					authorization = auth.String()
+				}
+			default:
+				return fmt.Errorf("cascade REGISTER unsupported authentication challenge %q", scheme)
+			}
 			if err != nil {
 				return err
 			}
 			authAttempts++
-			request = w.newRegisterRequest(expires, auth)
+			request = w.newRegisterRequestWithAuthorization(expires, authorization)
 			applyCascadeRequestTarget(request, targetURI, target)
 			continue
 		}
@@ -533,6 +565,9 @@ func (w *cascadeWorker) register(ctx context.Context, expires int) error {
 	}
 	if response.StatusCode() < 200 || response.StatusCode() >= 300 {
 		return fmt.Errorf("cascade REGISTER failed: %d %s", response.StatusCode(), response.Reason())
+	}
+	if w.platform.registerCertificateAuth != nil && w.platform.registerCertificateAuth.required && !certificateChallengeCompleted {
+		return fmt.Errorf("cascade REGISTER certificate authentication required but upstream returned success without Asymmetric challenge")
 	}
 	effective := negotiateCascadeVersion(w.platform.version, response)
 	accepted, err := cascadeAcceptedExpires(response, expires)
@@ -595,6 +630,21 @@ func (w *cascadeWorker) keepalive(ctx context.Context) error {
 func (w *cascadeWorker) newRegisterRequest(expires int, auth *sip.Authorization) *sip.Request {
 	w.cseq++
 	return w.newRequest(sip.MethodRegister, nil, nil, &w.callID, w.cseq, expires, auth)
+}
+
+func (w *cascadeWorker) newRegisterRequestWithAuthorization(expires int, authorization string) *sip.Request {
+	request := w.newRegisterRequest(expires, nil)
+	if authorization != "" {
+		request.AppendHeader(&sip.GenericHeader{HeaderName: "Authorization", Contents: authorization})
+	}
+	return request
+}
+
+func (w *cascadeWorker) newInitialRegisterRequest(expires int) *sip.Request {
+	if w.platform.registerCertificateAuth == nil {
+		return w.newRegisterRequest(expires, nil)
+	}
+	return w.newRegisterRequestWithAuthorization(expires, w.platform.registerCertificateAuth.capabilityAuthorization())
 }
 
 func (w *cascadeWorker) newKeepaliveRequest(body []byte) *sip.Request {
@@ -876,6 +926,13 @@ func cascadeDigestAuthorization(response *sip.Response, request *sip.Request, us
 		return nil, fmt.Errorf("cascade REGISTER 401 missing WWW-Authenticate")
 	}
 	auth := sip.AuthFromValue(headers[0].String())
+	return cascadeDigestAuthorizationFromChallenge(auth, request, username, password)
+}
+
+func cascadeDigestAuthorizationFromChallenge(auth *sip.Authorization, request *sip.Request, username, password string) (*sip.Authorization, error) {
+	if auth == nil || request == nil || request.Recipient() == nil {
+		return nil, fmt.Errorf("cascade REGISTER invalid Digest challenge")
+	}
 	if auth.Get("realm") == "" || auth.Get("nonce") == "" {
 		return nil, fmt.Errorf("cascade REGISTER invalid Digest challenge")
 	}

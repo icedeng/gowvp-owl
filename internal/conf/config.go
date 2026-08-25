@@ -122,42 +122,126 @@ type SIP struct {
 	TLSClientCA          string `comment:"用于校验 SIP-TLS 客户端证书的 CA 文件路径" json:"tls_client_ca,omitempty"`
 	TLSRequireClientCert bool   `comment:"是否要求 SIP-TLS 客户端必须提交有效证书" json:"tls_require_client_cert"`
 
-	StrictSourceCheck  bool                 `comment:"是否校验设备上报源IP与注册源IP一致" json:"strict_source_check"`
-	RequireMessageAuth bool                 `comment:"是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权" json:"require_message_auth"`
-	PTZWeakConfirm     bool                 `comment:"是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理" json:"ptz_weak_confirm"`
-	RegisterRedirect   string               `comment:"GB/T 28181-2022 注册重定向目标 SIP URI；为空表示不重定向" json:"register_redirect,omitempty"`
-	SignalDigest       SIPSignalDigest      `comment:"GB/T 28181 Date+Note 信令数字摘要" json:"signal_digest"`
-	DeviceHistory      DeviceHistoryConfig  `comment:"设备心跳与注册历史保留策略" json:"device_history"`
-	DirectTCPDownload  SIPDirectTCPDownload `comment:"GB/T 28181-2014 附录 O 裸 TCP 文件下载" json:"direct_tcp_download"`
-	Upstreams          []SIPUpstream        `comment:"上下级平台级联：本平台作为下级注册到上级平台" json:"upstreams,omitempty"`
-	Log                SIPLog               `json:"log"`
+	StrictSourceCheck       bool                       `comment:"是否校验设备上报源IP与注册源IP一致" json:"strict_source_check"`
+	RequireMessageAuth      bool                       `comment:"是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权" json:"require_message_auth"`
+	PTZWeakConfirm          bool                       `comment:"是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理" json:"ptz_weak_confirm"`
+	RegisterRedirect        string                     `comment:"GB/T 28181-2022 注册重定向目标 SIP URI；为空表示不重定向" json:"register_redirect,omitempty"`
+	RegisterCertificateAuth SIPRegisterCertificateAuth `comment:"GB/T 28181-2016 Capability/Asymmetric 数字证书 REGISTER 认证" json:"register_certificate_auth"`
+	SignalDigest            SIPSignalDigest            `comment:"GB/T 28181 Date+Note 信令数字摘要" json:"signal_digest"`
+	DeviceHistory           DeviceHistoryConfig        `comment:"设备心跳与注册历史保留策略" json:"device_history"`
+	DirectTCPDownload       SIPDirectTCPDownload       `comment:"GB/T 28181-2014 附录 O 裸 TCP 文件下载" json:"direct_tcp_download"`
+	Upstreams               []SIPUpstream              `comment:"上下级平台级联：本平台作为下级注册到上级平台" json:"upstreams,omitempty"`
+	Log                     SIPLog                     `json:"log"`
+}
+
+// SIPRegisterCertificateAuth 控制 GB/T 28181-2016 9.1.2.2 定义的
+// Capability/Asymmetric 数字证书双向 REGISTER 认证。该证书用途独立于 SIP-TLS。
+type SIPRegisterCertificateAuth struct {
+	Enabled            bool              `comment:"是否接受 Capability/Asymmetric REGISTER 认证" json:"enabled"`
+	Required           bool              `comment:"是否强制所有设备使用数字证书 REGISTER 认证；设置后隐式启用" json:"required"`
+	PlatformCert       string            `comment:"平台 X.509 证书文件路径" json:"platform_cert"`
+	PlatformKey        string            `comment:"平台 RSA 私钥文件路径" json:"platform_key"`
+	DeviceCA           string            `comment:"用于校验设备证书链的 CA 文件路径；为空时按配置证书固定信任" json:"device_ca,omitempty"`
+	CRL                string            `comment:"X.509 V2 证书撤销列表文件路径，可包含多个 PEM CRL" json:"crl,omitempty"`
+	DeviceCertificates map[string]string `comment:"设备国标 ID 到 X.509 设备证书文件路径的映射" json:"device_certificates"`
+}
+
+// Active 返回数字证书 REGISTER 认证是否启用。Required 模式隐式启用，避免出现
+// 配置要求强制认证但 Enabled 被遗漏的降级状态。
+func (config SIPRegisterCertificateAuth) Active() bool {
+	return config.Enabled || config.Required
+}
+
+// ValidateRegisterCertificateAuthConfig 校验数字证书 REGISTER 认证的结构化配置。
+// 证书、私钥、证书链和 CRL 的密码学校验在 GB28181 服务启动前完成。
+func ValidateRegisterCertificateAuthConfig(config SIPRegisterCertificateAuth) error {
+	if !config.Active() {
+		return nil
+	}
+	if strings.TrimSpace(config.PlatformCert) == "" {
+		return fmt.Errorf("启用数字证书 REGISTER 认证时必须配置平台证书文件")
+	}
+	if strings.TrimSpace(config.PlatformKey) == "" {
+		return fmt.Errorf("启用数字证书 REGISTER 认证时必须配置平台私钥文件")
+	}
+	if len(config.DeviceCertificates) == 0 {
+		return fmt.Errorf("启用数字证书 REGISTER 认证时必须配置至少一个设备证书")
+	}
+	for deviceID, certificate := range config.DeviceCertificates {
+		if !isDigitCode(strings.TrimSpace(deviceID), 20) {
+			return fmt.Errorf("数字证书设备 ID %q 必须是 20 位数字", deviceID)
+		}
+		if strings.TrimSpace(certificate) == "" {
+			return fmt.Errorf("数字证书设备 %s 的证书文件不能为空", deviceID)
+		}
+	}
+	if strings.TrimSpace(config.CRL) != "" && strings.TrimSpace(config.DeviceCA) == "" {
+		return fmt.Errorf("配置证书撤销列表 CRL 时必须同时配置设备 CA 文件")
+	}
+	return nil
 }
 
 // SIPUpstream 描述一个上级 GB/T 28181 平台的注册参数。
 type SIPUpstream struct {
-	Name              string            `json:"name" comment:"上级平台配置名称，必须唯一"`
-	Enabled           bool              `json:"enabled" comment:"是否启用级联注册"`
-	ServerID          string            `json:"server_id" comment:"上级平台 20 位国标编码"`
-	Domain            string            `json:"domain" comment:"上级平台 SIP 域；为空时取 server_id 前 10 位"`
-	Host              string            `json:"host" comment:"上级平台 SIP 地址"`
-	Port              int               `json:"port" comment:"上级平台 SIP 端口"`
-	Transport         string            `json:"transport,omitempty" comment:"上级平台 SIP 信令传输：udp/tcp/tls；空值默认 udp"`
-	TLSCA             string            `json:"tls_ca,omitempty" comment:"TLS 上级服务端证书的 CA 文件；为空时使用系统 CA"`
-	TLSCert           string            `json:"tls_cert,omitempty" comment:"TLS 客户端证书文件；与 tls_key 同时配置"`
-	TLSKey            string            `json:"tls_key,omitempty" comment:"TLS 客户端私钥文件；与 tls_cert 同时配置"`
-	TLSServerName     string            `json:"tls_server_name,omitempty" comment:"TLS 服务端证书名称；为空时使用 host"`
-	LocalID           string            `json:"local_id" comment:"向上级注册使用的本平台国标编码；为空时使用 Sip.ID"`
-	LocalDomain       string            `json:"local_domain" comment:"向上级注册使用的本平台 SIP 域；为空时使用 Sip.Domain 或 local_id 前 10 位"`
-	LocalHost         string            `json:"local_host" comment:"Contact 宣告地址；为空时使用 Sip.Host"`
-	LocalPort         int               `json:"local_port,omitempty" comment:"Contact 宣告端口；空值按传输使用本机 SIP 或 TLS 监听端口"`
-	Password          string            `json:"password" comment:"上级平台注册密码"`
-	SignalDigestSeed  string            `json:"signal_digest_seed,omitempty" comment:"与该上级约定的 Note 摘要 seed；为空时使用 Password 或 Sip.SignalDigest.Seed"`
-	Version           string            `json:"version" comment:"级联档案版本：1.0/1.1/2.0/3.0"`
-	Expires           int               `json:"expires" comment:"注册有效期秒数"`
-	KeepaliveInterval Duration          `json:"keepalive_interval" comment:"心跳间隔"`
-	SharedChannels    []string          `json:"shared_channels,omitempty" comment:"共享给该上级的本地国标通道编码；空列表表示不共享"`
-	ChannelIDMap      map[string]string `json:"channel_id_map,omitempty" comment:"本地通道编码到上级可见国标编码的映射"`
-	MediaAllowedCIDRs []string          `json:"media_allowed_cidrs,omitempty" comment:"除上级信令 IP 外允许接收级联媒体的 IP/CIDR 白名单"`
+	Name                    string                             `json:"name" comment:"上级平台配置名称，必须唯一"`
+	Enabled                 bool                               `json:"enabled" comment:"是否启用级联注册"`
+	ServerID                string                             `json:"server_id" comment:"上级平台 20 位国标编码"`
+	Domain                  string                             `json:"domain" comment:"上级平台 SIP 域；为空时取 server_id 前 10 位"`
+	Host                    string                             `json:"host" comment:"上级平台 SIP 地址"`
+	Port                    int                                `json:"port" comment:"上级平台 SIP 端口"`
+	Transport               string                             `json:"transport,omitempty" comment:"上级平台 SIP 信令传输：udp/tcp/tls；空值默认 udp"`
+	TLSCA                   string                             `json:"tls_ca,omitempty" comment:"TLS 上级服务端证书的 CA 文件；为空时使用系统 CA"`
+	TLSCert                 string                             `json:"tls_cert,omitempty" comment:"TLS 客户端证书文件；与 tls_key 同时配置"`
+	TLSKey                  string                             `json:"tls_key,omitempty" comment:"TLS 客户端私钥文件；与 tls_cert 同时配置"`
+	TLSServerName           string                             `json:"tls_server_name,omitempty" comment:"TLS 服务端证书名称；为空时使用 host"`
+	LocalID                 string                             `json:"local_id" comment:"向上级注册使用的本平台国标编码；为空时使用 Sip.ID"`
+	LocalDomain             string                             `json:"local_domain" comment:"向上级注册使用的本平台 SIP 域；为空时使用 Sip.Domain 或 local_id 前 10 位"`
+	LocalHost               string                             `json:"local_host" comment:"Contact 宣告地址；为空时使用 Sip.Host"`
+	LocalPort               int                                `json:"local_port,omitempty" comment:"Contact 宣告端口；空值按传输使用本机 SIP 或 TLS 监听端口"`
+	Password                string                             `json:"password" comment:"上级平台注册密码"`
+	RegisterCertificateAuth SIPUpstreamRegisterCertificateAuth `json:"register_certificate_auth" comment:"向上级注册时使用 Capability/Asymmetric 数字证书认证"`
+	SignalDigestSeed        string                             `json:"signal_digest_seed,omitempty" comment:"与该上级约定的 Note 摘要 seed；为空时使用 Password 或 Sip.SignalDigest.Seed"`
+	Version                 string                             `json:"version" comment:"级联档案版本：1.0/1.1/2.0/3.0"`
+	Expires                 int                                `json:"expires" comment:"注册有效期秒数"`
+	KeepaliveInterval       Duration                           `json:"keepalive_interval" comment:"心跳间隔"`
+	SharedChannels          []string                           `json:"shared_channels,omitempty" comment:"共享给该上级的本地国标通道编码；空列表表示不共享"`
+	ChannelIDMap            map[string]string                  `json:"channel_id_map,omitempty" comment:"本地通道编码到上级可见国标编码的映射"`
+	MediaAllowedCIDRs       []string                           `json:"media_allowed_cidrs,omitempty" comment:"除上级信令 IP 外允许接收级联媒体的 IP/CIDR 白名单"`
+}
+
+// SIPUpstreamRegisterCertificateAuth 控制本平台作为 SIP UA 向上级注册时使用的
+// GB/T 28181-2016 Capability/Asymmetric 数字证书双向认证。
+type SIPUpstreamRegisterCertificateAuth struct {
+	Enabled    bool   `json:"enabled" comment:"是否向上级声明数字证书认证能力"`
+	Required   bool   `json:"required" comment:"是否拒绝 Digest 或无挑战成功造成的认证降级；设置后隐式启用"`
+	LocalCert  string `json:"local_cert" comment:"本平台用于向该上级注册的 X.509 证书"`
+	LocalKey   string `json:"local_key" comment:"本平台用于向该上级注册的 RSA 私钥"`
+	ServerCert string `json:"server_cert" comment:"上级平台 X.509 证书"`
+	ServerCA   string `json:"server_ca,omitempty" comment:"用于校验上级平台证书链的 CA 文件；为空时固定信任 ServerCert"`
+	CRL        string `json:"crl,omitempty" comment:"上级平台证书撤销列表；配置时必须同时设置 ServerCA"`
+}
+
+func (config SIPUpstreamRegisterCertificateAuth) Active() bool {
+	return config.Enabled || config.Required
+}
+
+func ValidateUpstreamRegisterCertificateAuthConfig(config SIPUpstreamRegisterCertificateAuth) error {
+	if !config.Active() {
+		return nil
+	}
+	for name, value := range map[string]string{
+		"本平台证书":  config.LocalCert,
+		"本平台私钥":  config.LocalKey,
+		"上级平台证书": config.ServerCert,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("启用上级数字证书 REGISTER 认证时必须配置%s", name)
+		}
+	}
+	if strings.TrimSpace(config.CRL) != "" && strings.TrimSpace(config.ServerCA) == "" {
+		return fmt.Errorf("配置上级平台 CRL 时必须同时配置上级平台 CA 文件")
+	}
+	return nil
 }
 
 // SIPSignalDigest 控制 GB/T 28181 除 REGISTER 外的 Date + Note 信令摘要。
@@ -232,6 +316,9 @@ func ValidateSIPConfig(config SIP) error {
 	}
 	if config.DeviceHistory.MaxDays < 0 || config.DeviceHistory.MaxDays > 3650 {
 		return fmt.Errorf("设备历史保留天数应在 0–3650 之间")
+	}
+	if err := ValidateRegisterCertificateAuthConfig(config.RegisterCertificateAuth); err != nil {
+		return err
 	}
 	return ValidateSignalDigestConfig(config.SignalDigest)
 }

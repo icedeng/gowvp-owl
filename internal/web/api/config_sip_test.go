@@ -20,6 +20,10 @@ func TestMergeSIPUpdatePreservesOmittedNestedConfiguration(t *testing.T) {
 			Enabled: true, Required: true, Seed: "current-seed", Algorithm: "SHA-256",
 			Encoding: "base64", AcceptLegacyHex: true, Window: conf.Duration(5 * time.Minute),
 		},
+		RegisterCertificateAuth: conf.SIPRegisterCertificateAuth{
+			Enabled: true, PlatformCert: "platform.crt", PlatformKey: "platform.key",
+			DeviceCertificates: map[string]string{"34020000001320000001": "device.crt"},
+		},
 		Upstreams: []conf.SIPUpstream{{Name: "upstream-a", ServerID: "34020000002000000001"}},
 		Log: conf.SIPLog{
 			Enabled: true, Dir: "./logs/sip", MaxAge: conf.Duration(7 * 24 * time.Hour), RotationSize: 50,
@@ -41,6 +45,10 @@ func TestMergeSIPUpdatePreservesOmittedNestedConfiguration(t *testing.T) {
 	}
 	if next.SignalDigest != current.SignalDigest {
 		t.Fatalf("omitted signal Digest was cleared: got %+v want %+v", next.SignalDigest, current.SignalDigest)
+	}
+	if !next.RegisterCertificateAuth.Enabled || next.RegisterCertificateAuth.PlatformCert != "platform.crt" ||
+		next.RegisterCertificateAuth.DeviceCertificates["34020000001320000001"] != "device.crt" {
+		t.Fatalf("omitted certificate REGISTER config was cleared: %+v", next.RegisterCertificateAuth)
 	}
 	if next.TLSClientCA != current.TLSClientCA || next.TLSRequireClientCert != current.TLSRequireClientCert {
 		t.Fatalf("omitted TLS client verification config was cleared: %+v", next)
@@ -203,6 +211,10 @@ func TestSIPRestartRequiredFields(t *testing.T) {
 		{name: "TLS key", change: func(config *conf.SIP) { config.TLSKey = "server.key" }},
 		{name: "TLS client CA", change: func(config *conf.SIP) { config.TLSClientCA = "client-ca.crt" }},
 		{name: "TLS require client certificate", change: func(config *conf.SIP) { config.TLSRequireClientCert = true }},
+		{name: "REGISTER certificate authentication", change: func(config *conf.SIP) {
+			config.RegisterCertificateAuth.Enabled = true
+			config.RegisterCertificateAuth.PlatformCert = "platform.crt"
+		}},
 		{name: "log", change: func(config *conf.SIP) { config.Log.Enabled = !config.Log.Enabled }},
 	}
 	for _, test := range tests {

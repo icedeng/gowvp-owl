@@ -61,6 +61,9 @@ type GB28181API struct {
 	// REGISTER Digest nonce 由服务端签发并绑定设备和源 IP，避免接受任意或永久可重放的 nonce。
 	registerNonceMu sync.Mutex
 	registerNonces  map[string]registerNonceState
+	// registerCertificateAuth 实现 GB/T 28181-2016 Capability/Asymmetric REGISTER 认证。
+	// 默认 nil，避免改变现有 Digest/免密码注册行为。
+	registerCertificateAuth *registerCertificateAuthenticator
 	// registerOperations 按设备串行化 REGISTER 的查询、自动建档和状态提交，不同设备仍可并行。
 	registerOperationMu sync.Mutex
 	registerOperations  map[string]*keyedOperationLock
@@ -435,15 +438,13 @@ func (g *GB28181API) validateRegisterAuthorization(ctx *sip.Context, header sip.
 }
 
 func registerRequestFingerprint(request *sip.Request, response string) string {
-	callID := ""
-	if value, ok := request.CallID(); ok && value != nil {
-		callID = value.String()
+	hash := sha256.New()
+	if request != nil {
+		_, _ = hash.Write([]byte(request.String()))
 	}
-	sequence := ""
-	if value, ok := request.CSeq(); ok && value != nil {
-		sequence = fmt.Sprintf("%d:%s", value.SeqNo, value.MethodName)
-	}
-	return callID + "\x00" + sequence + "\x00" + response
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(response))
+	return string(hash.Sum(nil))
 }
 
 func (g *GB28181API) handlerRegister(ctx *sip.Context) {
@@ -539,10 +540,18 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		}
 	}
 
-	if password != "" {
-		hdrs := ctx.Request.GetHeaders("Authorization")
+	hdrs := ctx.Request.GetHeaders("Authorization")
+	certificateAuthenticated, stop := g.authenticateRegisterCertificate(ctx, hdrs)
+	if stop {
+		return
+	}
+	if password != "" && !certificateAuthenticated {
 		if len(hdrs) == 0 {
 			g.respondRegisterChallenge(ctx)
+			return
+		}
+		if len(hdrs) != 1 {
+			g.respondRegister(ctx, http.StatusBadRequest, "REGISTER requires exactly one Authorization header")
 			return
 		}
 		username := ctx.DeviceID

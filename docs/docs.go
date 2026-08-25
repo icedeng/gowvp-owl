@@ -4883,6 +4883,14 @@ const docTemplate = `{
                     "type": "boolean",
                     "example": false
                 },
+                "register_certificate_auth": {
+                    "description": "Capability/Asymmetric 数字证书 REGISTER 认证",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/api.SwaggerSIPRegisterCertificateAuth"
+                        }
+                    ]
+                },
                 "require_message_auth": {
                     "description": "是否要求 MESSAGE/NOTIFY 做 Digest 鉴权",
                     "type": "boolean",
@@ -4959,6 +4967,41 @@ const docTemplate = `{
                     "description": "纳秒",
                     "type": "integer",
                     "example": 43200000000000
+                }
+            }
+        },
+        "api.SwaggerSIPRegisterCertificateAuth": {
+            "type": "object",
+            "properties": {
+                "crl": {
+                    "type": "string",
+                    "example": "configs/certs/gb-device.crl"
+                },
+                "device_ca": {
+                    "type": "string",
+                    "example": "configs/certs/gb-device-ca.crt"
+                },
+                "device_certificates": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "platform_cert": {
+                    "type": "string",
+                    "example": "configs/certs/gb-platform.crt"
+                },
+                "platform_key": {
+                    "type": "string",
+                    "example": "configs/certs/gb-platform.key"
+                },
+                "required": {
+                    "type": "boolean",
+                    "example": false
                 }
             }
         },
@@ -5065,6 +5108,9 @@ const docTemplate = `{
                     "type": "integer",
                     "example": 5060
                 },
+                "register_certificate_auth": {
+                    "$ref": "#/definitions/api.SwaggerSIPUpstreamRegisterCertificateAuth"
+                },
                 "server_id": {
                     "type": "string",
                     "example": "34020000002000000001"
@@ -5102,6 +5148,39 @@ const docTemplate = `{
                 "version": {
                     "type": "string",
                     "example": "1.1"
+                }
+            }
+        },
+        "api.SwaggerSIPUpstreamRegisterCertificateAuth": {
+            "type": "object",
+            "properties": {
+                "crl": {
+                    "type": "string",
+                    "example": "configs/certs/upstream-register.crl"
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "local_cert": {
+                    "type": "string",
+                    "example": "configs/certs/cascade-register.crt"
+                },
+                "local_key": {
+                    "type": "string",
+                    "example": "configs/certs/cascade-register.key"
+                },
+                "required": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "server_ca": {
+                    "type": "string",
+                    "example": "configs/certs/upstream-register-ca.crt"
+                },
+                "server_cert": {
+                    "type": "string",
+                    "example": "configs/certs/upstream-register.crt"
                 }
             }
         },

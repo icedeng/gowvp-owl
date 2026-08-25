@@ -857,6 +857,10 @@ definitions:
         description: 是否启用 PTZ 弱确认模式
         example: false
         type: boolean
+      register_certificate_auth:
+        allOf:
+        - $ref: '#/definitions/api.SwaggerSIPRegisterCertificateAuth'
+        description: Capability/Asymmetric 数字证书 REGISTER 认证
       require_message_auth:
         description: 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
         example: false
@@ -914,6 +918,31 @@ definitions:
         description: 纳秒
         example: 43200000000000
         type: integer
+    type: object
+  api.SwaggerSIPRegisterCertificateAuth:
+    properties:
+      crl:
+        example: configs/certs/gb-device.crl
+        type: string
+      device_ca:
+        example: configs/certs/gb-device-ca.crt
+        type: string
+      device_certificates:
+        additionalProperties:
+          type: string
+        type: object
+      enabled:
+        example: false
+        type: boolean
+      platform_cert:
+        example: configs/certs/gb-platform.crt
+        type: string
+      platform_key:
+        example: configs/certs/gb-platform.key
+        type: string
+      required:
+        example: false
+        type: boolean
     type: object
   api.SwaggerSIPSignalDigest:
     properties:
@@ -991,6 +1020,8 @@ definitions:
       port:
         example: 5060
         type: integer
+      register_certificate_auth:
+        $ref: '#/definitions/api.SwaggerSIPUpstreamRegisterCertificateAuth'
       server_id:
         example: "34020000002000000001"
         type: string
@@ -1018,6 +1049,30 @@ definitions:
         type: string
       version:
         example: "1.1"
+        type: string
+    type: object
+  api.SwaggerSIPUpstreamRegisterCertificateAuth:
+    properties:
+      crl:
+        example: configs/certs/upstream-register.crl
+        type: string
+      enabled:
+        example: false
+        type: boolean
+      local_cert:
+        example: configs/certs/cascade-register.crt
+        type: string
+      local_key:
+        example: configs/certs/cascade-register.key
+        type: string
+      required:
+        example: false
+        type: boolean
+      server_ca:
+        example: configs/certs/upstream-register-ca.crt
+        type: string
+      server_cert:
+        example: configs/certs/upstream-register.crt
         type: string
     type: object
   api.SwaggerSnapshotLinkOutput:
