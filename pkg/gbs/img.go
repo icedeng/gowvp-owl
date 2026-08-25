@@ -335,11 +335,17 @@ func (g *GB28181API) sipMessageSnapshotFinished(ctx *sip.Context) {
 	}
 	g.snapshotStateMu.Lock()
 	state, ok := g.snapshotStates[snapshotStateKey(ctx.DeviceID, msg.SessionID)]
-	if !ok || runtimeStateExpired(state.UpdatedAt, time.Now(), snapshotStateTTL) {
+	now := time.Now()
+	if ok && !runtimeStateExpired(state.UpdatedAt, now, snapshotStateTTL) && strings.TrimSpace(state.ChannelID) != "" && strings.TrimSpace(state.ChannelID) != msg.DeviceID {
+		g.snapshotStateMu.Unlock()
+		ctx.String(400, "UploadSnapShotFinished session target mismatch")
+		return
+	}
+	if !ok || runtimeStateExpired(state.UpdatedAt, now, snapshotStateTTL) {
 		state = SnapshotState{DeviceID: ctx.DeviceID, ChannelID: msg.DeviceID, SessionID: msg.SessionID}
 	}
 	state.FileIDs = fileIDs
-	state.UpdatedAt = time.Now()
+	state.UpdatedAt = now
 	switch {
 	case len(state.FileIDs) == 0:
 		state.Status = "failed"

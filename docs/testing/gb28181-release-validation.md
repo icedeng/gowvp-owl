@@ -61,6 +61,7 @@ go test ./... -count=1
 - 3.0 CruiseTrackListQuery/CruiseTrackQuery 的请求、结构化响应、轨迹编号参数和安全级联；
 - 3.0 附录 H `X-PreferredPath` 首跳消费/剩余路径转发和 `X-RoutePath` 响应前置；平台编码、重复路径、错误首跳、下级确认不匹配及路由环拒绝；不同指定路径的实时、回放和下载媒体源隔离及正确释放；
 - 3.0 ConfigDownload 使用标准 `SnapShotConfig`，响应解析兼容厂商旧节点 `SnapShot`；
+- 3.0 `DeviceUpgradeResult` 与 `UploadSnapShotFinished` 最终通知同时校验已鉴权设备、`SessionID` 和原目标通道，同一 NVR 的兄弟通道不能覆盖会话终态；
 - A.4 ExtraInfo JSON 的整数、零值、数组和 20 位数值型编码保持原始精度；未知数值型对象编码同样拒绝转发；
 - 共享通道 PTZ、录像和版本化通道控制转发；设备级高影响控制不因共享单个通道而被级联放大；
 - 四版本历史级联 `INVITE→ACK→INFO→BYE` 完整对话、媒体启动/释放和 MANSRTSP/RTSP 转换；

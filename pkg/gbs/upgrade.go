@@ -293,6 +293,10 @@ func (g *GB28181API) sipMessageDeviceUpgradeResult(ctx *sip.Context) {
 		}
 	}
 	state, ok := g.UpgradeState(ctx.DeviceID, msg.SessionID)
+	if ok && strings.TrimSpace(state.ChannelID) != "" && strings.TrimSpace(state.ChannelID) != msg.DeviceID {
+		ctx.String(400, "DeviceUpgradeResult session target mismatch")
+		return
+	}
 	if !ok {
 		state = UpgradeState{DeviceID: ctx.DeviceID, ChannelID: msg.DeviceID, SessionID: msg.SessionID}
 	}

@@ -82,6 +82,32 @@ func TestDeviceUpgradeResultRequires2022AndValidSession(t *testing.T) {
 	}
 }
 
+func TestDeviceUpgradeResultRejectsSiblingChannelSession(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion30)
+	firstChannelID := gb10ChannelID
+	secondChannelID := "34020000001320000003"
+	memory.runtime.Channels.Store(firstChannelID, &Channel{ChannelID: firstChannelID, device: memory.runtime})
+	memory.runtime.Channels.Store(secondChannelID, &Channel{ChannelID: secondChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	sessionID := "upgrade-session-0000000000000004"
+	api.storeUpgradeState(UpgradeState{
+		DeviceID: gb10DeviceID, ChannelID: firstChannelID, SessionID: sessionID,
+		Status: "accepted", Firmware: "V1.2.3",
+	})
+	body := []byte(`<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>96</SN><DeviceID>` + secondChannelID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><UpgradeResult>OK</UpgradeResult>` +
+		`<Firmware>V1.2.4</Firmware></Notify>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "upgrade-wrong-channel", body, api.sipMessageDeviceUpgradeResult)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("sibling channel upgrade result response = %s", response)
+	}
+	state, ok := api.UpgradeState(gb10DeviceID, sessionID)
+	if !ok || state.ChannelID != firstChannelID || state.Status != "accepted" || state.SN != 0 {
+		t.Fatalf("sibling channel changed upgrade state = %+v, %v", state, ok)
+	}
+}
+
 func TestUpgradeStatesExpireAndRemainBounded(t *testing.T) {
 	api := &GB28181API{}
 	now := time.Now()

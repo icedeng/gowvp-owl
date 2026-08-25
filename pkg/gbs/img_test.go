@@ -86,6 +86,31 @@ func TestSnapshotFinishedRequires2022(t *testing.T) {
 	}
 }
 
+func TestSnapshotFinishedRejectsSiblingChannelSession(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion30)
+	firstChannelID := gb10ChannelID
+	secondChannelID := "34020000001320000003"
+	memory.runtime.Channels.Store(firstChannelID, &Channel{ChannelID: firstChannelID, device: memory.runtime})
+	memory.runtime.Channels.Store(secondChannelID, &Channel{ChannelID: secondChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	sessionID := "snapshot-session-0000000000000005"
+	api.storeSnapshotState(SnapshotState{
+		DeviceID: gb10DeviceID, ChannelID: firstChannelID, SessionID: sessionID,
+		Status: "uploading", ExpectedCount: 1, ReceivedCount: 1,
+	})
+	body := []byte(`<Notify><CmdType>UploadSnapShotFinished</CmdType><SN>105</SN><DeviceID>` + secondChannelID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><SnapShotList/></Notify>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "snapshot-wrong-channel", body, api.sipMessageSnapshotFinished)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("sibling channel snapshot response = %s", response)
+	}
+	state, ok := api.SnapshotState(gb10DeviceID, sessionID)
+	if !ok || state.ChannelID != firstChannelID || state.Status != "uploading" || state.ReceivedCount != 1 {
+		t.Fatalf("sibling channel changed snapshot state = %+v, %v", state, ok)
+	}
+}
+
 func TestSnapshotStatesExpireAndRemainBounded(t *testing.T) {
 	api := &GB28181API{}
 	now := time.Now()
