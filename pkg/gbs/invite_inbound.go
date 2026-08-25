@@ -17,19 +17,23 @@ import (
 )
 
 type inboundInviteDialog struct {
-	CallID      string
-	DeviceID    string
-	Established bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	LocalCSeq   uint32
-	Request     *sip.Request
-	Response    *sip.Response
-	Broadcast   *broadcastSession
-	Cascade     *cascadeMediaSession
-	InviteTx    *sip.Transaction
-	Cancelled   bool
-	mu          sync.Mutex
+	CallID       string
+	DeviceID     string
+	RemoteTag    string
+	InitialToTag string
+	LocalTag     string
+	TagsBound    bool
+	Established  bool
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	LocalCSeq    uint32
+	Request      *sip.Request
+	Response     *sip.Response
+	Broadcast    *broadcastSession
+	Cascade      *cascadeMediaSession
+	InviteTx     *sip.Transaction
+	Cancelled    bool
+	mu           sync.Mutex
 }
 
 const pendingInviteDialogTTL = 10 * time.Minute
@@ -78,6 +82,10 @@ func (g *GB28181API) sipCancelGeneric(ctx *sip.Context) {
 	if (dialog.Cascade != nil && !g.authorizeCascadeDialogRequest(dialog, ctx)) ||
 		(dialog.Broadcast != nil && !g.authorizeBroadcastDialogRequest(dialog, ctx)) {
 		ctx.String(http.StatusForbidden, "cascade dialog source mismatch")
+		return
+	}
+	if !inboundDialogTagsMatch(dialog, ctx.Request, false) {
+		ctx.String(481, "Call/Transaction Does Not Exist")
 		return
 	}
 	dialog.mu.Lock()
@@ -156,6 +164,10 @@ func (g *GB28181API) sipInviteBroadcast(ctx *sip.Context, callID string, session
 	}
 	if existing, ok := g.inviteDialogs.Load(callID); ok {
 		if dialog, ok := existing.(*inboundInviteDialog); ok && dialog != nil && dialog.Broadcast == session {
+			if !inboundDialogTagsMatch(dialog, ctx.Request, false) {
+				ctx.String(491, "Call-ID already in use")
+				return
+			}
 			dialog.mu.Lock()
 			resp := dialog.Response
 			dialog.UpdatedAt = time.Now()
@@ -196,7 +208,7 @@ func (g *GB28181API) sipInviteBroadcast(ctx *sip.Context, callID string, session
 		session.mu.Unlock()
 	}()
 	dialog := &inboundInviteDialog{
-		CallID: callID, DeviceID: strings.TrimSpace(ctx.DeviceID), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		CallID: callID, DeviceID: strings.TrimSpace(ctx.DeviceID), RemoteTag: sipRequestFromTag(ctx.Request), InitialToTag: sipRequestToTag(ctx.Request), TagsBound: true, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 		LocalCSeq: 1, Request: ctx.Request, Broadcast: session, InviteTx: ctx.Tx,
 	}
 	if _, loaded := g.inviteDialogs.LoadOrStore(callID, dialog); loaded {
@@ -278,6 +290,7 @@ func (g *GB28181API) sipInviteBroadcast(ctx *sip.Context, callID string, session
 		return
 	}
 	dialog.Response = resp
+	dialog.LocalTag = sipResponseToTag(resp)
 	dialog.UpdatedAt = time.Now()
 	dialog.mu.Unlock()
 	session.SSRC = ssrc
@@ -348,6 +361,10 @@ func (g *GB28181API) sipByeGeneric(ctx *sip.Context) {
 	}
 	if d.Broadcast != nil && !g.authorizeBroadcastDialogRequest(d, ctx) {
 		ctx.String(http.StatusForbidden, "broadcast dialog source mismatch")
+		return
+	}
+	if !inboundDialogTagsMatch(d, ctx.Request, true) {
+		ctx.String(481, "Call/Transaction Does Not Exist")
 		return
 	}
 	d.mu.Lock()
@@ -430,6 +447,9 @@ func (g *GB28181API) sipAckGeneric(ctx *sip.Context) {
 	if d.Broadcast != nil && !g.authorizeBroadcastDialogRequest(d, ctx) {
 		return
 	}
+	if !inboundDialogTagsMatch(d, ctx.Request, true) {
+		return
+	}
 	d.mu.Lock()
 	d.Established = true
 	d.UpdatedAt = time.Now()
@@ -458,6 +478,10 @@ func (g *GB28181API) sipInfoGeneric(ctx *sip.Context) {
 	dialog, _ := value.(*inboundInviteDialog)
 	if dialog == nil || dialog.Cascade == nil || !g.authorizeCascadeDialogRequest(dialog, ctx) {
 		ctx.String(http.StatusForbidden, "cascade dialog source mismatch")
+		return
+	}
+	if !inboundDialogTagsMatch(dialog, ctx.Request, true) {
+		ctx.String(481, "Call/Transaction Does Not Exist")
 		return
 	}
 	dialog.mu.Lock()
@@ -526,6 +550,82 @@ func (g *GB28181API) authorizeBroadcastDialogRequest(dialog *inboundInviteDialog
 		currentSource = ctx.Request.Source()
 	}
 	return originalSource == nil || addressIP(originalSource).Equal(addressIP(currentSource))
+}
+
+func inboundDialogTagsMatch(dialog *inboundInviteDialog, request *sip.Request, established bool) bool {
+	if dialog == nil || request == nil {
+		return false
+	}
+	dialog.mu.Lock()
+	remoteTag := dialog.RemoteTag
+	initialToTag := dialog.InitialToTag
+	localTag := dialog.LocalTag
+	tagsBound := dialog.TagsBound
+	dialogRequest := dialog.Request
+	dialogResponse := dialog.Response
+	if !tagsBound && remoteTag == "" {
+		remoteTag = sipRequestFromTag(dialogRequest)
+	}
+	if !tagsBound && initialToTag == "" {
+		initialToTag = sipRequestToTag(dialogRequest)
+	}
+	if !tagsBound && localTag == "" {
+		localTag = sipResponseToTag(dialogResponse)
+	}
+	dialog.mu.Unlock()
+	if !tagsBound && remoteTag == "" && initialToTag == "" && localTag == "" && dialogRequest == nil && dialogResponse == nil {
+		// 兼容内部旧调用构造的无 SIP 报文会话；协议入口创建的会话始终保存标签。
+		return true
+	}
+	expectedToTag := initialToTag
+	if established {
+		expectedToTag = localTag
+	}
+	return sipRequestFromTag(request) == remoteTag && sipRequestToTag(request) == expectedToTag
+}
+
+func sipRequestFromTag(request *sip.Request) string {
+	if request == nil {
+		return ""
+	}
+	from, ok := request.From()
+	if !ok || from == nil {
+		return ""
+	}
+	return sipParamsTag(from.Params)
+}
+
+func sipRequestToTag(request *sip.Request) string {
+	if request == nil {
+		return ""
+	}
+	to, ok := request.To()
+	if !ok || to == nil {
+		return ""
+	}
+	return sipParamsTag(to.Params)
+}
+
+func sipResponseToTag(response *sip.Response) string {
+	if response == nil {
+		return ""
+	}
+	to, ok := response.To()
+	if !ok || to == nil {
+		return ""
+	}
+	return sipParamsTag(to.Params)
+}
+
+func sipParamsTag(params sip.Params) string {
+	if params == nil {
+		return ""
+	}
+	tag, ok := params.Get("tag")
+	if !ok || tag == nil {
+		return ""
+	}
+	return strings.TrimSpace(tag.String())
 }
 
 func (g *GB28181API) authorizeCascadeWorker(worker *cascadeWorker, ctx *sip.Context) bool {

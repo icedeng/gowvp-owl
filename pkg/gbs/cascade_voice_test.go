@@ -115,7 +115,12 @@ func TestCascadeBroadcastBuildsUpstreamSourceAndDownstreamSession(t *testing.T) 
 		case <-time.After(time.Second):
 			t.Fatal("downstream Broadcast INVITE response timeout")
 		}
+		dialogValue, ok := api.inviteDialogs.Load("cascade-voice-receiver")
+		if !ok {
+			t.Fatal("downstream Broadcast dialog not stored")
+		}
 		ack := newCascadeBroadcastReceiverRequest(t, connection, sip.MethodACK, "cascade-voice-receiver", session.SourceID, session.ChannelID, nil)
+		applyInboundDialogTags(t, ack, dialogValue.(*inboundInviteDialog), true)
 		api.sipAckGeneric(&sip.Context{Request: ack, DeviceID: gb10DeviceID, Source: connection.remote})
 		return nil
 	}
@@ -169,6 +174,11 @@ func TestCascadeBroadcastBuildsUpstreamSourceAndDownstreamSession(t *testing.T) 
 		t.Fatalf("downstream Broadcast RTP = %+v", started)
 	}
 	bye := newCascadeBroadcastReceiverRequest(t, connection, sip.MethodBYE, "cascade-voice-receiver", session.SourceID, session.ChannelID, nil)
+	dialogValue, ok := api.inviteDialogs.Load("cascade-voice-receiver")
+	if !ok {
+		t.Fatal("downstream Broadcast dialog not retained")
+	}
+	applyInboundDialogTags(t, bye, dialogValue.(*inboundInviteDialog), true)
 	api.sipByeGeneric(&sip.Context{
 		Request: bye, Tx: sip.NewTransaction("cascade-voice-receiver-bye", connection),
 		DeviceID: gb10DeviceID, Source: connection.remote, Log: slog.Default(),
@@ -208,6 +218,40 @@ func newCascadeBroadcastReceiverRequest(t *testing.T, connection sip.Connection,
 	request.SetSource(connection.RemoteAddr())
 	request.SetDestination(connection.LocalAddr())
 	return request
+}
+
+func applyInboundDialogTags(t *testing.T, request *sip.Request, dialog *inboundInviteDialog, established bool) {
+	t.Helper()
+	if request == nil || dialog == nil {
+		t.Fatal("dialog tag test input is nil")
+	}
+	dialog.mu.Lock()
+	remoteTag := dialog.RemoteTag
+	toTag := dialog.InitialToTag
+	if established {
+		toTag = dialog.LocalTag
+	}
+	dialog.mu.Unlock()
+	from, ok := request.From()
+	if !ok || from == nil || from.Address == nil {
+		t.Fatal("dialog request From is unavailable")
+	}
+	to, ok := request.To()
+	if !ok || to == nil || to.Address == nil {
+		t.Fatal("dialog request To is unavailable")
+	}
+	fromAddress := &sip.Address{DisplayName: from.DisplayName, URI: from.Address.Clone(), Params: sip.NewParams()}
+	if remoteTag != "" {
+		fromAddress.Params.Add("tag", sip.String{Str: remoteTag})
+	}
+	toAddress := &sip.Address{DisplayName: to.DisplayName, URI: to.Address.Clone(), Params: sip.NewParams()}
+	if toTag != "" {
+		toAddress.Params.Add("tag", sip.String{Str: toTag})
+	}
+	request.RemoveHeader("From")
+	request.AppendHeader(&sip.FromHeader{DisplayName: fromAddress.DisplayName, Address: fromAddress.URI, Params: fromAddress.Params})
+	request.RemoveHeader("To")
+	request.AppendHeader(&sip.ToHeader{DisplayName: toAddress.DisplayName, Address: toAddress.URI, Params: toAddress.Params})
 }
 
 func TestCascadeBroadcast2011ReturnsBusinessError(t *testing.T) {
@@ -328,6 +372,10 @@ func TestCascadeBroadcastReceiverCancelStopsBothLegs(t *testing.T) {
 	}
 	api.inviteDialogs.Store(dialog.CallID, dialog)
 	cancel := newFlowRequest(t, connection, sip.MethodCancel, dialog.CallID, nil)
+	cancel.RemoveHeader("From")
+	if from, ok := invite.From(); ok {
+		cancel.AppendHeader(from.Clone())
+	}
 	api.sipCancelGeneric(&sip.Context{
 		Request: cancel, Tx: sip.NewTransaction("cascade-voice-cancel", connection),
 		DeviceID: gb10DeviceID, Source: connection.remote, Log: slog.Default(),

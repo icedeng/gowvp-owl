@@ -450,6 +450,7 @@ func TestCascadeCancelTerminatesPendingInvite(t *testing.T) {
 		close(cancelled)
 	}}
 	remote := mustFlowAddress(t, "sip:"+gb10PlatformID+"@remote.example")
+	remote.Params.Add("tag", sip.String{Str: "pending-remote-tag"})
 	local := mustFlowAddress(t, "sip:"+testExposedChannelID+"@local.example")
 	invite := sip.NewRequest("", sip.MethodInvite, local.URI, sip.DefaultSipVersion,
 		sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodInvite).SetCallID(&callID).
@@ -589,6 +590,82 @@ func TestCascadeDialogControlRejectsDifferentUpstream(t *testing.T) {
 	dialog.mu.Unlock()
 	if established {
 		t.Fatal("cross-upstream ACK established cascade dialog")
+	}
+}
+
+func TestCascadeDialogControlRejectsMismatchedTags(t *testing.T) {
+	connection := newFlowConnection()
+	connection.remote = &net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060}
+	server := &Server{}
+	api := &GB28181API{svr: server}
+	server.gb = api
+	worker := newCascadeWorker(server, testSharedCascadePlatform(t))
+	worker.updateStatus(func(state *CascadePlatformStatus) { state.Registered = true })
+	callID := sip.CallID("cascade-dialog-tags")
+	cancelled := false
+	dialog := &inboundInviteDialog{
+		CallID: "cascade-dialog-tags", DeviceID: gb10PlatformID,
+		RemoteTag: "owner-remote", InitialToTag: "", LocalTag: "owner-local", TagsBound: true, Established: true,
+		Cascade: &cascadeMediaSession{worker: worker, cancel: func() { cancelled = true }}, UpdatedAt: time.Now(),
+	}
+	api.inviteDialogs.Store(dialog.CallID, dialog)
+	remote := mustFlowAddress(t, "sip:"+gb10PlatformID+"@remote.example")
+	local := mustFlowAddress(t, "sip:"+testExposedChannelID+"@local.example")
+	newRequest := func(method, fromTag, toTag string) *sip.Request {
+		from := remote.Clone()
+		from.Params.Add("tag", sip.String{Str: fromTag})
+		to := local.Clone()
+		if toTag != "" {
+			to.Params.Add("tag", sip.String{Str: toTag})
+		}
+		request := sip.NewRequest("", method, local.URI, sip.DefaultSipVersion,
+			sip.NewHeaderBuilder().SetFrom(from).SetToWithParam(to).SetMethod(method).SetCallID(&callID).
+				AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
+		request.SetConnection(connection)
+		request.SetSource(connection.remote)
+		request.SetDestination(connection.local)
+		return request
+	}
+	assertRejected := func(method string, request *sip.Request, invoke func(*sip.Context)) {
+		invoke(&sip.Context{
+			Request: request, Tx: sip.NewTransaction("cascade-dialog-tags-"+strings.ToLower(method), connection),
+			DeviceID: gb10PlatformID, Source: connection.remote, Log: slog.Default(),
+		})
+		select {
+		case payload := <-connection.writes:
+			if !strings.Contains(string(payload), "SIP/2.0 481") {
+				t.Fatalf("mismatched-tag %s response: %s", method, payload)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("mismatched-tag %s response timeout", method)
+		}
+	}
+	if !inboundDialogTagsMatch(dialog, newRequest(sip.MethodCancel, "owner-remote", ""), false) ||
+		!inboundDialogTagsMatch(dialog, newRequest(sip.MethodACK, "owner-remote", "owner-local"), true) {
+		t.Fatal("owner dialog tags were not accepted")
+	}
+
+	assertRejected(sip.MethodCancel, newRequest(sip.MethodCancel, "other-remote", ""), api.sipCancelGeneric)
+	assertRejected(sip.MethodBYE, newRequest(sip.MethodBYE, "owner-remote", "other-local"), api.sipByeGeneric)
+	info := newRequest(sip.MethodInfo, "owner-remote", "other-local")
+	info.AppendHeader(&sip.GenericHeader{HeaderName: "Content-Type", Contents: "Application/MANSRTSP"})
+	assertRejected(sip.MethodInfo, info, api.sipInfoGeneric)
+
+	dialog.mu.Lock()
+	dialog.Established = false
+	dialog.mu.Unlock()
+	api.sipAckGeneric(&sip.Context{
+		Request: newRequest(sip.MethodACK, "owner-remote", "other-local"), DeviceID: gb10PlatformID,
+		Source: connection.remote, Log: slog.Default(),
+	})
+	dialog.mu.Lock()
+	established := dialog.Established
+	dialog.mu.Unlock()
+	if established || cancelled {
+		t.Fatalf("mismatched dialog tags changed state: established=%v cancelled=%v", established, cancelled)
+	}
+	if _, ok := api.inviteDialogs.Load(dialog.CallID); !ok {
+		t.Fatal("mismatched dialog tags removed the owner dialog")
 	}
 }
 
@@ -823,8 +900,10 @@ func TestCascadeRealtimeInviteEstablishesAndReleasesB2BUA(t *testing.T) {
 	dialog.mu.Lock()
 	dialog.Established = true
 	dialog.mu.Unlock()
+	remote.Params.Add("tag", sip.String{Str: dialog.RemoteTag})
+	local.Params.Add("tag", sip.String{Str: dialog.LocalTag})
 	bye := sip.NewRequest("", sip.MethodBYE, local.URI, sip.DefaultSipVersion,
-		sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodBYE).SetCallID(&callID).
+		sip.NewHeaderBuilder().SetFrom(remote).SetToWithParam(local).SetMethod(sip.MethodBYE).SetCallID(&callID).
 			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
 	bye.SetConnection(connection)
 	bye.SetSource(connection.remote)
@@ -924,6 +1003,7 @@ func TestCascadeHistoryDialogFourVersionEndToEnd(t *testing.T) {
 			}
 
 			remote := mustFlowAddress(t, "sip:"+gb10PlatformID+"@remote.example")
+			remote.Params.Add("tag", sip.String{Str: "history-remote-tag-" + test.name})
 			local := mustFlowAddress(t, "sip:"+testExposedChannelID+"@local.example")
 			callID := sip.CallID("cascade-history-" + test.name)
 			invite := sip.NewRequest("", sip.MethodInvite, local.URI, sip.DefaultSipVersion,
@@ -968,9 +1048,15 @@ func TestCascadeHistoryDialogFourVersionEndToEnd(t *testing.T) {
 			if media.startCalls != 1 || media.started.Stream != "history-source" || media.started.DstURL != "192.0.2.30" || media.started.DstPort != 30000 {
 				t.Fatalf("history RTP forwarding = %+v", media.started)
 			}
+			dialogValue, ok := api.inviteDialogs.Load(string(callID))
+			if !ok {
+				t.Fatal("history dialog not stored")
+			}
+			dialog := dialogValue.(*inboundInviteDialog)
+			local.Params.Add("tag", sip.String{Str: dialog.LocalTag})
 
 			ack := sip.NewRequest("", sip.MethodACK, local.URI, sip.DefaultSipVersion,
-				sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodACK).SetCallID(&callID).
+				sip.NewHeaderBuilder().SetFrom(remote).SetToWithParam(local).SetMethod(sip.MethodACK).SetCallID(&callID).
 					AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
 			ack.SetConnection(connection)
 			ack.SetSource(connection.remote)
@@ -983,7 +1069,7 @@ func TestCascadeHistoryDialogFourVersionEndToEnd(t *testing.T) {
 			}
 			infoBody = append(infoBody, "\r\n"...)
 			info := sip.NewRequest("", sip.MethodInfo, local.URI, sip.DefaultSipVersion,
-				sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodInfo).SetCallID(&callID).
+				sip.NewHeaderBuilder().SetFrom(remote).SetToWithParam(local).SetMethod(sip.MethodInfo).SetCallID(&callID).
 					AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), infoBody)
 			info.AppendHeader(&sip.GenericHeader{HeaderName: "Content-Type", Contents: "Application/MANSRTSP"})
 			info.SetConnection(connection)
@@ -1007,7 +1093,7 @@ func TestCascadeHistoryDialogFourVersionEndToEnd(t *testing.T) {
 			}
 
 			bye := sip.NewRequest("", sip.MethodBYE, local.URI, sip.DefaultSipVersion,
-				sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodBYE).SetCallID(&callID).
+				sip.NewHeaderBuilder().SetFrom(remote).SetToWithParam(local).SetMethod(sip.MethodBYE).SetCallID(&callID).
 					AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
 			bye.SetConnection(connection)
 			bye.SetSource(connection.remote)

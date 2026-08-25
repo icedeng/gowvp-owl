@@ -101,10 +101,20 @@ func TestBroadcastReceiverInviteStartsAndStopsRTP(t *testing.T) {
 	if start.DstURL != "192.0.2.30" || start.DstPort != 8000 || !start.IsUDP || start.Type != broadcastRTPTypePS || start.PT != 96 || !start.OnlyAudio {
 		t.Fatalf("unexpected RTP start: %+v", start)
 	}
+	dialogValue, ok := api.inviteDialogs.Load("broadcast-dialog")
+	if !ok {
+		t.Fatal("Broadcast dialog not stored")
+	}
+	dialog := dialogValue.(*inboundInviteDialog)
 
 	ack := newFlowRequest(t, conn, sip.MethodACK, "broadcast-dialog", nil)
+	applyInboundDialogTags(t, ack, dialog, true)
 	api.sipAckGeneric(&sip.Context{Request: ack, DeviceID: gb10DeviceID})
-	response = runFlowHandler(t, conn, api, sip.MethodBYE, "broadcast-dialog", nil, api.sipByeGeneric)
+	bye := newFlowRequest(t, conn, sip.MethodBYE, "broadcast-dialog", nil)
+	applyInboundDialogTags(t, bye, dialog, true)
+	tx := sip.NewTransaction("broadcast-dialog-bye", conn)
+	api.sipByeGeneric(&sip.Context{Request: bye, Tx: tx, DeviceID: gb10DeviceID, Source: conn.remote})
+	response = string(<-flowResponse(t, conn))
 	assertFlowOK(t, response)
 	media.mu.Lock()
 	stopped := media.stopped

@@ -230,6 +230,10 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 	if existing, loaded := g.inviteDialogs.Load(callID); loaded {
 		dialog, _ := existing.(*inboundInviteDialog)
 		if dialog != nil && dialog.Cascade != nil && dialog.Cascade.worker == worker {
+			if !inboundDialogTagsMatch(dialog, ctx.Request, false) {
+				respondCascadeInviteStatus(ctx, worker, 491, "Call-ID already in use")
+				return
+			}
 			dialog.mu.Lock()
 			response := dialog.Response
 			dialog.UpdatedAt = time.Now()
@@ -282,14 +286,23 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 	sessionCtx, cancel := context.WithCancel(monitorUserIdentityContext(ctx))
 	session := &cascadeMediaSession{worker: worker, ssrc: offer.SSRC, vhost: cascadeSourceVHost, app: cascadeSourceApp, cancel: cancel}
 	dialog := &inboundInviteDialog{
-		CallID: callID, DeviceID: ctx.DeviceID, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		CallID: callID, DeviceID: ctx.DeviceID, RemoteTag: sipRequestFromTag(ctx.Request), InitialToTag: sipRequestToTag(ctx.Request), TagsBound: true, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 		LocalCSeq: 1, Request: ctx.Request, Cascade: session, InviteTx: ctx.Tx,
 	}
 	actual, loaded := g.inviteDialogs.LoadOrStore(callID, dialog)
 	if loaded {
 		cancel()
-		if previous, ok := actual.(*inboundInviteDialog); ok && previous != nil && previous.Response != nil {
-			_ = ctx.Tx.Respond(previous.Response)
+		previous, ok := actual.(*inboundInviteDialog)
+		if !ok || previous == nil || previous.Cascade == nil || previous.Cascade.worker != worker || !inboundDialogTagsMatch(previous, ctx.Request, false) {
+			respondCascadeInviteStatus(ctx, worker, 491, "Call-ID already in use")
+			return
+		}
+		previous.mu.Lock()
+		previousResponse := previous.Response
+		previous.UpdatedAt = time.Now()
+		previous.mu.Unlock()
+		if previousResponse != nil {
+			_ = ctx.Tx.Respond(previousResponse)
 		} else {
 			ctx.String(100, "Trying")
 		}
@@ -367,6 +380,7 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 		return
 	}
 	dialog.Response = response
+	dialog.LocalTag = sipResponseToTag(response)
 	dialog.UpdatedAt = time.Now()
 	dialog.mu.Unlock()
 	if err := ctx.Tx.Respond(response); err != nil {
