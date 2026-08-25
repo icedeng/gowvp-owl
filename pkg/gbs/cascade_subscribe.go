@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
@@ -233,6 +234,92 @@ func (g *GB28181API) invokeCascadeSubscribe(ctx context.Context, input *Subscrib
 	return g.Subscribe(ctx, input)
 }
 
+func (g *GB28181API) lockCascadeSubscriptionOperation(ctx context.Context, key string) (func(), error) {
+	if g == nil {
+		return nil, fmt.Errorf("GB28181 service is unavailable")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, fmt.Errorf("cascade subscription key is unavailable")
+	}
+	g.cascadeSubscriptionOpMu.Lock()
+	if g.cascadeSubscriptionOps == nil {
+		g.cascadeSubscriptionOps = make(map[string]*keyedOperationLock)
+	}
+	entry := g.cascadeSubscriptionOps[key]
+	if entry == nil {
+		entry = &keyedOperationLock{}
+		g.cascadeSubscriptionOps[key] = entry
+	}
+	entry.refs++
+	g.cascadeSubscriptionOpMu.Unlock()
+	if err := entry.mutex.LockContext(ctx); err != nil {
+		g.releaseCascadeSubscriptionOperationRef(key, entry)
+		return nil, err
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			entry.mutex.Unlock()
+			g.releaseCascadeSubscriptionOperationRef(key, entry)
+		})
+	}, nil
+}
+
+func (g *GB28181API) releaseCascadeSubscriptionOperationRef(key string, entry *keyedOperationLock) {
+	g.cascadeSubscriptionOpMu.Lock()
+	if current := g.cascadeSubscriptionOps[key]; current == entry {
+		entry.refs--
+		if entry.refs == 0 {
+			delete(g.cascadeSubscriptionOps, key)
+		}
+	}
+	g.cascadeSubscriptionOpMu.Unlock()
+}
+
+func (g *GB28181API) lockEventSubscriptionOperation(ctx context.Context, key string) (func(), error) {
+	if g == nil {
+		return nil, fmt.Errorf("GB28181 service is unavailable")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, fmt.Errorf("event subscription key is unavailable")
+	}
+	g.eventSubscriptionMu.Lock()
+	if g.eventSubscriptionOps == nil {
+		g.eventSubscriptionOps = make(map[string]*keyedOperationLock)
+	}
+	entry := g.eventSubscriptionOps[key]
+	if entry == nil {
+		entry = &keyedOperationLock{}
+		g.eventSubscriptionOps[key] = entry
+	}
+	entry.refs++
+	g.eventSubscriptionMu.Unlock()
+	if err := entry.mutex.LockContext(ctx); err != nil {
+		g.releaseEventSubscriptionOperationRef(key, entry)
+		return nil, err
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			entry.mutex.Unlock()
+			g.releaseEventSubscriptionOperationRef(key, entry)
+		})
+	}, nil
+}
+
+func (g *GB28181API) releaseEventSubscriptionOperationRef(key string, entry *keyedOperationLock) {
+	g.eventSubscriptionMu.Lock()
+	if current := g.eventSubscriptionOps[key]; current == entry {
+		entry.refs--
+		if entry.refs == 0 {
+			delete(g.eventSubscriptionOps, key)
+		}
+	}
+	g.eventSubscriptionMu.Unlock()
+}
+
 func (g *GB28181API) syncCascadeDownstreamSubscriptions(ctx context.Context, previous []string, desired map[string]SubscribeInput) ([]string, error) {
 	return g.syncCascadeDownstreamSubscriptionsMode(ctx, previous, desired, true)
 }
@@ -241,10 +328,8 @@ func (g *GB28181API) syncCascadeDownstreamSubscriptionsMode(ctx context.Context,
 	if len(previous) == 0 && len(desired) == 0 {
 		return nil, nil
 	}
-	g.cascadeSubscriptionMu.Lock()
-	defer g.cascadeSubscriptionMu.Unlock()
-	if g.cascadeSubscriptions == nil {
-		g.cascadeSubscriptions = make(map[string]*cascadeDownstreamSubscription)
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	previousSet := make(map[string]struct{}, len(previous))
 	for _, key := range previous {
@@ -257,7 +342,16 @@ func (g *GB28181API) syncCascadeDownstreamSubscriptionsMode(ctx context.Context,
 	sort.Strings(keys)
 	acquired := make([]string, 0, len(keys))
 	for _, key := range keys {
+		unlock, err := g.lockCascadeSubscriptionOperation(ctx, key)
+		if err != nil {
+			g.rollbackCascadeDownstreamSubscriptions(ctx, acquired)
+			return nil, err
+		}
 		input := desired[key]
+		g.cascadeSubscriptionMu.Lock()
+		if g.cascadeSubscriptions == nil {
+			g.cascadeSubscriptions = make(map[string]*cascadeDownstreamSubscription)
+		}
 		state := g.cascadeSubscriptions[key]
 		_, alreadyOwned := previousSet[key]
 		if state != nil {
@@ -266,43 +360,79 @@ func (g *GB28181API) syncCascadeDownstreamSubscriptionsMode(ctx context.Context,
 			}
 			if alreadyOwned {
 				if !refreshOwned {
+					g.cascadeSubscriptionMu.Unlock()
+					unlock()
 					continue
 				}
 				refresh := state.Input
+				g.cascadeSubscriptionMu.Unlock()
 				if err := g.invokeCascadeSubscribe(ctx, &refresh); err != nil {
+					unlock()
+					g.rollbackCascadeDownstreamSubscriptions(ctx, acquired)
 					return nil, fmt.Errorf("renew downstream %s subscription: %w", input.Event, err)
 				}
+				unlock()
 				continue
 			}
 			state.Refs++
+			g.cascadeSubscriptionMu.Unlock()
+			unlock()
 			acquired = append(acquired, key)
 			continue
 		}
+		// 先登记占位，使关闭路径能发现并等待在途创建。
+		state = &cascadeDownstreamSubscription{Input: input}
+		g.cascadeSubscriptions[key] = state
+		g.cascadeSubscriptionMu.Unlock()
 		if err := g.invokeCascadeSubscribe(ctx, &input); err != nil {
-			for index := len(acquired) - 1; index >= 0; index-- {
-				g.releaseCascadeDownstreamSubscriptionLocked(ctx, acquired[index])
+			g.cascadeSubscriptionMu.Lock()
+			if g.cascadeSubscriptions[key] == state {
+				delete(g.cascadeSubscriptions, key)
 			}
+			g.cascadeSubscriptionMu.Unlock()
+			unlock()
+			g.rollbackCascadeDownstreamSubscriptions(ctx, acquired)
 			return nil, fmt.Errorf("create downstream %s subscription: %w", input.Event, err)
 		}
-		g.cascadeSubscriptions[key] = &cascadeDownstreamSubscription{Input: input, Refs: 1}
+		g.cascadeSubscriptionMu.Lock()
+		state.Refs = 1
+		g.cascadeSubscriptionMu.Unlock()
+		unlock()
 		acquired = append(acquired, key)
 	}
 	for _, key := range previous {
 		if _, keep := desired[key]; !keep {
-			g.releaseCascadeDownstreamSubscriptionLocked(ctx, key)
+			g.releaseCascadeDownstreamSubscription(ctx, key)
 		}
 	}
 	return keys, nil
+}
+
+func (g *GB28181API) rollbackCascadeDownstreamSubscriptions(ctx context.Context, keys []string) {
+	for index := len(keys) - 1; index >= 0; index-- {
+		g.releaseCascadeDownstreamSubscription(ctx, keys[index])
+	}
 }
 
 func (g *GB28181API) reconcileCascadeDownstreamSubscriptions(ctx context.Context) {
 	if g == nil {
 		return
 	}
-	g.eventSubscriptionMu.Lock()
-	defer g.eventSubscriptionMu.Unlock()
 	now := time.Now()
-	g.eventSubscribers.Range(func(_, value any) bool {
+	g.eventSubscribers.Range(func(rawKey, value any) bool {
+		key, ok := rawKey.(string)
+		if !ok || strings.TrimSpace(key) == "" {
+			return true
+		}
+		unlock, err := g.lockEventSubscriptionOperation(ctx, key)
+		if err != nil {
+			return true
+		}
+		defer unlock()
+		value, exists := g.eventSubscribers.Load(key)
+		if !exists {
+			return true
+		}
 		sub, ok := value.(*eventSubscription)
 		if !ok || sub == nil {
 			return true
@@ -350,30 +480,34 @@ func (g *GB28181API) reconcileCascadeDownstreamSubscriptions(ctx context.Context
 }
 
 func (g *GB28181API) releaseCascadeDownstreamSubscriptions(ctx context.Context, keys []string) {
-	if len(keys) == 0 {
-		return
-	}
-	g.cascadeSubscriptionMu.Lock()
-	defer g.cascadeSubscriptionMu.Unlock()
 	for _, key := range keys {
-		g.releaseCascadeDownstreamSubscriptionLocked(ctx, key)
+		g.releaseCascadeDownstreamSubscription(ctx, key)
 	}
 }
 
-func (g *GB28181API) releaseCascadeDownstreamSubscriptionLocked(ctx context.Context, key string) {
+func (g *GB28181API) releaseCascadeDownstreamSubscription(ctx context.Context, key string) {
+	unlock, err := g.lockCascadeSubscriptionOperation(context.Background(), key)
+	if err != nil {
+		return
+	}
+	defer unlock()
+	g.cascadeSubscriptionMu.Lock()
 	state := g.cascadeSubscriptions[key]
 	if state == nil {
+		g.cascadeSubscriptionMu.Unlock()
 		return
 	}
 	state.Refs--
 	if state.Refs > 0 {
+		g.cascadeSubscriptionMu.Unlock()
 		return
 	}
 	delete(g.cascadeSubscriptions, key)
 	cancel := state.Input
+	g.cascadeSubscriptionMu.Unlock()
 	cancel.Cancel = true
 	cancel.Expires = 0
-	if err := g.invokeCascadeSubscribe(ctx, &cancel); err != nil {
+	if err = g.invokeCascadeSubscribe(ctx, &cancel); err != nil {
 		slog.Warn("cancel downstream cascade subscription failed", "device_id", cancel.DeviceID, "target_id", cancel.TargetID, "event", cancel.Event, "err", err)
 	}
 }
@@ -382,20 +516,34 @@ func (g *GB28181API) closeCascadeDownstreamSubscriptions() {
 	if g == nil {
 		return
 	}
-	g.cascadeSubscriptionMu.Lock()
-	states := make([]SubscribeInput, 0, len(g.cascadeSubscriptions))
-	for key, state := range g.cascadeSubscriptions {
-		if state != nil {
-			states = append(states, state.Input)
+	for {
+		g.cascadeSubscriptionMu.Lock()
+		keys := make([]string, 0, len(g.cascadeSubscriptions))
+		for key := range g.cascadeSubscriptions {
+			keys = append(keys, key)
 		}
-		delete(g.cascadeSubscriptions, key)
-	}
-	g.cascadeSubscriptionMu.Unlock()
-	for _, input := range states {
-		input.Cancel = true
-		input.Expires = 0
-		if err := g.invokeCascadeSubscribe(context.Background(), &input); err != nil {
-			slog.Warn("cancel downstream cascade subscription during close failed", "device_id", input.DeviceID, "target_id", input.TargetID, "event", input.Event, "err", err)
+		g.cascadeSubscriptionMu.Unlock()
+		if len(keys) == 0 {
+			return
+		}
+		for _, key := range keys {
+			unlock, err := g.lockCascadeSubscriptionOperation(context.Background(), key)
+			if err != nil {
+				continue
+			}
+			g.cascadeSubscriptionMu.Lock()
+			state := g.cascadeSubscriptions[key]
+			delete(g.cascadeSubscriptions, key)
+			g.cascadeSubscriptionMu.Unlock()
+			if state != nil && state.Refs > 0 {
+				input := state.Input
+				input.Cancel = true
+				input.Expires = 0
+				if err := g.invokeCascadeSubscribe(context.Background(), &input); err != nil {
+					slog.Warn("cancel downstream cascade subscription during close failed", "device_id", input.DeviceID, "target_id", input.TargetID, "event", input.Event, "err", err)
+				}
+			}
+			unlock()
 		}
 	}
 }
@@ -404,9 +552,20 @@ func (g *GB28181API) removeCascadeEventSubscriptions(worker *cascadeWorker) {
 	if g == nil || worker == nil {
 		return
 	}
-	g.eventSubscriptionMu.Lock()
-	defer g.eventSubscriptionMu.Unlock()
-	g.eventSubscribers.Range(func(key, value any) bool {
+	g.eventSubscribers.Range(func(rawKey, value any) bool {
+		key, ok := rawKey.(string)
+		if !ok || strings.TrimSpace(key) == "" {
+			return true
+		}
+		unlock, err := g.lockEventSubscriptionOperation(context.Background(), key)
+		if err != nil {
+			return true
+		}
+		defer unlock()
+		value, exists := g.eventSubscribers.Load(key)
+		if !exists {
+			return true
+		}
 		subscription, ok := value.(*eventSubscription)
 		if !ok || subscription == nil {
 			return true

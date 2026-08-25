@@ -53,6 +53,11 @@ type cascadeDownstreamSubscription struct {
 	Refs  int
 }
 
+type keyedOperationLock struct {
+	mutex cancelableMutex
+	refs  int
+}
+
 // eventSubscription 保存事件源侧订阅会话。
 type eventSubscription struct {
 	mu        sync.Mutex
@@ -228,8 +233,12 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 
 	dialogID, fromTag := parseSubscribeDialog(ctx)
 	key := buildEventSubscriptionKey(dialogID, fromTag, cmdType, deviceID)
-	g.eventSubscriptionMu.Lock()
-	defer g.eventSubscriptionMu.Unlock()
+	unlockSubscription, err := g.lockEventSubscriptionOperation(context.Background(), key)
+	if err != nil {
+		ctx.String(503, err.Error())
+		return
+	}
+	defer unlockSubscription()
 	if expires == 0 {
 		// Expires=0 为退订。
 		if value, loaded := g.eventSubscribers.LoadAndDelete(key); loaded {
@@ -393,15 +402,21 @@ func (g *GB28181API) renewTerminatedCascadeSubscription(key any) {
 	if !ok || keyString == "" {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	unlock, err := g.lockCascadeSubscriptionOperation(ctx, keyString)
+	if err != nil {
+		return
+	}
+	defer unlock()
 	g.cascadeSubscriptionMu.Lock()
-	defer g.cascadeSubscriptionMu.Unlock()
 	state := g.cascadeSubscriptions[keyString]
 	if state == nil || state.Refs <= 0 {
+		g.cascadeSubscriptionMu.Unlock()
 		return
 	}
 	input := state.Input
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	g.cascadeSubscriptionMu.Unlock()
 	if err := g.invokeCascadeSubscribe(ctx, &input); err != nil {
 		slog.Warn("renew terminated cascade subscription failed", "event", input.Event, "device_id", input.DeviceID, "target_id", input.TargetID, "err", err)
 	}
@@ -932,9 +947,21 @@ func (g *GB28181API) startEventSubscriberCleaner() {
 }
 
 func (g *GB28181API) cleanupEventSubscriptions(now time.Time) {
-	g.eventSubscriptionMu.Lock()
-	defer g.eventSubscriptionMu.Unlock()
-	g.eventSubscribers.Range(func(key, value any) bool {
+	g.eventSubscribers.Range(func(rawKey, value any) bool {
+		key, ok := rawKey.(string)
+		if !ok || strings.TrimSpace(key) == "" {
+			g.eventSubscribers.Delete(rawKey)
+			return true
+		}
+		unlock, err := g.lockEventSubscriptionOperation(context.Background(), key)
+		if err != nil {
+			return true
+		}
+		defer unlock()
+		value, exists := g.eventSubscribers.Load(key)
+		if !exists {
+			return true
+		}
 		sub, ok := value.(*eventSubscription)
 		if !ok || sub == nil {
 			g.eventSubscribers.Delete(key)

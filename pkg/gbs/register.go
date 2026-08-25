@@ -67,14 +67,17 @@ type GB28181API struct {
 	alarmHandler   func(context.Context, *AlarmEvent)
 	// 事件源侧订阅表（9.11），用于向订阅方发送 NOTIFY。
 	eventSubscribers sync.Map
-	// eventSubscriptionMu 串行化订阅创建、续订、取消和过期删除，避免续订与清理互相覆盖。
-	eventSubscriptionMu sync.Mutex
+	// eventSubscriptionOps 按订阅键串行化创建、续订、取消和过期删除，无关对话可并行。
+	eventSubscriptionMu  sync.Mutex
+	eventSubscriptionOps map[string]*keyedOperationLock
 	// 订阅方侧对话表，保证续订/取消复用 Call-ID、标签和递增 CSeq。
 	outgoingSubscriptions sync.Map
 	// 上级事件订阅到下级设备订阅的引用表；多个上级订阅可安全复用同一条下级对话。
-	cascadeSubscriptionMu sync.Mutex
-	cascadeSubscriptions  map[string]*cascadeDownstreamSubscription
-	cascadeSubscribe      func(context.Context, *SubscribeInput) error
+	cascadeSubscriptionMu   sync.Mutex
+	cascadeSubscriptions    map[string]*cascadeDownstreamSubscription
+	cascadeSubscriptionOpMu sync.Mutex
+	cascadeSubscriptionOps  map[string]*keyedOperationLock
+	cascadeSubscribe        func(context.Context, *SubscribeInput) error
 	// key=deviceID:sn，用于等待 DeviceConfig 业务应答（9.7/9.14）。
 	pendingDeviceConfig sync.Map
 	// 设备软件升级状态（2022 9.13/A.2.5.9），key=deviceID:sessionID。

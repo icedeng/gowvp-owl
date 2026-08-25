@@ -78,6 +78,150 @@ func TestRemovingCascadeSubscriptionDoesNotWaitForNotifyResponse(t *testing.T) {
 	}
 }
 
+func TestCascadeDownstreamSubscriptionDoesNotBlockUnrelatedKey(t *testing.T) {
+	api := &GB28181API{cascadeSubscriptions: make(map[string]*cascadeDownstreamSubscription)}
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	api.cascadeSubscribe = func(_ context.Context, input *SubscribeInput) error {
+		if input.TargetID == "target-1" && !input.Cancel {
+			close(firstStarted)
+			<-releaseFirst
+		}
+		return nil
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := api.syncCascadeDownstreamSubscriptions(t.Context(), nil, map[string]SubscribeInput{
+			"key-1": {DeviceID: "device-1", TargetID: "target-1", Event: "Alarm", Expires: 60},
+		})
+		firstDone <- err
+	}()
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first downstream subscription did not start")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := api.syncCascadeDownstreamSubscriptions(t.Context(), nil, map[string]SubscribeInput{
+			"key-2": {DeviceID: "device-2", TargetID: "target-2", Event: "Catalog", Expires: 60},
+		})
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("unrelated downstream subscription failed: %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		close(releaseFirst)
+		<-firstDone
+		<-secondDone
+		t.Fatal("unrelated downstream subscription waited for global subscription lock")
+	}
+
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first downstream subscription failed: %v", err)
+	}
+	api.cascadeSubscriptionOpMu.Lock()
+	operationCount := len(api.cascadeSubscriptionOps)
+	api.cascadeSubscriptionOpMu.Unlock()
+	if operationCount != 0 {
+		t.Fatalf("released cascade subscription operations retained %d entries", operationCount)
+	}
+}
+
+func TestEventSubscriptionOperationsSerializePerKeyWithoutCrossKeyBlocking(t *testing.T) {
+	api := &GB28181API{}
+	unlockFirst, err := api.lockEventSubscriptionOperation(context.Background(), "event-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err = api.lockEventSubscriptionOperation(ctx, "event-1"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("same event subscription lock error = %v; want %v", err, context.DeadlineExceeded)
+	}
+	otherCtx, otherCancel := context.WithTimeout(context.Background(), time.Second)
+	defer otherCancel()
+	unlockSecond, err := api.lockEventSubscriptionOperation(otherCtx, "event-2")
+	if err != nil {
+		t.Fatalf("unrelated event subscription was blocked: %v", err)
+	}
+	unlockSecond()
+	unlockFirst()
+
+	api.eventSubscriptionMu.Lock()
+	count := len(api.eventSubscriptionOps)
+	api.eventSubscriptionMu.Unlock()
+	if count != 0 {
+		t.Fatalf("released event subscription operations retained %d entries", count)
+	}
+}
+
+func TestClosingCascadeSubscriptionsWaitsForPendingCreate(t *testing.T) {
+	api := &GB28181API{cascadeSubscriptions: make(map[string]*cascadeDownstreamSubscription)}
+	createStarted := make(chan struct{})
+	releaseCreate := make(chan struct{})
+	cancelled := make(chan struct{})
+	api.cascadeSubscribe = func(_ context.Context, input *SubscribeInput) error {
+		if input.Cancel {
+			close(cancelled)
+			return nil
+		}
+		close(createStarted)
+		<-releaseCreate
+		return nil
+	}
+
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := api.syncCascadeDownstreamSubscriptions(t.Context(), nil, map[string]SubscribeInput{
+			"pending-key": {DeviceID: "device-1", TargetID: "target-1", Event: "Alarm", Expires: 60},
+		})
+		createDone <- err
+	}()
+	select {
+	case <-createStarted:
+	case <-time.After(time.Second):
+		t.Fatal("pending downstream subscription did not start")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		api.closeCascadeDownstreamSubscriptions()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+		t.Fatal("cascade subscription close returned before pending create settled")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseCreate)
+	if err := <-createDone; err != nil {
+		t.Fatalf("pending downstream subscription failed: %v", err)
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("cascade subscription close did not finish")
+	}
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("pending downstream subscription was not cancelled after creation")
+	}
+	api.cascadeSubscriptionMu.Lock()
+	remaining := len(api.cascadeSubscriptions)
+	api.cascadeSubscriptionMu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("cascade subscriptions retained %d entries after close", remaining)
+	}
+}
+
 func TestAlarmSubscriptionFilterValidationAndMatch(t *testing.T) {
 	valid := subscribeEventRequest{
 		CmdType: "Alarm", SN: 1, DeviceID: gb10DeviceID,
