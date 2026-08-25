@@ -37,6 +37,11 @@ func TestDeviceControlStandardParameterRanges(t *testing.T) {
 		&DeviceControlInput{AlarmMethod: "vendor", AlarmType: "vendor"}, legacyAlarm); err != nil {
 		t.Fatalf("2.0 compatible alarm reset extension rejected: %v", err)
 	}
+	if err := api.fillDeviceControlRequest("device", deviceControlActionCameraControl,
+		&DeviceControlInput{PTZCmd: "A50F0100000000B5", PTZCmdParam: &PTZCmdParam{PresetName: "gate"}},
+		&deviceControlA23Request{}); err == nil {
+		t.Fatal("2.0 must reject 3.0 PTZ command parameters")
+	}
 
 	memory.device.setGBVersion(GBVersion30)
 	for _, input := range []*DeviceControlInput{
@@ -82,6 +87,17 @@ func TestDeviceControlStandardParameterRanges(t *testing.T) {
 		request := &deviceControlA23Request{}
 		if err := api.fillDeviceControlRequest("device", deviceControlActionAlarmReset, input, request); err != nil || request.Info == nil {
 			t.Fatalf("valid 3.0 alarm reset rejected: %+v, err = %v", input, err)
+		}
+	}
+	for _, length := range []int{32, 33} {
+		request := &deviceControlA23Request{}
+		err := api.fillDeviceControlRequest("device", deviceControlActionCameraControl,
+			&DeviceControlInput{PTZCmd: "A50F0100000000B5", PTZCmdParam: &PTZCmdParam{CruiseTrackName: strings.Repeat("a", length)}}, request)
+		if length == 32 && (err != nil || request.PTZCmdParams == nil) {
+			t.Fatalf("32-byte cruise track name rejected: %v", err)
+		}
+		if length == 33 && err == nil {
+			t.Fatal("33-byte cruise track name accepted")
 		}
 	}
 }

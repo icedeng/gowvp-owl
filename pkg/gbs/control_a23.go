@@ -303,9 +303,19 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 			return fmt.Errorf("camera_control requires ptz_cmd")
 		}
 		if in.PTZCmdParam != nil {
-			req.PTZCmdParams = &deviceControlA23PTZCmdParam{
-				PresetName:      strings.TrimSpace(in.PTZCmdParam.PresetName),
-				CruiseTrackName: strings.TrimSpace(in.PTZCmdParam.CruiseTrackName),
+			presetName := strings.TrimSpace(in.PTZCmdParam.PresetName)
+			cruiseTrackName := strings.TrimSpace(in.PTZCmdParam.CruiseTrackName)
+			if presetName != "" || cruiseTrackName != "" {
+				if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "云台控制附加参数"); err != nil {
+					return err
+				}
+				if len(cruiseTrackName) > 32 {
+					return fmt.Errorf("cruise_track_name must not exceed 32 bytes")
+				}
+				req.PTZCmdParams = &deviceControlA23PTZCmdParam{
+					PresetName:      presetName,
+					CruiseTrackName: cruiseTrackName,
+				}
 			}
 		}
 	case deviceControlActionTeleBoot:
