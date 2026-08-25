@@ -608,7 +608,6 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 	// 命中通用查询等待队列（A.2.4 ConfigDownload 查询等待）。
 	g.resolvePendingDeviceQuery(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID)
 	g.decodeAndStoreQueryData(ctx.DeviceID, msg.CmdType, ctx.Request.Body())
-	g.publishEventNotify(msg.CmdType, ctx.DeviceID, ctx.Request.Body())
-
 	ctx.String(200, "OK")
+	g.publishEventNotify(msg.CmdType, ctx.DeviceID, ctx.Request.Body())
 }

@@ -248,8 +248,10 @@ func (g *GB28181API) sipNotifyMobilePosition(ctx *sip.Context) {
 			cmdType = "MobilePosition"
 		}
 		g.decodeAndStoreQueryData(deviceID, cmdType, ctx.Request.Body())
+		ctx.String(200, "OK")
 		// 9.11 事件源侧：移动位置事件通知订阅方。
 		g.publishEventNotify(cmdType, deviceID, ctx.Request.Body())
+		return
 	}
 	ctx.String(200, "OK")
 }

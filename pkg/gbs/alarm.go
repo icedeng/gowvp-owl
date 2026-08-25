@@ -126,6 +126,8 @@ func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 		g.storeAppendixA4State(deviceID, ext)
 		g.persistAppendixA4Objects(deviceID, ext)
 	}
+	// 设备报警确认不应被业务回调或订阅方 NOTIFY 响应拖延。
+	ctx.String(200, "OK")
 
 	g.alarmHandlerMu.RLock()
 	handler := g.alarmHandler
@@ -136,6 +138,4 @@ func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 	notify(notifyAlarm(event))
 	// 9.11 事件源侧：报警发生后，向订阅方发送 NOTIFY。
 	g.publishEventNotify("Alarm", deviceID, ctx.Request.Body())
-
-	ctx.String(200, "OK")
 }

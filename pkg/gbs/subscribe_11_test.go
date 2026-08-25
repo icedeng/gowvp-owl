@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gowvp/owl/pkg/gbs/m"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
@@ -70,6 +71,61 @@ func TestKeepaliveRespondsBeforeSlowSubscriptionNotify(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("Keepalive handler did not stop after SIP shutdown")
+	}
+}
+
+func TestAlarmRespondsBeforeSlowSubscriptionNotify(t *testing.T) {
+	previousConfig := config
+	config = &m.Config{NotifyMap: map[string]string{}}
+	t.Cleanup(func() { config = previousConfig })
+	baseConn := newFlowConnection()
+	conn := &tcpFlowConnection{flowConnection: baseConn}
+	platform := mustFlowAddress(t, "sip:"+gb10PlatformID+"@3402000000")
+	sipServer := sip.NewServer(platform)
+	t.Cleanup(sipServer.Close)
+	server := &Server{Server: sipServer, fromAddress: *platform}
+	api := &GB28181API{svr: server}
+	server.gb = api
+	api.eventSubscribers.Store("slow-alarm", &eventSubscription{
+		Key: "slow-alarm", CmdType: "Alarm", DeviceID: gb10DeviceID,
+		ExpiresAt: time.Now().Add(time.Minute),
+		To:        mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000"),
+		Source:    baseConn.remote, Conn: conn, GBVersion: string(GBVersion10), Event: "presence",
+	})
+
+	request := newFlowRequest(t, baseConn, sip.MethodMessage, "alarm-before-notify", readGB10Fixture(t, "alarm-notify.xml"))
+	request.SetConnection(conn)
+	done := make(chan struct{})
+	go func() {
+		api.sipMessageAlarm(&sip.Context{
+			Request: request, Tx: sip.NewTransaction("alarm-before-notify-tx", conn),
+			DeviceID: gb10DeviceID, Source: baseConn.remote,
+			To: mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000"), Log: slog.Default(),
+		})
+		close(done)
+	}()
+
+	select {
+	case payload := <-baseConn.writes:
+		if !strings.Contains(string(payload), "SIP/2.0 200 OK") {
+			t.Fatalf("first Alarm write was delayed by subscription NOTIFY:\n%s", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Alarm response timeout")
+	}
+	select {
+	case payload := <-baseConn.writes:
+		if !strings.HasPrefix(string(payload), "NOTIFY ") {
+			t.Fatalf("second Alarm write was not subscription NOTIFY:\n%s", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Alarm subscription NOTIFY was not sent")
+	}
+	sipServer.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Alarm handler did not stop after SIP shutdown")
 	}
 }
 

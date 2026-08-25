@@ -578,7 +578,7 @@ func (g *GB28181API) sipMessageQueryGeneric(ctx *sip.Context) {
 	}
 	// 解析并落入结构化状态缓存。
 	g.decodeAndStoreQueryData(deviceID, msg.CmdType, ctx.Request.Body())
+	ctx.String(200, "OK")
 	// 9.11 事件源侧：通用查询类事件通知。
 	g.publishEventNotify(msg.CmdType, deviceID, ctx.Request.Body())
-	ctx.String(200, "OK")
 }

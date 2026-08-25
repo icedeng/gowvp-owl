@@ -127,8 +127,7 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 
 	// 命中通用查询等待队列（A.2.4 DeviceInfo 查询等待）。
 	g.resolvePendingDeviceQuery(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID)
+	ctx.String(200, "OK")
 	// 9.11 事件源侧：设备信息变化通知。
 	g.publishEventNotify(msg.CmdType, ctx.DeviceID, ctx.Request.Body())
-
-	ctx.String(200, "OK")
 }
