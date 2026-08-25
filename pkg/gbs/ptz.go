@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/xml"
 	"errors"
@@ -98,6 +99,17 @@ type pendingDeviceControl struct {
 }
 
 func (g *GB28181API) PTZ(in *PTZInput) (*PTZOutput, error) {
+	return g.PTZContext(context.Background(), in)
+}
+
+// PTZContext 下发云台控制并允许调用方取消 SIP 及业务应答等待。
+func (g *GB28181API) PTZContext(ctx context.Context, in *PTZInput) (*PTZOutput, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if in == nil || in.ChannelID == "" {
 		return nil, errors.New("invalid ptz input")
 	}
@@ -142,7 +154,7 @@ func (g *GB28181API) PTZ(in *PTZInput) (*PTZOutput, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err = sipResponse(tx); err != nil {
+	if _, err = sipResponseContext(ctx, tx); err != nil {
 		return nil, err
 	}
 
@@ -166,6 +178,8 @@ func (g *GB28181API) PTZ(in *PTZInput) (*PTZOutput, error) {
 		}, nil
 	case <-g.serviceDone():
 		return nil, ErrServiceStopped
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-timer.C:
 		cfg := g.configSnapshot()
 		if cfg != nil && cfg.PTZWeakConfirm {

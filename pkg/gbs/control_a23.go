@@ -173,7 +173,13 @@ type deviceControlA23PTZPrecise struct {
 }
 
 // DeviceControl 执行附录 A.2.3 设备控制命令，并等待设备 Response。
-func (g *GB28181API) DeviceControl(_ context.Context, in *DeviceControlInput) (*DeviceControlOutput, error) {
+func (g *GB28181API) DeviceControl(ctx context.Context, in *DeviceControlInput) (*DeviceControlOutput, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if in == nil || strings.TrimSpace(in.DeviceID) == "" {
 		return nil, ErrDeviceNotExist
 	}
@@ -225,7 +231,7 @@ func (g *GB28181API) DeviceControl(_ context.Context, in *DeviceControlInput) (*
 	if err != nil {
 		return nil, err
 	}
-	if _, err = sipResponse(tx); err != nil {
+	if _, err = sipResponseContext(ctx, tx); err != nil {
 		return nil, err
 	}
 
@@ -249,6 +255,8 @@ func (g *GB28181API) DeviceControl(_ context.Context, in *DeviceControlInput) (*
 		}, nil
 	case <-g.serviceDone():
 		return nil, ErrServiceStopped
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-timer.C:
 		// 统一返回更明确的中文错误，避免调用方误以为命令未发送。
 		return nil, fmt.Errorf("%s", ptzTimeoutErrorMessage)

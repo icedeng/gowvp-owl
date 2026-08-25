@@ -71,6 +71,12 @@ type deviceControlUpgradeRequest struct {
 
 // Upgrade 执行设备软件升级（GB/T 28181-2022 9.13，A.2.3.1.12）。
 func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOutput, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if in == nil || in.DeviceID == "" || in.ChannelID == "" {
 		return nil, errors.New("invalid upgrade input")
 	}
@@ -127,7 +133,7 @@ func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOut
 	if err != nil {
 		return nil, err
 	}
-	if _, err = sipResponse(tx); err != nil {
+	if _, err = sipResponseContext(ctx, tx); err != nil {
 		return nil, err
 	}
 

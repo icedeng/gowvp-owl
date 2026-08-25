@@ -28,6 +28,12 @@ func (g *GB28181API) QueryRecordList(ctx context.Context, in *RecordQueryInput) 
 }
 
 func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput) ([]RecordItem, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if in == nil || in.DeviceID == "" || in.ChannelID == "" {
 		return nil, errors.New("invalid record query input")
 	}
@@ -61,18 +67,18 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 		g.recordResponses.Cancel(recordKey)
 		return nil, err
 	}
-	if _, err = sipResponse(tx); err != nil {
+	if _, err = sipResponseContext(ctx, tx); err != nil {
 		g.recordResponses.Cancel(recordKey)
 		return nil, err
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, in.Timeout)
 	defer cancel()
 	result := g.recordResponses.Wait(waitCtx, recordKey)
 	if g.serviceStopped() {
 		return nil, ErrServiceStopped
+	}
+	if !result.Complete && ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	return result.Items, nil
 }

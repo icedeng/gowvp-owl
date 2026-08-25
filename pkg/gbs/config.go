@@ -257,6 +257,12 @@ func (g *GB28181API) SetBasicParam(ctx context.Context, in *BasicParamConfigInpu
 
 // SetDeviceConfig 下发 2014 DeviceConfig 并等待设备的业务应答。
 func (g *GB28181API) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput) (*DeviceConfigState, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if in == nil || strings.TrimSpace(in.DeviceID) == "" {
 		return nil, fmt.Errorf("invalid DeviceConfig input")
 	}
@@ -306,7 +312,7 @@ func (g *GB28181API) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput)
 	if err != nil {
 		return nil, err
 	}
-	if _, err = sipResponse(tx); err != nil {
+	if _, err = sipResponseContext(ctx, tx); err != nil {
 		return nil, err
 	}
 

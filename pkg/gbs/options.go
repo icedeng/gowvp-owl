@@ -29,6 +29,12 @@ func (g *GB28181API) sipOptionsGeneric(ctx *sip.Context) {
 // ProbeOptions 对设备发起 OPTIONS 探测。
 // 探测成功后会刷新设备 Keepalive 时间，避免被离线扫描误判。
 func (g *GB28181API) ProbeOptions(ctx context.Context, in *OptionsProbeInput) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if in == nil || in.DeviceID == "" {
 		return fmt.Errorf("invalid options probe request")
 	}
@@ -61,12 +67,18 @@ func (g *GB28181API) ProbeOptions(ctx context.Context, in *OptionsProbeInput) er
 }
 
 func sipResponseWithTimeout(ctx context.Context, tx *sip.Transaction, timeout time.Duration) (*sip.Response, error) {
+	if tx == nil {
+		return nil, sip.NewError(nil, "SIP transaction is unavailable")
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	response, err := tx.GetResponseContext(waitCtx)
+	if err != nil {
+		tx.Close()
+	}
 	if err != nil && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

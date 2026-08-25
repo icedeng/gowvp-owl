@@ -105,7 +105,7 @@ func (g *GB28181API) sendCascadeDeviceControlDownstream(ctx context.Context, cha
 	if err != nil {
 		return "ERROR", err
 	}
-	if _, err = sipResponse(tx); err != nil {
+	if _, err = sipResponseContext(ctx, tx); err != nil {
 		return "ERROR", err
 	}
 	timer := time.NewTimer(cascadeDeviceControlTimeout)

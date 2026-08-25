@@ -14,7 +14,13 @@ type TimeSyncInput struct {
 
 // SyncTime 主动校时（9.10），向设备发送 DeviceControl(Time)。
 // 注：注册 200 OK 中已携带 Date，此接口用于主动触发。
-func (g *GB28181API) SyncTime(_ context.Context, in *TimeSyncInput) error {
+func (g *GB28181API) SyncTime(ctx context.Context, in *TimeSyncInput) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if in == nil || in.DeviceID == "" {
 		return ErrDeviceNotExist
 	}
@@ -48,6 +54,6 @@ func (g *GB28181API) SyncTime(_ context.Context, in *TimeSyncInput) error {
 	if err != nil {
 		return err
 	}
-	_, err = sipResponse(tx)
+	_, err = sipResponseContext(ctx, tx)
 	return err
 }

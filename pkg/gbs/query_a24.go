@@ -88,7 +88,13 @@ type genericDeviceQueryRequest struct {
 }
 
 // DeviceQuery 执行附录 A.2.4 查询命令，并等待设备响应。
-func (g *GB28181API) DeviceQuery(_ context.Context, in *DeviceQueryInput) (*DeviceQueryOutput, error) {
+func (g *GB28181API) DeviceQuery(ctx context.Context, in *DeviceQueryInput) (*DeviceQueryOutput, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if in == nil || strings.TrimSpace(in.DeviceID) == "" {
 		return nil, ErrDeviceNotExist
 	}
@@ -119,7 +125,7 @@ func (g *GB28181API) DeviceQuery(_ context.Context, in *DeviceQueryInput) (*Devi
 		if in.Start <= 0 || in.End <= in.Start {
 			return nil, fmt.Errorf("record_info requires valid start/end")
 		}
-		records, err := g.QueryRecordList(context.Background(), &RecordQueryInput{
+		records, err := g.QueryRecordList(ctx, &RecordQueryInput{
 			DeviceID:  deviceID,
 			ChannelID: targetID,
 			Start:     in.Start,
@@ -189,7 +195,7 @@ func (g *GB28181API) DeviceQuery(_ context.Context, in *DeviceQueryInput) (*Devi
 	if err != nil {
 		return nil, err
 	}
-	if _, err = sipResponse(tx); err != nil {
+	if _, err = sipResponseContext(ctx, tx); err != nil {
 		return nil, err
 	}
 
@@ -201,6 +207,8 @@ func (g *GB28181API) DeviceQuery(_ context.Context, in *DeviceQueryInput) (*Devi
 		return out, nil
 	case <-g.serviceDone():
 		return nil, ErrServiceStopped
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-timer.C:
 		return nil, fmt.Errorf("wait query response timeout")
 	}

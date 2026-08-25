@@ -65,6 +65,15 @@ func (g *GB28181API) stopPlay(ch *Channel, in *StopPlayInput) error {
 
 // StopPlay 加锁的停止播放
 func (g *GB28181API) StopPlay(ctx context.Context, in *StopPlayInput) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if in == nil || in.Channel == nil {
+		return fmt.Errorf("invalid stop play input")
+	}
 	ch, ok := g.svr.memoryStorer.GetChannel(in.Channel.DeviceID, in.Channel.ChannelID)
 	if !ok {
 		return ErrDeviceNotExist
@@ -81,6 +90,17 @@ func (g *GB28181API) StopPlay(ctx context.Context, in *StopPlayInput) error {
 }
 
 func (g *GB28181API) Play(in *PlayInput) error {
+	return g.PlayContext(context.Background(), in)
+}
+
+// PlayContext 启动实时点播并允许调用方取消 SIP INVITE 等待。
+func (g *GB28181API) PlayContext(ctx context.Context, in *PlayInput) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if in == nil || in.Channel == nil {
 		return fmt.Errorf("invalid play input")
 	}
@@ -159,7 +179,14 @@ func (g *GB28181API) Play(in *PlayInput) error {
 			} else {
 				log.Info("已关闭旧的RTP服务器，等待清理")
 				// 等待一小段时间让 ZLM 清理资源
-				time.Sleep(500 * time.Millisecond)
+				timer := time.NewTimer(500 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					g.streams.CompareAndDelete(key, stream)
+					return ctx.Err()
+				case <-timer.C:
+				}
 			}
 			// 重新打开 RTP 服务器
 			resp, err = g.sms.OpenRTPServer(in.SMS, zlm.OpenRTPServerRequest{
@@ -180,14 +207,14 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	}
 
 	log.Debug("2. 发送SDP请求", "port", resp.Port)
-	if err := g.sipPlayPush2(ch, in, resp.Port, stream); err != nil {
+	if err := g.sipPlayPush2(ctx, ch, in, resp.Port, stream); err != nil {
 		log.Debug("2.1. 发送SDP请求失败", "err", err)
 		g.streams.CompareAndDelete(key, stream)
 		_, _ = g.sms.CloseRTPServer(in.SMS, zlm.CloseRTPServerRequest{StreamID: streamID})
 		return err
 	}
 
-	g.svr.gb.core.EditPlaying(context.TODO(), in.Channel.DeviceID, in.Channel.ChannelID, true)
+	g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, true)
 
 	return nil
 }
@@ -240,7 +267,7 @@ func GetIP(input string) (string, error) {
 	return input, fmt.Errorf("域名没有解析到IP地址")
 }
 
-func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *Streams) error {
+func (g *GB28181API) sipPlayPush2(ctx context.Context, ch *Channel, in *PlayInput, port int, stream *Streams) error {
 	cfg := g.configSnapshot()
 	if cfg == nil {
 		return fmt.Errorf("SIP configuration is unavailable")
@@ -289,7 +316,7 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 		slog.Error("INVITE 发送失败", "channelID", ch.ChannelID, "ssrc", ssrc, "err", err)
 		return err
 	}
-	resp, err := sipResponse(tx)
+	resp, err := sipResponseContext(ctx, tx)
 	if err != nil {
 		slog.Error("INVITE 等待响应失败", "channelID", ch.ChannelID, "ssrc", ssrc, "err", err)
 		return err

@@ -29,7 +29,13 @@ type SubscribeInput struct {
 }
 
 // Subscribe 事件订阅（9.11），通过 SUBSCRIBE 发送订阅请求。
-func (g *GB28181API) Subscribe(_ context.Context, in *SubscribeInput) error {
+func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if in == nil || strings.TrimSpace(in.DeviceID) == "" {
 		return ErrDeviceNotExist
 	}
@@ -148,7 +154,7 @@ func (g *GB28181API) Subscribe(_ context.Context, in *SubscribeInput) error {
 		}
 		return err
 	}
-	response, err := sipResponse(tx)
+	response, err := sipResponseContext(ctx, tx)
 	if err != nil {
 		if dialog.response == nil {
 			g.outgoingSubscriptions.Delete(key)

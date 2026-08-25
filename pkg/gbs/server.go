@@ -468,7 +468,21 @@ func ssrc2stream(ssrc string) string {
 }
 
 func sipResponse(tx *sip.Transaction) (*sip.Response, error) {
-	response := tx.GetResponse()
+	return sipResponseContext(context.Background(), tx)
+}
+
+func sipResponseContext(ctx context.Context, tx *sip.Transaction) (*sip.Response, error) {
+	if tx == nil {
+		return nil, sip.NewError(nil, "SIP transaction is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	response, err := tx.GetResponseContext(ctx)
+	if err != nil {
+		tx.Close()
+		return nil, err
+	}
 	if response == nil {
 		return nil, sip.NewError(nil, "response timeout", "tx key:", tx.Key())
 	}
@@ -483,9 +497,19 @@ func (s *Server) QueryCatalog(deviceID string) error {
 	return s.gb.QueryCatalog(deviceID)
 }
 
+// QueryCatalogContext 查询目录，并允许调用方取消 SIP 及多响应等待。
+func (s *Server) QueryCatalogContext(ctx context.Context, deviceID string) error {
+	return s.gb.QueryCatalogContext(ctx, deviceID)
+}
+
 func (s *Server) Play(in *PlayInput) error {
+	return s.PlayContext(context.Background(), in)
+}
+
+// PlayContext 启动实时点播并允许调用方取消 SIP INVITE 等待。
+func (s *Server) PlayContext(ctx context.Context, in *PlayInput) error {
 	s.gb.metrics.mediaRequests.Add(1)
-	err := s.gb.Play(in)
+	err := s.gb.PlayContext(ctx, in)
 	if err != nil {
 		s.gb.metrics.mediaFailures.Add(1)
 	} else {
@@ -499,7 +523,7 @@ func (s *Server) StopPlay(ctx context.Context, in *StopPlayInput) error {
 }
 
 func (s *Server) PTZ(ctx context.Context, in *PTZInput) (*PTZOutput, error) {
-	return s.gb.PTZ(in)
+	return s.gb.PTZContext(ctx, in)
 }
 
 // DeviceControl 执行附录 A.2.3 设备控制命令。
@@ -618,6 +642,11 @@ func (s *Server) StopVoice(ctx context.Context, in *StopVoiceInput) error {
 // QuerySnapshot 厂商实现抓图的少，sip 层已实现，先搁置
 func (s *Server) QuerySnapshot(deviceID, targetID, coverKey string) (*SnapshotState, error) {
 	return s.gb.QuerySnapshot(deviceID, targetID, coverKey)
+}
+
+// QuerySnapshotContext 下发抓拍并允许调用方取消 SIP 及业务应答等待。
+func (s *Server) QuerySnapshotContext(ctx context.Context, deviceID, targetID, coverKey string) (*SnapshotState, error) {
+	return s.gb.QuerySnapshotContext(ctx, deviceID, targetID, coverKey)
 }
 
 func (s *Server) SnapshotState(deviceID, sessionID string) (SnapshotState, bool) {

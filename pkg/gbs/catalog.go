@@ -143,6 +143,17 @@ func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 // QueryCatalog 设备目录查询或订阅请求
 // GB/T28181 81 页 A.2.4.3
 func (g *GB28181API) QueryCatalog(deviceID string) (err error) {
+	return g.QueryCatalogContext(context.Background(), deviceID)
+}
+
+// QueryCatalogContext 查询目录，并允许调用方取消 SIP 及分包聚合等待。
+func (g *GB28181API) QueryCatalogContext(ctx context.Context, deviceID string) (err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	g.metrics.catalogRequests.Add(1)
 	defer func() {
 		if err == nil {
@@ -174,15 +185,19 @@ func (g *GB28181API) QueryCatalog(deviceID string) (err error) {
 		g.catalogResponses.Cancel(key)
 		return err
 	}
-	if _, err = sipResponse(tx); err != nil {
+	if _, err = sipResponseContext(ctx, tx); err != nil {
 		g.catalogResponses.Cancel(key)
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	requestCtx := ctx
+	waitCtx, cancel := context.WithTimeout(requestCtx, 10*time.Second)
 	defer cancel()
-	result := g.catalogResponses.Wait(ctx, key)
+	result := g.catalogResponses.Wait(waitCtx, key)
 	if g.serviceStopped() {
 		return ErrServiceStopped
+	}
+	if !result.Complete && requestCtx.Err() != nil {
+		return requestCtx.Err()
 	}
 	if len(result.Items) == 0 && !result.Complete {
 		return fmt.Errorf("wait Catalog response timeout")

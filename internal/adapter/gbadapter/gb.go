@@ -58,7 +58,7 @@ func (a *Adapter) OnStreamNotFound(ctx context.Context, app string, stream strin
 		return err
 	}
 
-	return a.gbs.Play(&gbs.PlayInput{
+	return a.gbs.PlayContext(ctx, &gbs.PlayInput{
 		Channel:    ch,
 		StreamMode: dev.StreamMode,
 		SMS:        svr,
@@ -67,7 +67,7 @@ func (a *Adapter) OnStreamNotFound(ctx context.Context, app string, stream strin
 
 // QueryCatalog implements ipc.Protocoler.
 func (a *Adapter) QueryCatalog(ctx context.Context, device *ipc.Device) error {
-	return a.gbs.QueryCatalog(device.DeviceID)
+	return a.gbs.QueryCatalogContext(ctx, device.DeviceID)
 }
 
 // StartPlay implements ipc.Protocoler.
@@ -76,7 +76,7 @@ func (a *Adapter) StartPlay(ctx context.Context, device *ipc.Device, channel *ip
 	if err != nil {
 		return nil, err
 	}
-	if err := a.gbs.Play(&gbs.PlayInput{
+	if err := a.gbs.PlayContext(ctx, &gbs.PlayInput{
 		Channel:    channel,
 		StreamMode: device.StreamMode,
 		SMS:        svr,

@@ -2579,7 +2579,7 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 		}
 		needLiveSnapshotFallback := false
 		var gbSnapshotErr error
-		state, queryErr := a.uc.SipServer.QuerySnapshot(ch.DeviceID, ch.ChannelID, ch.ID)
+		state, queryErr := a.uc.SipServer.QuerySnapshotContext(c.Request.Context(), ch.DeviceID, ch.ChannelID, ch.ID)
 		if queryErr != nil {
 			gbSnapshotErr = queryErr
 			needLiveSnapshotFallback = true

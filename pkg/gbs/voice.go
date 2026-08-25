@@ -141,6 +141,12 @@ func voiceKey(mode, deviceID, channelID string) string {
 
 // StartVoice 启动语音会话（9.12），支持 Talk/Broadcast 信令流程。
 func (g *GB28181API) StartVoice(ctx context.Context, in *VoiceInput) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if in == nil || in.Channel == nil {
 		return fmt.Errorf("invalid voice input")
 	}
@@ -226,7 +232,7 @@ func (g *GB28181API) startTalk(ctx context.Context, ch *Channel, in *VoiceInput)
 	session.mu.Lock()
 	session.receiverOpened = true
 	session.mu.Unlock()
-	if err = g.sipInviteVoice(ch, in, resp.Port, stream); err != nil {
+	if err = g.sipInviteVoice(ctx, ch, in, resp.Port, stream); err != nil {
 		return err
 	}
 	timeout := in.Timeout
@@ -404,7 +410,7 @@ func (g *GB28181API) startBroadcastNotification(ctx context.Context, ch *Channel
 	if err != nil {
 		return err
 	}
-	if _, err = sipResponse(tx); err != nil {
+	if _, err = sipResponseContext(ctx, tx); err != nil {
 		return err
 	}
 	timeout := in.Timeout
@@ -457,6 +463,12 @@ func buildPendingBroadcastKey(targetID string, sn int) string {
 
 // StopVoice 停止语音会话。
 func (g *GB28181API) StopVoice(ctx context.Context, in *StopVoiceInput) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if in == nil || in.Channel == nil {
 		return fmt.Errorf("invalid stop voice input")
 	}
@@ -706,7 +718,7 @@ func parseBroadcastPayload(media *sdp.Media, version GBProtocolVersion) (payload
 	return 0, "", 0, fmt.Errorf("Broadcast INVITE does not offer PCMA/8000 audio for protocol %s", version)
 }
 
-func (g *GB28181API) sipInviteVoice(ch *Channel, in *VoiceInput, port int, stream *Streams) error {
+func (g *GB28181API) sipInviteVoice(ctx context.Context, ch *Channel, in *VoiceInput, port int, stream *Streams) error {
 	cfg := g.configSnapshot()
 	if cfg == nil {
 		return fmt.Errorf("SIP configuration is unavailable")
@@ -769,7 +781,7 @@ func (g *GB28181API) sipInviteVoice(ch *Channel, in *VoiceInput, port int, strea
 	if err != nil {
 		return err
 	}
-	resp, err := sipResponse(tx)
+	resp, err := sipResponseContext(ctx, tx)
 	if err != nil {
 		return err
 	}

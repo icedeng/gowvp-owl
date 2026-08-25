@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -33,6 +34,17 @@ type snapshotFinishedNotify struct {
 }
 
 func (g *GB28181API) QuerySnapshot(deviceID, targetID, coverKey string) (*SnapshotState, error) {
+	return g.QuerySnapshotContext(context.Background(), deviceID, targetID, coverKey)
+}
+
+// QuerySnapshotContext 下发抓拍并允许调用方取消 SIP 及业务应答等待。
+func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetID, coverKey string) (*SnapshotState, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	slog.Debug("QuerySnapshot", "deviceID", deviceID)
 	if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "图像抓拍(9.14)"); err != nil {
 		return nil, err
@@ -65,7 +77,7 @@ func (g *GB28181API) QuerySnapshot(deviceID, targetID, coverKey string) (*Snapsh
 	if err != nil {
 		return nil, err
 	}
-	if _, err = sipResponse(tx); err != nil {
+	if _, err = sipResponseContext(ctx, tx); err != nil {
 		return nil, err
 	}
 
@@ -84,6 +96,8 @@ func (g *GB28181API) QuerySnapshot(deviceID, targetID, coverKey string) (*Snapsh
 		return nil, fmt.Errorf("snapshot config failed: %s", resp.Result)
 	case <-g.serviceDone():
 		return nil, ErrServiceStopped
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-timer.C:
 		return nil, fmt.Errorf("wait snapshot response timeout")
 	}

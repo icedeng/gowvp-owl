@@ -801,6 +801,12 @@ func cascadeAcceptedExpires(response *sip.Response, requested int) (int, error) 
 }
 
 func (w *cascadeWorker) exchangeRequest(ctx context.Context, request *sip.Request) (*sip.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := w.prepareRequestConnection(ctx, request); err != nil {
 		return nil, err
 	}
@@ -817,6 +823,7 @@ func (w *cascadeWorker) exchangeRequest(ctx context.Context, request *sip.Reques
 	defer cancel()
 	response, err := tx.GetResponseContext(waitCtx)
 	if err != nil {
+		tx.Close()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}

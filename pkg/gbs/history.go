@@ -69,6 +69,12 @@ func resolveHistorySessionKey(mode, deviceID, channelID, sessionKey string) stri
 
 // StartHistory 启动历史回放或文件下载会话（9.8/9.9）。
 func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if in == nil || in.Channel == nil {
 		return fmt.Errorf("invalid history input")
 	}
@@ -134,7 +140,7 @@ func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
 		return err
 	}
 
-	if err := g.sipInviteHistory(ch, in, resp.Port, stream); err != nil {
+	if err := g.sipInviteHistory(ctx, ch, in, resp.Port, stream); err != nil {
 		_, _ = g.sms.CloseRTPServer(in.SMS, zlm.CloseRTPServerRequest{StreamID: streamID})
 		g.streams.CompareAndDelete(key, stream)
 		return err
@@ -158,6 +164,12 @@ func (g *GB28181API) requireHistoryDownloadSpeed(deviceID string, speed int) err
 
 // StopHistory 停止历史回放或下载会话。
 func (g *GB28181API) StopHistory(ctx context.Context, in *StopHistoryInput) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if in == nil || in.Channel == nil {
 		return fmt.Errorf("invalid stop history input")
 	}
@@ -167,7 +179,7 @@ func (g *GB28181API) StopHistory(ctx context.Context, in *StopHistoryInput) erro
 	}
 	ch.device.playMutex.Lock()
 	defer ch.device.playMutex.Unlock()
-	err := g.stopHistoryNoLock(ch, in)
+	err := g.stopHistoryNoLockContext(ctx, ch, in)
 	if !g.hasActiveChannelStream(in.Channel.DeviceID, in.Channel.ChannelID) {
 		_ = g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, false)
 	}
@@ -175,7 +187,13 @@ func (g *GB28181API) StopHistory(ctx context.Context, in *StopHistoryInput) erro
 }
 
 // ControlHistory 通过 INFO 下发历史会话控制命令（9.8/9.9）。
-func (g *GB28181API) ControlHistory(_ context.Context, in *ControlHistoryInput) error {
+func (g *GB28181API) ControlHistory(ctx context.Context, in *ControlHistoryInput) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if in == nil || in.Channel == nil {
 		return fmt.Errorf("invalid control history input")
 	}
@@ -207,7 +225,7 @@ func (g *GB28181API) ControlHistory(_ context.Context, in *ControlHistoryInput) 
 	if err != nil {
 		return err
 	}
-	_, err = sipResponse(tx)
+	_, err = sipResponseContext(ctx, tx)
 	return err
 }
 
@@ -274,6 +292,10 @@ func historyControlProtocolVersion(version GBProtocolVersion) string {
 }
 
 func (g *GB28181API) stopHistoryNoLock(ch *Channel, in *StopHistoryInput) error {
+	return g.stopHistoryNoLockContext(context.Background(), ch, in)
+}
+
+func (g *GB28181API) stopHistoryNoLockContext(ctx context.Context, ch *Channel, in *StopHistoryInput) error {
 	key := resolveHistorySessionKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID, in.sessionKey)
 	stream, ok := g.streams.Load(key)
 	if !ok {
@@ -292,10 +314,14 @@ func (g *GB28181API) stopHistoryNoLock(ch *Channel, in *StopHistoryInput) error 
 	if in.Mode == historyModeDownload && !stream.DirectTCP {
 		g.finishRTPDownload(stream, rtpDownloadStopped, "stopped_by_user")
 	}
-	return g.sendHistoryBYE(ch, stream)
+	return g.sendHistoryBYEContext(ctx, ch, stream)
 }
 
 func (g *GB28181API) sendHistoryBYE(ch *Channel, stream *Streams) error {
+	return g.sendHistoryBYEContext(context.Background(), ch, stream)
+}
+
+func (g *GB28181API) sendHistoryBYEContext(ctx context.Context, ch *Channel, stream *Streams) error {
 	if ch == nil || stream == nil || stream.Resp == nil {
 		return nil
 	}
@@ -307,7 +333,7 @@ func (g *GB28181API) sendHistoryBYE(ch *Channel, stream *Streams) error {
 		if err != nil {
 			responseErr = err
 		} else {
-			_, responseErr = sipResponse(tx)
+			_, responseErr = sipResponseContext(ctx, tx)
 		}
 	}
 	if stream.mediaServer != nil && g.sms != nil {
@@ -377,7 +403,7 @@ func (g *GB28181API) startDirectTCPHistory(ctx context.Context, ch *Channel, in 
 	}
 	g.streams.Store(key, stream)
 
-	offer, err := g.sipInviteDirectTCPHistory(ch, in, stream, policy.OfferPort)
+	offer, err := g.sipInviteDirectTCPHistory(ctx, ch, in, stream, policy.OfferPort)
 	if err != nil {
 		g.streams.Delete(key)
 		return err
@@ -408,7 +434,7 @@ func (g *GB28181API) startDirectTCPHistory(ctx context.Context, ch *Channel, in 
 	return nil
 }
 
-func (g *GB28181API) sipInviteDirectTCPHistory(ch *Channel, in *HistoryInput, stream *Streams, port int) (directTCPDownloadOffer, error) {
+func (g *GB28181API) sipInviteDirectTCPHistory(ctx context.Context, ch *Channel, in *HistoryInput, stream *Streams, port int) (directTCPDownloadOffer, error) {
 	cfg := g.configSnapshot()
 	if cfg == nil {
 		return directTCPDownloadOffer{}, fmt.Errorf("SIP configuration is unavailable")
@@ -444,7 +470,7 @@ func (g *GB28181API) sipInviteDirectTCPHistory(ch *Channel, in *HistoryInput, st
 	if err != nil {
 		return directTCPDownloadOffer{}, err
 	}
-	resp, err := sipResponse(tx)
+	resp, err := sipResponseContext(ctx, tx)
 	if err != nil {
 		return directTCPDownloadOffer{}, err
 	}
@@ -521,7 +547,7 @@ func addressIP(address net.Addr) net.IP {
 	return net.ParseIP(strings.Trim(host, "[]"))
 }
 
-func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, stream *Streams) error {
+func (g *GB28181API) sipInviteHistory(ctx context.Context, ch *Channel, in *HistoryInput, port int, stream *Streams) error {
 	cfg := g.configSnapshot()
 	if cfg == nil {
 		return fmt.Errorf("SIP configuration is unavailable")
@@ -564,7 +590,7 @@ func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, s
 	if err != nil {
 		return err
 	}
-	resp, err := sipResponse(tx)
+	resp, err := sipResponseContext(ctx, tx)
 	if err != nil {
 		return err
 	}
