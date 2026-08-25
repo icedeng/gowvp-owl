@@ -203,46 +203,66 @@ func (g *GB28181API) cleanupQueryStates(now time.Time) {
 	}
 }
 
-func (g *GB28181API) decodeAndStoreQueryData(deviceID, cmdType string, body []byte) any {
+type decodedDeviceQuery struct {
+	data       any
+	appendixA4 []AppendixA4Object
+}
+
+func (g *GB28181API) decodeAndStoreQueryResult(deviceID, cmdType string, body []byte) decodedDeviceQuery {
 	cmd := strings.TrimSpace(cmdType)
 	deviceID = strings.TrimSpace(deviceID)
 	if cmd == "" || len(body) == 0 || deviceID == "" {
-		return nil
+		return decodedDeviceQuery{}
 	}
-	if ext := g.decodeAppendixA4Objects(cmd, body); len(ext) > 0 {
-		g.storeAppendixA4State(deviceID, ext)
-		g.persistAppendixA4Objects(deviceID, ext)
+	result := decodedDeviceQuery{appendixA4: g.decodeAppendixA4Objects(cmd, body)}
+	if len(result.appendixA4) > 0 {
+		g.storeAppendixA4State(deviceID, result.appendixA4)
 	}
-	var data any
 	switch cmd {
 	case "DeviceStatus":
-		data = decodeDeviceStatusData(body)
+		result.data = decodeDeviceStatusData(body)
 	case "PresetQuery":
-		data = decodePresetQueryData(body)
+		result.data = decodePresetQueryData(body)
 	case "HomePositionQuery":
-		data = decodeHomePositionData(body)
+		result.data = decodeHomePositionData(body)
 	case "CruiseTrackListQuery":
-		data = decodeCruiseTrackListData(body)
+		result.data = decodeCruiseTrackListData(body)
 	case "CruiseTrackQuery":
-		data = decodeCruiseTrackData(body)
+		result.data = decodeCruiseTrackData(body)
 	case "PTZPosition":
-		data = decodePTZPositionData(body)
+		result.data = decodePTZPositionData(body)
 	case "SDCardStatus":
-		data = decodeSDCardStatusData(body)
+		result.data = decodeSDCardStatusData(body)
 	case "MobilePosition":
-		data = decodeMobilePositionData(body)
+		result.data = decodeMobilePositionData(body)
 	case "VideoUploadNotify":
-		data = decodeVideoUploadData(body)
+		result.data = decodeVideoUploadData(body)
 	case "ConfigDownload":
-		data = decodeConfigDownloadState(body)
+		result.data = decodeConfigDownloadState(body)
 	default:
-		return nil
+		return result
 	}
-	if data == nil {
-		return nil
+	if result.data != nil {
+		g.storeQueryState(deviceID, cmd, result.data)
 	}
-	g.storeQueryState(deviceID, cmd, data)
-	return data
+	return result
+}
+
+func (g *GB28181API) persistDecodedQuery(deviceID, cmdType string, result decodedDeviceQuery) {
+	if cmdType == "DeviceStatus" {
+		if status, ok := result.data.(*DeviceStatusData); ok {
+			g.applyDeviceStatus(deviceID, status)
+		}
+	}
+	if len(result.appendixA4) > 0 {
+		g.persistAppendixA4Objects(deviceID, result.appendixA4)
+	}
+}
+
+func (g *GB28181API) decodeAndStoreQueryData(deviceID, cmdType string, body []byte) any {
+	result := g.decodeAndStoreQueryResult(deviceID, cmdType, body)
+	g.persistDecodedQuery(deviceID, strings.TrimSpace(cmdType), result)
+	return result.data
 }
 
 func (g *GB28181API) storeQueryState(deviceID, cmdType string, data any) {
@@ -263,7 +283,6 @@ func (g *GB28181API) storeQueryState(deviceID, cmdType string, data any) {
 	case "DeviceStatus":
 		if s, ok := data.(*DeviceStatusData); ok {
 			state.DeviceStatus = s
-			g.applyDeviceStatus(deviceID, s)
 		}
 	case "PresetQuery":
 		if items, ok := data.([]PresetItemData); ok {

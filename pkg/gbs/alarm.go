@@ -121,13 +121,16 @@ func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 		SourceMethod:     sourceMethod,
 	}
 
-	// 抽取附录 A.4 扩展对象并做结构化落库。
-	if ext := g.decodeAppendixA4Objects(msg.CmdType, ctx.Request.Body()); len(ext) > 0 {
+	// 抽取附录 A.4 扩展对象并先更新内存快照。
+	ext := g.decodeAppendixA4Objects(msg.CmdType, ctx.Request.Body())
+	if len(ext) > 0 {
 		g.storeAppendixA4State(deviceID, ext)
+	}
+	// 设备报警确认不应被数据库、业务回调或订阅方 NOTIFY 响应拖延。
+	ctx.String(200, "OK")
+	if len(ext) > 0 {
 		g.persistAppendixA4Objects(deviceID, ext)
 	}
-	// 设备报警确认不应被业务回调或订阅方 NOTIFY 响应拖延。
-	ctx.String(200, "OK")
 
 	g.alarmHandlerMu.RLock()
 	handler := g.alarmHandler

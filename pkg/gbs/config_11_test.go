@@ -250,13 +250,17 @@ func TestConfigDownload11AggregatesMultipleResponses(t *testing.T) {
 		},
 	}
 	api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "ConfigDownload", 18), pending)
-	api.resolvePendingDeviceQuery(gb10DeviceID, "ConfigDownload", 18, "OK", []byte(`<Response><CmdType>ConfigDownload</CmdType><SN>18</SN><DeviceID>`+gb10DeviceID+`</DeviceID><Result>OK</Result><BasicParam><Name>IPC</Name></BasicParam></Response>`), gb10DeviceID)
+	resolve := func(body []byte) {
+		decoded := api.decodeAndStoreQueryResult(gb10DeviceID, "ConfigDownload", body)
+		api.resolvePendingDeviceQueryResult(gb10DeviceID, "ConfigDownload", 18, "OK", body, gb10DeviceID, decoded)
+	}
+	resolve([]byte(`<Response><CmdType>ConfigDownload</CmdType><SN>18</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><BasicParam><Name>IPC</Name></BasicParam></Response>`))
 	select {
 	case out := <-pending.wait:
 		t.Fatalf("combined query completed after first response: %+v", out)
 	default:
 	}
-	api.resolvePendingDeviceQuery(gb10DeviceID, "ConfigDownload", 18, "OK", []byte(`<Response><CmdType>ConfigDownload</CmdType><SN>18</SN><DeviceID>`+gb10DeviceID+`</DeviceID><Result>OK</Result><VideoParamOpt><VideoFormatOpt>2/5</VideoFormatOpt></VideoParamOpt></Response>`), gb10DeviceID)
+	resolve([]byte(`<Response><CmdType>ConfigDownload</CmdType><SN>18</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><VideoParamOpt><VideoFormatOpt>2/5</VideoFormatOpt></VideoParamOpt></Response>`))
 	select {
 	case out := <-pending.wait:
 		state, ok := out.Data.(*ConfigDownloadState)

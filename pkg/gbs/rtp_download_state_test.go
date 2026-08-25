@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,6 +62,65 @@ func TestRemoteBYEFinishesOutboundRTPDownload(t *testing.T) {
 	media.mu.Unlock()
 	if closed.StreamID != stream.StreamID {
 		t.Fatalf("RTP receiver was not closed: %+v", closed)
+	}
+}
+
+func TestRemoteBYEAcknowledgesBeforeMediaCleanup(t *testing.T) {
+	conn := newFlowConnection()
+	media := &blockingCloseRTPMediaService{
+		fakeRTPMediaService: &fakeRTPMediaService{},
+		started:             make(chan struct{}),
+		release:             make(chan struct{}),
+	}
+	api := &GB28181API{sms: media, streams: &conc.Map[string, *Streams]{}}
+	stream := &Streams{
+		DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, StreamID: "slow-bye-stream", CallID: "slow-remote-bye",
+		mediaServer: &sms.MediaServer{},
+	}
+	key := "play:" + gb10DeviceID + ":" + gb10ChannelID
+	api.streams.Store(key, stream)
+	request := newFlowRequest(t, conn, sip.MethodBYE, stream.CallID, nil)
+	to := mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		api.sipByeGeneric(&sip.Context{
+			Request: request, Tx: sip.NewTransaction("slow-remote-bye-tx", conn),
+			DeviceID: gb10DeviceID, Source: conn.remote, To: to,
+		})
+	}()
+	release := func() {
+		select {
+		case <-media.release:
+		default:
+			close(media.release)
+		}
+	}
+	defer release()
+
+	select {
+	case <-media.started:
+	case <-time.After(time.Second):
+		t.Fatal("remote BYE media cleanup was not reached")
+	}
+	select {
+	case payload := <-conn.writes:
+		if response := string(payload); !strings.Contains(response, "SIP/2.0 200 OK") {
+			t.Fatalf("unexpected BYE response:\n%s", response)
+		}
+	default:
+		release()
+		<-done
+		t.Fatal("media cleanup delayed BYE 200 OK")
+	}
+	if _, ok := api.streams.Load(key); ok {
+		t.Fatal("remote BYE acknowledged before removing stream state")
+	}
+	release()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("remote BYE handler did not finish")
 	}
 }
 

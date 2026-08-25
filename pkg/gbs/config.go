@@ -228,9 +228,9 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 		RawXML:   msg.RawXML,
 	}
 	g.storeDeviceConfigState(ctx.DeviceID, state)
-	if ext := g.decodeAppendixA4Objects(msg.CmdType, ctx.Request.Body()); len(ext) > 0 {
+	ext := g.decodeAppendixA4Objects(msg.CmdType, ctx.Request.Body())
+	if len(ext) > 0 {
 		g.storeAppendixA4State(ctx.DeviceID, ext)
-		g.persistAppendixA4Objects(ctx.DeviceID, ext)
 	}
 
 	waitKey := buildPendingDeviceConfigKey(ctx.DeviceID, msg.SN)
@@ -242,6 +242,9 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 	}
 
 	ctx.String(200, "OK")
+	if len(ext) > 0 {
+		g.persistAppendixA4Objects(ctx.DeviceID, ext)
+	}
 }
 
 // SetBasicParam 保留原有 BasicParam API，并复用统一 DeviceConfig 写入链路。
@@ -606,8 +609,9 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 	}
 
 	// 命中通用查询等待队列（A.2.4 ConfigDownload 查询等待）。
-	g.resolvePendingDeviceQuery(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID)
-	g.decodeAndStoreQueryData(ctx.DeviceID, msg.CmdType, ctx.Request.Body())
+	decoded := g.decodeAndStoreQueryResult(ctx.DeviceID, msg.CmdType, ctx.Request.Body())
+	g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
 	ctx.String(200, "OK")
+	g.persistDecodedQuery(ctx.DeviceID, msg.CmdType, decoded)
 	g.publishEventNotify(msg.CmdType, ctx.DeviceID, ctx.Request.Body())
 }

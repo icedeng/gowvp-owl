@@ -39,13 +39,29 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		source: ctx.Source,
 		to:     ctx.To,
 	})
+	isOnline := msg.Status == "" || msg.Status == "OK" || msg.Status == "ON"
+	// 9.6 状态信息报送：先更新无外部 I/O 的结构化状态并确认设备，避免慢数据库触发心跳重传或误离线。
+	status := &DeviceStatusData{
+		CmdType:        "DeviceStatus",
+		SN:             msg.SN,
+		DeviceID:       ctx.DeviceID,
+		Status:         msg.Status,
+		FaultDeviceIDs: normalizeGBIDList(msg.Info.DeviceIDs),
+	}
+	if isOnline {
+		status.Online = "ONLINE"
+	} else {
+		status.Online = "OFFLINE"
+	}
+	g.storeQueryState(ctx.DeviceID, "DeviceStatus", status)
+	ctx.String(200, "OK")
 
 	effectiveVersion := GBVersion10
 	var disabledCapabilities []string
 	if err := g.svr.memoryStorer.Change(ctx.DeviceID, func(d *ipc.Device) error {
 		d.KeepaliveAt = orm.Now()
 		// 兼容省略 Status 的厂商，同时保留显式 OFF/ERROR 状态的语义。
-		d.IsOnline = msg.Status == "" || msg.Status == "OK" || msg.Status == "ON"
+		d.IsOnline = isOnline
 		d.Address = ctx.Source.String()
 		d.Transport = ctx.Source.Network()
 		effectiveVersion = applyGBProtocolVersion(&d.Ext, ctx.XGBVer)
@@ -65,22 +81,6 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		}
 	}
 
-	// 9.6 状态信息报送：将心跳状态同步为结构化设备状态并推送订阅者。
-	status := &DeviceStatusData{
-		CmdType:        "DeviceStatus",
-		SN:             msg.SN,
-		DeviceID:       ctx.DeviceID,
-		Status:         msg.Status,
-		FaultDeviceIDs: normalizeGBIDList(msg.Info.DeviceIDs),
-	}
-	if msg.Status == "OK" || msg.Status == "ON" {
-		status.Online = "ONLINE"
-	} else {
-		status.Online = "OFFLINE"
-	}
-	g.storeQueryState(ctx.DeviceID, "DeviceStatus", status)
-	// 心跳确认必须先于订阅转发和首次目录补载，避免慢订阅方或目录超时导致设备重传/误离线。
-	ctx.String(200, "OK")
 	if body, err := sip.XMLEncode(struct {
 		XMLName xml.Name `xml:"Notify"`
 		*DeviceStatusData

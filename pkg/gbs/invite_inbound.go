@@ -373,6 +373,7 @@ func (g *GB28181API) handleOutboundBYE(ctx *sip.Context, callID string) bool {
 	}
 	matched := false
 	var endedStream *Streams
+	endedDownload := false
 	g.streams.Range(func(key string, stream *Streams) bool {
 		if stream == nil || normalizeStoredCallID(stream.CallID) != callID {
 			return true
@@ -385,23 +386,25 @@ func (g *GB28181API) handleOutboundBYE(ctx *sip.Context, callID string) bool {
 		stream.Stop = true
 		stream.Status = 1
 		stream.EndReason = "remote_bye"
-		if strings.HasPrefix(key, "history:"+historyModeDownload+":") && !stream.DirectTCP {
-			g.finishRTPDownload(stream, rtpDownloadStopped, "remote_bye")
-		}
-		if value, ok := g.talkSessions.Load(stream.StreamID); ok {
-			if session, ok := value.(*talkSession); ok {
-				_ = g.stopTalkSession(session, fmt.Errorf("Talk ended by remote BYE"))
-			}
-		} else if stream.mediaServer != nil && g.sms != nil {
-			_, _ = g.sms.CloseRTPServer(stream.mediaServer, zlm.CloseRTPServerRequest{StreamID: stream.StreamID})
-		}
-		if g.core.Store() != nil {
-			_ = g.core.EditPlaying(context.Background(), stream.DeviceID, stream.ChannelID, false)
-		}
+		endedDownload = strings.HasPrefix(key, "history:"+historyModeDownload+":") && !stream.DirectTCP
 		return false
 	})
 	if matched {
+		// 会话已从运行态移除后先确认 BYE，媒体服务器和数据库清理慢时不触发重复 BYE。
 		ctx.String(200, "OK")
+		if endedDownload {
+			g.finishRTPDownload(endedStream, rtpDownloadStopped, "remote_bye")
+		}
+		if value, ok := g.talkSessions.Load(endedStream.StreamID); ok {
+			if session, ok := value.(*talkSession); ok {
+				_ = g.stopTalkSession(session, fmt.Errorf("Talk ended by remote BYE"))
+			}
+		} else if endedStream.mediaServer != nil && g.sms != nil {
+			_, _ = g.sms.CloseRTPServer(endedStream.mediaServer, zlm.CloseRTPServerRequest{StreamID: endedStream.StreamID})
+		}
+		if g.core.Store() != nil {
+			_ = g.core.EditPlaying(context.Background(), endedStream.DeviceID, endedStream.ChannelID, false)
+		}
 		g.terminateCascadeSessionsForStream(endedStream)
 	}
 	return matched

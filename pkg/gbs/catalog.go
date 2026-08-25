@@ -135,9 +135,12 @@ func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 	}
 
 	// 命中通用查询等待队列（A.2.4 Catalog 查询等待）。
-	g.resolvePendingDeviceQuery(ctx.DeviceID, msg.CmdType, msg.SN, "", ctx.Request.Body(), msg.DeviceID)
+	stateDeviceID := firstNonEmpty(strings.TrimSpace(msg.DeviceID), strings.TrimSpace(ctx.DeviceID))
+	decoded := g.decodeAndStoreQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body())
+	g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, "", ctx.Request.Body(), msg.DeviceID, decoded)
 
 	ctx.String(200, "OK")
+	g.persistDecodedQuery(stateDeviceID, msg.CmdType, decoded)
 }
 
 // QueryCatalog 设备目录查询或订阅请求

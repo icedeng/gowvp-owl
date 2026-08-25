@@ -70,64 +70,71 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 	// 为什么: Result 非 OK 代表设备端查询失败，可选字段可能为空或旧值，不应覆盖数据库，避免清空已有厂商/型号等信息。
 	if !msg.isResultOK() {
 		ctx.Log.Warn("sipMessageDeviceInfo result not ok", "result", msg.Result, "sn", msg.SN)
-		g.resolvePendingDeviceQuery(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID)
+		stateDeviceID := firstNonEmpty(msg.DeviceID, ctx.DeviceID)
+		decoded := g.decodeAndStoreQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body())
+		g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
 		ctx.String(200, "OK")
+		g.persistDecodedQuery(stateDeviceID, msg.CmdType, decoded)
 		return
 	}
 
+	var persist func() error
 	if isChannelResponse {
 		if g.core.Store() == nil {
 			ctx.String(500, ErrDatabase.Error())
 			return
 		}
-		var channel ipc.Channel
-		err := g.core.Store().Channel().Update(context.Background(), &channel, func(item *ipc.Channel) error {
-			if msg.DeviceName != "" {
-				item.Name = msg.DeviceName
-				item.Ext.Name = msg.DeviceName
-			}
-			if msg.Firmware != "" {
-				item.Ext.Firmware = msg.Firmware
-			}
-			if msg.Manufacturer != "" {
-				item.Ext.Manufacturer = msg.Manufacturer
-			}
-			if msg.Model != "" {
-				item.Ext.Model = msg.Model
-			}
-			return nil
-		}, orm.Where("device_id = ? AND channel_id = ?", ctx.DeviceID, msg.DeviceID))
-		if err != nil {
-			ctx.Log.Error("update channel DeviceInfo", "err", err, "channel_id", msg.DeviceID)
-			ctx.String(500, ErrDatabase.Error())
-			return
+		persist = func() error {
+			var channel ipc.Channel
+			return g.core.Store().Channel().Update(context.Background(), &channel, func(item *ipc.Channel) error {
+				if msg.DeviceName != "" {
+					item.Name = msg.DeviceName
+					item.Ext.Name = msg.DeviceName
+				}
+				if msg.Firmware != "" {
+					item.Ext.Firmware = msg.Firmware
+				}
+				if msg.Manufacturer != "" {
+					item.Ext.Manufacturer = msg.Manufacturer
+				}
+				if msg.Model != "" {
+					item.Ext.Model = msg.Model
+				}
+				return nil
+			}, orm.Where("device_id = ? AND channel_id = ?", ctx.DeviceID, msg.DeviceID))
 		}
-	} else if err := g.core.Update(ctx.DeviceID, func(d *ipc.Device) {
-		// 为什么: 可选字段为空时不覆盖，避免把上一次成功拿到的信息抹成空串。
-		if msg.Firmware != "" {
-			d.Ext.Firmware = msg.Firmware
-		}
-		if msg.Manufacturer != "" {
-			d.Ext.Manufacturer = msg.Manufacturer
-		}
-		if msg.Model != "" {
-			d.Ext.Model = msg.Model
-		}
-		if msg.DeviceName != "" {
-			d.Ext.Name = msg.DeviceName
-		}
+	} else {
+		persist = func() error {
+			return g.core.Update(ctx.DeviceID, func(d *ipc.Device) {
+				// 为什么: 可选字段为空时不覆盖，避免把上一次成功拿到的信息抹成空串。
+				if msg.Firmware != "" {
+					d.Ext.Firmware = msg.Firmware
+				}
+				if msg.Manufacturer != "" {
+					d.Ext.Manufacturer = msg.Manufacturer
+				}
+				if msg.Model != "" {
+					d.Ext.Model = msg.Model
+				}
+				if msg.DeviceName != "" {
+					d.Ext.Name = msg.DeviceName
+				}
 
-		d.Address = ctx.Source.String()
-		d.Transport = ctx.Source.Network()
-	}); err != nil {
-		ctx.Log.Error("Edit", "err", err)
-		ctx.String(500, ErrDatabase.Error())
-		return
+				d.Address = ctx.Source.String()
+				d.Transport = ctx.Source.Network()
+			})
+		}
 	}
 
 	// 命中通用查询等待队列（A.2.4 DeviceInfo 查询等待）。
-	g.resolvePendingDeviceQuery(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID)
+	stateDeviceID := firstNonEmpty(msg.DeviceID, ctx.DeviceID)
+	decoded := g.decodeAndStoreQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body())
+	g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
 	ctx.String(200, "OK")
+	if err := persist(); err != nil {
+		ctx.Log.Error("persist DeviceInfo", "err", err, "target_id", msg.DeviceID)
+	}
+	g.persistDecodedQuery(stateDeviceID, msg.CmdType, decoded)
 	// 9.11 事件源侧：设备信息变化通知。
 	g.publishEventNotify(msg.CmdType, ctx.DeviceID, ctx.Request.Body())
 }

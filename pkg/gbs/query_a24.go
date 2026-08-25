@@ -420,7 +420,7 @@ func canonicalGBQueryCmdType(value string) string {
 	return value
 }
 
-func (g *GB28181API) resolvePendingDeviceQuery(deviceID, cmdType string, sn int, result string, body []byte, targetID string) {
+func (g *GB28181API) resolvePendingDeviceQueryResult(deviceID, cmdType string, sn int, result string, body []byte, targetID string, decoded decodedDeviceQuery) {
 	cmdType = canonicalGBQueryCmdType(cmdType)
 	if sn <= 0 || cmdType == "" {
 		return
@@ -444,8 +444,8 @@ func (g *GB28181API) resolvePendingDeviceQuery(deviceID, cmdType string, sn int,
 		if out.DeviceID == "" {
 			out.DeviceID = strings.TrimSpace(deviceID)
 		}
-		out.Data = g.decodeAndStoreQueryData(out.DeviceID, out.CmdType, body)
-		out.AppendixA4 = g.decodeAppendixA4Objects(out.CmdType, body)
+		out.Data = decoded.data
+		out.AppendixA4 = decoded.appendixA4
 		pending := v.(*pendingQueryWait)
 		if out.CmdType == "ConfigDownload" && (out.Result == "" || strings.EqualFold(out.Result, "OK")) {
 			state, _ := out.Data.(*ConfigDownloadState)
@@ -571,14 +571,14 @@ func (g *GB28181API) sipMessageQueryGeneric(ctx *sip.Context) {
 		return
 	}
 	msg.CmdType = canonicalGBQueryCmdType(msg.CmdType)
-	g.resolvePendingDeviceQuery(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID)
 	deviceID := strings.TrimSpace(ctx.DeviceID)
 	if deviceID == "" {
 		deviceID = strings.TrimSpace(msg.DeviceID)
 	}
-	// 解析并落入结构化状态缓存。
-	g.decodeAndStoreQueryData(deviceID, msg.CmdType, ctx.Request.Body())
+	decoded := g.decodeAndStoreQueryResult(deviceID, msg.CmdType, ctx.Request.Body())
+	g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
 	ctx.String(200, "OK")
+	g.persistDecodedQuery(deviceID, msg.CmdType, decoded)
 	// 9.11 事件源侧：通用查询类事件通知。
 	g.publishEventNotify(msg.CmdType, deviceID, ctx.Request.Body())
 }
