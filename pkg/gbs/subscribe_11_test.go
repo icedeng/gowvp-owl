@@ -2,12 +2,76 @@ package gbs
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
+
+type tcpFlowConnection struct {
+	*flowConnection
+}
+
+func (*tcpFlowConnection) Network() string { return "tcp" }
+
+func TestKeepaliveRespondsBeforeSlowSubscriptionNotify(t *testing.T) {
+	baseConn := newFlowConnection()
+	conn := &tcpFlowConnection{flowConnection: baseConn}
+	platform := mustFlowAddress(t, "sip:"+gb10PlatformID+"@3402000000")
+	sipServer := sip.NewServer(platform)
+	t.Cleanup(sipServer.Close)
+	memory := newFlowMemory(gb10DeviceID)
+	server := &Server{
+		Server: sipServer, fromAddress: *platform, memoryStorer: memory,
+	}
+	api := &GB28181API{svr: server}
+	server.gb = api
+	api.eventSubscribers.Store("slow-device-status", &eventSubscription{
+		Key: "slow-device-status", CmdType: "DeviceStatus", DeviceID: gb10DeviceID,
+		ExpiresAt: time.Now().Add(time.Minute),
+		To:        mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000"),
+		Source:    baseConn.remote, Conn: conn, GBVersion: string(GBVersion10), Event: "presence",
+	})
+
+	request := newFlowRequest(t, baseConn, sip.MethodMessage, "keepalive-before-notify", readGB10Fixture(t, "keepalive.xml"))
+	request.SetConnection(conn)
+	done := make(chan struct{})
+	go func() {
+		api.sipMessageKeepalive(&sip.Context{
+			Request: request, Tx: sip.NewTransaction("keepalive-before-notify-tx", conn),
+			DeviceID: gb10DeviceID, Source: baseConn.remote,
+			To: mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000"), Log: slog.Default(),
+		})
+		close(done)
+	}()
+
+	var first string
+	select {
+	case payload := <-baseConn.writes:
+		first = string(payload)
+	case <-time.After(time.Second):
+		t.Fatal("Keepalive response timeout")
+	}
+	if !strings.Contains(first, "SIP/2.0 200 OK") {
+		t.Fatalf("first Keepalive write was delayed by subscription NOTIFY:\n%s", first)
+	}
+	select {
+	case payload := <-baseConn.writes:
+		if !strings.HasPrefix(string(payload), "NOTIFY ") {
+			t.Fatalf("second Keepalive write was not subscription NOTIFY:\n%s", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subscription NOTIFY was not sent")
+	}
+	sipServer.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Keepalive handler did not stop after SIP shutdown")
+	}
+}
 
 func TestCatalogSubscriptionEventValue11(t *testing.T) {
 	value := buildSubscriptionEventValue("Catalog", gb10DeviceID)

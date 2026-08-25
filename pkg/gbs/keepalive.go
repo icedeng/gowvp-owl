@@ -79,6 +79,8 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		status.Online = "OFFLINE"
 	}
 	g.storeQueryState(ctx.DeviceID, "DeviceStatus", status)
+	// 心跳确认必须先于订阅转发和首次目录补载，避免慢订阅方或目录超时导致设备重传/误离线。
+	ctx.String(200, "OK")
 	if body, err := sip.XMLEncode(struct {
 		XMLName xml.Name `xml:"Notify"`
 		*DeviceStatusData
@@ -94,8 +96,6 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		slog.Info("keepalive 触发 Catalog 补载", "device_id", ctx.DeviceID)
 		_ = g.QueryCatalog(ctx.DeviceID)
 	}
-
-	ctx.String(200, "OK")
 }
 
 func normalizeGBIDList(values []string) []string {
