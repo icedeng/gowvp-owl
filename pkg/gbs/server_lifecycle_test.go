@@ -2,7 +2,9 @@ package gbs
 
 import (
 	"context"
+	"errors"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -85,10 +87,50 @@ func TestOfflineCheckMarksUnchangedTimedOutDeviceOffline(t *testing.T) {
 	}
 }
 
+func TestPersistOptionsProbeActivityReturnsStateError(t *testing.T) {
+	old := time.Now().Add(-time.Minute)
+	memory := &probePersistenceFailureMemory{
+		flowMemory: &flowMemory{
+			persistent: &ipc.Device{DeviceID: gb10DeviceID, KeepaliveAt: orm.Time{Time: old}},
+			runtime:    &Device{LastKeepaliveAt: old},
+		},
+		err: errors.New("database unavailable"),
+	}
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+
+	err := api.persistOptionsProbeActivity(gb10DeviceID)
+	if err == nil || !strings.Contains(err.Error(), "database unavailable") {
+		t.Fatalf("OPTIONS activity persistence result = %v", err)
+	}
+	if !memory.runtime.runtimeSnapshot().LastKeepaliveAt.Equal(old) {
+		t.Fatal("failed OPTIONS activity persistence updated runtime state")
+	}
+}
+
 type refreshBeforeOfflineMemory struct {
 	*flowMemory
 	refreshedAt time.Time
 	refreshed   bool
+}
+
+type probePersistenceFailureMemory struct {
+	*flowMemory
+	err error
+}
+
+func (m *probePersistenceFailureMemory) Change(_ string, persistent func(*ipc.Device) error, runtime func(*Device)) error {
+	if m.err != nil {
+		return m.err
+	}
+	if persistent != nil {
+		if err := persistent(m.persistent); err != nil {
+			return err
+		}
+	}
+	if runtime != nil {
+		runtime(m.runtime)
+	}
+	return nil
 }
 
 func (m *refreshBeforeOfflineMemory) Change(deviceID string, persistent func(*ipc.Device) error, runtime func(*Device)) error {

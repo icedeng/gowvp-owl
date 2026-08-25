@@ -57,12 +57,18 @@ func (g *GB28181API) ProbeOptions(ctx context.Context, in *OptionsProbeInput) er
 	if resp.StatusCode() != 200 {
 		return fmt.Errorf("options failed: %d %s", resp.StatusCode(), resp.Reason())
 	}
-	_ = g.svr.memoryStorer.Change(in.DeviceID, func(d *ipc.Device) error {
+	return g.persistOptionsProbeActivity(in.DeviceID)
+}
+
+func (g *GB28181API) persistOptionsProbeActivity(deviceID string) error {
+	if err := g.svr.memoryStorer.Change(deviceID, func(d *ipc.Device) error {
 		d.KeepaliveAt = orm.Now()
 		return nil
 	}, func(d *Device) {
 		d.LastKeepaliveAt = time.Now()
-	})
+	}); err != nil {
+		return fmt.Errorf("persist options probe activity: %w", err)
+	}
 	return nil
 }
 
