@@ -76,7 +76,7 @@ func (p cascadePlatform) allowsMediaDestination(ip net.IP) bool {
 	if ip == nil {
 		return false
 	}
-	if p.remote != nil && p.remote.IP != nil && p.remote.IP.Equal(ip) {
+	if remoteIP := addressIP(p.remote); remoteIP != nil && remoteIP.Equal(ip) {
 		return true
 	}
 	for index := range p.mediaAllowedCIDRs {

@@ -116,6 +116,9 @@ func (s *Server) mustTX(msg *Request) *Transaction {
 		} else {
 			tx = s.txs.newTX(key, msg.conn)
 		}
+	} else if msg.conn != nil && msg.conn.Network() == "tcp" {
+		// 同一对话可能在 TCP 断线后通过新连接继续，事务必须跟随当前连接。
+		tx.setConnection(msg.conn)
 	}
 	return tx
 }
@@ -262,9 +265,17 @@ func (s *Server) Close() {
 
 // ProcessTcpConn 处理传入的 TCP 连接。
 func (s *Server) ProcessTcpConn(conn net.Conn) {
+	s.ProcessTCPConnection(NewTCPConnection(conn))
+}
+
+// ProcessTCPConnection 处理已建立的入向或出向 SIP/TCP 连接。
+// 调用方把连接所有权交给服务器，读取循环退出时连接会被关闭。
+func (s *Server) ProcessTCPConnection(conn Connection) {
+	if conn == nil {
+		return
+	}
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
-	c := NewTCPConnection(conn)
 
 	parser := newParser()
 	defer parser.stop()
@@ -311,7 +322,7 @@ func (s *Server) ProcessTcpConn(conn net.Conn) {
 			}
 		}
 
-		parser.in <- newPacket(buffer.Bytes(), conn.RemoteAddr(), c)
+		parser.in <- newPacket(buffer.Bytes(), conn.RemoteAddr(), conn)
 	}
 }
 

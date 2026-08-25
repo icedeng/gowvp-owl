@@ -1,9 +1,13 @@
 package gbs
 
 import (
+	"bufio"
 	"context"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +21,21 @@ func testCascadePlatform(t *testing.T, version string) cascadePlatform {
 	platform, err := normalizeCascadePlatform(conf.SIPUpstream{
 		Name: "provincial", Enabled: true,
 		ServerID: gb10PlatformID, Host: "192.0.2.30", Port: 5060,
+		Domain: "remote.example", LocalID: gb10DeviceID, LocalDomain: "local.example",
+		LocalHost: "192.0.2.20", Password: "cascade-secret",
+		Version: version, Expires: 3600, KeepaliveInterval: conf.Duration(30 * time.Second),
+	}, conf.SIP{ID: gb10DeviceID, Domain: "local.example", Host: "192.0.2.20", Port: 5060}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return platform
+}
+
+func testCascadeTCPPlatform(t *testing.T, version string) cascadePlatform {
+	t.Helper()
+	platform, err := normalizeCascadePlatform(conf.SIPUpstream{
+		Name: "provincial-tcp", Enabled: true,
+		ServerID: gb10PlatformID, Host: "192.0.2.30", Port: 5060, Transport: "tcp",
 		Domain: "remote.example", LocalID: gb10DeviceID, LocalDomain: "local.example",
 		LocalHost: "192.0.2.20", Password: "cascade-secret",
 		Version: version, Expires: 3600, KeepaliveInterval: conf.Duration(30 * time.Second),
@@ -129,6 +148,162 @@ func TestCascadeRegisterSupportsLegacyDigestWithoutQOP(t *testing.T) {
 	}
 }
 
+func TestCascadeRegisterOverTCPReusesConnectionForDigest(t *testing.T) {
+	platform := testCascadeTCPPlatform(t, "3.0")
+	localURI, err := sip.ParseSipURI("sip:" + gb10DeviceID + "@192.0.2.20:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sipServer := sip.NewServer(&sip.Address{URI: &localURI, Params: sip.NewParams()})
+	defer sipServer.Close()
+	worker := newCascadeWorker(&Server{Server: sipServer}, platform)
+	defer worker.closeTCPConnection()
+
+	registrarErr := make(chan error, 1)
+	allowRegistrarClose := make(chan struct{})
+	dialCalls := 0
+	worker.dialTCP = func(_ context.Context, _ string) (net.Conn, error) {
+		dialCalls++
+		client, registrar := net.Pipe()
+		clientConn := &cascadeTestTCPConn{
+			Conn:   client,
+			local:  &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 41000},
+			remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060},
+		}
+		go func() {
+			defer registrar.Close()
+			reader := bufio.NewReader(registrar)
+			for index := 0; index < 3; index++ {
+				request, readErr := readCascadeTestTCPMessage(reader)
+				if readErr != nil {
+					registrarErr <- readErr
+					return
+				}
+				if !strings.Contains(request, "Via: SIP/2.0/TCP") || !strings.Contains(request, ";transport=tcp") {
+					registrarErr <- fmt.Errorf("TCP REGISTER missing transport markers: %s", request)
+					return
+				}
+				status, reason := http.StatusUnauthorized, "Unauthorized"
+				extra := `WWW-Authenticate: Digest realm="3402000000",qop="auth",nonce="tcp-nonce"`
+				if index == 1 {
+					if !strings.Contains(request, "Authorization: Digest") {
+						registrarErr <- fmt.Errorf("authenticated TCP REGISTER missing Authorization")
+						return
+					}
+					status, reason = http.StatusOK, "OK"
+					extra = "Expires: 120\r\nX-GB-Ver: 3.0"
+				} else if index == 2 {
+					if !strings.HasPrefix(request, "MESSAGE ") || !strings.Contains(request, "<CmdType>Keepalive</CmdType>") {
+						registrarErr <- fmt.Errorf("unexpected TCP keepalive request: %s", request)
+						return
+					}
+					status, reason, extra = http.StatusOK, "OK", ""
+				}
+				if _, writeErr := io.WriteString(registrar, cascadeTestTCPResponse(request, status, reason, extra)); writeErr != nil {
+					registrarErr <- writeErr
+					return
+				}
+			}
+			registrarErr <- nil
+			<-allowRegistrarClose
+		}()
+		return clientConn, nil
+	}
+
+	if err := worker.register(t.Context(), worker.platform.expires); err != nil {
+		t.Fatal(err)
+	}
+	if dialCalls != 1 {
+		t.Fatalf("TCP cascade dial calls = %d, want 1", dialCalls)
+	}
+	if status := worker.snapshot(); !status.Registered || status.Address != "192.0.2.30:5060" || status.NegotiatedVersion != "3.0" {
+		t.Fatalf("TCP cascade status = %+v", status)
+	}
+	manager := NewCascadeManager(nil)
+	manager.items[worker.platform.name] = worker
+	if matched, ok := manager.matchRegistered(gb10PlatformID, &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060}); !ok || matched != worker {
+		t.Fatalf("registered TCP upstream source match = %v, %v", matched, ok)
+	}
+	keepaliveDone := make(chan error, 1)
+	go func() { keepaliveDone <- worker.keepalive(t.Context()) }()
+	select {
+	case err := <-keepaliveDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TCP keepalive timed out")
+	}
+	if dialCalls != 1 {
+		t.Fatalf("TCP keepalive opened another connection: dials=%d", dialCalls)
+	}
+	if err := <-registrarErr; err != nil {
+		t.Fatal(err)
+	}
+	close(allowRegistrarClose)
+}
+
+type cascadeTestTCPConn struct {
+	net.Conn
+	local  net.Addr
+	remote net.Addr
+}
+
+func (c *cascadeTestTCPConn) LocalAddr() net.Addr  { return c.local }
+func (c *cascadeTestTCPConn) RemoteAddr() net.Addr { return c.remote }
+
+func readCascadeTestTCPMessage(reader *bufio.Reader) (string, error) {
+	var message strings.Builder
+	bodyLength := 0
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		message.WriteString(line)
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			break
+		}
+		name, value, found := strings.Cut(trimmed, ":")
+		if found && (strings.EqualFold(strings.TrimSpace(name), "Content-Length") || strings.EqualFold(strings.TrimSpace(name), "l")) {
+			bodyLength, err = strconv.Atoi(strings.TrimSpace(value))
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	if bodyLength > 0 {
+		body := make([]byte, bodyLength)
+		if _, err := io.ReadFull(reader, body); err != nil {
+			return "", err
+		}
+		message.Write(body)
+	}
+	return message.String(), nil
+}
+
+func cascadeTestTCPResponse(request string, status int, reason, extra string) string {
+	header := func(name string) string {
+		for line := range strings.SplitSeq(request, "\r\n") {
+			key, value, ok := strings.Cut(line, ":")
+			if ok && strings.EqualFold(strings.TrimSpace(key), name) {
+				return strings.TrimSpace(value)
+			}
+		}
+		return ""
+	}
+	to := header("To")
+	if !strings.Contains(strings.ToLower(to), ";tag=") {
+		to += ";tag=tcp-registrar"
+	}
+	if extra != "" {
+		extra += "\r\n"
+	}
+	return fmt.Sprintf("SIP/2.0 %d %s\r\nVia: %s\r\nFrom: %s\r\nTo: %s\r\nCall-ID: %s\r\nCSeq: %s\r\n%sContent-Length: 0\r\n\r\n",
+		status, reason, header("Via"), header("From"), to, header("Call-ID"), header("CSeq"), extra)
+}
+
 func TestCascadeRegisterFollows2022Redirect(t *testing.T) {
 	worker := newCascadeWorker(nil, testCascadePlatform(t, "3.0"))
 	requests := make([]*sip.Request, 0, 3)
@@ -202,7 +377,7 @@ func TestCascadeRegisterRejectsUnsafeRedirect(t *testing.T) {
 	}{
 		{name: "different server", contact: "sip:34020000002000009999@192.0.2.31:5070"},
 		{name: "sips unsupported", contact: "sips:" + gb10PlatformID + "@192.0.2.31:5071"},
-		{name: "tcp unsupported", contact: "sip:" + gb10PlatformID + "@192.0.2.31:5070;transport=tcp"},
+		{name: "transport unsupported", contact: "sip:" + gb10PlatformID + "@192.0.2.31:5070;transport=ws"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -218,6 +393,69 @@ func TestCascadeRegisterRejectsUnsafeRedirect(t *testing.T) {
 			}
 			if err := worker.register(t.Context(), worker.platform.expires); err == nil || !strings.Contains(strings.ToLower(err.Error()), "redirect") {
 				t.Fatalf("unsafe redirect error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCascadeRegisterRedirectSupportsTCPTransport(t *testing.T) {
+	request := sip.NewRequest("", sip.MethodRegister, &sip.URI{FHost: "remote.example"}, sip.DefaultSipVersion, nil, nil)
+	response := sip.NewResponseFromRequest("", request, http.StatusMovedPermanently, "Moved Permanently", nil)
+	redirectURI, err := sip.ParseSipURI("sip:" + gb10PlatformID + "@192.0.2.31:5070;transport=tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.AppendHeader(&sip.ContactHeader{Address: &redirectURI, Params: sip.NewParams()})
+	uri, remote, err := cascadeRegisterRedirectTarget(response, gb10PlatformID, "udp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uri == nil || remote == nil || cascadeTransportForAddr(remote) != "tcp" || remote.String() != "192.0.2.31:5070" {
+		t.Fatalf("TCP redirect target = %v / %v", uri, remote)
+	}
+}
+
+func TestCascadeRegisterRedirectUpdatesRequestTransport(t *testing.T) {
+	tests := []struct {
+		name          string
+		platform      func(*testing.T, string) cascadePlatform
+		redirect      string
+		wantTransport string
+	}{
+		{name: "udp to tcp", platform: testCascadePlatform, redirect: "tcp", wantTransport: "TCP"},
+		{name: "tcp to udp", platform: testCascadeTCPPlatform, redirect: "udp", wantTransport: "UDP"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			worker := newCascadeWorker(nil, test.platform(t, "3.0"))
+			requests := make([]*sip.Request, 0, 2)
+			worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+				requests = append(requests, request)
+				if len(requests) == 1 {
+					response := sip.NewResponseFromRequest("", request, http.StatusMovedPermanently, "Moved Permanently", nil)
+					uri, err := sip.ParseSipURI("sip:" + gb10PlatformID + "@192.0.2.31:5070;transport=" + test.redirect)
+					if err != nil {
+						t.Fatal(err)
+					}
+					response.AppendHeader(&sip.ContactHeader{Address: &uri, Params: sip.NewParams()})
+					return response, nil
+				}
+				return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+			}
+			if err := worker.register(t.Context(), worker.platform.expires); err != nil {
+				t.Fatal(err)
+			}
+			if len(requests) != 2 {
+				t.Fatalf("redirect request count = %d", len(requests))
+			}
+			via, _ := requests[1].ViaHop()
+			contact, _ := requests[1].Contact()
+			if via == nil || via.Transport != test.wantTransport || cascadeTransportForAddr(requests[1].Destination()) != strings.ToLower(test.wantTransport) {
+				t.Fatalf("redirect transport = via %v destination %v", via, requests[1].Destination())
+			}
+			hasTCPContact := contact != nil && contact.Address != nil && strings.Contains(strings.ToLower(contact.Address.String()), "transport=tcp")
+			if hasTCPContact != (test.wantTransport == "TCP") {
+				t.Fatalf("redirect Contact = %v", contact)
 			}
 		})
 	}
@@ -309,6 +547,11 @@ func TestNormalizeCascadePlatformsRejectsUnsafeConfiguration(t *testing.T) {
 	invalid.ServerID = "not-a-gb-id"
 	if _, err := normalizeCascadePlatforms(local, []conf.SIPUpstream{invalid}, ""); err == nil || !strings.Contains(err.Error(), "server_id") {
 		t.Fatalf("invalid server ID error = %v", err)
+	}
+	invalid = base
+	invalid.Transport = "sctp"
+	if _, err := normalizeCascadePlatforms(local, []conf.SIPUpstream{invalid}, ""); err == nil || !strings.Contains(err.Error(), "transport") {
+		t.Fatalf("invalid transport error = %v", err)
 	}
 	invalid = base
 	local.Port = 0

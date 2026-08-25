@@ -40,10 +40,30 @@ func (txs *transacionts) rmTX(tx *Transaction) {
 
 // Transaction Transaction
 type Transaction struct {
+	connMu sync.RWMutex
 	conn   Connection
 	key    string
 	resp   chan *Response
 	active chan int
+}
+
+func (tx *Transaction) setConnection(conn Connection) {
+	if tx == nil || conn == nil {
+		return
+	}
+	tx.connMu.Lock()
+	tx.conn = conn
+	tx.connMu.Unlock()
+}
+
+func (tx *Transaction) connection() Connection {
+	if tx == nil {
+		return nil
+	}
+	tx.connMu.RLock()
+	conn := tx.conn
+	tx.connMu.RUnlock()
+	return conn
 }
 
 // NewTransaction NewTransaction
@@ -112,19 +132,27 @@ func (tx *Transaction) receiveResponse(msg *Response) {
 // Respond Respond
 func (tx *Transaction) Respond(res *Response) error {
 	// logrus.Traceln("send response,to:", res.dest.String(), "txkey:", tx.key, "message: \n", res.String())
+	conn := tx.connection()
+	if conn == nil {
+		return NewError(nil, "transaction connection is unavailable")
+	}
 	payload := []byte(res.String())
-	logTraffic("out", tx.conn.Network(), tx.conn.LocalAddr(), res.dest, payload)
-	_, err := tx.conn.WriteTo(payload, res.dest)
+	logTraffic("out", conn.Network(), conn.LocalAddr(), res.dest, payload)
+	_, err := conn.WriteTo(payload, res.dest)
 	return err
 }
 
 // Request Request
 func (tx *Transaction) Request(req *Request) error {
+	conn := tx.connection()
+	if conn == nil {
+		return NewError(nil, "transaction connection is unavailable")
+	}
 	str := req.String()
 	s := unsafe.Slice(unsafe.StringData(str), len(str))
-	logTraffic("out", tx.conn.Network(), tx.conn.LocalAddr(), req.dest, s)
+	logTraffic("out", conn.Network(), conn.LocalAddr(), req.dest, s)
 	// logrus.Traceln("send request,to:", req.dest.String(), "txkey:", tx.key, "message: \n", req.String())
-	_, err := tx.conn.WriteTo(s, req.dest)
+	_, err := conn.WriteTo(s, req.dest)
 	return err
 }
 

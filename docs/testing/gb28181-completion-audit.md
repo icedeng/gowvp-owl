@@ -6,7 +6,7 @@
 
 代码建设、自动化测试和本地协议模拟器已完成到开发计划的 AI-502；AI-403 的 2014 附录 O 裸 TCP 下载已经实现，不再是代码阻断项。
 
-目标尚不能标记为生产完成。除 AI-503 真实设备矩阵和 AI-602 部署灰度/回滚必须在外部设备及目标环境执行外，本平台主动向上级注册的级联信令当前仍仅支持 UDP，尚未覆盖标准要求的 TCP 信令。上下级平台级联的查询、目录、事件订阅、直播、回放、下载和语音广播/对讲代码链路已经补齐；2022 附录 H 指定路径级联已完成自动化闭环；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅现在会自动建立、续订、复用和取消下级订阅，但仍需要真实上级平台及真实设备共同验证。
+目标尚不能标记为生产完成，原因是 AI-503 真实设备矩阵和 AI-602 部署灰度/回滚必须在外部设备及目标环境执行。上下级平台级联的 UDP/TCP 注册、查询、目录、事件订阅、直播、回放、下载和语音广播/对讲代码链路已经补齐；2022 附录 H 指定路径级联已完成自动化闭环；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅现在会自动建立、续订、复用和取消下级订阅，但仍需要真实上级平台及真实设备共同验证。
 
 ## 2. 任务逐项证据
 
@@ -41,7 +41,7 @@
 
 | 能力 | 状态 | 当前证据 |
 |---|---|---|
-| 多上级注册 | UDP 完成（自动化）；TCP 待实现 | UDP Digest/qop、续注册、注销、退避、热更新、实际 Expires；2022 301/302 注册重定向、Contact/ServerID/UDP 传输校验、重定向目标 Digest 及后续心跳/入向身份绑定；作为服务端可接收 SIP/TCP，但 `SIPUpstream` 主动注册、心跳和级联请求仍固定使用 UDP；`cascade_test.go` |
+| 多上级注册 | 完成（自动化） | `SIPUpstream.transport` 支持 UDP/TCP 且空值默认 UDP；TCP 持久连接覆盖 REGISTER→401 Digest→认证 REGISTER→Keepalive、断线重连事务换连接和入向身份绑定；Digest/qop、续注册、注销、退避、热更新、实际 Expires；2022 301/302 支持 UDP/TCP 重定向并校验 Contact/ServerID/传输；`cascade_test.go`、`server_tcp_test.go` |
 | 查询与目录 | 完成（自动化） | 平台与共享通道 DeviceInfo/DeviceStatus、共享通道 RecordInfo 下级查询及响应编码映射；可信 NVR 可代表其已知子通道返回 DeviceInfo，通道元数据单独落库且不会覆盖父设备，非法跨设备编码仍拒绝；按上级版本安全转发 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 CruiseTrackListQuery/CruiseTrackQuery/PTZPosition/SDCardStatus；巡航轨迹编号、列表、预置位、停留时间和速度结构化解析；上下级 SN 独立、响应恢复上级 SN，DeviceID/ParentID 映射且未知下级编码不透传，多上级并发响应隔离；Catalog 支持平台根或单个共享通道目标、共享白名单、20 条查询分包和版本化 Info；录像列表 20 条分包且不泄露下级编码；`cascade_query_test.go`、`device_info_channel_test.go` |
 | 设备控制 | 完成（共享通道安全子集） | PTZ、录像控制及版本匹配的 IFrame/DragZoom/HomePosition/精准 PTZ 转发下级并映射业务响应；校验 PTZ 校验和、上下级版本与设备能力关闭项；重启、布撤防、报警复位、格式化等设备级操作不允许经仅共享通道越权执行；`cascade_control_test.go` |
 | 订阅通知 | 完成（自动化） | 1.1+ Catalog 初始通知仅发送离线/异常目录并携带 `Status=OK`，默认 Expires 600 秒；1.0、Alarm、MobilePosition、PTZPosition 不误发初始 Catalog；2011 Catalog 变化通知使用 `Response` 根，2014+ 使用 `Notify` 根；平台根和单个共享通道订阅分别维护可见目录快照，只发送 ADD/DEL/ON/OFF/UPDATE 增量，单包 `SumNum` 与 `DeviceList Num` 一致；同一订阅的增量计算、分包发送和快照提交串行执行，失败不提交快照且重试补发；刷新保留原对话与 NOTIFY CSeq，未重复携带 X-GB-Ver 时复用注册协商版本；空消息体 terminated NOTIFY 返回 200、清理出向对话，并在仍有级联引用时自动重订；上级 Catalog 订阅自动映射到承载共享通道的下级 NVR，目录快照变化后重新计算来源并为新增或迁移通道补订阅；Catalog/Alarm/MobilePosition/PTZPosition 下级订阅支持续订、退订、过期/上级移除清理和多上级引用计数，续订与过期清理串行收敛；Alarm 完整支持 Start/EndAlarmPriority、AlarmMethod、AlarmType、Start/EndAlarmTime 过滤，兼容 2011 示例的 StartTime/EndTime 别名；事件通知按平台级、指定共享通道和过滤条件二次筛选并映射编码；2.0 起支持 AlarmType，3.0 支持 PTZ 精准位置变化订阅/通知且 1.0/1.1/2.0 明确拒绝；非标准级联订阅明确拒绝；`cascade_subscribe_test.go`、`cascade_query_test.go`、`subscribe_11_test.go` |

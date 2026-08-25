@@ -7,7 +7,7 @@
 - 1.0：代码与模拟器核心流程已完成，尚未完成真实设备矩阵验收；
 - 1.1：Catalog 扩展、BasicParam、MediaStatus、多响应、目录订阅、接收者主动 INVITE 广播和附录 O 直接 TCP 文件下载已完成自动化/模拟器验证；
 - 2.0/3.0：相关包回归通过，广播使用 `PCMA/8000`，对讲具备 RTP 双向媒体闭环；RTP over TCP 与 2022 能力门禁未被 1.0/1.1 打开或降级；
-- 上下级平台级联：基于 UDP 的多上级注册、核心及版本化扩展查询、目录、订阅通知、直播、回放、下载和语音广播/对讲已完成自动化验证；2022 附录 H 指定路径已覆盖实时、回放和下载；主动向上级注册的 TCP 信令尚未实现，仍需四版本真实上级平台互通；
+- 上下级平台级联：基于 UDP/TCP 的多上级注册、核心及版本化扩展查询、目录、订阅通知、直播、回放、下载和语音广播/对讲已完成自动化验证；TCP 持久连接覆盖 Digest 注册、心跳、重连事务换连接及 301/302 传输切换；2022 附录 H 指定路径已覆盖实时、回放和下载；仍需四版本真实上级平台互通；
 - 全仓 test/vet/race 已通过；对外状态仍不得标记为“生产完整支持”，真实设备矩阵和目标环境灰度/回滚仍是阶段门。
 
 ## 2. 已执行验证
@@ -47,6 +47,7 @@ go test ./... -count=1
 - 注册、目录、媒体会话、异常断流和直接 TCP 下载灰度计数器。
 - LALMAX `code/msg` 与 `error_code/desp` 响应兼容；`stat/group` 映射媒体存在性、音视频轨道、码率及累计字节；直播、回放和语音接收结束后通过 `stop_rtp_pub` 幂等释放 RTP 接收会话；
 - 四版本级联 REGISTER、Catalog、UDP/TCP、下载倍速、订阅能力矩阵；
+- 上级级联信令可配置 UDP/TCP；TCP 同一连接完成 REGISTER Digest 与 Keepalive，断线后同一 Call-ID 事务切换新连接，301/302 可切换到 TCP 目标；
 - 2022 上级 REGISTER 301/302 重定向，校验 Contact 的 ServerID、SIPS/transport，重定向后重新 Digest 注册，后续心跳、通知、媒体请求和入向身份校验绑定新地址；
 - 共享通道 DeviceInfo、DeviceStatus 和 RecordInfo 查询，录像响应分包并映射为上级可见编码；NVR 代表已知子通道返回 DeviceInfo 时只更新子通道元数据；
 - 共享通道 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 PTZPosition/SDCardStatus 查询转发；上下级 SN 转换、DeviceID/ParentID 安全映射、未知编码拒绝、下级失败业务应答及多上级响应隔离；

@@ -45,6 +45,58 @@ func TestProcessTCPConnFramesCaseInsensitiveAndCompactContentLength(t *testing.T
 	}
 }
 
+func TestServerUpdatesExistingTransactionToReconnectedTCPConnection(t *testing.T) {
+	localURI, err := ParseSipURI("sip:34020000002000000001@127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &localURI, Params: NewParams()})
+	defer server.Close()
+	callID := CallID("tcp-reconnect")
+
+	newConnection := func(localPort int) (Connection, net.Conn) {
+		client, peer := net.Pipe()
+		wrapped := &sipTestTCPConn{
+			Conn:   client,
+			local:  &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: localPort},
+			remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060},
+		}
+		return NewTCPConnection(wrapped), peer
+	}
+	first, firstPeer := newConnection(41000)
+	defer first.Close()
+	defer firstPeer.Close()
+	second, secondPeer := newConnection(41001)
+	defer second.Close()
+	defer secondPeer.Close()
+
+	request := NewRequest("", MethodRegister, &localURI, DefaultSipVersion,
+		[]Header{&callID}, nil)
+	request.SetConnection(first)
+	transaction := server.mustTX(request)
+	if transaction.connection() != first {
+		t.Fatal("initial TCP transaction did not retain its connection")
+	}
+
+	reconnected := request.Clone().(*Request)
+	reconnected.SetConnection(second)
+	if got := server.mustTX(reconnected); got != transaction {
+		t.Fatal("same Call-ID did not reuse transaction")
+	}
+	if transaction.connection() != second {
+		t.Fatal("reconnected TCP transaction kept stale connection")
+	}
+}
+
+type sipTestTCPConn struct {
+	net.Conn
+	local  net.Addr
+	remote net.Addr
+}
+
+func (c *sipTestTCPConn) LocalAddr() net.Addr  { return c.local }
+func (c *sipTestTCPConn) RemoteAddr() net.Addr { return c.remote }
+
 func tcpTestRequest(callID string, cseq int, lengthHeader, body string) string {
 	return fmt.Sprintf("MESSAGE sip:34020000002000000001@127.0.0.1 SIP/2.0\r\n"+
 		"Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-%s\r\n"+

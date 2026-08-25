@@ -796,6 +796,9 @@ definitions:
       port:
         example: 5060
         type: integer
+      transport:
+        example: udp
+        type: string
       server_id:
         example: "34020000002000000001"
         type: string

@@ -55,11 +55,11 @@ func TestUpdateSIPInputDecodesSnakeCaseLogConfiguration(t *testing.T) {
 
 func TestUpdateSIPInputAcceptsReadableDurationStrings(t *testing.T) {
 	var input updateSIPInput
-	body := []byte(`{"upstreams":[{"name":"upstream","enabled":true,"server_id":"34020000002000000001","host":"192.0.2.30","keepalive_interval":"60s"}],"direct_tcp_download":{"dial_timeout":"5s"}}`)
+	body := []byte(`{"upstreams":[{"name":"upstream","enabled":true,"server_id":"34020000002000000001","host":"192.0.2.30","transport":"tcp","keepalive_interval":"60s"}],"direct_tcp_download":{"dial_timeout":"5s"}}`)
 	if err := json.Unmarshal(body, &input); err != nil {
 		t.Fatal(err)
 	}
-	if input.Upstreams == nil || len(*input.Upstreams) != 1 || (*input.Upstreams)[0].KeepaliveInterval != conf.Duration(time.Minute) || input.DirectTCPDownload.DialTimeout != conf.Duration(5*time.Second) {
+	if input.Upstreams == nil || len(*input.Upstreams) != 1 || (*input.Upstreams)[0].Transport != "tcp" || (*input.Upstreams)[0].KeepaliveInterval != conf.Duration(time.Minute) || input.DirectTCPDownload.DialTimeout != conf.Duration(5*time.Second) {
 		t.Fatalf("decoded readable durations = upstreams %+v direct %+v", input.Upstreams, input.DirectTCPDownload)
 	}
 }

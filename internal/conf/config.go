@@ -129,7 +129,6 @@ type SIP struct {
 }
 
 // SIPUpstream 描述一个上级 GB/T 28181 平台的注册参数。
-// 第一阶段复用本地 SIP UDP 监听套接字发送注册和心跳；媒体级联由独立会话层处理。
 type SIPUpstream struct {
 	Name              string            `json:"name" comment:"上级平台配置名称，必须唯一"`
 	Enabled           bool              `json:"enabled" comment:"是否启用级联注册"`
@@ -137,6 +136,7 @@ type SIPUpstream struct {
 	Domain            string            `json:"domain" comment:"上级平台 SIP 域；为空时取 server_id 前 10 位"`
 	Host              string            `json:"host" comment:"上级平台 SIP 地址"`
 	Port              int               `json:"port" comment:"上级平台 SIP 端口"`
+	Transport         string            `json:"transport,omitempty" comment:"上级平台 SIP 信令传输：udp/tcp；空值默认 udp"`
 	LocalID           string            `json:"local_id" comment:"向上级注册使用的本平台国标编码；为空时使用 Sip.ID"`
 	LocalDomain       string            `json:"local_domain" comment:"向上级注册使用的本平台 SIP 域；为空时使用 Sip.Domain 或 local_id 前 10 位"`
 	LocalHost         string            `json:"local_host" comment:"Contact 宣告地址；为空时使用 Sip.Host"`

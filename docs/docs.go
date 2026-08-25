@@ -4639,6 +4639,10 @@ const docTemplate = `{
                     "type": "integer",
                     "example": 5060
                 },
+                "transport": {
+                    "type": "string",
+                    "example": "udp"
+                },
                 "server_id": {
                     "type": "string",
                     "example": "34020000002000000001"
