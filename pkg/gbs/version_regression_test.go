@@ -257,6 +257,59 @@ func TestGenericQueryResponseRejectsInvalidEnvelopeVersionAndTarget(t *testing.T
 	}
 }
 
+func TestDeviceStatusResponseValidatesRequiredFieldsBeforeStateAndRuntime(t *testing.T) {
+	api, memory := newVersionGateAPI(GBVersion10)
+	initialOnline := memory.device.runtimeSnapshot().IsOnline
+	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}
+	api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "DeviceStatus", 81), pending)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing result", body: `<Response><CmdType>DeviceStatus</CmdType><SN>81</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Online>ONLINE</Online><Status>OK</Status></Response>`},
+		{name: "invalid result", body: `<Response><CmdType>DeviceStatus</CmdType><SN>81</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>SUCCESS</Result><Online>ONLINE</Online><Status>OK</Status></Response>`},
+		{name: "invalid online", body: `<Response><CmdType>DeviceStatus</CmdType><SN>81</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><Online>ON</Online><Status>OK</Status></Response>`},
+		{name: "invalid status", body: `<Response><CmdType>DeviceStatus</CmdType><SN>81</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><Online>ONLINE</Online><Status>ON</Status></Response>`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "device-status-invalid-"+test.name, []byte(test.body), api.sipMessageQueryGeneric)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("invalid DeviceStatus response = %s", response)
+			}
+		})
+	}
+	select {
+	case output := <-pending.wait:
+		t.Fatalf("invalid DeviceStatus resolved pending query: %+v", output)
+	default:
+	}
+	if state, ok := api.GetQueryState(gb10DeviceID); ok && state.DeviceStatus != nil {
+		t.Fatalf("invalid DeviceStatus changed state: %+v", state.DeviceStatus)
+	}
+	if memory.device.runtimeSnapshot().IsOnline != initialOnline {
+		t.Fatal("invalid DeviceStatus changed device runtime")
+	}
+}
+
+func TestDeviceStatusFailureAndChildResponseDoNotChangeParentRuntime(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion10)
+	memory.runtime.UpdateRuntime(func(device *Device) { device.IsOnline = false })
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	for _, body := range []string{
+		`<Response><CmdType>DeviceStatus</CmdType><SN>82</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>ERROR</Result><Online>ONLINE</Online><Status>OK</Status></Response>`,
+		`<Response><CmdType>DeviceStatus</CmdType><SN>83</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>OK</Result><Online>ONLINE</Online><Status>OK</Status></Response>`,
+	} {
+		response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "device-status-no-parent-update", []byte(body), api.sipMessageQueryGeneric)
+		assertFlowOK(t, response)
+	}
+	if memory.runtime.runtimeSnapshot().IsOnline {
+		t.Fatal("failed/child DeviceStatus changed parent runtime")
+	}
+}
+
 func TestGB30VideoUploadNotifyStoresStructuredState(t *testing.T) {
 	api, memory := newVersionGateAPI(GBVersion30)
 	body := []byte(`<Notify><CmdType>VideoUploadNotify</CmdType><SN>108</SN><DeviceID>` + gb10DeviceID +

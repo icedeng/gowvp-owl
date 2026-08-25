@@ -76,6 +76,8 @@ type genericDeviceQueryResponse struct {
 	SN       int    `xml:"SN"`
 	DeviceID string `xml:"DeviceID"`
 	Result   string `xml:"Result"`
+	Online   string `xml:"Online"`
+	Status   string `xml:"Status"`
 }
 
 type genericDeviceQueryRequest struct {
@@ -604,6 +606,13 @@ func (g *GB28181API) validateGenericDeviceQueryResponse(ctx *sip.Context, msg ge
 	if !version.AtLeast(minimum) {
 		return fmt.Errorf("%s requires %s or later", msg.CmdType, minimum.StandardName())
 	}
+	if msg.CmdType == "DeviceStatus" {
+		if !isGBResultValue(msg.Result) ||
+			!equalFoldAny(strings.TrimSpace(msg.Online), "ONLINE", "OFFLINE") ||
+			!isGBResultValue(msg.Status) {
+			return fmt.Errorf("DeviceStatus requires valid Result, Online and Status")
+		}
+	}
 	if msg.DeviceID == strings.TrimSpace(ctx.DeviceID) {
 		return nil
 	}
@@ -614,6 +623,19 @@ func (g *GB28181API) validateGenericDeviceQueryResponse(ctx *sip.Context, msg ge
 		return fmt.Errorf("query response target mismatch")
 	}
 	return nil
+}
+
+func isGBResultValue(value string) bool {
+	return equalFoldAny(strings.TrimSpace(value), "OK", "ERROR")
+}
+
+func equalFoldAny(value string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if strings.EqualFold(value, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func genericQueryResponseMinimumVersion(cmdType string) (GBProtocolVersion, bool) {

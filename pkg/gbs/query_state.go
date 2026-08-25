@@ -414,7 +414,9 @@ func (g *GB28181API) decodeAndStoreQueryResult(deviceID, cmdType string, body []
 func (g *GB28181API) persistDecodedQuery(deviceID, cmdType string, result decodedDeviceQuery) {
 	if cmdType == "DeviceStatus" {
 		if status, ok := result.data.(*DeviceStatusData); ok {
-			g.applyDeviceStatus(deviceID, status)
+			if strings.EqualFold(status.Result, "OK") && status.DeviceID == strings.TrimSpace(deviceID) {
+				g.applyDeviceStatus(deviceID, status)
+			}
 		}
 	}
 	if len(result.appendixA4) > 0 {
