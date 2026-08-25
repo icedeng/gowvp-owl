@@ -86,6 +86,32 @@ func TestSnapshotFinishedRequires2022(t *testing.T) {
 	}
 }
 
+func TestSnapshotFinishedRejectsSchemaViolations(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	sessionID := "snapshot-session-0000000000000099"
+	fileID := gb10DeviceID + "022026082508150000001"
+	tests := []struct {
+		name    string
+		sn      string
+		cmdType string
+		files   string
+	}{
+		{name: "non-positive SN", sn: "0", cmdType: "UploadSnapShotFinished"},
+		{name: "wrong command", sn: "1", cmdType: "Catalog"},
+		{name: "too many files", sn: "1", cmdType: "UploadSnapShotFinished", files: strings.Repeat("<SnapShotFileID>"+fileID+"</SnapShotFileID>", 11)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(`<Notify><CmdType>` + test.cmdType + `</CmdType><SN>` + test.sn + `</SN><DeviceID>` + gb10DeviceID +
+				`</DeviceID><SessionID>` + sessionID + `</SessionID><SnapShotList>` + test.files + `</SnapShotList></Notify>`)
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "snapshot-schema-"+test.name, body, api.sipMessageSnapshotFinished)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("schema-invalid snapshot response = %s", response)
+			}
+		})
+	}
+}
+
 func TestSnapshotFinishedRejectsSiblingChannelSession(t *testing.T) {
 	memory := newFlowMemory(gb10DeviceID)
 	memory.runtime.setGBVersion(GBVersion30)

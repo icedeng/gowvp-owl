@@ -281,8 +281,11 @@ func (g *GB28181API) sipMessageDeviceUpgradeResult(ctx *sip.Context) {
 	}
 	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
 	msg.SessionID = strings.TrimSpace(msg.SessionID)
-	msg.Result = strings.TrimSpace(msg.Result)
-	if msg.DeviceID == "" || msg.Result == "" || validateGBSessionID(msg.SessionID) != nil {
+	msg.Result = strings.ToUpper(strings.TrimSpace(msg.Result))
+	msg.Firmware = strings.TrimSpace(msg.Firmware)
+	msg.FailedReason = strings.TrimSpace(msg.FailedReason)
+	if msg.SN <= 0 || !strings.EqualFold(strings.TrimSpace(msg.CmdType), "DeviceUpgradeResult") || msg.DeviceID == "" || validateGBSessionID(msg.SessionID) != nil || msg.Firmware == "" ||
+		(msg.Result != "OK" && msg.Result != "ERROR") || msg.Result == "ERROR" && !validUpgradeFailedReason(msg.FailedReason) {
 		ctx.String(400, "invalid DeviceUpgradeResult notification")
 		return
 	}
@@ -302,8 +305,8 @@ func (g *GB28181API) sipMessageDeviceUpgradeResult(ctx *sip.Context) {
 	}
 	state.SN = msg.SN
 	state.Result = msg.Result
-	state.Firmware = strings.TrimSpace(msg.Firmware)
-	state.FailedReason = strings.TrimSpace(msg.FailedReason)
+	state.Firmware = msg.Firmware
+	state.FailedReason = msg.FailedReason
 	state.UpdatedAt = time.Now()
 	if strings.EqualFold(msg.Result, "OK") {
 		state.Status = "completed"
@@ -312,4 +315,13 @@ func (g *GB28181API) sipMessageDeviceUpgradeResult(ctx *sip.Context) {
 	}
 	g.storeUpgradeState(state)
 	ctx.String(200, "OK")
+}
+
+func validUpgradeFailedReason(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "01", "02", "03", "99":
+		return true
+	default:
+		return false
+	}
 }

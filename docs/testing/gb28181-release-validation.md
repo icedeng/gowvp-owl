@@ -62,6 +62,7 @@ go test ./... -count=1
 - 3.0 附录 H `X-PreferredPath` 首跳消费/剩余路径转发和 `X-RoutePath` 响应前置；平台编码、重复路径、错误首跳、下级确认不匹配及路由环拒绝；不同指定路径的实时、回放和下载媒体源隔离及正确释放；
 - 3.0 ConfigDownload 使用标准 `SnapShotConfig`，响应解析兼容厂商旧节点 `SnapShot`；
 - 3.0 `DeviceUpgradeResult` 与 `UploadSnapShotFinished` 最终通知同时校验已鉴权设备、`SessionID` 和原目标通道，同一 NVR 的兄弟通道不能覆盖会话终态；
+- 2.0/3.0 HomePosition 及 3.0 PTZPreciseCtrl 按标准边界拒绝无效参数；3.0 升级结果校验正 SN、结果枚举、固件和失败原因，抓拍完成通知校验正 SN、命令类型及最多 10 个文件标识；
 - A.4 ExtraInfo JSON 的整数、零值、数组和 20 位数值型编码保持原始精度；未知数值型对象编码同样拒绝转发；
 - 共享通道 PTZ、录像和版本化通道控制转发；设备级高影响控制不因共享单个通道而被级联放大；
 - 四版本历史级联 `INVITE→ACK→INFO→BYE` 完整对话、媒体启动/释放和 MANSRTSP/RTSP 转换；

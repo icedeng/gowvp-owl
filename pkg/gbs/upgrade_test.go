@@ -82,6 +82,32 @@ func TestDeviceUpgradeResultRequires2022AndValidSession(t *testing.T) {
 	}
 }
 
+func TestDeviceUpgradeResultRejectsSchemaViolations(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	sessionID := "upgrade-session-0000000000000099"
+	tests := []struct {
+		name string
+		sn   string
+		body string
+	}{
+		{name: "non-positive SN", sn: "0", body: `<UpgradeResult>OK</UpgradeResult><Firmware>V1</Firmware>`},
+		{name: "invalid result", sn: "1", body: `<UpgradeResult>MAYBE</UpgradeResult><Firmware>V1</Firmware>`},
+		{name: "missing firmware", sn: "1", body: `<UpgradeResult>OK</UpgradeResult>`},
+		{name: "missing failure reason", sn: "1", body: `<UpgradeResult>ERROR</UpgradeResult><Firmware>V1</Firmware>`},
+		{name: "invalid failure reason", sn: "1", body: `<UpgradeResult>ERROR</UpgradeResult><Firmware>V1</Firmware><UpgradeFailedReason>04</UpgradeFailedReason>`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(`<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>` + test.sn + `</SN><DeviceID>` + gb10DeviceID +
+				`</DeviceID><SessionID>` + sessionID + `</SessionID>` + test.body + `</Notify>`)
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "upgrade-schema-"+test.name, body, api.sipMessageDeviceUpgradeResult)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("schema-invalid upgrade result response = %s", response)
+			}
+		})
+	}
+}
+
 func TestDeviceUpgradeResultRejectsSiblingChannelSession(t *testing.T) {
 	memory := newFlowMemory(gb10DeviceID)
 	memory.runtime.setGBVersion(GBVersion30)

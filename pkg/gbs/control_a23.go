@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -400,6 +401,9 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		if in.HomePosition != nil && in.HomePosition.Enabled != nil {
 			enabled = *in.HomePosition.Enabled
 		}
+		if enabled != 0 && enabled != 1 {
+			return fmt.Errorf("home_position enabled must be 0 or 1")
+		}
 		home.Enabled = &enabled
 		if in.HomePosition != nil && in.HomePosition.ResetTime != nil {
 			v := *in.HomePosition.ResetTime
@@ -407,6 +411,9 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		}
 		if in.HomePosition != nil && in.HomePosition.PresetIndex != nil {
 			v := *in.HomePosition.PresetIndex
+			if v < 0 || v > 255 {
+				return fmt.Errorf("home_position preset_index must be in [0,255]")
+			}
 			home.PresetIndex = &v
 		}
 		req.HomePosition = home
@@ -421,6 +428,15 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		}
 		if in.PTZPrecise.Pan == nil && in.PTZPrecise.Tilt == nil && in.PTZPrecise.Zoom == nil {
 			return fmt.Errorf("ptz_precise requires at least one of pan/tilt/zoom")
+		}
+		if in.PTZPrecise.Pan != nil && (!validFiniteRange(*in.PTZPrecise.Pan, 0, 360)) {
+			return fmt.Errorf("ptz_precise pan must be in [0,360]")
+		}
+		if in.PTZPrecise.Tilt != nil && !validFinite(*in.PTZPrecise.Tilt) {
+			return fmt.Errorf("ptz_precise tilt must be finite")
+		}
+		if in.PTZPrecise.Zoom != nil && !validFinite(*in.PTZPrecise.Zoom) {
+			return fmt.Errorf("ptz_precise zoom must be finite")
 		}
 		req.PTZPreciseCtrl = &deviceControlA23PTZPrecise{
 			Pan:  in.PTZPrecise.Pan,
@@ -480,4 +496,12 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		return fmt.Errorf("unsupported device control action: %s", action)
 	}
 	return nil
+}
+
+func validFiniteRange(value, minimum, maximum float64) bool {
+	return validFinite(value) && value >= minimum && value <= maximum
+}
+
+func validFinite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }

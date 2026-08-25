@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,48 @@ import (
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
+
+func float64Pointer(value float64) *float64 { return &value }
+func intPointer(value int) *int             { return &value }
+
+func TestDeviceControlStandardParameterRanges(t *testing.T) {
+	api, memory := newVersionGateAPI(GBVersion20)
+	for _, input := range []*DeviceControlInput{
+		{HomePosition: &HomePositionParam{Enabled: intPointer(-1)}},
+		{HomePosition: &HomePositionParam{Enabled: intPointer(2)}},
+		{HomePosition: &HomePositionParam{Enabled: intPointer(1), PresetIndex: intPointer(-1)}},
+		{HomePosition: &HomePositionParam{Enabled: intPointer(1), PresetIndex: intPointer(256)}},
+	} {
+		if err := api.fillDeviceControlRequest("device", deviceControlActionHomePosition, input, &deviceControlA23Request{}); err == nil {
+			t.Fatalf("invalid HomePosition accepted: %+v", input.HomePosition)
+		}
+	}
+	for _, preset := range []int{0, 255} {
+		input := &DeviceControlInput{HomePosition: &HomePositionParam{Enabled: intPointer(1), PresetIndex: intPointer(preset)}}
+		if err := api.fillDeviceControlRequest("device", deviceControlActionHomePosition, input, &deviceControlA23Request{}); err != nil {
+			t.Fatalf("valid HomePosition preset %d rejected: %v", preset, err)
+		}
+	}
+
+	memory.device.setGBVersion(GBVersion30)
+	for _, input := range []*DeviceControlInput{
+		{PTZPrecise: &PTZPreciseParam{Pan: float64Pointer(-0.01)}},
+		{PTZPrecise: &PTZPreciseParam{Pan: float64Pointer(360.01)}},
+		{PTZPrecise: &PTZPreciseParam{Pan: float64Pointer(math.NaN())}},
+		{PTZPrecise: &PTZPreciseParam{Tilt: float64Pointer(math.Inf(-1))}},
+		{PTZPrecise: &PTZPreciseParam{Zoom: float64Pointer(math.Inf(1))}},
+	} {
+		if err := api.fillDeviceControlRequest("device", deviceControlActionPTZPrecise, input, &deviceControlA23Request{}); err == nil {
+			t.Fatalf("invalid PTZPrecise accepted: %+v", input.PTZPrecise)
+		}
+	}
+	valid := &DeviceControlInput{PTZPrecise: &PTZPreciseParam{
+		Pan: float64Pointer(360), Tilt: float64Pointer(-45), Zoom: float64Pointer(1),
+	}}
+	if err := api.fillDeviceControlRequest("device", deviceControlActionPTZPrecise, valid, &deviceControlA23Request{}); err != nil {
+		t.Fatalf("valid PTZPrecise boundary rejected: %v", err)
+	}
+}
 
 func TestGB20And30FeatureRegression(t *testing.T) {
 	api, memory := newVersionGateAPI(GBVersion20)

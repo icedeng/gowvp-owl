@@ -311,7 +311,8 @@ func (g *GB28181API) sipMessageSnapshotFinished(ctx *sip.Context) {
 	}
 	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
 	msg.SessionID = strings.TrimSpace(msg.SessionID)
-	if msg.DeviceID == "" || validateGBSessionID(msg.SessionID) != nil {
+	if msg.SN <= 0 || !strings.EqualFold(strings.TrimSpace(msg.CmdType), "UploadSnapShotFinished") || msg.DeviceID == "" ||
+		validateGBSessionID(msg.SessionID) != nil || len(msg.FileIDs) > 10 {
 		ctx.String(400, "invalid UploadSnapShotFinished notification")
 		return
 	}
