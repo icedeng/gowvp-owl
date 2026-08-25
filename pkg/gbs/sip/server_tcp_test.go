@@ -107,6 +107,24 @@ func TestProcessTCPConnRejectsMissingRequiredRoutingHeaders(t *testing.T) {
 	}
 }
 
+func TestParserStopClosesHandlerOutput(t *testing.T) {
+	parser := newParser()
+	handlerDone := make(chan struct{})
+	server := NewServer(&Address{})
+	defer server.Close()
+	go func() {
+		server.handlerListen(parser.out)
+		close(handlerDone)
+	}()
+
+	parser.stop()
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("SIP parser handler did not stop after parser shutdown")
+	}
+}
+
 func TestServerUpdatesExistingTransactionToReconnectedTCPConnection(t *testing.T) {
 	localURI, err := ParseSipURI("sip:34020000002000000001@127.0.0.1")
 	if err != nil {

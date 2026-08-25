@@ -366,9 +366,7 @@ func parseTCPContentLength(line []byte) (int, bool, error) {
 }
 
 func (s *Server) handlerListen(msgs chan Message) {
-	var msg Message
-	for {
-		msg = <-msgs
+	for msg := range msgs {
 		switch tmsg := msg.(type) {
 		case *Request:
 			req := tmsg

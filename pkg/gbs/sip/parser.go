@@ -588,6 +588,7 @@ func (p *parser) stop() {
 }
 
 func (p *parser) start() {
+	defer close(p.out)
 	var termErr error
 	var msg Message
 
