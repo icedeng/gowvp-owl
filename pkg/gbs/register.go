@@ -474,6 +474,15 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		_ = ctx.Tx.Respond(resp)
 		return
 	}
+	respFn := func() {
+		g.metrics.registerSuccess.Add(1)
+		resp := g.newRegisterResponse(ctx, http.StatusOK, "OK")
+		resp.AppendHeader(&sip.GenericHeader{
+			HeaderName: "Date",
+			Contents:   time.Now().Format("2006-01-02T15:04:05.000"),
+		})
+		_ = ctx.Tx.Respond(resp)
+	}
 
 	var (
 		dev      ipc.Device
@@ -487,7 +496,6 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		}
 		isNewDev = true
 	}
-
 	password := cfg.Password
 	if !isNewDev {
 		password = dev.Password
@@ -516,6 +524,12 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 			return
 		}
 	}
+	// 注销不存在的绑定应在鉴权通过后保持幂等，不能绕过鉴权或反向创建设备档案。
+	if isNewDev && expires == 0 {
+		ctx.Log.Info("忽略未知设备注销")
+		respFn()
+		return
+	}
 
 	// 鉴权通过后，未知设备才自动建档
 	if isNewDev {
@@ -535,26 +549,20 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		to:     ctx.To,
 	})
 
-	respFn := func() {
-		g.metrics.registerSuccess.Add(1)
-		resp := g.newRegisterResponse(ctx, http.StatusOK, "OK")
-		resp.AppendHeader(&sip.GenericHeader{
-			HeaderName: "Date",
-			Contents:   time.Now().Format("2006-01-02T15:04:05.000"),
-		})
-		_ = ctx.Tx.Respond(resp)
-	}
-
 	if expires == 0 {
 		ctx.Log.Info("设备注销")
-		g.logout(ctx.DeviceID, func(b *ipc.Device) error {
+		if err := g.logout(ctx.DeviceID, func(b *ipc.Device) error {
 			b.IsOnline = false
 			b.Address = ctx.Source.String()
 			if ctx.XGBVer != "" {
 				applyGBProtocolVersion(&b.Ext, ctx.XGBVer)
 			}
 			return nil
-		})
+		}); err != nil {
+			ctx.Log.Error("设备注销状态持久化失败", "err", err)
+			g.respondRegister(ctx, http.StatusInternalServerError, "server db error")
+			return
+		}
 		respFn()
 		return
 	}
@@ -569,7 +577,7 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		ctx.Log.Warn("设备声明了未知协议版本，使用保守或已配置档案")
 	}
 
-	g.login(ctx, effectiveVersion, dev.Ext.GBDisabledCapabilities, func(b *ipc.Device) error {
+	if err := g.login(ctx, effectiveVersion, dev.Ext.GBDisabledCapabilities, func(b *ipc.Device) error {
 		b.IsOnline = true
 		b.RegisteredAt = orm.Now()
 		b.KeepaliveAt = orm.Now()
@@ -578,11 +586,10 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		b.Transport = ctx.Source.Network()
 		applyGBProtocolVersion(&b.Ext, ctx.XGBVer)
 		return nil
-	})
-	if history := g.core.DeviceHistory(); history != nil {
-		if err := history.Record(context.TODO(), ctx.DeviceID, ipc.DeviceHistoryRegister, ctx.Source.String(), "online", time.Now()); err != nil {
-			ctx.Log.Error("持久化设备注册历史失败", "err", err)
-		}
+	}); err != nil {
+		ctx.Log.Error("设备注册状态持久化失败", "err", err)
+		g.respondRegister(ctx, http.StatusInternalServerError, "server db error")
+		return
 	}
 
 	// conn := ctx.Request.GetConnection()
@@ -592,6 +599,12 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	// ctx.Log.Debug("device info", "source", ctx.Source, "host", ctx.Host)
 
 	respFn()
+	// 注册历史不是 REGISTER 成功事务的一部分，避免其查询、写入和清理延迟 200 OK。
+	if history := g.core.DeviceHistory(); history != nil {
+		if err := history.Record(context.TODO(), ctx.DeviceID, ipc.DeviceHistoryRegister, ctx.Source.String(), "online", time.Now()); err != nil {
+			ctx.Log.Error("持久化设备注册历史失败", "err", err)
+		}
+	}
 
 	ctx.XGBVer = string(effectiveVersion)
 	g.QueryDeviceInfo(ctx)
@@ -625,9 +638,9 @@ func parseRegisterExpires(ctx *sip.Context) (int, error) {
 	return expires, nil
 }
 
-func (g *GB28181API) login(ctx *sip.Context, version GBProtocolVersion, disabledCapabilities []string, fn func(d *ipc.Device) error) {
+func (g *GB28181API) login(ctx *sip.Context, version GBProtocolVersion, disabledCapabilities []string, fn func(d *ipc.Device) error) error {
 	slog.Info("status change 设备上线", "device_id", ctx.DeviceID)
-	g.svr.memoryStorer.Change(ctx.DeviceID, fn, func(d *Device) {
+	return g.svr.memoryStorer.Change(ctx.DeviceID, fn, func(d *Device) {
 		d.conn = ctx.Request.GetConnection()
 		d.source = ctx.Source
 		d.to = ctx.To

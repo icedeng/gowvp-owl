@@ -1,12 +1,22 @@
 package gbs
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/glebarez/sqlite"
 	"github.com/gowvp/owl/internal/conf"
+	"github.com/gowvp/owl/internal/core/ipc"
+	"github.com/gowvp/owl/internal/core/ipc/store/ipcdb"
 	"github.com/gowvp/owl/pkg/gbs/sip"
+	"github.com/ixugo/goddd/domain/uniqueid"
+	"github.com/ixugo/goddd/pkg/orm"
+	"gorm.io/gorm"
 )
 
 func TestRegisterResponseIncludesPlatformVersion(t *testing.T) {
@@ -106,6 +116,147 @@ func TestParseRegisterExpires(t *testing.T) {
 	request.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "invalid"})
 	if _, err := parseRegisterExpires(ctx); err == nil {
 		t.Fatal("invalid expires accepted")
+	}
+}
+
+func TestRegisterStateChangeFailureReturnsServerError(t *testing.T) {
+	api, memory, connection := newRegisterHandlerTestAPI(t, true)
+	memory.changeErr = errors.New("update failed")
+	ctx := newRegisterHandlerTestContext(t, connection, "register-state-failure", 3600)
+
+	api.handlerRegister(ctx)
+
+	assertRegisterHandlerResponse(t, connection, "SIP/2.0 500 server db error")
+	metrics := api.metrics.Snapshot()
+	if metrics.RegisterSuccess != 0 || metrics.RegisterFailures != 1 {
+		t.Fatalf("REGISTER metrics = success:%d failures:%d", metrics.RegisterSuccess, metrics.RegisterFailures)
+	}
+	if memory.changeCalls != 1 {
+		t.Fatalf("state changes = %d, want 1", memory.changeCalls)
+	}
+}
+
+func TestUnregisterStateChangeFailureReturnsServerError(t *testing.T) {
+	api, memory, connection := newRegisterHandlerTestAPI(t, true)
+	memory.changeErr = errors.New("update failed")
+	ctx := newRegisterHandlerTestContext(t, connection, "unregister-state-failure", 0)
+
+	api.handlerRegister(ctx)
+
+	assertRegisterHandlerResponse(t, connection, "SIP/2.0 500 server db error")
+	metrics := api.metrics.Snapshot()
+	if metrics.RegisterSuccess != 0 || metrics.RegisterFailures != 1 {
+		t.Fatalf("unregister metrics = success:%d failures:%d", metrics.RegisterSuccess, metrics.RegisterFailures)
+	}
+	if memory.changeCalls != 1 {
+		t.Fatalf("state changes = %d, want 1", memory.changeCalls)
+	}
+}
+
+func TestUnknownDeviceUnregisterIsIdempotentWithoutCreatingDevice(t *testing.T) {
+	api, memory, connection := newRegisterHandlerTestAPI(t, false)
+	ctx := newRegisterHandlerTestContext(t, connection, "unknown-unregister", 0)
+
+	api.handlerRegister(ctx)
+
+	assertRegisterHandlerResponse(t, connection, "SIP/2.0 200 OK")
+	if memory.loadOrStoreCalls != 0 || memory.changeCalls != 0 {
+		t.Fatalf("unknown unregister mutated memory: load_or_store=%d change=%d", memory.loadOrStoreCalls, memory.changeCalls)
+	}
+	var device ipc.Device
+	err := api.core.Store().Device().Get(context.Background(), &device, orm.Where("device_id = ?", gb10DeviceID))
+	if !orm.IsErrRecordNotFound(err) {
+		t.Fatalf("unknown unregister database lookup = %v, device = %+v", err, device)
+	}
+	metrics := api.metrics.Snapshot()
+	if metrics.RegisterSuccess != 1 || metrics.RegisterFailures != 0 {
+		t.Fatalf("unknown unregister metrics = success:%d failures:%d", metrics.RegisterSuccess, metrics.RegisterFailures)
+	}
+}
+
+func TestUnknownDeviceUnregisterDoesNotBypassAuthentication(t *testing.T) {
+	api, memory, connection := newRegisterHandlerTestAPI(t, false)
+	api.cfg.Password = "secret"
+	ctx := newRegisterHandlerTestContext(t, connection, "unknown-unregister-auth", 0)
+
+	api.handlerRegister(ctx)
+
+	assertRegisterHandlerResponse(t, connection, "SIP/2.0 401 Unauthorized")
+	if memory.loadOrStoreCalls != 0 || memory.changeCalls != 0 {
+		t.Fatalf("unauthenticated unregister mutated memory: load_or_store=%d change=%d", memory.loadOrStoreCalls, memory.changeCalls)
+	}
+	metrics := api.metrics.Snapshot()
+	if metrics.RegisterSuccess != 0 || metrics.RegisterFailures != 0 {
+		t.Fatalf("unauthenticated unregister metrics = success:%d failures:%d", metrics.RegisterSuccess, metrics.RegisterFailures)
+	}
+}
+
+type registerHandlerTestMemory struct {
+	*flowMemory
+	changeErr        error
+	loadOrStoreCalls int
+	changeCalls      int
+}
+
+func (m *registerHandlerTestMemory) LoadOrStore(deviceID string, device *Device) {
+	m.loadOrStoreCalls++
+	m.flowMemory.LoadOrStore(deviceID, device)
+}
+
+func (m *registerHandlerTestMemory) Change(deviceID string, persistent func(*ipc.Device) error, runtime func(*Device)) error {
+	m.changeCalls++
+	if m.changeErr != nil {
+		return m.changeErr
+	}
+	return m.flowMemory.Change(deviceID, persistent, runtime)
+}
+
+func newRegisterHandlerTestAPI(t *testing.T, createDevice bool) (*GB28181API, *registerHandlerTestMemory, *flowConnection) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := ipcdb.NewDB(db).AutoMigrate(true)
+	if createDevice {
+		device := &ipc.Device{
+			ID: "GB_register_device", DeviceID: gb10DeviceID, Type: ipc.TypeGB28181,
+			IsOnline: true, RegisteredAt: orm.Now(), KeepaliveAt: orm.Now(),
+		}
+		if err := db.Create(device).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	connection := newFlowConnection()
+	memory := &registerHandlerTestMemory{flowMemory: newFlowMemory(gb10DeviceID)}
+	api := &GB28181API{
+		cfg:  &conf.SIP{ID: gb10PlatformID, Domain: "3402000000"},
+		core: ipc.NewAdapter(store, uniqueid.Core{}),
+	}
+	api.svr = &Server{memoryStorer: memory}
+	return api, memory, connection
+}
+
+func newRegisterHandlerTestContext(t *testing.T, connection *flowConnection, callID string, expires int) *sip.Context {
+	t.Helper()
+	request := newFlowRequest(t, connection, sip.MethodRegister, callID, nil)
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: fmt.Sprint(expires)})
+	return &sip.Context{
+		Request: request, Tx: sip.NewTransaction(callID, connection), DeviceID: gb10DeviceID,
+		Source: connection.remote, To: mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000"),
+		XGBVer: string(GBVersion10), XGBVerRaw: string(GBVersion10), Log: slog.Default(),
+	}
+}
+
+func assertRegisterHandlerResponse(t *testing.T, connection *flowConnection, expected string) {
+	t.Helper()
+	select {
+	case payload := <-connection.writes:
+		if !strings.Contains(string(payload), expected) {
+			t.Fatalf("REGISTER response = %s, want %q", payload, expected)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("REGISTER response timeout, want %q", expected)
 	}
 }
 
