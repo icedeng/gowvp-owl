@@ -23,7 +23,7 @@
 | AI-202 1.0 SDP | 完成 | 统一 SDP Builder；直播/回放/下载 golden；Subject、u/t/y/f 测试 |
 | AI-203 1.0 核心流程 | 完成（设备接入模拟器） | REGISTER→Keepalive→Catalog、RecordInfo、Alarm 流程测试；平台主动点播的 1.0 UDP SDP 由 golden 测试覆盖；SIP/TCP 支持大小写不敏感 `Content-Length`、紧凑头 `l` 及同连接连续报文分帧；ACK/BYE 从响应建立的路由集按 RFC 3261 反转 `Record-Route` 且不修改原响应 CSeq。已注册上级的入向 INVITE 进入级联 B2BUA，其他未知入向 INVITE 明确返回 501；`server_tcp_test.go`、`panic_fix_test.go` |
 | AI-301 Catalog 扩展 | 完成 | 目录树五类节点、2014 字段、厂商 XML 保留；`catalog_extension_test.go` |
-| AI-302 配置读写 | 完成 | ConfigDownload、BasicParam 写入、原始 XML、Web/Core/Adapter API；`config_11_test.go` |
+| AI-302 配置读写 | 完成 | ConfigDownload 支持 BasicParam、VideoParamOpt/Config、AudioParamOpt/Config、SVACEncode/DecodeConfig 多响应聚合；DeviceConfig 写入支持 BasicParam、结构化 VideoParamConfig/AudioParamConfig 及经过 XML 完整性/指令校验的 SVACEncodeConfig/SVACDecodeConfig，可组合下发并保留 BasicParam 兼容 API；Web/Core/Adapter/Swagger 已贯通；`config_11_test.go`、`gb_config_test.go`、`ipc_gb_config_test.go` |
 | AI-303 MediaStatus | 完成 | Call-ID 关联、121、未知/重复幂等；`media_status_test.go`；并纳入 1.1 串联模拟流程 |
 | AI-304 多响应 | 完成 | 乱序、重复、总数冲突、超时部分结果、同设备并发；`multi_response_test.go` |
 | AI-305 目录/事件订阅 | 完成（自动化） | Catalog 初始、续订、取消、Event id、部分目录目标及真实 ADD/DEL/ON/OFF/UPDATE 增量；2011 Catalog 通知使用 `Response` 根，2014+ 使用 `Notify` 根；空消息体 terminated NOTIFY 正确确认、清理并在仍被上级引用时重订；Alarm 查询过滤参数、MobilePosition Interval、PTZPosition 版本门禁；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅自动桥接下级并按引用计数复用及释放，目录快照变化后重新计算 Catalog 下级来源；`subscribe_11_test.go`、`cascade_subscribe_test.go`、`cascade_query_test.go` |

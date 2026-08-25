@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"strconv"
@@ -156,6 +157,18 @@ type BasicParamConfigInput struct {
 	Param    BasicParam
 }
 
+// DeviceConfigInput 是 2014 修改补充文件定义的统一设备配置写入请求。
+type DeviceConfigInput struct {
+	DeviceID         string
+	TargetID         string
+	Timeout          time.Duration
+	BasicParam       *BasicParam
+	VideoParamConfig *VideoParamConfigWrite
+	AudioParamConfig *AudioParamConfigWrite
+	SVACEncodeConfig *SVACEncodeConfig
+	SVACDecodeConfig *SVACDecodeConfig
+}
+
 type pendingDeviceConfig struct {
 	wait chan *DeviceConfigResponse
 }
@@ -223,19 +236,27 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 	ctx.String(200, "OK")
 }
 
-// SetBasicParam 下发 BasicParam 配置并等待设备的业务应答。
+// SetBasicParam 保留原有 BasicParam API，并复用统一 DeviceConfig 写入链路。
 func (g *GB28181API) SetBasicParam(ctx context.Context, in *BasicParamConfigInput) (*DeviceConfigState, error) {
-	if in == nil || strings.TrimSpace(in.DeviceID) == "" {
+	if in == nil {
 		return nil, fmt.Errorf("invalid BasicParam config input")
 	}
+	param := in.Param
+	return g.SetDeviceConfig(ctx, &DeviceConfigInput{
+		DeviceID: in.DeviceID, TargetID: in.TargetID, Timeout: in.Timeout, BasicParam: &param,
+	})
+}
+
+// SetDeviceConfig 下发 2014 DeviceConfig 并等待设备的业务应答。
+func (g *GB28181API) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput) (*DeviceConfigState, error) {
+	if in == nil || strings.TrimSpace(in.DeviceID) == "" {
+		return nil, fmt.Errorf("invalid DeviceConfig input")
+	}
 	deviceID := strings.TrimSpace(in.DeviceID)
-	if err := g.requireGBFeature(deviceID, "config_write", "基础参数配置(BasicParam)", func(c GBCapabilities) bool {
+	if err := g.requireGBFeature(deviceID, "config_write", "设备配置(DeviceConfig)", func(c GBCapabilities) bool {
 		return c.ConfigWrite
 	}); err != nil {
 		return nil, err
-	}
-	if in.Param.Expiration <= 0 || in.Param.HeartBeatInterval <= 0 || in.Param.HeartBeatCount <= 0 {
-		return nil, fmt.Errorf("BasicParam expiration, heartbeat interval and count must be positive")
 	}
 	device, ok := g.svr.memoryStorer.Load(deviceID)
 	if !ok || !device.IsOnline {
@@ -253,7 +274,7 @@ func (g *GB28181API) SetBasicParam(ctx context.Context, in *BasicParamConfigInpu
 		}
 		target = channel
 	}
-	param, err := g.completeBasicParam(targetID, device, in.Param)
+	request, err := g.buildDeviceConfigRequest(targetID, device, in)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +284,8 @@ func (g *GB28181API) SetBasicParam(ctx context.Context, in *BasicParamConfigInpu
 	}
 
 	sn := int32(g.nextControlSN())
-	body, err := sip.XMLEncode(NewDeviceConfig(targetID).SetSN(sn).SetBasicParam(&param))
+	request.SetSN(sn)
+	body, err := sip.XMLEncode(request)
 	if err != nil {
 		return nil, err
 	}
@@ -293,13 +315,117 @@ func (g *GB28181API) SetBasicParam(ctx context.Context, in *BasicParamConfigInpu
 			RawXML:   response.RawXML,
 		}
 		if state.Result != "" && !strings.EqualFold(state.Result, "OK") {
-			return state, fmt.Errorf("BasicParam config failed: %s", state.Result)
+			return state, fmt.Errorf("DeviceConfig failed: %s", state.Result)
 		}
 		return state, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-timer.C:
-		return nil, fmt.Errorf("wait BasicParam config response timeout")
+		return nil, fmt.Errorf("wait DeviceConfig response timeout")
+	}
+}
+
+func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, in *DeviceConfigInput) (*DeviceConfigRequest, error) {
+	request := NewDeviceConfig(targetID)
+	configured := false
+	if in.BasicParam != nil {
+		if in.BasicParam.Expiration <= 0 || in.BasicParam.HeartBeatInterval <= 0 || in.BasicParam.HeartBeatCount <= 0 {
+			return nil, fmt.Errorf("BasicParam expiration, heartbeat interval and count must be positive")
+		}
+		param, err := g.completeBasicParam(targetID, device, *in.BasicParam)
+		if err != nil {
+			return nil, err
+		}
+		request.BasicParam = &param
+		configured = true
+	}
+	if in.VideoParamConfig != nil {
+		config := *in.VideoParamConfig
+		config.Items = append([]VideoParamWriteItem(nil), in.VideoParamConfig.Items...)
+		if err := validateVideoParamConfig(&config); err != nil {
+			return nil, err
+		}
+		config.Num = len(config.Items)
+		request.VideoParamConfig = &config
+		configured = true
+	}
+	if in.AudioParamConfig != nil {
+		config := *in.AudioParamConfig
+		config.Items = append([]AudioParamWriteItem(nil), in.AudioParamConfig.Items...)
+		if err := validateAudioParamConfig(&config); err != nil {
+			return nil, err
+		}
+		config.Num = len(config.Items)
+		request.AudioParamConfig = &config
+		configured = true
+	}
+	if in.SVACEncodeConfig != nil {
+		config := *in.SVACEncodeConfig
+		if err := validateDeviceConfigXMLFragment("SVACEncodeConfig", config.InnerXML); err != nil {
+			return nil, err
+		}
+		request.SVACEncodeConfig = &config
+		configured = true
+	}
+	if in.SVACDecodeConfig != nil {
+		config := *in.SVACDecodeConfig
+		if err := validateDeviceConfigXMLFragment("SVACDecodeConfig", config.InnerXML); err != nil {
+			return nil, err
+		}
+		request.SVACDecodeConfig = &config
+		configured = true
+	}
+	if !configured {
+		return nil, fmt.Errorf("DeviceConfig requires at least one configuration section")
+	}
+	return request, nil
+}
+
+func validateVideoParamConfig(config *VideoParamConfigWrite) error {
+	if config == nil || len(config.Items) == 0 {
+		return fmt.Errorf("VideoParamConfig requires at least one item")
+	}
+	for index, item := range config.Items {
+		if strings.TrimSpace(item.StreamName) == "" || strings.TrimSpace(item.VideoFormat) == "" ||
+			strings.TrimSpace(item.Resolution) == "" || strings.TrimSpace(item.FrameRate) == "" ||
+			strings.TrimSpace(item.BitRateType) == "" || strings.TrimSpace(item.VideoBitRate) == "" {
+			return fmt.Errorf("VideoParamConfig item %d requires all standard fields", index+1)
+		}
+	}
+	return nil
+}
+
+func validateAudioParamConfig(config *AudioParamConfigWrite) error {
+	if config == nil || len(config.Items) == 0 {
+		return fmt.Errorf("AudioParamConfig requires at least one item")
+	}
+	for index, item := range config.Items {
+		if strings.TrimSpace(item.StreamName) == "" || strings.TrimSpace(item.AudioFormat) == "" ||
+			strings.TrimSpace(item.AudioBitRate) == "" || strings.TrimSpace(item.SamplingRate) == "" {
+			return fmt.Errorf("AudioParamConfig item %d requires all standard fields", index+1)
+		}
+	}
+	return nil
+}
+
+func validateDeviceConfigXMLFragment(name, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("%s inner_xml is required", name)
+	}
+	decoder := xml.NewDecoder(strings.NewReader("<DeviceConfigFragment>" + value + "</DeviceConfigFragment>"))
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("%s inner_xml is invalid: %w", name, err)
+		}
+		switch token.(type) {
+		case xml.Directive, xml.ProcInst:
+			return fmt.Errorf("%s inner_xml contains unsupported XML directive", name)
+		}
 	}
 }
 

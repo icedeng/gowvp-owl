@@ -50,6 +50,62 @@ func TestDeviceConfig11BasicParamRequest(t *testing.T) {
 	}
 }
 
+func TestDeviceConfig11VideoAudioAndSVACRequest(t *testing.T) {
+	api := &GB28181API{}
+	request, err := api.buildDeviceConfigRequest(gb10DeviceID, nil, &DeviceConfigInput{
+		VideoParamConfig: &VideoParamConfigWrite{Items: []VideoParamWriteItem{{
+			StreamName: "Stream1", VideoFormat: "H.264", Resolution: "1920x1080",
+			FrameRate: "25", BitRateType: "1", VideoBitRate: "4096",
+		}}},
+		AudioParamConfig: &AudioParamConfigWrite{Items: []AudioParamWriteItem{{
+			StreamName: "Stream1", AudioFormat: "G.711", AudioBitRate: "64", SamplingRate: "8",
+		}}},
+		SVACEncodeConfig: &SVACEncodeConfig{InnerXML: `<SVCParam><SVCFlag>1</SVCFlag><SVCSTMMode>2</SVCSTMMode></SVCParam>`},
+		SVACDecodeConfig: &SVACDecodeConfig{InnerXML: `<SVCParam><SVCSTMMode>1</SVCSTMMode></SVCParam>`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SetSN(32)
+	body, err := sip.XMLEncode(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, required := range []string{
+		`<VideoParamConfig Num="1">`, "<StreamName>Stream1</StreamName>", "<VideoFormat>H.264</VideoFormat>",
+		"<Resolution>1920x1080</Resolution>", "<FrameRate>25</FrameRate>", "<BitRateType>1</BitRateType>", "<VideoBitRate>4096</VideoBitRate>",
+		`<AudioParamConfig Num="1">`, "<AudioFormat>G.711</AudioFormat>", "<AudioBitRate>64</AudioBitRate>", "<SamplingRate>8</SamplingRate>",
+		"<SVACEncodeConfig><SVCParam><SVCFlag>1</SVCFlag><SVCSTMMode>2</SVCSTMMode></SVCParam></SVACEncodeConfig>",
+		"<SVACDecodeConfig><SVCParam><SVCSTMMode>1</SVCSTMMode></SVCParam></SVACDecodeConfig>",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("DeviceConfig request missing %q: %s", required, text)
+		}
+	}
+}
+
+func TestDeviceConfig11RejectsIncompleteAndUnsafeSections(t *testing.T) {
+	api := &GB28181API{}
+	tests := []struct {
+		name  string
+		input *DeviceConfigInput
+	}{
+		{name: "empty", input: &DeviceConfigInput{}},
+		{name: "video missing field", input: &DeviceConfigInput{VideoParamConfig: &VideoParamConfigWrite{Items: []VideoParamWriteItem{{StreamName: "Stream1"}}}}},
+		{name: "audio missing field", input: &DeviceConfigInput{AudioParamConfig: &AudioParamConfigWrite{Items: []AudioParamWriteItem{{StreamName: "Stream1"}}}}},
+		{name: "svac malformed", input: &DeviceConfigInput{SVACEncodeConfig: &SVACEncodeConfig{InnerXML: `<SVCParam>`}}},
+		{name: "svac directive", input: &DeviceConfigInput{SVACDecodeConfig: &SVACDecodeConfig{InnerXML: `<!DOCTYPE test><SVCParam/>`}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := api.buildDeviceConfigRequest(gb10DeviceID, nil, test.input); err == nil {
+				t.Fatal("invalid DeviceConfig section was accepted")
+			}
+		})
+	}
+}
+
 func TestHandleDeviceConfig11StoresRawXML(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("testdata", "gb28181", "1.1", "device-config-basic-response.xml"))
 	if err != nil {

@@ -168,9 +168,41 @@ type GBBasicParamInput struct {
 }
 
 type GBDeviceConfigInput struct {
-	TargetID   string             `json:"target_id"`
-	Timeout    int                `json:"timeout"`
-	BasicParam *GBBasicParamInput `json:"basic_param"`
+	TargetID         string                   `json:"target_id"`
+	Timeout          int                      `json:"timeout"`
+	BasicParam       *GBBasicParamInput       `json:"basic_param"`
+	VideoParamConfig *GBVideoParamConfigInput `json:"video_param_config"`
+	AudioParamConfig *GBAudioParamConfigInput `json:"audio_param_config"`
+	SVACEncodeConfig *GBXMLConfigInput        `json:"svac_encode_config"`
+	SVACDecodeConfig *GBXMLConfigInput        `json:"svac_decode_config"`
+}
+
+type GBVideoParamConfigInput struct {
+	Items []GBVideoParamItemInput `json:"items"`
+}
+
+type GBVideoParamItemInput struct {
+	StreamName   string `json:"stream_name"`
+	VideoFormat  string `json:"video_format"`
+	Resolution   string `json:"resolution"`
+	FrameRate    string `json:"frame_rate"`
+	BitRateType  string `json:"bit_rate_type"`
+	VideoBitRate string `json:"video_bit_rate"`
+}
+
+type GBAudioParamConfigInput struct {
+	Items []GBAudioParamItemInput `json:"items"`
+}
+
+type GBAudioParamItemInput struct {
+	StreamName   string `json:"stream_name"`
+	AudioFormat  string `json:"audio_format"`
+	AudioBitRate string `json:"audio_bit_rate"`
+	SamplingRate string `json:"sampling_rate"`
+}
+
+type GBXMLConfigInput struct {
+	InnerXML string `json:"inner_xml"`
 }
 
 type GBDeviceConfigOutput struct {

@@ -471,6 +471,10 @@ func (s *Server) SetBasicParam(ctx context.Context, in *BasicParamConfigInput) (
 	return s.gb.SetBasicParam(ctx, in)
 }
 
+func (s *Server) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput) (*DeviceConfigState, error) {
+	return s.gb.SetDeviceConfig(ctx, in)
+}
+
 // QueryRecordList 查询设备录像目录（RecordInfo）。
 func (s *Server) QueryRecordList(ctx context.Context, in *RecordQueryInput) (*Records, error) {
 	return s.gb.QueryRecordList(ctx, in)

@@ -175,7 +175,7 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.GET("/:id/history", web.WrapH(api.deviceHistory))
 		group.POST("/:id/gb/control", web.WrapH(api.gbDeviceControl)) // GB 附录A.2.3 设备控制
 		group.POST("/:id/gb/query", web.WrapH(api.gbDeviceQuery))     // GB 附录A.2.4 设备查询
-		group.POST("/:id/gb/config", web.WrapH(api.gbDeviceConfig))   // GB 设备配置（2014 BasicParam）
+		group.POST("/:id/gb/config", web.WrapH(api.gbDeviceConfig))   // GB 设备配置（2014 DeviceConfig）
 		group.GET("/:id/gb/diagnostics", web.WrapH(api.gbDiagnostics))
 		group.GET("/:id/gb/a4_snapshot", web.WrapH(api.gbAppendixA4Snapshot))
 	}
@@ -1398,9 +1398,41 @@ type gbBasicParamInput struct {
 }
 
 type gbDeviceConfigInput struct {
-	TargetID   string             `json:"target_id" example:"34020000001320000001"`
-	Timeout    int                `json:"timeout" example:"8"`
-	BasicParam *gbBasicParamInput `json:"basic_param"`
+	TargetID         string                   `json:"target_id" example:"34020000001320000001"`
+	Timeout          int                      `json:"timeout" example:"8"`
+	BasicParam       *gbBasicParamInput       `json:"basic_param"`
+	VideoParamConfig *gbVideoParamConfigInput `json:"video_param_config"`
+	AudioParamConfig *gbAudioParamConfigInput `json:"audio_param_config"`
+	SVACEncodeConfig *gbXMLConfigInput        `json:"svac_encode_config"`
+	SVACDecodeConfig *gbXMLConfigInput        `json:"svac_decode_config"`
+}
+
+type gbVideoParamConfigInput struct {
+	Items []gbVideoParamItemInput `json:"items"`
+}
+
+type gbVideoParamItemInput struct {
+	StreamName   string `json:"stream_name" example:"Stream1"`
+	VideoFormat  string `json:"video_format" example:"H.264"`
+	Resolution   string `json:"resolution" example:"1920x1080"`
+	FrameRate    string `json:"frame_rate" example:"25"`
+	BitRateType  string `json:"bit_rate_type" example:"1"`
+	VideoBitRate string `json:"video_bit_rate" example:"4096"`
+}
+
+type gbAudioParamConfigInput struct {
+	Items []gbAudioParamItemInput `json:"items"`
+}
+
+type gbAudioParamItemInput struct {
+	StreamName   string `json:"stream_name" example:"Stream1"`
+	AudioFormat  string `json:"audio_format" example:"G.711"`
+	AudioBitRate string `json:"audio_bit_rate" example:"64"`
+	SamplingRate string `json:"sampling_rate" example:"8"`
+}
+
+type gbXMLConfigInput struct {
+	InnerXML string `json:"inner_xml" example:"<SVCParam><SVCFlag>1</SVCFlag></SVCParam>"`
 }
 
 type optionsProbeInput struct {
@@ -2036,25 +2068,64 @@ func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, erro
 	return resp, nil
 }
 
-// gbDeviceConfig 下发 GB/T 28181-2014 BasicParam 配置。
+// gbDeviceConfig godoc
+// @Summary GB 设备配置
+// @Description 下发 GB/T 28181-2014 DeviceConfig；支持 BasicParam、VideoParamConfig、AudioParamConfig、SVACEncodeConfig 和 SVACDecodeConfig，可在一次请求中组合多个配置段。
+// @Description SVAC 的 `inner_xml` 只填写配置节点内部的标准 XML；服务端会校验 XML 完整性并拒绝指令/DOCTYPE。
+// @Tags GB28181
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "设备内部ID或设备编号(device_id)"
+// @Param body body SwaggerGBDeviceConfigInput true "GB 设备配置参数"
+// @Success 200 {object} SwaggerGBDeviceConfigOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id}/gb/config [post]
 func (a IPCAPI) gbDeviceConfig(c *gin.Context, in *gbDeviceConfigInput) (any, error) {
-	if in == nil || in.BasicParam == nil {
-		return nil, ErrDevice.SetMsg("basic_param is required")
+	if in == nil || (in.BasicParam == nil && in.VideoParamConfig == nil && in.AudioParamConfig == nil && in.SVACEncodeConfig == nil && in.SVACDecodeConfig == nil) {
+		return nil, ErrDevice.SetMsg("at least one device config section is required")
 	}
 	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		return nil, err
 	}
-	out, err := a.ipc.GBDeviceConfig(c.Request.Context(), deviceID, &ipc.GBDeviceConfigInput{
+	input := &ipc.GBDeviceConfigInput{
 		TargetID: in.TargetID,
 		Timeout:  in.Timeout,
-		BasicParam: &ipc.GBBasicParamInput{
+	}
+	if in.BasicParam != nil {
+		input.BasicParam = &ipc.GBBasicParamInput{
 			Name:              in.BasicParam.Name,
 			Expiration:        in.BasicParam.Expiration,
 			HeartBeatInterval: in.BasicParam.HeartBeatInterval,
 			HeartBeatCount:    in.BasicParam.HeartBeatCount,
-		},
-	})
+		}
+	}
+	if in.VideoParamConfig != nil {
+		input.VideoParamConfig = &ipc.GBVideoParamConfigInput{Items: make([]ipc.GBVideoParamItemInput, 0, len(in.VideoParamConfig.Items))}
+		for _, item := range in.VideoParamConfig.Items {
+			input.VideoParamConfig.Items = append(input.VideoParamConfig.Items, ipc.GBVideoParamItemInput{
+				StreamName: item.StreamName, VideoFormat: item.VideoFormat, Resolution: item.Resolution,
+				FrameRate: item.FrameRate, BitRateType: item.BitRateType, VideoBitRate: item.VideoBitRate,
+			})
+		}
+	}
+	if in.AudioParamConfig != nil {
+		input.AudioParamConfig = &ipc.GBAudioParamConfigInput{Items: make([]ipc.GBAudioParamItemInput, 0, len(in.AudioParamConfig.Items))}
+		for _, item := range in.AudioParamConfig.Items {
+			input.AudioParamConfig.Items = append(input.AudioParamConfig.Items, ipc.GBAudioParamItemInput{
+				StreamName: item.StreamName, AudioFormat: item.AudioFormat,
+				AudioBitRate: item.AudioBitRate, SamplingRate: item.SamplingRate,
+			})
+		}
+	}
+	if in.SVACEncodeConfig != nil {
+		input.SVACEncodeConfig = &ipc.GBXMLConfigInput{InnerXML: in.SVACEncodeConfig.InnerXML}
+	}
+	if in.SVACDecodeConfig != nil {
+		input.SVACDecodeConfig = &ipc.GBXMLConfigInput{InnerXML: in.SVACDecodeConfig.InnerXML}
+	}
+	out, err := a.ipc.GBDeviceConfig(c.Request.Context(), deviceID, input)
 	if err != nil {
 		return nil, ErrDevice.SetMsg(err.Error())
 	}

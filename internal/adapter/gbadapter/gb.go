@@ -337,17 +337,7 @@ func (a *Adapter) DeviceQuery(ctx context.Context, device *ipc.Device, in *ipc.G
 }
 
 func (a *Adapter) DeviceConfig(ctx context.Context, device *ipc.Device, in *ipc.GBDeviceConfigInput) (*ipc.GBDeviceConfigOutput, error) {
-	state, err := a.gbs.SetBasicParam(ctx, &gbs.BasicParamConfigInput{
-		DeviceID: device.DeviceID,
-		TargetID: in.TargetID,
-		Timeout:  time.Duration(in.Timeout) * time.Second,
-		Param: gbs.BasicParam{
-			Name:              in.BasicParam.Name,
-			Expiration:        in.BasicParam.Expiration,
-			HeartBeatInterval: in.BasicParam.HeartBeatInterval,
-			HeartBeatCount:    in.BasicParam.HeartBeatCount,
-		},
-	})
+	state, err := a.gbs.SetDeviceConfig(ctx, toGBDeviceConfigInput(device.DeviceID, in))
 	if err != nil {
 		return nil, err
 	}
@@ -358,6 +348,50 @@ func (a *Adapter) DeviceConfig(ctx context.Context, device *ipc.Device, in *ipc.
 		Result:   state.Result,
 		RawXML:   state.RawXML,
 	}, nil
+}
+
+func toGBDeviceConfigInput(deviceID string, in *ipc.GBDeviceConfigInput) *gbs.DeviceConfigInput {
+	if in == nil {
+		return nil
+	}
+	input := &gbs.DeviceConfigInput{
+		DeviceID: deviceID,
+		TargetID: in.TargetID,
+		Timeout:  time.Duration(in.Timeout) * time.Second,
+	}
+	if in.BasicParam != nil {
+		input.BasicParam = &gbs.BasicParam{
+			Name:              in.BasicParam.Name,
+			Expiration:        in.BasicParam.Expiration,
+			HeartBeatInterval: in.BasicParam.HeartBeatInterval,
+			HeartBeatCount:    in.BasicParam.HeartBeatCount,
+		}
+	}
+	if in.VideoParamConfig != nil {
+		input.VideoParamConfig = &gbs.VideoParamConfigWrite{Items: make([]gbs.VideoParamWriteItem, 0, len(in.VideoParamConfig.Items))}
+		for _, item := range in.VideoParamConfig.Items {
+			input.VideoParamConfig.Items = append(input.VideoParamConfig.Items, gbs.VideoParamWriteItem{
+				StreamName: item.StreamName, VideoFormat: item.VideoFormat, Resolution: item.Resolution,
+				FrameRate: item.FrameRate, BitRateType: item.BitRateType, VideoBitRate: item.VideoBitRate,
+			})
+		}
+	}
+	if in.AudioParamConfig != nil {
+		input.AudioParamConfig = &gbs.AudioParamConfigWrite{Items: make([]gbs.AudioParamWriteItem, 0, len(in.AudioParamConfig.Items))}
+		for _, item := range in.AudioParamConfig.Items {
+			input.AudioParamConfig.Items = append(input.AudioParamConfig.Items, gbs.AudioParamWriteItem{
+				StreamName: item.StreamName, AudioFormat: item.AudioFormat,
+				AudioBitRate: item.AudioBitRate, SamplingRate: item.SamplingRate,
+			})
+		}
+	}
+	if in.SVACEncodeConfig != nil {
+		input.SVACEncodeConfig = &gbs.SVACEncodeConfig{InnerXML: in.SVACEncodeConfig.InnerXML}
+	}
+	if in.SVACDecodeConfig != nil {
+		input.SVACDecodeConfig = &gbs.SVACDecodeConfig{InnerXML: in.SVACDecodeConfig.InnerXML}
+	}
+	return input
 }
 
 func toGBDragZoom(in *ipc.GBDragZoomInput) *gbs.DragZoomParam {

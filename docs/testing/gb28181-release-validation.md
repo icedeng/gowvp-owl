@@ -5,7 +5,7 @@
 ## 1. 当前结论
 
 - 1.0：代码与模拟器核心流程已完成，尚未完成真实设备矩阵验收；
-- 1.1：Catalog 扩展、BasicParam、MediaStatus、多响应、目录订阅、接收者主动 INVITE 广播和附录 O 直接 TCP 文件下载已完成自动化/模拟器验证；
+- 1.1：Catalog 扩展、Basic/视频/音频/SVAC 设备配置、MediaStatus、多响应、目录订阅、接收者主动 INVITE 广播和附录 O 直接 TCP 文件下载已完成自动化/模拟器验证；
 - 2.0/3.0：相关包回归通过，广播使用 `PCMA/8000`，对讲具备 RTP 双向媒体闭环；RTP over TCP 与 2022 能力门禁未被 1.0/1.1 打开或降级；
 - 上下级平台级联：基于 UDP/TCP 的多上级注册、核心及版本化扩展查询、目录、订阅通知、直播、回放、下载和语音广播/对讲已完成自动化验证；TCP 持久连接覆盖 Digest 注册、心跳、重连事务换连接及 301/302 传输切换；2022 附录 H 指定路径已覆盖实时、回放和下载；仍需四版本真实上级平台互通；
 - 全仓 test/vet/race 已通过；对外状态仍不得标记为“生产完整支持”，真实设备矩阵和目标环境灰度/回滚仍是阶段门。
@@ -32,7 +32,7 @@ go test ./... -count=1
 - 设备级 `gb_disabled_capabilities` 会同步影响持久化能力快照、诊断输出和发送前能力门禁；
 - 1.1 Keepalive、Catalog、DeviceConfig、MediaStatus/121、Broadcast Response 串联模拟流程；
 - 1.1 Catalog 扩展与目录节点、未知 XML 保留；
-- BasicParam 查询与写入报文、原始响应保存；
+- BasicParam、VideoParamConfig、AudioParamConfig、SVACEncodeConfig、SVACDecodeConfig 查询与写入报文、组合下发、SVAC XML 片段安全校验及原始响应保存；
 - MediaStatus/121 幂等收敛；
 - Catalog/RecordInfo 多响应乱序、重复、总数冲突、超时部分结果和同设备并发；
 - `Event: Catalog;id=...` 初始订阅、续订、取消；

@@ -318,6 +318,79 @@ definitions:
         example: 2
         type: integer
     type: object
+  api.SwaggerGBAudioParamConfigInput:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/api.SwaggerGBAudioParamItemInput'
+        type: array
+    type: object
+  api.SwaggerGBAudioParamItemInput:
+    properties:
+      audio_bit_rate:
+        example: "64"
+        type: string
+      audio_format:
+        example: G.711
+        type: string
+      sampling_rate:
+        example: "8"
+        type: string
+      stream_name:
+        example: Stream1
+        type: string
+    type: object
+  api.SwaggerGBBasicParamInput:
+    properties:
+      expiration:
+        example: 3600
+        type: integer
+      heartbeat_count:
+        example: 3
+        type: integer
+      heartbeat_interval:
+        example: 60
+        type: integer
+      name:
+        example: IPC
+        type: string
+    type: object
+  api.SwaggerGBDeviceConfigInput:
+    properties:
+      audio_param_config:
+        $ref: '#/definitions/api.SwaggerGBAudioParamConfigInput'
+      basic_param:
+        $ref: '#/definitions/api.SwaggerGBBasicParamInput'
+      svac_decode_config:
+        $ref: '#/definitions/api.SwaggerGBXMLConfigInput'
+      svac_encode_config:
+        $ref: '#/definitions/api.SwaggerGBXMLConfigInput'
+      target_id:
+        example: "34020000001320000001"
+        type: string
+      timeout:
+        example: 8
+        type: integer
+      video_param_config:
+        $ref: '#/definitions/api.SwaggerGBVideoParamConfigInput'
+    type: object
+  api.SwaggerGBDeviceConfigOutput:
+    properties:
+      cmd_type:
+        example: DeviceConfig
+        type: string
+      device_id:
+        example: "34020000001320000001"
+        type: string
+      raw_xml:
+        type: string
+      result:
+        example: OK
+        type: string
+      sn:
+        example: 12
+        type: integer
+    type: object
   api.SwaggerGBDeviceControlInput:
     properties:
       action:
@@ -535,6 +608,40 @@ definitions:
         description: 精确变倍值
         example: 2
         type: number
+    type: object
+  api.SwaggerGBVideoParamConfigInput:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/api.SwaggerGBVideoParamItemInput'
+        type: array
+    type: object
+  api.SwaggerGBVideoParamItemInput:
+    properties:
+      bit_rate_type:
+        example: "1"
+        type: string
+      frame_rate:
+        example: "25"
+        type: string
+      resolution:
+        example: 1920x1080
+        type: string
+      stream_name:
+        example: Stream1
+        type: string
+      video_bit_rate:
+        example: "4096"
+        type: string
+      video_format:
+        example: H.264
+        type: string
+    type: object
+  api.SwaggerGBXMLConfigInput:
+    properties:
+      inner_xml:
+        example: <SVCParam><SVCFlag>1</SVCFlag></SVCParam>
+        type: string
     type: object
   api.SwaggerMessageResponse:
     properties:
@@ -796,9 +903,6 @@ definitions:
       port:
         example: 5060
         type: integer
-      transport:
-        example: udp
-        type: string
       server_id:
         example: "34020000002000000001"
         type: string
@@ -806,6 +910,9 @@ definitions:
         items:
           type: string
         type: array
+      transport:
+        example: udp
+        type: string
       version:
         example: "1.1"
         type: string
@@ -3696,6 +3803,41 @@ paths:
       security:
       - BearerAuth: []
       summary: 查询附录 A.4 快照
+      tags:
+      - GB28181
+  /devices/{id}/gb/config:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        下发 GB/T 28181-2014 DeviceConfig；支持 BasicParam、VideoParamConfig、AudioParamConfig、SVACEncodeConfig 和 SVACDecodeConfig，可在一次请求中组合多个配置段。
+        SVAC 的 `inner_xml` 只填写配置节点内部的标准 XML；服务端会校验 XML 完整性并拒绝指令/DOCTYPE。
+      parameters:
+      - description: 设备内部ID或设备编号(device_id)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: GB 设备配置参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.SwaggerGBDeviceConfigInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SwaggerGBDeviceConfigOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: GB 设备配置
       tags:
       - GB28181
   /devices/{id}/gb/control:

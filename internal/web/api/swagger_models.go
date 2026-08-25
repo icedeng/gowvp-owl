@@ -341,6 +341,60 @@ type SwaggerGBDeviceQueryOutput struct {
 	AppendixA4 []SwaggerGBAppendixA4Output `json:"appendix_a4,omitempty"`           // 附录 A.4 扩展对象结构化结果
 }
 
+// SwaggerGBDeviceConfigInput 是 2014 DeviceConfig 写入请求。
+type SwaggerGBDeviceConfigInput struct {
+	TargetID         string                          `json:"target_id" example:"34020000001320000001"`
+	Timeout          int                             `json:"timeout" example:"8"`
+	BasicParam       *SwaggerGBBasicParamInput       `json:"basic_param,omitempty"`
+	VideoParamConfig *SwaggerGBVideoParamConfigInput `json:"video_param_config,omitempty"`
+	AudioParamConfig *SwaggerGBAudioParamConfigInput `json:"audio_param_config,omitempty"`
+	SVACEncodeConfig *SwaggerGBXMLConfigInput        `json:"svac_encode_config,omitempty"`
+	SVACDecodeConfig *SwaggerGBXMLConfigInput        `json:"svac_decode_config,omitempty"`
+}
+
+type SwaggerGBBasicParamInput struct {
+	Name              string `json:"name" example:"IPC"`
+	Expiration        int    `json:"expiration" example:"3600"`
+	HeartBeatInterval int    `json:"heartbeat_interval" example:"60"`
+	HeartBeatCount    int    `json:"heartbeat_count" example:"3"`
+}
+
+type SwaggerGBVideoParamConfigInput struct {
+	Items []SwaggerGBVideoParamItemInput `json:"items"`
+}
+
+type SwaggerGBVideoParamItemInput struct {
+	StreamName   string `json:"stream_name" example:"Stream1"`
+	VideoFormat  string `json:"video_format" example:"H.264"`
+	Resolution   string `json:"resolution" example:"1920x1080"`
+	FrameRate    string `json:"frame_rate" example:"25"`
+	BitRateType  string `json:"bit_rate_type" example:"1"`
+	VideoBitRate string `json:"video_bit_rate" example:"4096"`
+}
+
+type SwaggerGBAudioParamConfigInput struct {
+	Items []SwaggerGBAudioParamItemInput `json:"items"`
+}
+
+type SwaggerGBAudioParamItemInput struct {
+	StreamName   string `json:"stream_name" example:"Stream1"`
+	AudioFormat  string `json:"audio_format" example:"G.711"`
+	AudioBitRate string `json:"audio_bit_rate" example:"64"`
+	SamplingRate string `json:"sampling_rate" example:"8"`
+}
+
+type SwaggerGBXMLConfigInput struct {
+	InnerXML string `json:"inner_xml" example:"<SVCParam><SVCFlag>1</SVCFlag></SVCParam>"`
+}
+
+type SwaggerGBDeviceConfigOutput struct {
+	SN       int    `json:"sn" example:"12"`
+	CmdType  string `json:"cmd_type" example:"DeviceConfig"`
+	DeviceID string `json:"device_id" example:"34020000001320000001"`
+	Result   string `json:"result,omitempty" example:"OK"`
+	RawXML   string `json:"raw_xml,omitempty"`
+}
+
 // SwaggerGBAppendixA4SnapshotOutput 是附录 A.4 快照响应。
 type SwaggerGBAppendixA4SnapshotOutput struct {
 	DeviceID string                      `json:"device_id" example:"340200..."`                 // 当前设备国标编码

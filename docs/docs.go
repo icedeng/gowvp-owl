@@ -2593,6 +2593,58 @@ const docTemplate = `{
                 }
             }
         },
+        "/devices/{id}/gb/config": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "下发 GB/T 28181-2014 DeviceConfig；支持 BasicParam、VideoParamConfig、AudioParamConfig、SVACEncodeConfig 和 SVACDecodeConfig，可在一次请求中组合多个配置段。\nSVAC 的 ` + "`" + `inner_xml` + "`" + ` 只填写配置节点内部的标准 XML；服务端会校验 XML 完整性并拒绝指令/DOCTYPE。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "GB28181"
+                ],
+                "summary": "GB 设备配置",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "设备内部ID或设备编号(device_id)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "GB 设备配置参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerGBDeviceConfigInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerGBDeviceConfigOutput"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/devices/{id}/gb/control": {
             "post": {
                 "security": [
@@ -3981,6 +4033,111 @@ const docTemplate = `{
                 }
             }
         },
+        "api.SwaggerGBAudioParamConfigInput": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.SwaggerGBAudioParamItemInput"
+                    }
+                }
+            }
+        },
+        "api.SwaggerGBAudioParamItemInput": {
+            "type": "object",
+            "properties": {
+                "audio_bit_rate": {
+                    "type": "string",
+                    "example": "64"
+                },
+                "audio_format": {
+                    "type": "string",
+                    "example": "G.711"
+                },
+                "sampling_rate": {
+                    "type": "string",
+                    "example": "8"
+                },
+                "stream_name": {
+                    "type": "string",
+                    "example": "Stream1"
+                }
+            }
+        },
+        "api.SwaggerGBBasicParamInput": {
+            "type": "object",
+            "properties": {
+                "expiration": {
+                    "type": "integer",
+                    "example": 3600
+                },
+                "heartbeat_count": {
+                    "type": "integer",
+                    "example": 3
+                },
+                "heartbeat_interval": {
+                    "type": "integer",
+                    "example": 60
+                },
+                "name": {
+                    "type": "string",
+                    "example": "IPC"
+                }
+            }
+        },
+        "api.SwaggerGBDeviceConfigInput": {
+            "type": "object",
+            "properties": {
+                "audio_param_config": {
+                    "$ref": "#/definitions/api.SwaggerGBAudioParamConfigInput"
+                },
+                "basic_param": {
+                    "$ref": "#/definitions/api.SwaggerGBBasicParamInput"
+                },
+                "svac_decode_config": {
+                    "$ref": "#/definitions/api.SwaggerGBXMLConfigInput"
+                },
+                "svac_encode_config": {
+                    "$ref": "#/definitions/api.SwaggerGBXMLConfigInput"
+                },
+                "target_id": {
+                    "type": "string",
+                    "example": "34020000001320000001"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "example": 8
+                },
+                "video_param_config": {
+                    "$ref": "#/definitions/api.SwaggerGBVideoParamConfigInput"
+                }
+            }
+        },
+        "api.SwaggerGBDeviceConfigOutput": {
+            "type": "object",
+            "properties": {
+                "cmd_type": {
+                    "type": "string",
+                    "example": "DeviceConfig"
+                },
+                "device_id": {
+                    "type": "string",
+                    "example": "34020000001320000001"
+                },
+                "raw_xml": {
+                    "type": "string"
+                },
+                "result": {
+                    "type": "string",
+                    "example": "OK"
+                },
+                "sn": {
+                    "type": "integer",
+                    "example": 12
+                }
+            }
+        },
         "api.SwaggerGBDeviceControlInput": {
             "type": "object",
             "properties": {
@@ -4282,6 +4439,55 @@ const docTemplate = `{
                     "description": "精确变倍值",
                     "type": "number",
                     "example": 2
+                }
+            }
+        },
+        "api.SwaggerGBVideoParamConfigInput": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.SwaggerGBVideoParamItemInput"
+                    }
+                }
+            }
+        },
+        "api.SwaggerGBVideoParamItemInput": {
+            "type": "object",
+            "properties": {
+                "bit_rate_type": {
+                    "type": "string",
+                    "example": "1"
+                },
+                "frame_rate": {
+                    "type": "string",
+                    "example": "25"
+                },
+                "resolution": {
+                    "type": "string",
+                    "example": "1920x1080"
+                },
+                "stream_name": {
+                    "type": "string",
+                    "example": "Stream1"
+                },
+                "video_bit_rate": {
+                    "type": "string",
+                    "example": "4096"
+                },
+                "video_format": {
+                    "type": "string",
+                    "example": "H.264"
+                }
+            }
+        },
+        "api.SwaggerGBXMLConfigInput": {
+            "type": "object",
+            "properties": {
+                "inner_xml": {
+                    "type": "string",
+                    "example": "\u003cSVCParam\u003e\u003cSVCFlag\u003e1\u003c/SVCFlag\u003e\u003c/SVCParam\u003e"
                 }
             }
         },
@@ -4639,10 +4845,6 @@ const docTemplate = `{
                     "type": "integer",
                     "example": 5060
                 },
-                "transport": {
-                    "type": "string",
-                    "example": "udp"
-                },
                 "server_id": {
                     "type": "string",
                     "example": "34020000002000000001"
@@ -4652,6 +4854,10 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "transport": {
+                    "type": "string",
+                    "example": "udp"
                 },
                 "version": {
                     "type": "string",

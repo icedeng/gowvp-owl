@@ -78,10 +78,10 @@ func (c Core) GBDeviceQuery(ctx context.Context, deviceID string, in *GBDeviceQu
 	return query.DeviceQuery(ctx, dev, in)
 }
 
-// GBDeviceConfig 下发 GB 设备配置；当前安全开放 2014 BasicParam 写入。
+// GBDeviceConfig 下发 GB/T 28181-2014 设备配置。
 func (c Core) GBDeviceConfig(ctx context.Context, deviceID string, in *GBDeviceConfigInput) (*GBDeviceConfigOutput, error) {
-	if in == nil || in.BasicParam == nil {
-		return nil, reason.ErrBadRequest.SetMsg("basic_param is required")
+	if in == nil || (in.BasicParam == nil && in.VideoParamConfig == nil && in.AudioParamConfig == nil && in.SVACEncodeConfig == nil && in.SVACDecodeConfig == nil) {
+		return nil, reason.ErrBadRequest.SetMsg("at least one device config section is required")
 	}
 	dev, err := c.GetDevice(ctx, deviceID)
 	if err != nil {
