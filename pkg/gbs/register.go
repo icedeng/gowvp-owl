@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
@@ -29,6 +30,8 @@ const (
 	registerNonceTTL   = 5 * time.Minute
 	maxRegisterNonces  = 4096
 	registerDigestAlgo = "MD5"
+	registerResultTTL  = time.Minute
+	maxRegisterResults = 4096
 )
 
 type registerNonceState struct {
@@ -37,6 +40,11 @@ type registerNonceState struct {
 	AcceptedFingerprint string
 	IssuedAt            time.Time
 	Expires             time.Time
+}
+
+type registerResultState struct {
+	Date      string
+	ExpiresAt time.Time
 }
 
 type GB28181API struct {
@@ -55,6 +63,8 @@ type GB28181API struct {
 	// registerOperations 按设备串行化 REGISTER 的查询、自动建档和状态提交，不同设备仍可并行。
 	registerOperationMu sync.Mutex
 	registerOperations  map[string]*keyedOperationLock
+	registerResultMu    sync.Mutex
+	registerResults     map[[sha256.Size]byte]registerResultState
 	// MESSAGE/NOTIFY 兼容 Digest nonce 独立维护，按设备、源 IP 和 nc 防重放。
 	messageNonceMu sync.Mutex
 	messageNonces  map[string]messageNonceState
@@ -479,14 +489,28 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	}
 	unlockRegister := g.lockRegisterOperation(ctx.DeviceID)
 	defer unlockRegister()
-	respFn := func() {
+	requestKey := registerResultKey(ctx)
+	respondOK := func(date string) {
 		g.metrics.registerSuccess.Add(1)
 		resp := g.newRegisterResponse(ctx, http.StatusOK, "OK")
 		resp.AppendHeader(&sip.GenericHeader{
 			HeaderName: "Date",
-			Contents:   time.Now().Format("2006-01-02T15:04:05.000"),
+			Contents:   date,
 		})
 		_ = ctx.Tx.Respond(resp)
+	}
+	if cached, ok := g.loadRegisterResult(requestKey, time.Now()); ok {
+		respondOK(cached.Date)
+		return
+	}
+	respFn := func() {
+		now := time.Now()
+		state := registerResultState{
+			Date:      now.Format("2006-01-02T15:04:05.000"),
+			ExpiresAt: now.Add(registerResultTTL),
+		}
+		g.storeRegisterResult(requestKey, state, now)
+		respondOK(state.Date)
 	}
 
 	var (
@@ -618,6 +642,61 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	if effectiveVersion.Capabilities().ConfigQuery {
 		_ = g.QueryConfigDownloadBasic(dev.GetGB28181DeviceID())
 	}
+}
+
+func registerResultKey(ctx *sip.Context) [sha256.Size]byte {
+	hash := sha256.New()
+	if ctx != nil && ctx.Request != nil {
+		_, _ = hash.Write([]byte(ctx.Request.String()))
+	}
+	_, _ = hash.Write([]byte{0})
+	if ctx != nil && ctx.Source != nil {
+		_, _ = hash.Write([]byte(ctx.Source.String()))
+	}
+	var out [sha256.Size]byte
+	copy(out[:], hash.Sum(nil))
+	return out
+}
+
+func (g *GB28181API) loadRegisterResult(key [sha256.Size]byte, now time.Time) (registerResultState, bool) {
+	g.registerResultMu.Lock()
+	defer g.registerResultMu.Unlock()
+	state, ok := g.registerResults[key]
+	if !ok {
+		return registerResultState{}, false
+	}
+	if !state.ExpiresAt.After(now) {
+		delete(g.registerResults, key)
+		return registerResultState{}, false
+	}
+	return state, true
+}
+
+func (g *GB28181API) storeRegisterResult(key [sha256.Size]byte, state registerResultState, now time.Time) {
+	g.registerResultMu.Lock()
+	defer g.registerResultMu.Unlock()
+	if g.registerResults == nil {
+		g.registerResults = make(map[[sha256.Size]byte]registerResultState)
+	}
+	if len(g.registerResults) >= maxRegisterResults {
+		for currentKey, current := range g.registerResults {
+			if !current.ExpiresAt.After(now) {
+				delete(g.registerResults, currentKey)
+			}
+		}
+	}
+	if len(g.registerResults) >= maxRegisterResults {
+		var oldestKey [sha256.Size]byte
+		oldestAt := time.Time{}
+		for currentKey, current := range g.registerResults {
+			if oldestAt.IsZero() || current.ExpiresAt.Before(oldestAt) {
+				oldestKey = currentKey
+				oldestAt = current.ExpiresAt
+			}
+		}
+		delete(g.registerResults, oldestKey)
+	}
+	g.registerResults[key] = state
 }
 
 func (g *GB28181API) lockRegisterOperation(deviceID string) func() {

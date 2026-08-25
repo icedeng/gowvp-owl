@@ -2,10 +2,13 @@ package gbs
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -236,6 +239,75 @@ func TestRegisterOperationLockSerializesOnlySameDevice(t *testing.T) {
 	}
 }
 
+func TestExactUnknownUnregisterRetransmissionReusesSuccess(t *testing.T) {
+	api, memory, connection := newRegisterHandlerTestAPI(t, false)
+	countingStore := &countingRegisterStore{Storer: api.core.Store()}
+	countingStore.device = &countingRegisterDeviceStore{DeviceStorer: countingStore.Storer.Device()}
+	api.core = ipc.NewAdapter(countingStore, uniqueid.Core{})
+	first := newRegisterHandlerTestContext(t, connection, "unknown-unregister-retransmit", 0)
+	secondRequest := first.Request.Clone().(*sip.Request)
+	secondRequest.SetConnection(connection)
+	secondRequest.SetSource(connection.remote)
+	secondRequest.SetDestination(connection.local)
+	second := &sip.Context{
+		Request: secondRequest, Tx: sip.NewTransaction("unknown-unregister-retransmit-2", connection),
+		DeviceID: first.DeviceID, Source: first.Source, To: first.To.Clone(), XGBVer: first.XGBVer,
+		XGBVerRaw: first.XGBVerRaw, Log: slog.Default(),
+	}
+
+	api.handlerRegister(first)
+	firstPayload := assertRegisterHandlerResponsePayload(t, connection, "SIP/2.0 200 OK")
+	api.handlerRegister(second)
+	secondPayload := assertRegisterHandlerResponsePayload(t, connection, "SIP/2.0 200 OK")
+
+	if got := countingStore.device.getCalls.Load(); got != 1 {
+		t.Fatalf("database lookups = %d, want 1 for exact retransmission", got)
+	}
+	if registerResponseDate(firstPayload) == "" || registerResponseDate(firstPayload) != registerResponseDate(secondPayload) {
+		t.Fatalf("retransmitted REGISTER Date differs:\nfirst=%s\nsecond=%s", firstPayload, secondPayload)
+	}
+	if memory.loadOrStoreCalls != 0 || memory.changeCalls != 0 {
+		t.Fatalf("unknown unregister retransmission mutated memory: load_or_store=%d change=%d", memory.loadOrStoreCalls, memory.changeCalls)
+	}
+}
+
+func TestRegisterResultKeyChangesWithRequestAndSource(t *testing.T) {
+	connection := newFlowConnection()
+	ctx := newRegisterHandlerTestContext(t, connection, "register-result-key", 3600)
+	base := registerResultKey(ctx)
+	changedExpires := newRegisterHandlerTestContext(t, connection, "register-result-key", 7200)
+	if base == registerResultKey(changedExpires) {
+		t.Fatal("REGISTER result key ignored Expires change")
+	}
+	changedSource := *ctx
+	changedSource.Source = &net.UDPAddr{IP: net.ParseIP("192.0.2.11"), Port: 5060}
+	if base == registerResultKey(&changedSource) {
+		t.Fatal("REGISTER result key ignored source change")
+	}
+}
+
+func TestRegisterResultCacheExpiresAndRemainsBounded(t *testing.T) {
+	api := &GB28181API{}
+	now := time.Now()
+	expiredKey := sha256.Sum256([]byte("expired"))
+	api.storeRegisterResult(expiredKey, registerResultState{Date: "expired", ExpiresAt: now.Add(-time.Second)}, now)
+	if _, ok := api.loadRegisterResult(expiredKey, now); ok {
+		t.Fatal("expired REGISTER result remained cached")
+	}
+	for index := 0; index <= maxRegisterResults; index++ {
+		key := sha256.Sum256([]byte(fmt.Sprintf("result-%d", index)))
+		api.storeRegisterResult(key, registerResultState{
+			Date: fmt.Sprint(index), ExpiresAt: now.Add(time.Duration(index+1) * time.Second),
+		}, now)
+	}
+	api.registerResultMu.Lock()
+	size := len(api.registerResults)
+	api.registerResultMu.Unlock()
+	if size != maxRegisterResults {
+		t.Fatalf("REGISTER result cache size = %d, want %d", size, maxRegisterResults)
+	}
+}
+
 type registerHandlerTestMemory struct {
 	*flowMemory
 	changeErr        error
@@ -295,14 +367,47 @@ func newRegisterHandlerTestContext(t *testing.T, connection *flowConnection, cal
 
 func assertRegisterHandlerResponse(t *testing.T, connection *flowConnection, expected string) {
 	t.Helper()
+	_ = assertRegisterHandlerResponsePayload(t, connection, expected)
+}
+
+func assertRegisterHandlerResponsePayload(t *testing.T, connection *flowConnection, expected string) string {
+	t.Helper()
 	select {
 	case payload := <-connection.writes:
 		if !strings.Contains(string(payload), expected) {
 			t.Fatalf("REGISTER response = %s, want %q", payload, expected)
 		}
+		return string(payload)
 	case <-time.After(time.Second):
 		t.Fatalf("REGISTER response timeout, want %q", expected)
+		return ""
 	}
+}
+
+func registerResponseDate(payload string) string {
+	for _, line := range strings.Split(payload, "\r\n") {
+		if strings.HasPrefix(line, "Date: ") {
+			return strings.TrimPrefix(line, "Date: ")
+		}
+	}
+	return ""
+}
+
+type countingRegisterStore struct {
+	ipc.Storer
+	device *countingRegisterDeviceStore
+}
+
+func (s *countingRegisterStore) Device() ipc.DeviceStorer { return s.device }
+
+type countingRegisterDeviceStore struct {
+	ipc.DeviceStorer
+	getCalls atomic.Int32
+}
+
+func (s *countingRegisterDeviceStore) Get(ctx context.Context, device *ipc.Device, opts ...orm.QueryOption) error {
+	s.getCalls.Add(1)
+	return s.DeviceStorer.Get(ctx, device, opts...)
 }
 
 func TestRegisterDigestRequiresIssuedNonceAndRejectsReplay(t *testing.T) {
