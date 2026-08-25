@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gowvp/owl/internal/conf"
+	"github.com/gowvp/owl/internal/core/ipc"
+	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/ixugo/goddd/pkg/conc"
 )
 
@@ -41,5 +44,44 @@ func TestMediaStreamLifecycleActiveAndInactive(t *testing.T) {
 	// 重复注销和 MediaStatus 竞争后均应保持幂等。
 	if err := api.OnMediaStreamChanged(context.Background(), MediaStreamEvent{StreamID: stream.StreamID, Reason: "duplicate"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMediaStartFailuresDoNotRetainPlaceholders(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	channel := &Channel{ChannelID: gb10ChannelID, device: memory.runtime}
+	memory.runtime.Channels.Store(gb10ChannelID, channel)
+	media := &fakeRTPMediaService{}
+	streams := &conc.Map[string, *Streams]{}
+	cfg := conf.SIP{ID: gb10PlatformID, Domain: "3402000000"}
+	api := &GB28181API{cfg: &cfg, sms: media, streams: streams}
+	api.svr = &Server{gb: api, memoryStorer: memory}
+	inputChannel := &ipc.Channel{DeviceID: gb10DeviceID, ChannelID: gb10ChannelID}
+	mediaServer := &sms.MediaServer{}
+
+	if err := api.Play(&PlayInput{Channel: inputChannel, SMS: mediaServer}); err == nil {
+		t.Fatal("Play unexpectedly succeeded")
+	}
+	if streams.Len() != 0 {
+		t.Fatal("failed Play retained a stream placeholder")
+	}
+
+	if err := api.StartHistory(t.Context(), &HistoryInput{
+		Channel: inputChannel, SMS: mediaServer, Mode: historyModePlayback,
+		StartAt: time.Now().Add(-time.Hour), EndAt: time.Now(),
+	}); err == nil {
+		t.Fatal("StartHistory unexpectedly succeeded")
+	}
+	if streams.Len() != 0 {
+		t.Fatal("failed history start retained a stream placeholder")
+	}
+
+	placeholderKey := historyKey(historyModePlayback, gb10DeviceID, gb10ChannelID)
+	streams.Store(placeholderKey, &Streams{DeviceID: gb10DeviceID, ChannelID: gb10ChannelID})
+	if err := api.stopHistoryNoLock(channel, &StopHistoryInput{Channel: inputChannel, Mode: historyModePlayback}); err != nil {
+		t.Fatal(err)
+	}
+	if streams.Len() != 0 {
+		t.Fatal("stopping an incomplete history session retained its placeholder")
 	}
 }

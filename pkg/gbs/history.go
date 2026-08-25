@@ -130,6 +130,7 @@ func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
 		StreamID: streamID,
 	})
 	if err != nil {
+		g.streams.CompareAndDelete(key, stream)
 		return err
 	}
 
@@ -275,7 +276,11 @@ func historyControlProtocolVersion(version GBProtocolVersion) string {
 func (g *GB28181API) stopHistoryNoLock(ch *Channel, in *StopHistoryInput) error {
 	key := resolveHistorySessionKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID, in.sessionKey)
 	stream, ok := g.streams.Load(key)
-	if !ok || stream.Resp == nil {
+	if !ok {
+		return nil
+	}
+	if stream.Resp == nil {
+		g.streams.CompareAndDelete(key, stream)
 		return nil
 	}
 	if stream.DirectTCP && g.directDownloads != nil && g.directDownloads.Cancel(stream.DirectSessionID) {

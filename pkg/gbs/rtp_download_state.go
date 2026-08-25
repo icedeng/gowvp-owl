@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -13,6 +14,10 @@ const (
 	rtpDownloadReceiving = "receiving"
 	rtpDownloadCompleted = "completed"
 	rtpDownloadStopped   = "stopped"
+
+	rtpDownloadTerminalTTL              = 7 * 24 * time.Hour
+	rtpDownloadMaxChannelTerminalStates = 4096
+	rtpDownloadMaxSessionTerminalStates = 2048
 )
 
 // RTPDownloadState 描述普通 RTP 下载的媒体服务器接收进度。
@@ -141,6 +146,91 @@ func (g *GB28181API) finishRTPDownload(stream *Streams, status, reason string) {
 		session.state.ProgressPercent = 100
 	}
 	session.mu.Unlock()
+}
+
+type rtpDownloadTerminalEntry struct {
+	key       string
+	session   *rtpDownloadSession
+	completed time.Time
+}
+
+// cleanupRTPDownloads 清理普通 RTP 下载终态。
+// 通道最近状态与级联独立会话分别限额，避免级联会话挤占通道查询状态；活动状态不参与清理。
+func (g *GB28181API) cleanupRTPDownloads(now time.Time) {
+	if g == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	cutoff := now.Add(-rtpDownloadTerminalTTL)
+	channelTerminals := make([]rtpDownloadTerminalEntry, 0)
+	sessionTerminals := make([]rtpDownloadTerminalEntry, 0)
+	g.rtpDownloads.Range(func(key, value any) bool {
+		keyText, keyOK := key.(string)
+		session, sessionOK := value.(*rtpDownloadSession)
+		if !keyOK || !sessionOK || session == nil {
+			g.rtpDownloads.CompareAndDelete(key, value)
+			return true
+		}
+		state := session.snapshot()
+		if state.CompletedAt.IsZero() {
+			return true
+		}
+		if !state.CompletedAt.After(cutoff) {
+			g.rtpDownloads.CompareAndDelete(key, session)
+			return true
+		}
+		entry := rtpDownloadTerminalEntry{key: keyText, session: session, completed: state.CompletedAt}
+		if keyText == historyKey(historyModeDownload, state.DeviceID, state.ChannelID) {
+			channelTerminals = append(channelTerminals, entry)
+		} else {
+			sessionTerminals = append(sessionTerminals, entry)
+		}
+		return true
+	})
+	trim := func(terminals []rtpDownloadTerminalEntry, limit int) {
+		if len(terminals) <= limit {
+			return
+		}
+		sort.Slice(terminals, func(i, j int) bool {
+			if terminals[i].completed.Equal(terminals[j].completed) {
+				return terminals[i].key < terminals[j].key
+			}
+			return terminals[i].completed.Before(terminals[j].completed)
+		})
+		for _, entry := range terminals[:len(terminals)-limit] {
+			g.rtpDownloads.CompareAndDelete(entry.key, entry.session)
+		}
+	}
+	trim(channelTerminals, rtpDownloadMaxChannelTerminalStates)
+	trim(sessionTerminals, rtpDownloadMaxSessionTerminalStates)
+}
+
+func (g *GB28181API) cleanupRuntimeStates(now time.Time) {
+	if g == nil {
+		return
+	}
+	g.cleanupRTPDownloads(now)
+	if g.directDownloads != nil {
+		g.directDownloads.Cleanup(now)
+	}
+	g.cleanupQueryStates(now)
+}
+
+// startRuntimeStateCleaner 的生命周期与 GB28181 服务一致，保证无新请求时也会回收终态、查询快照和过期文件。
+func (g *GB28181API) startRuntimeStateCleaner() {
+	g.cleanupRuntimeStates(time.Now())
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-g.lifecycleDone:
+			return
+		case now := <-ticker.C:
+			g.cleanupRuntimeStates(now)
+		}
+	}
 }
 
 // RTPDownloadByChannel 返回通道最近一次普通 RTP 下载状态。

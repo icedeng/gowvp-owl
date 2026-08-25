@@ -254,9 +254,14 @@ func (m *flowMemory) Change(_ string, changePersistent func(*ipc.Device) error, 
 	}
 	return nil
 }
-func (m *flowMemory) Load(string) (*Device, bool)                { return m.runtime, m.runtime != nil }
-func (m *flowMemory) Store(_ string, device *Device)             { m.runtime = device }
-func (m *flowMemory) GetChannel(string, string) (*Channel, bool) { return nil, false }
+func (m *flowMemory) Load(string) (*Device, bool)    { return m.runtime, m.runtime != nil }
+func (m *flowMemory) Store(_ string, device *Device) { m.runtime = device }
+func (m *flowMemory) GetChannel(_ string, channelID string) (*Channel, bool) {
+	if m.runtime == nil {
+		return nil, false
+	}
+	return m.runtime.Channels.Load(channelID)
+}
 
 type flowConnection struct {
 	local  net.Addr

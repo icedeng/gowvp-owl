@@ -32,6 +32,8 @@ type inboundInviteDialog struct {
 	mu          sync.Mutex
 }
 
+const pendingInviteDialogTTL = 10 * time.Minute
+
 // sipInviteGeneric 处理入向 INVITE。
 // 2014+ 广播由接收者主动 INVITE 语音源；已注册上级的媒体请求进入级联 B2BUA。
 // 其他未识别的入向媒体会话明确拒绝，避免回显 offer 使对端误判媒体已经建立。
@@ -723,29 +725,38 @@ func (g *GB28181API) startInviteDialogCleaner() {
 			return
 		case <-ticker.C:
 		}
-		expireBefore := time.Now().Add(-10 * time.Minute)
-		g.inviteDialogs.Range(func(key, value any) bool {
-			d, ok := value.(*inboundInviteDialog)
-			if !ok || d == nil {
-				g.inviteDialogs.Delete(key)
-				return true
-			}
-			d.mu.Lock()
-			expired := d.UpdatedAt.Before(expireBefore)
-			d.mu.Unlock()
-			if expired {
-				if d.Cascade != nil {
-					_ = g.sendInboundDialogBYE(d)
-					g.stopCascadeMediaSession(d.Cascade, false, false)
-				}
-				g.inviteDialogs.Delete(key)
-				if d.Broadcast != nil {
-					_ = g.stopBroadcastSession(d.Broadcast, false)
-				}
-			}
-			return true
-		})
+		g.cleanupInviteDialogs(time.Now())
 	}
+}
+
+func (g *GB28181API) cleanupInviteDialogs(now time.Time) {
+	if g == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	expireBefore := now.Add(-pendingInviteDialogTTL)
+	g.inviteDialogs.Range(func(key, value any) bool {
+		d, ok := value.(*inboundInviteDialog)
+		if !ok || d == nil {
+			g.inviteDialogs.Delete(key)
+			return true
+		}
+		d.mu.Lock()
+		expired := !d.Established && d.UpdatedAt.Before(expireBefore)
+		d.mu.Unlock()
+		if expired {
+			if d.Cascade != nil {
+				g.stopCascadeMediaSession(d.Cascade, false, false)
+			}
+			g.inviteDialogs.CompareAndDelete(key, d)
+			if d.Broadcast != nil {
+				_ = g.stopBroadcastSession(d.Broadcast, false)
+			}
+		}
+		return true
+	})
 }
 
 func (g *GB28181API) close() {
@@ -759,10 +770,110 @@ func (g *GB28181API) close() {
 		g.closeCascadeDownstreamSubscriptions()
 		g.closeCascadeMediaSessions()
 		g.closeCascadeVoiceSessions()
+		g.closeVoiceSessions()
 		if g.directDownloads != nil {
 			g.directDownloads.CancelAll()
 		}
+		g.closeRemainingMediaSessions()
 	})
+}
+
+func (g *GB28181API) closeVoiceSessions() {
+	if g == nil {
+		return
+	}
+	g.talkSessions.Range(func(key, value any) bool {
+		session, ok := value.(*talkSession)
+		if !ok || session == nil {
+			g.talkSessions.Delete(key)
+			return true
+		}
+		_ = g.stopTalkSession(session, fmt.Errorf("GB28181 service stopped"))
+		if g.streams != nil && session.Stream != nil {
+			g.streams.CompareAndDelete(voiceKey(voiceModeTalk, session.DeviceID, session.ChannelID), session.Stream)
+		}
+		return true
+	})
+	g.broadcastSessions.Range(func(key, value any) bool {
+		session, ok := value.(*broadcastSession)
+		if !ok || session == nil {
+			g.broadcastSessions.Delete(key)
+			return true
+		}
+		_ = g.stopBroadcastSession(session, true)
+		session.mu.Lock()
+		dialog := session.Dialog
+		session.mu.Unlock()
+		if dialog != nil {
+			g.inviteDialogs.CompareAndDelete(dialog.CallID, dialog)
+		}
+		return true
+	})
+}
+
+func (g *GB28181API) closeRemainingMediaSessions() {
+	if g == nil {
+		return
+	}
+	if g.streams != nil {
+		g.streams.Range(func(key string, stream *Streams) bool {
+			if stream == nil {
+				g.streams.Delete(key)
+				return true
+			}
+			if !g.streams.CompareAndDelete(key, stream) {
+				return true
+			}
+			if stream.DirectTCP && g.directDownloads != nil {
+				g.directDownloads.Cancel(stream.DirectSessionID)
+			}
+			if strings.HasPrefix(key, "history:"+historyModeDownload+":") && !stream.DirectTCP {
+				g.finishRTPDownload(stream, rtpDownloadStopped, "service_stopped")
+			}
+			stream.Stop = true
+			stream.Status = 1
+			stream.EndReason = "service_stopped"
+			g.sendStreamBYE(stream)
+			if stream.mediaServer != nil && g.sms != nil {
+				_, _ = g.sms.CloseRTPServer(stream.mediaServer, zlm.CloseRTPServerRequest{StreamID: stream.StreamID})
+			}
+			if g.core.Store() != nil {
+				_ = g.core.EditPlaying(context.Background(), stream.DeviceID, stream.ChannelID, false)
+			}
+			return true
+		})
+	}
+	g.inviteDialogs.Range(func(key, value any) bool {
+		dialog, _ := value.(*inboundInviteDialog)
+		if dialog != nil {
+			_ = g.sendInboundDialogBYE(dialog)
+			if dialog.Broadcast != nil {
+				_ = g.stopBroadcastSession(dialog.Broadcast, false)
+			}
+			if dialog.Cascade != nil {
+				g.stopCascadeMediaSession(dialog.Cascade, false, false)
+			}
+		}
+		g.inviteDialogs.CompareAndDelete(key, value)
+		return true
+	})
+}
+
+func (g *GB28181API) sendStreamBYE(stream *Streams) {
+	if g == nil || stream == nil || stream.Resp == nil || g.svr == nil || g.svr.memoryStorer == nil {
+		return
+	}
+	ch, ok := g.svr.memoryStorer.GetChannel(stream.DeviceID, stream.ChannelID)
+	if !ok || ch == nil || ch.Conn() == nil || ch.Source() == nil {
+		return
+	}
+	req, err := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp)
+	if err != nil {
+		return
+	}
+	req.SetDestination(ch.Source())
+	req.SetConnection(ch.Conn())
+	_, _ = g.svr.Request(req)
 }
 
 func (g *GB28181API) closeCascadeMediaSessions() {

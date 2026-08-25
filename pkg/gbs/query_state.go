@@ -34,6 +34,16 @@ type QueryState struct {
 	AppendixA4 []AppendixA4Object `json:"appendix_a4,omitempty"`
 }
 
+const (
+	queryStateTTL        = 7 * 24 * time.Hour
+	maxQueryStateEntries = 4096
+)
+
+type queryStateCleanupEntry struct {
+	deviceID string
+	state    *QueryState
+}
+
 // DeviceStatusData 对应 DeviceStatus 查询结果。
 type DeviceStatusData struct {
 	CmdType        string   `json:"cmd_type"`
@@ -156,6 +166,41 @@ func (g *GB28181API) GetQueryState(deviceID string) (*QueryState, bool) {
 	}
 	state, ok := v.(*QueryState)
 	return state, ok
+}
+
+func (g *GB28181API) cleanupQueryStates(now time.Time) {
+	if g == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	cutoff := now.Add(-queryStateTTL)
+	g.queryStateMu.Lock()
+	defer g.queryStateMu.Unlock()
+	entries := make([]queryStateCleanupEntry, 0)
+	g.queryStates.Range(func(key, value any) bool {
+		deviceID, keyOK := key.(string)
+		state, stateOK := value.(*QueryState)
+		if !keyOK || !stateOK || state == nil || state.UpdatedAt.IsZero() || !state.UpdatedAt.After(cutoff) {
+			g.queryStates.CompareAndDelete(key, value)
+			return true
+		}
+		entries = append(entries, queryStateCleanupEntry{deviceID: deviceID, state: state})
+		return true
+	})
+	if len(entries) <= maxQueryStateEntries {
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].state.UpdatedAt.Equal(entries[j].state.UpdatedAt) {
+			return entries[i].deviceID < entries[j].deviceID
+		}
+		return entries[i].state.UpdatedAt.Before(entries[j].state.UpdatedAt)
+	})
+	for _, entry := range entries[:len(entries)-maxQueryStateEntries] {
+		g.queryStates.CompareAndDelete(entry.deviceID, entry.state)
+	}
 }
 
 func (g *GB28181API) decodeAndStoreQueryData(deviceID, cmdType string, body []byte) any {

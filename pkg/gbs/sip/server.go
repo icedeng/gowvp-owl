@@ -667,6 +667,15 @@ func (s *Server) Request(req *Request) (*Transaction, error) {
 
 // RequestWithSecurity 在报文写出前安装事务级签名器，避免响应早于验签器安装的竞态。
 func (s *Server) RequestWithSecurity(req *Request, security MessageSecurity) (*Transaction, error) {
+	if s == nil || req == nil {
+		return nil, fmt.Errorf("SIP request is unavailable")
+	}
+	if req.GetConnection() == nil {
+		return nil, fmt.Errorf("SIP request connection is unavailable")
+	}
+	if req.Destination() == nil {
+		return nil, fmt.Errorf("SIP request destination is unavailable")
+	}
 	viaHop, ok := req.ViaHop()
 	if !ok {
 		return nil, fmt.Errorf("missing required 'Via' header")

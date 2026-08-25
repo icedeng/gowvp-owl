@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -61,4 +62,75 @@ func TestRemoteBYEFinishesOutboundRTPDownload(t *testing.T) {
 	if closed.StreamID != stream.StreamID {
 		t.Fatalf("RTP receiver was not closed: %+v", closed)
 	}
+}
+
+func TestCleanupRTPDownloadsExpiresOnlyTerminalStates(t *testing.T) {
+	now := time.Now()
+	api := &GB28181API{}
+	expiredKey := "cascade-download-expired"
+	activeKey := "cascade-download-active"
+	recentKey := historyKey(historyModeDownload, gb10DeviceID, gb10ChannelID)
+	api.rtpDownloads.Store(expiredKey, testRTPDownloadSession(gb10DeviceID, gb10ChannelID, now.Add(-rtpDownloadTerminalTTL-time.Second)))
+	api.rtpDownloads.Store(activeKey, testRTPDownloadSession(gb10DeviceID, gb10ChannelID, time.Time{}))
+	api.rtpDownloads.Store(recentKey, testRTPDownloadSession(gb10DeviceID, gb10ChannelID, now.Add(-time.Minute)))
+	api.rtpDownloads.Store("invalid", "unexpected")
+
+	api.cleanupRTPDownloads(now)
+
+	if _, ok := api.rtpDownloads.Load(expiredKey); ok {
+		t.Fatal("expired RTP terminal state was retained")
+	}
+	if _, ok := api.rtpDownloads.Load(activeKey); !ok {
+		t.Fatal("active RTP download was removed")
+	}
+	if _, ok := api.rtpDownloads.Load(recentKey); !ok {
+		t.Fatal("recent channel RTP terminal state was removed")
+	}
+	if _, ok := api.rtpDownloads.Load("invalid"); ok {
+		t.Fatal("invalid RTP download entry was retained")
+	}
+}
+
+func TestCleanupRTPDownloadsBoundsIndependentSessionStates(t *testing.T) {
+	now := time.Now()
+	api := &GB28181API{}
+	for i := 0; i < rtpDownloadMaxSessionTerminalStates+2; i++ {
+		key := fmt.Sprintf("cascade-download-%04d", i)
+		api.rtpDownloads.Store(key, testRTPDownloadSession(gb10DeviceID, gb10ChannelID, now.Add(time.Duration(i)*time.Nanosecond)))
+	}
+	activeKey := "cascade-download-active"
+	api.rtpDownloads.Store(activeKey, testRTPDownloadSession(gb10DeviceID, gb10ChannelID, time.Time{}))
+
+	api.cleanupRTPDownloads(now.Add(time.Second))
+
+	terminalCount := 0
+	api.rtpDownloads.Range(func(key, value any) bool {
+		session, ok := value.(*rtpDownloadSession)
+		if ok && !session.snapshot().CompletedAt.IsZero() {
+			terminalCount++
+		}
+		return true
+	})
+	if terminalCount != rtpDownloadMaxSessionTerminalStates {
+		t.Fatalf("RTP session terminal states = %d; want %d", terminalCount, rtpDownloadMaxSessionTerminalStates)
+	}
+	if _, ok := api.rtpDownloads.Load("cascade-download-0000"); ok {
+		t.Fatal("oldest RTP session terminal state was retained")
+	}
+	if _, ok := api.rtpDownloads.Load(activeKey); !ok {
+		t.Fatal("active RTP session was removed by capacity cleanup")
+	}
+}
+
+func testRTPDownloadSession(deviceID, channelID string, completedAt time.Time) *rtpDownloadSession {
+	state := RTPDownloadState{
+		SessionID: "test-session", DeviceID: deviceID, ChannelID: channelID,
+		Status: rtpDownloadReceiving, StartedAt: completedAt.Add(-time.Second), UpdatedAt: completedAt,
+		CompletedAt: completedAt,
+	}
+	if completedAt.IsZero() {
+		state.StartedAt = time.Now()
+		state.UpdatedAt = state.StartedAt
+	}
+	return &rtpDownloadSession{state: state}
 }

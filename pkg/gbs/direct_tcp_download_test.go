@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -342,7 +343,7 @@ func TestDirectTCPDownloadManagerRetentionOnlyRemovesManagedFiles(t *testing.T) 
 	if err := os.Chtimes(unmanaged, old, old); err != nil {
 		t.Fatal(err)
 	}
-	manager.cleanupExpiredFiles(time.Now(), manager.opts)
+	manager.cleanupExpiredFiles(time.Now(), manager.opts, nil)
 	for _, name := range managed {
 		if _, err := os.Stat(filepath.Join(manager.opts.StorageDir, name)); !os.IsNotExist(err) {
 			t.Fatalf("managed file %s was not removed: %v", name, err)
@@ -350,6 +351,96 @@ func TestDirectTCPDownloadManagerRetentionOnlyRemovesManagedFiles(t *testing.T) 
 	}
 	if _, err := os.Stat(unmanaged); err != nil {
 		t.Fatalf("unmanaged file was removed: %v", err)
+	}
+}
+
+func TestDirectTCPDownloadManagerCleanupExpiresOnlyTerminalStates(t *testing.T) {
+	manager := newTestDirectTCPManager(t)
+	now := time.Now()
+	manager.states["expired"] = DirectTCPDownloadState{
+		SessionID: "expired", StartedAt: now.Add(-48 * time.Hour),
+		CompletedAt: now.Add(-25 * time.Hour), Status: directTCPStatusCompleted,
+	}
+	manager.states["recent"] = DirectTCPDownloadState{
+		SessionID: "recent", StartedAt: now.Add(-time.Hour),
+		CompletedAt: now.Add(-time.Minute), Status: directTCPStatusCompleted,
+	}
+	manager.states["active"] = DirectTCPDownloadState{
+		SessionID: "active", StartedAt: now.Add(-48 * time.Hour), Status: directTCPStatusReceiving,
+	}
+	manager.active["active"] = &directTCPDownloadSession{}
+
+	manager.Cleanup(now)
+
+	if _, ok := manager.State("expired"); ok {
+		t.Fatal("expired Direct TCP terminal state was retained")
+	}
+	if _, ok := manager.State("recent"); !ok {
+		t.Fatal("recent Direct TCP terminal state was removed")
+	}
+	if _, ok := manager.State("active"); !ok {
+		t.Fatal("active Direct TCP state was removed")
+	}
+}
+
+func TestDirectTCPDownloadManagerCleanupBoundsTerminalStates(t *testing.T) {
+	manager := newTestDirectTCPManager(t)
+	now := time.Now()
+	for i := 0; i < directTCPMaxTerminalStates+2; i++ {
+		sessionID := fmt.Sprintf("terminal-%04d", i)
+		completedAt := now.Add(time.Duration(i) * time.Nanosecond)
+		manager.states[sessionID] = DirectTCPDownloadState{
+			SessionID: sessionID, Status: directTCPStatusCompleted,
+			StartedAt: completedAt.Add(-time.Second), UpdatedAt: completedAt, CompletedAt: completedAt,
+		}
+	}
+	manager.states["active"] = DirectTCPDownloadState{
+		SessionID: "active", Status: directTCPStatusReceiving, StartedAt: now,
+	}
+	manager.active["active"] = &directTCPDownloadSession{}
+
+	manager.Cleanup(now.Add(time.Second))
+
+	manager.mu.RLock()
+	terminalCount := len(manager.states) - len(manager.active)
+	_, oldestExists := manager.states["terminal-0000"]
+	_, activeExists := manager.states["active"]
+	manager.mu.RUnlock()
+	if terminalCount != directTCPMaxTerminalStates {
+		t.Fatalf("Direct TCP terminal states = %d; want %d", terminalCount, directTCPMaxTerminalStates)
+	}
+	if oldestExists {
+		t.Fatal("oldest Direct TCP terminal state was retained")
+	}
+	if !activeExists {
+		t.Fatal("active Direct TCP state was removed by capacity cleanup")
+	}
+}
+
+func TestDirectTCPDownloadManagerCleanupProtectsActivePartialFile(t *testing.T) {
+	manager := newTestDirectTCPManager(t)
+	partial := filepath.Join(manager.opts.StorageDir, ".active.ps-123.part")
+	if err := os.WriteFile(partial, []byte("active"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(partial, old, old); err != nil {
+		t.Fatal(err)
+	}
+	session := &directTCPDownloadSession{}
+	session.setTempPath(partial)
+	manager.active["active"] = session
+	manager.states["active"] = DirectTCPDownloadState{SessionID: "active", Status: directTCPStatusReceiving}
+
+	manager.Cleanup(time.Now())
+	if _, err := os.Stat(partial); err != nil {
+		t.Fatalf("active partial file was removed: %v", err)
+	}
+
+	delete(manager.active, "active")
+	manager.Cleanup(time.Now())
+	if _, err := os.Stat(partial); !os.IsNotExist(err) {
+		t.Fatalf("inactive expired partial file was retained: %v", err)
 	}
 }
 

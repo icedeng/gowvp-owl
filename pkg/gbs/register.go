@@ -155,6 +155,7 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 	g.applyDirectTCPConfig(cfg.Sip.DirectTCPDownload)
 	go g.startEventSubscriberCleaner()
 	go g.startInviteDialogCleaner()
+	go g.startRuntimeStateCleaner()
 	return &g
 }
 

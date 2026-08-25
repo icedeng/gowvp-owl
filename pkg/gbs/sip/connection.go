@@ -20,7 +20,7 @@ type Packet struct {
 }
 
 func newPacket(data []byte, raddr net.Addr, conn Connection) Packet {
-	slog.Debug("receive new packet,from:", "raddr", raddr.String(), "data", string(data))
+	slog.Debug("receive new packet,from:", "raddr", addrString(raddr), "data", string(data))
 	logTraffic("in", conn.Network(), raddr, conn.LocalAddr(), data)
 	return Packet{
 		reader:     bufio.NewReader(bytes.NewReader(data)),
@@ -78,6 +78,7 @@ type connection struct {
 	raddr    net.Addr
 	// mu       sync.RWMutex
 	logKey string
+	packet bool
 }
 
 func NewUDPConnection(baseConn net.Conn) Connection {
@@ -86,6 +87,7 @@ func NewUDPConnection(baseConn net.Conn) Connection {
 		laddr:    baseConn.LocalAddr(),
 		raddr:    baseConn.RemoteAddr(),
 		logKey:   "udp ",
+		packet:   true,
 	}
 	return conn
 }
@@ -115,7 +117,14 @@ func (conn *connection) Read(buf []byte) (int, error) {
 }
 
 func (conn *connection) ReadFrom(buf []byte) (num int, raddr net.Addr, err error) {
-	num, raddr, err = conn.baseConn.(net.PacketConn).ReadFrom(buf)
+	if !conn.packet {
+		return 0, nil, fmt.Errorf("%sconnection does not support packet reads", conn.logKey)
+	}
+	packetConn, ok := conn.baseConn.(net.PacketConn)
+	if !ok {
+		return 0, nil, fmt.Errorf("%sconnection does not support packet reads", conn.logKey)
+	}
+	num, raddr, err = packetConn.ReadFrom(buf)
 	if err != nil {
 		return num, raddr, err
 		//  NewError(err, conn.logKey, "readfrom", conn.baseConn.LocalAddr().String(), raddr.String())
@@ -139,10 +148,14 @@ func (conn *connection) Write(buf []byte) (int, error) {
 }
 
 func (conn *connection) WriteTo(buf []byte, raddr net.Addr) (num int, err error) {
-	if conn.Network() == "tcp" {
+	if !conn.packet {
 		num, err = conn.baseConn.Write(buf)
 	} else {
-		num, err = conn.baseConn.(net.PacketConn).WriteTo(buf, raddr)
+		packetConn, ok := conn.baseConn.(net.PacketConn)
+		if !ok {
+			return 0, fmt.Errorf("%sconnection does not support packet writes", conn.logKey)
+		}
+		num, err = packetConn.WriteTo(buf, raddr)
 	}
 	if err != nil {
 		return num, err
@@ -161,15 +174,20 @@ func (conn *connection) RemoteAddr() net.Addr {
 }
 
 func (conn *connection) Close() error {
+	local := conn.baseConn.LocalAddr()
+	remote := conn.baseConn.RemoteAddr()
 	err := conn.baseConn.Close()
 	if err != nil {
-		return NewError(err, conn.logKey, "close", conn.baseConn.LocalAddr().String(), conn.baseConn.RemoteAddr().String())
+		return NewError(err, conn.logKey, "close", addrString(local), addrString(remote))
 	}
 	return nil
 }
 
 func (conn *connection) Network() string {
-	return conn.baseConn.LocalAddr().Network()
+	if local := conn.baseConn.LocalAddr(); local != nil {
+		return local.Network()
+	}
+	return ""
 }
 
 func (conn *connection) SetDeadline(t time.Time) error {

@@ -194,6 +194,7 @@ type fakeRTPMediaService struct {
 	mediaErr    error
 	openPort    int
 	openCalls   int
+	closeCalls  int
 	closed      zlm.CloseRTPServerRequest
 	startPort   int
 	startErr    error
@@ -203,6 +204,7 @@ type fakeRTPMediaService struct {
 	talkErr     error
 	talkCalls   int
 	talkStarted zlm.StartSendRTPTalkRequest
+	stopCalls   int
 	stopped     zlm.StopSendRTPRequest
 }
 
@@ -219,6 +221,7 @@ func (f *fakeRTPMediaService) OpenRTPServer(*sms.MediaServer, zlm.OpenRTPServerR
 func (f *fakeRTPMediaService) CloseRTPServer(_ *sms.MediaServer, in zlm.CloseRTPServerRequest) (*zlm.CloseRTPServerResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.closeCalls++
 	f.closed = in
 	return &zlm.CloseRTPServerResponse{Hit: 1}, nil
 }
@@ -258,6 +261,7 @@ func (f *fakeRTPMediaService) StartSendRTPTalk(_ *sms.MediaServer, in zlm.StartS
 func (f *fakeRTPMediaService) StopSendRTP(_ *sms.MediaServer, in zlm.StopSendRTPRequest) (*zlm.StopSendRTPResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.stopCalls++
 	f.stopped = in
 	return &zlm.StopSendRTPResponse{}, nil
 }

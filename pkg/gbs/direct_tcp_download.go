@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,8 @@ const (
 	directTCPStatusCompleted  = "completed"
 	directTCPStatusFailed     = "failed"
 	directTCPStatusCancelled  = "cancelled"
+
+	directTCPMaxTerminalStates = 4096
 )
 
 // DirectTCPDownloadOptions 是 2014 附录 O 下载管理器的资源与安全限制。
@@ -82,6 +85,7 @@ type directTCPDownloadSession struct {
 	mu             sync.Mutex
 	conn           net.Conn
 	senderFinished bool
+	tempPath       string
 }
 
 func (s *directTCPDownloadSession) setConn(conn net.Conn) {
@@ -125,6 +129,18 @@ func (s *directTCPDownloadSession) wasSenderFinished() bool {
 	return s.senderFinished
 }
 
+func (s *directTCPDownloadSession) setTempPath(path string) {
+	s.mu.Lock()
+	s.tempPath = path
+	s.mu.Unlock()
+}
+
+func (s *directTCPDownloadSession) tempPathSnapshot() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tempPath
+}
+
 // DirectTCPDownloadManager 管理裸 TCP 文件接收、进度、取消和资源限制。
 type DirectTCPDownloadManager struct {
 	mu          sync.RWMutex
@@ -133,7 +149,6 @@ type DirectTCPDownloadManager struct {
 	active      map[string]*directTCPDownloadSession
 	deviceCount map[string]int
 	activeCount int
-	lastCleanup time.Time
 	pendingOpts *DirectTCPDownloadOptions
 }
 
@@ -255,21 +270,8 @@ func (m *DirectTCPDownloadManager) Start(parent context.Context, req DirectTCPDo
 		StartedAt:     now,
 		UpdatedAt:     now,
 	}
-	cleanup := now.Sub(m.lastCleanup) >= time.Hour
-	if cleanup {
-		m.lastCleanup = now
-		cutoff := now.Add(-time.Duration(opts.RetainDays) * 24 * time.Hour)
-		for sessionID, state := range m.states {
-			if !state.CompletedAt.IsZero() && state.CompletedAt.Before(cutoff) {
-				delete(m.states, sessionID)
-			}
-		}
-	}
 	m.mu.Unlock()
 
-	if cleanup {
-		go m.cleanupExpiredFiles(now, opts)
-	}
 	go m.run(session)
 	return nil
 }
@@ -426,8 +428,10 @@ func (m *DirectTCPDownloadManager) run(session *directTCPDownloadSession) {
 		return
 	}
 	tmpPath := tmp.Name()
+	session.setTempPath(tmpPath)
 	keep := false
 	defer func() {
+		session.setTempPath("")
 		_ = tmp.Close()
 		if !keep {
 			_ = os.Remove(tmpPath)
@@ -571,12 +575,76 @@ func (m *DirectTCPDownloadManager) finish(session *directTCPDownloadSession, sta
 			m.pendingOpts = nil
 		}
 	}
+	m.cleanupTerminalStatesLocked(now, m.opts)
 	m.mu.Unlock()
 	session.cancel()
 	close(session.done)
 	if session.request.OnFinish != nil {
 		session.request.OnFinish(state)
 	}
+}
+
+type directTCPTerminalEntry struct {
+	sessionID string
+	completed time.Time
+	started   time.Time
+}
+
+func (m *DirectTCPDownloadManager) cleanupTerminalStatesLocked(now time.Time, opts DirectTCPDownloadOptions) {
+	cutoff := now.Add(-time.Duration(opts.RetainDays) * 24 * time.Hour)
+	terminals := make([]directTCPTerminalEntry, 0, len(m.states))
+	for sessionID, state := range m.states {
+		if _, active := m.active[sessionID]; active || state.CompletedAt.IsZero() {
+			continue
+		}
+		if !state.CompletedAt.After(cutoff) {
+			delete(m.states, sessionID)
+			continue
+		}
+		terminals = append(terminals, directTCPTerminalEntry{
+			sessionID: sessionID, completed: state.CompletedAt, started: state.StartedAt,
+		})
+	}
+	if len(terminals) <= directTCPMaxTerminalStates {
+		return
+	}
+	sort.Slice(terminals, func(i, j int) bool {
+		if terminals[i].completed.Equal(terminals[j].completed) {
+			if terminals[i].started.Equal(terminals[j].started) {
+				return terminals[i].sessionID < terminals[j].sessionID
+			}
+			return terminals[i].started.Before(terminals[j].started)
+		}
+		return terminals[i].completed.Before(terminals[j].completed)
+	})
+	for _, entry := range terminals[:len(terminals)-directTCPMaxTerminalStates] {
+		delete(m.states, entry.sessionID)
+	}
+}
+
+// Cleanup 回收下载终态和管理器生成的过期文件；活动任务不受影响。
+func (m *DirectTCPDownloadManager) Cleanup(now time.Time) {
+	if m == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	m.mu.Lock()
+	opts := m.opts
+	m.cleanupTerminalStatesLocked(now, opts)
+	active := make([]*directTCPDownloadSession, 0, len(m.active))
+	for _, session := range m.active {
+		active = append(active, session)
+	}
+	m.mu.Unlock()
+	protected := make(map[string]struct{}, len(active))
+	for _, session := range active {
+		if path := session.tempPathSnapshot(); path != "" {
+			protected[path] = struct{}{}
+		}
+	}
+	m.cleanupExpiredFiles(now, opts, protected)
 }
 
 func validateDirectTCPAddress(address string, registeredIP net.IP, opts DirectTCPDownloadOptions) error {
@@ -657,7 +725,7 @@ func pathWithinRoot(root, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
-func (m *DirectTCPDownloadManager) cleanupExpiredFiles(now time.Time, opts DirectTCPDownloadOptions) {
+func (m *DirectTCPDownloadManager) cleanupExpiredFiles(now time.Time, opts DirectTCPDownloadOptions, protected map[string]struct{}) {
 	root, err := filepath.Abs(opts.StorageDir)
 	if err != nil {
 		return
@@ -673,9 +741,13 @@ func (m *DirectTCPDownloadManager) cleanupExpiredFiles(now time.Time, opts Direc
 		if entry.IsDir() || !managedFile {
 			continue
 		}
+		path := filepath.Join(root, name)
+		if _, active := protected[path]; active {
+			continue
+		}
 		info, err := entry.Info()
 		if err == nil && info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(root, name))
+			_ = os.Remove(path)
 		}
 	}
 }

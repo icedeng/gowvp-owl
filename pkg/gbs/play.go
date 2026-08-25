@@ -169,10 +169,12 @@ func (g *GB28181API) Play(in *PlayInput) error {
 			})
 			if err != nil {
 				log.Debug("1.2. 重新开启RTP服务器失败", "err", err)
+				g.streams.CompareAndDelete(key, stream)
 				return err
 			}
 			log.Info("成功重新打开RTP服务器", "port", resp.Port)
 		} else {
+			g.streams.CompareAndDelete(key, stream)
 			return err
 		}
 	}
