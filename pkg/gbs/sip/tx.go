@@ -9,7 +9,7 @@ import (
 	"unsafe"
 )
 
-var activeTX *transacionts
+const transactionIdleTimeout = 20 * time.Second
 
 type transacionts struct {
 	txs map[string]*Transaction
@@ -17,8 +17,15 @@ type transacionts struct {
 }
 
 func (txs *transacionts) newTX(key string, conn Connection) *Transaction {
-	tx := NewTransaction(key, conn)
 	txs.rwm.Lock()
+	if existing := txs.txs[key]; existing != nil {
+		txs.rwm.Unlock()
+		if conn != nil {
+			existing.setConnection(conn)
+		}
+		return existing
+	}
+	tx := newTransaction(key, conn, txs)
 	txs.txs[key] = tx
 	txs.rwm.Unlock()
 	return tx
@@ -35,9 +42,29 @@ func (txs *transacionts) getTX(key string) *Transaction {
 }
 
 func (txs *transacionts) rmTX(tx *Transaction) {
+	if txs == nil || tx == nil {
+		return
+	}
 	txs.rwm.Lock()
-	delete(txs.txs, tx.key)
+	if txs.txs[tx.key] == tx {
+		delete(txs.txs, tx.key)
+	}
 	txs.rwm.Unlock()
+}
+
+func (txs *transacionts) close() {
+	if txs == nil {
+		return
+	}
+	txs.rwm.RLock()
+	items := make([]*Transaction, 0, len(txs.txs))
+	for _, tx := range txs.txs {
+		items = append(items, tx)
+	}
+	txs.rwm.RUnlock()
+	for _, tx := range items {
+		tx.Close()
+	}
 }
 
 // Transaction Transaction
@@ -49,6 +76,9 @@ type Transaction struct {
 	key        string
 	resp       chan *Response
 	active     chan int
+	done       chan struct{}
+	owner      *transacionts
+	closeOnce  sync.Once
 }
 
 func (tx *Transaction) setConnection(conn Connection) {
@@ -92,8 +122,15 @@ func (tx *Transaction) messageSecurity() MessageSecurity {
 
 // NewTransaction NewTransaction
 func NewTransaction(key string, conn Connection) *Transaction {
+	return newTransaction(key, conn, nil)
+}
+
+func newTransaction(key string, conn Connection, owner *transacionts) *Transaction {
 	// logrus.Traceln("new tx", key, time.Now().Format("2006-01-02 15:04:05"))
-	tx := &Transaction{conn: conn, key: key, resp: make(chan *Response, 10), active: make(chan int, 1)}
+	tx := &Transaction{
+		conn: conn, key: key, resp: make(chan *Response, 10), active: make(chan int, 1),
+		done: make(chan struct{}), owner: owner,
+	}
 	go tx.watch()
 	return tx
 }
@@ -104,11 +141,22 @@ func (tx *Transaction) Key() string {
 }
 
 func (tx *Transaction) watch() {
+	timer := time.NewTimer(transactionIdleTimeout)
+	defer timer.Stop()
 	for {
 		select {
+		case <-tx.done:
+			return
 		case <-tx.active:
 			// logrus.Traceln("active tx", tx.Key(), time.Now().Format("2006-01-02 15:04:05"))
-		case <-time.After(20 * time.Second):
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(transactionIdleTimeout)
+		case <-timer.C:
 			tx.Close()
 			// logrus.Traceln("watch closed tx", tx.key, time.Now().Format("2006-01-02 15:04:05"))
 			return
@@ -135,6 +183,8 @@ func (tx *Transaction) GetResponseContext(ctx context.Context) (*Response, error
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		case <-tx.done:
+			return nil, nil
 		case res, ok := <-tx.resp:
 			if !ok || res == nil {
 				return nil, nil
@@ -154,8 +204,13 @@ func (tx *Transaction) markActive(value int) {
 	if tx == nil || tx.active == nil {
 		return
 	}
-	defer func() { _ = recover() }()
 	select {
+	case <-tx.done:
+		return
+	default:
+	}
+	select {
+	case <-tx.done:
 	case tx.active <- value:
 	default:
 	}
@@ -163,10 +218,18 @@ func (tx *Transaction) markActive(value int) {
 
 // Close Close
 func (tx *Transaction) Close() {
-	// logrus.Traceln("closed tx", tx.key, time.Now().Format("2006-01-02 15:04:05"))
-	activeTX.rmTX(tx)
-	close(tx.resp)
-	close(tx.active)
+	if tx == nil {
+		return
+	}
+	tx.closeOnce.Do(func() {
+		// logrus.Traceln("closed tx", tx.key, time.Now().Format("2006-01-02 15:04:05"))
+		if tx.owner != nil {
+			tx.owner.rmTX(tx)
+		}
+		if tx.done != nil {
+			close(tx.done)
+		}
+	})
 }
 
 // Response Response
@@ -183,7 +246,11 @@ func (tx *Transaction) receiveResponse(msg *Response) {
 		}
 	}
 	// logrus.Traceln("receiveResponse tx", tx.Key(), time.Now().Format("2006-01-02 15:04:05"))
-	tx.resp <- msg
+	select {
+	case <-tx.done:
+		return
+	case tx.resp <- msg:
+	}
 	tx.markActive(1)
 }
 

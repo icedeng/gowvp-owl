@@ -54,10 +54,10 @@ type RequestSecurityResolver func(*Request) (MessageSecurity, error)
 
 // NewServer sip server
 func NewServer(form *Address) *Server {
-	activeTX = &transacionts{txs: map[string]*Transaction{}, rwm: &sync.RWMutex{}}
+	txs := &transacionts{txs: map[string]*Transaction{}, rwm: &sync.RWMutex{}}
 	ctx, cancel := context.WithCancel(context.TODO())
 	srv := &Server{
-		txs:    activeTX,
+		txs:    txs,
 		ctx:    ctx,
 		cancel: cancel,
 		from:   form,
@@ -278,6 +278,9 @@ func (s *Server) Close() {
 	if s.tlsListener != nil {
 		s.tlsListener.Close()
 		s.tlsListener = nil
+	}
+	if s.txs != nil {
+		s.txs.close()
 	}
 }
 

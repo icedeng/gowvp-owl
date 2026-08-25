@@ -41,7 +41,7 @@
 
 | 能力 | 状态 | 当前证据 |
 |---|---|---|
-| 多上级注册 | 完成（自动化） | `SIPUpstream.transport` 支持 UDP/TCP 且空值默认 UDP；TCP 持久连接覆盖 REGISTER→401 Digest→认证 REGISTER→Keepalive、断线重连事务换连接和入向身份绑定；Digest/qop、续注册、注销、退避、热更新、实际 Expires；2022 301/302 支持 UDP/TCP 重定向并校验 Contact/ServerID/传输；`cascade_test.go`、`server_tcp_test.go` |
+| 多上级注册 | 完成（自动化） | `SIPUpstream.transport` 支持 UDP/TCP 且空值默认 UDP；TCP 持久连接覆盖 REGISTER→401 Digest→认证 REGISTER→Keepalive、断线重连事务换连接和入向身份绑定；Digest/qop、续注册、注销、退避、热更新、实际 Expires；2022 301/302 支持 UDP/TCP 重定向并校验 Contact/ServerID/传输。SIP 事务表按 Server 实例隔离，同 Call-ID 并发获取原子去重，停服幂等关闭并唤醒等待者，避免多实例覆盖和旧事务误删新事务；`cascade_test.go`、`server_tcp_test.go`、`sip/tx_lifecycle_test.go` |
 | `Date + Note` 信令摘要 | 完成（自动化，默认关闭） | 除 REGISTER 请求/响应外，级联 MESSAGE/Keepalive 在写出前签名并校验响应；入向已注册上级按 `SignalDigestSeed → Password → 全局 Seed` 选择 seed，设备按设备独立密码优先；Required 模式丢弃无签名、超时或正文被篡改的响应且事务不阻塞；`cascade_test.go`、`signal_digest_test.go`、`sip/signal_digest_test.go` |
 | 查询与目录 | 完成（自动化） | 平台与共享通道 DeviceInfo/DeviceStatus、共享通道 RecordInfo 下级查询及响应编码映射；可信 NVR 可代表其已知子通道返回 DeviceInfo，通道元数据单独落库且不会覆盖父设备，非法跨设备编码仍拒绝；按上级版本安全转发 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 CruiseTrackListQuery/CruiseTrackQuery/PTZPosition/SDCardStatus；巡航轨迹编号、列表、预置位、停留时间和速度结构化解析；上下级 SN 独立、响应恢复上级 SN，DeviceID/ParentID 映射且未知下级编码不透传，多上级并发响应隔离；Catalog 支持平台根或单个共享通道目标、共享白名单、20 条查询分包和版本化 Info；录像列表 20 条分包且不泄露下级编码；`cascade_query_test.go`、`device_info_channel_test.go` |
 | 设备控制 | 完成（共享通道安全子集） | PTZ、录像控制及版本匹配的 IFrame/DragZoom/HomePosition/精准 PTZ/TargetTrack 转发下级并映射业务响应；TargetTrack 仅允许控制当前共享通道，`DeviceID2` 会映射为真实下级编码，禁止借此越权控制未共享通道；校验 PTZ 校验和、上下级版本与设备能力关闭项；重启、布撤防、报警复位、格式化等设备级操作不允许经仅共享通道越权执行；`cascade_control_test.go` |
