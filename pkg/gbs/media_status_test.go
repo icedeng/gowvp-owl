@@ -148,3 +148,26 @@ func TestMediaStatus11UnknownNotifyTypeDoesNotStop(t *testing.T) {
 		t.Fatal("unknown MediaStatus type stopped the session")
 	}
 }
+
+func TestMediaStatusCannotStopAnotherDevicesHistorySession(t *testing.T) {
+	streams := &conc.Map[string, *Streams]{}
+	key := historyKey(historyModePlayback, gb10DeviceID, gb10ChannelID)
+	stream := &Streams{DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, CallID: "shared-call-id"}
+	streams.Store(key, stream)
+	api := &GB28181API{streams: streams}
+	conn := newFlowConnection()
+	body := []byte(`<?xml version="1.0"?><Notify><CmdType>MediaStatus</CmdType><SN>41</SN><DeviceID>` + gb10ChannelID + `</DeviceID><NotifyType>121</NotifyType></Notify>`)
+	request := newFlowRequest(t, conn, sip.MethodMessage, "shared-call-id", body)
+	api.sipMessageMediaStatus(&sip.Context{
+		Request: request, Tx: sip.NewTransaction("cross-device-media-status", conn), DeviceID: "34020000001320009999", Source: conn.remote,
+	})
+	select {
+	case response := <-conn.writes:
+		assertFlowOK(t, string(response))
+	case <-time.After(time.Second):
+		t.Fatal("MediaStatus response timeout")
+	}
+	if current, ok := streams.Load(key); !ok || current != stream || stream.Stop {
+		t.Fatal("cross-device MediaStatus stopped another device's history session")
+	}
+}

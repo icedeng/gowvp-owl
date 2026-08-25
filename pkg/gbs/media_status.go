@@ -36,12 +36,12 @@ func (g *GB28181API) sipMessageMediaStatus(ctx *sip.Context) {
 	matched := false
 	var ended *Streams
 	endedDownload := false
-	if callID != "" && g.directDownloads != nil && g.directDownloads.NotifySenderFinished(callID) {
+	if callID != "" && g.directDownloads != nil && g.directDownloads.NotifySenderFinishedForDevice(callID, ctx.DeviceID) {
 		matched = true
 	}
 	if !matched && g.streams != nil && callID != "" {
 		g.streams.Range(func(key string, stream *Streams) bool {
-			if stream == nil || normalizeStoredCallID(stream.CallID) != callID || !strings.HasPrefix(key, "history:") {
+			if stream == nil || stream.DeviceID != ctx.DeviceID || normalizeStoredCallID(stream.CallID) != callID || !strings.HasPrefix(key, "history:") {
 				return true
 			}
 			if !g.streams.CompareAndDelete(key, stream) {

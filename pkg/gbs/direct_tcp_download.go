@@ -389,13 +389,20 @@ func (m *DirectTCPDownloadManager) CancelDevice(deviceID string) int {
 
 // NotifySenderFinished 处理 MediaStatus/121；未知大小时以该通知收敛传输。
 func (m *DirectTCPDownloadManager) NotifySenderFinished(sessionID string) bool {
+	return m.NotifySenderFinishedForDevice(sessionID, "")
+}
+
+// NotifySenderFinishedForDevice 仅允许会话所属设备通过 MediaStatus/121 收敛传输。
+// deviceID 为空保留内部旧调用兼容；协议入口必须传入已鉴权的设备编号。
+func (m *DirectTCPDownloadManager) NotifySenderFinishedForDevice(sessionID, deviceID string) bool {
 	if m == nil {
 		return false
 	}
+	deviceID = strings.TrimSpace(deviceID)
 	m.mu.RLock()
 	session, ok := m.active[strings.TrimSpace(sessionID)]
 	m.mu.RUnlock()
-	if !ok {
+	if !ok || deviceID != "" && session.request.DeviceID != deviceID {
 		return false
 	}
 	session.signalSenderFinished()

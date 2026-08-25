@@ -375,7 +375,7 @@ func (g *GB28181API) handleOutboundBYE(ctx *sip.Context, callID string) bool {
 	var endedStream *Streams
 	endedDownload := false
 	g.streams.Range(func(key string, stream *Streams) bool {
-		if stream == nil || normalizeStoredCallID(stream.CallID) != callID {
+		if stream == nil || stream.DeviceID != ctx.DeviceID || normalizeStoredCallID(stream.CallID) != callID {
 			return true
 		}
 		if !g.streams.CompareAndDelete(key, stream) {

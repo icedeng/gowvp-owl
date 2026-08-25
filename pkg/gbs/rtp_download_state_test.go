@@ -65,6 +65,32 @@ func TestRemoteBYEFinishesOutboundRTPDownload(t *testing.T) {
 	}
 }
 
+func TestRemoteBYECannotStopAnotherDevicesOutboundSession(t *testing.T) {
+	api := &GB28181API{streams: &conc.Map[string, *Streams]{}}
+	conn := newFlowConnection()
+	stream := &Streams{
+		DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, CallID: "cross-device-bye", StreamID: "cross-device-stream",
+	}
+	key := historyKey(historyModePlayback, gb10DeviceID, gb10ChannelID)
+	api.streams.Store(key, stream)
+	request := newFlowRequest(t, conn, sip.MethodBYE, stream.CallID, nil)
+	api.sipByeGeneric(&sip.Context{
+		Request: request, Tx: sip.NewTransaction("cross-device-bye-tx", conn),
+		DeviceID: "34020000001320009999", Source: conn.remote,
+	})
+	select {
+	case response := <-conn.writes:
+		if !strings.Contains(string(response), "SIP/2.0 481") {
+			t.Fatalf("cross-device BYE response = %s", response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cross-device BYE response timeout")
+	}
+	if current, ok := api.streams.Load(key); !ok || current != stream || stream.Stop {
+		t.Fatal("cross-device BYE stopped another device's outbound session")
+	}
+}
+
 func TestRemoteBYEAcknowledgesBeforeMediaCleanup(t *testing.T) {
 	conn := newFlowConnection()
 	media := &blockingCloseRTPMediaService{

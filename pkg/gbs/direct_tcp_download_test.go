@@ -236,7 +236,10 @@ func TestDirectTCPDownloadManagerTimeoutCancelAndMediaStatus(t *testing.T) {
 		manager := newTestDirectTCPManager(t)
 		startDirectTCPTestDownload(t, manager, directTCPRequest("media-status", address))
 		waitDirectTCPBytes(t, manager, "media-status")
-		if !manager.NotifySenderFinished("media-status") {
+		if manager.NotifySenderFinishedForDevice("media-status", "34020000001320009999") {
+			t.Fatal("another device stopped the direct TCP download")
+		}
+		if !manager.NotifySenderFinishedForDevice("media-status", gb10DeviceID) {
 			t.Fatal("NotifySenderFinished returned false")
 		}
 		state := waitDirectTCPState(t, manager, "media-status")
