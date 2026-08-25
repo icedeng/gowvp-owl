@@ -68,12 +68,15 @@ func TestPlayContextCancelsWhileWaitingForDeviceMediaLock(t *testing.T) {
 	memory.runtime.Channels.Store(gb10ChannelID, channel)
 	api := &GB28181API{svr: &Server{memoryStorer: memory}}
 
-	memory.runtime.playMutex.Lock()
-	defer memory.runtime.playMutex.Unlock()
+	unlock, err := memory.runtime.lockMediaContext(context.Background(), gb10ChannelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	err := api.PlayContext(ctx, &PlayInput{Channel: &ipc.Channel{
+	err = api.PlayContext(ctx, &PlayInput{Channel: &ipc.Channel{
 		DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, ID: "stream-waiting-for-lock",
 	}})
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -81,5 +84,35 @@ func TestPlayContextCancelsWhileWaitingForDeviceMediaLock(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("media lock cancellation took %s", elapsed)
+	}
+}
+
+func TestDeviceMediaLocksSerializePerChannelWithoutCrossChannelBlocking(t *testing.T) {
+	device := &Device{}
+	unlockFirst, err := device.lockMediaContext(context.Background(), "channel-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err = device.lockMediaContext(ctx, "channel-1"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("same-channel lock error = %v; want %v", err, context.DeadlineExceeded)
+	}
+
+	otherCtx, otherCancel := context.WithTimeout(context.Background(), time.Second)
+	defer otherCancel()
+	unlockSecond, err := device.lockMediaContext(otherCtx, "channel-2")
+	if err != nil {
+		t.Fatalf("different channel was blocked: %v", err)
+	}
+	unlockSecond()
+	unlockFirst()
+
+	device.mediaLockMu.Lock()
+	count := len(device.mediaLocks)
+	device.mediaLockMu.Unlock()
+	if count != 0 {
+		t.Fatalf("released media locks retained %d entries", count)
 	}
 }

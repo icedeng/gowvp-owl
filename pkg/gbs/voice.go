@@ -180,10 +180,11 @@ func (g *GB28181API) StartVoice(ctx context.Context, in *VoiceInput) error {
 		}
 	}
 
-	if err := ch.device.playMutex.LockContext(ctx); err != nil {
+	unlock, err := ch.device.lockMediaContext(ctx, ch.ChannelID)
+	if err != nil {
 		return err
 	}
-	defer ch.device.playMutex.Unlock()
+	defer unlock()
 	if in.Mode == voiceModeBroadcast {
 		return g.startBroadcast(ctx, ch, in)
 	}
@@ -478,10 +479,11 @@ func (g *GB28181API) StopVoice(ctx context.Context, in *StopVoiceInput) error {
 	if !ok {
 		return ErrChannelNotExist
 	}
-	if err := ch.device.playMutex.LockContext(ctx); err != nil {
+	unlock, err := ch.device.lockMediaContext(ctx, ch.ChannelID)
+	if err != nil {
 		return err
 	}
-	defer ch.device.playMutex.Unlock()
+	defer unlock()
 	defer func() {
 		_ = g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, false)
 	}()

@@ -20,6 +20,11 @@ type cancelableMutex struct {
 	token chan struct{}
 }
 
+type channelMediaLock struct {
+	mutex cancelableMutex
+	refs  int
+}
+
 func (m *cancelableMutex) init() {
 	m.once.Do(func() {
 		m.token = make(chan struct{}, 1)
@@ -69,9 +74,9 @@ type Device struct {
 	Channels conc.Map[string, *Channel]
 
 	registerWithKeepaliveMutex sync.Mutex
-	// 播放互斥锁也可以移动到 channel 属性
-	playMutex cancelableMutex
-	stateMu   sync.RWMutex
+	mediaLockMu                sync.Mutex
+	mediaLocks                 map[string]*channelMediaLock
+	stateMu                    sync.RWMutex
 
 	IsOnline    bool
 	Address     string
@@ -91,6 +96,49 @@ type Device struct {
 
 	keepaliveInterval uint16
 	keepaliveTimeout  uint16
+}
+
+func (d *Device) lockMediaContext(ctx context.Context, channelID string) (func(), error) {
+	if d == nil {
+		return nil, fmt.Errorf("GB28181 device is unavailable")
+	}
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" {
+		return nil, fmt.Errorf("GB28181 media channel is unavailable")
+	}
+	d.mediaLockMu.Lock()
+	if d.mediaLocks == nil {
+		d.mediaLocks = make(map[string]*channelMediaLock)
+	}
+	entry := d.mediaLocks[channelID]
+	if entry == nil {
+		entry = &channelMediaLock{}
+		d.mediaLocks[channelID] = entry
+	}
+	entry.refs++
+	d.mediaLockMu.Unlock()
+	if err := entry.mutex.LockContext(ctx); err != nil {
+		d.releaseMediaLockRef(channelID, entry)
+		return nil, err
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			entry.mutex.Unlock()
+			d.releaseMediaLockRef(channelID, entry)
+		})
+	}, nil
+}
+
+func (d *Device) releaseMediaLockRef(channelID string, entry *channelMediaLock) {
+	d.mediaLockMu.Lock()
+	if current := d.mediaLocks[channelID]; current == entry {
+		entry.refs--
+		if entry.refs == 0 {
+			delete(d.mediaLocks, channelID)
+		}
+	}
+	d.mediaLockMu.Unlock()
 }
 
 type deviceRuntimeState struct {

@@ -79,12 +79,13 @@ func (g *GB28181API) StopPlay(ctx context.Context, in *StopPlayInput) error {
 		return ErrDeviceNotExist
 	}
 
-	if err := ch.device.playMutex.LockContext(ctx); err != nil {
+	unlock, err := ch.device.lockMediaContext(ctx, ch.ChannelID)
+	if err != nil {
 		return err
 	}
-	defer ch.device.playMutex.Unlock()
+	defer unlock()
 
-	err := g.stopPlay(ch, in)
+	err = g.stopPlay(ch, in)
 	if !g.hasActiveChannelStream(in.Channel.DeviceID, in.Channel.ChannelID) {
 		g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, false)
 	}
@@ -114,10 +115,11 @@ func (g *GB28181API) PlayContext(ctx context.Context, in *PlayInput) error {
 		return ErrChannelNotExist
 	}
 
-	if err := ch.device.playMutex.LockContext(ctx); err != nil {
+	unlock, err := ch.device.lockMediaContext(ctx, ch.ChannelID)
+	if err != nil {
 		return err
 	}
-	defer ch.device.playMutex.Unlock()
+	defer unlock()
 
 	if !ch.device.IsOnlineNow() {
 		return ErrDeviceOffline
