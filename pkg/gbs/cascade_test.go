@@ -148,6 +148,39 @@ func TestCascadeRegisterSupportsLegacyDigestWithoutQOP(t *testing.T) {
 	}
 }
 
+func TestCascadeDigestSupportsSHA256AndRejectsUnsupportedAlgorithm(t *testing.T) {
+	worker := newCascadeWorker(nil, testCascadePlatform(t, "3.0"))
+	request := worker.newRegisterRequest(3600, nil)
+	response := sip.NewResponseFromRequest("", request, http.StatusUnauthorized, "Unauthorized", nil)
+	response.AppendHeader(&sip.GenericHeader{
+		HeaderName: "WWW-Authenticate",
+		Contents:   `Digest realm="3402000000",nonce="sha256-nonce",algorithm=SHA-256,qop="auth,auth-int"`,
+	})
+	auth, err := cascadeDigestAuthorization(response, request, gb10DeviceID, "cascade-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := sip.CalcResponseWithAlgorithm(
+		"SHA-256", gb10DeviceID, "3402000000", "cascade-secret", sip.MethodRegister,
+		request.Recipient().String(), "sha256-nonce", "auth", auth.Get("cnonce"), "00000001",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth.Algorithm() != "SHA-256" || auth.Get("response") != expected || auth.QOP() != "auth" {
+		t.Fatalf("SHA-256 Digest Authorization = %s", auth.String())
+	}
+
+	unsupported := sip.NewResponseFromRequest("", request, http.StatusUnauthorized, "Unauthorized", nil)
+	unsupported.AppendHeader(&sip.GenericHeader{
+		HeaderName: "WWW-Authenticate",
+		Contents:   `Digest realm="3402000000",nonce="sm3-nonce",algorithm=SM3,qop="auth"`,
+	})
+	if _, err := cascadeDigestAuthorization(unsupported, request, gb10DeviceID, "cascade-secret"); err == nil {
+		t.Fatal("unsupported Digest algorithm accepted")
+	}
+}
+
 func TestCascadeRegisterOverTCPReusesConnectionForDigest(t *testing.T) {
 	platform := testCascadeTCPPlatform(t, "3.0")
 	localURI, err := sip.ParseSipURI("sip:" + gb10DeviceID + "@192.0.2.20:5060")

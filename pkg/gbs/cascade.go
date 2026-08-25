@@ -748,10 +748,12 @@ func cascadeDigestAuthorization(response *sip.Response, request *sip.Request, us
 		SetPassword(password).
 		SetMethod(request.Method()).
 		SetURI(request.Recipient().String())
-	if strings.Contains(strings.ToLower(auth.Get("qop")), "auth") {
+	if auth.QOP() == "auth" {
 		auth.SetClientNonce("00000001", sip.RandString(24))
 	}
-	auth.CalcResponse()
+	if _, err := auth.CalcResponseChecked(); err != nil {
+		return nil, fmt.Errorf("cascade REGISTER unsupported Digest challenge: %w", err)
+	}
 	return auth, nil
 }
 

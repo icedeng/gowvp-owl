@@ -82,7 +82,7 @@ git diff --check
 
 | 项目 | 当前状态 | 处理结论 |
 |---|---|---|
-| SIP REGISTER 口令摘要认证 | 已实现，但本轮审计发现服务端签发 nonce 的生命周期和算法一致性仍需加固 | 作为下一代码工作包修复，不能用现有自动化结果证明重放防护完整 |
+| SIP REGISTER 口令摘要认证 | 已加固并有自动化证据 | nonce 由服务端使用密码学安全随机源签发，绑定设备与源 IP、5 分钟失效且有界保存；首次成功后仅允许同 Call-ID/CSeq/摘要的 UDP 幂等重传，拒绝跨请求重放、任意 nonce、错误 realm/username/URI 和算法混淆；服务端保持 MD5 设备兼容，级联客户端支持 MD5/SHA-1/SHA-256 并明确拒绝未知算法；`register_version_test.go`、`sip/auth_test.go`、`cascade_test.go` |
 | 附录 H `Note` 信令数字摘要 | 未形成完整的收发、时间窗和 seed 管理闭环 | 属于四版本安全专项；当前 `RequireMessageAuth` 是 RFC Digest 兼容开关，不能等同于标准附录 H `Note` |
 | 数字证书双向认证、CRL | 未实现完整协议闭环 | 高安全级别专项，不能宣称支持 |
 | `Monitor-User-Identity` 跨域身份头 | 未实现完整生成、逐级追加和验证 | 与安全路由网关身份体系一起设计，不能仅做字符串透传后宣称完成 |

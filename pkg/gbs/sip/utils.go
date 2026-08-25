@@ -3,13 +3,14 @@ package sip
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
+	mathrand "math/rand"
 	"net"
 	"net/http"
 	"strings"
@@ -62,8 +63,8 @@ func RandInt(min, max int) int {
 	}
 	max++
 	max -= min
-	rand.Seed(time.Now().UnixNano())
-	r := rand.Int()
+	mathrand.Seed(time.Now().UnixNano())
+	r := mathrand.Int()
 	return r%max + min
 }
 
@@ -73,12 +74,11 @@ const (
 
 // RandString https://github.com/kpbird/golang_random_string
 func RandString(n int) string {
-	rand.Seed(time.Now().UnixNano())
 	output := make([]byte, n)
 	// We will take n bytes, one byte for each character of output.
 	randomness := make([]byte, n)
 	// read all random
-	_, err := rand.Read(randomness)
+	_, err := cryptorand.Read(randomness)
 	if err != nil {
 		panic(err)
 	}

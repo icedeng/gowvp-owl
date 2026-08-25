@@ -2,6 +2,8 @@ package gbs
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -23,6 +25,20 @@ const ignorePassword = "#"
 
 const defaultRegisterExpires = 86400
 
+const (
+	registerNonceTTL   = 5 * time.Minute
+	maxRegisterNonces  = 4096
+	registerDigestAlgo = "MD5"
+)
+
+type registerNonceState struct {
+	DeviceID            string
+	SourceIP            string
+	AcceptedFingerprint string
+	IssuedAt            time.Time
+	Expires             time.Time
+}
+
 type GB28181API struct {
 	cfg  *conf.SIP
 	boot *conf.Bootstrap
@@ -32,6 +48,9 @@ type GB28181API struct {
 	recordResponses  *multiResponseCollector[RecordItem]
 	// key=deviceID:SN，映射到 RecordInfo 的通道聚合键，兼容设备回写设备 ID。
 	recordResponseAliases sync.Map
+	// REGISTER Digest nonce 由服务端签发并绑定设备和源 IP，避免接受任意或永久可重放的 nonce。
+	registerNonceMu sync.Mutex
+	registerNonces  map[string]registerNonceState
 
 	// TODO: 待替换成 redis
 	streams *conc.Map[string, *Streams]
@@ -116,6 +135,7 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 		recordResponses: newMultiResponseCollector(func(item RecordItem) string {
 			return item.DeviceID + "\x00" + item.FilePath + "\x00" + item.StartTime + "\x00" + item.EndTime
 		}),
+		registerNonces:       make(map[string]registerNonceState),
 		streams:              &conc.Map[string, *Streams]{},
 		cascadeSources:       make(map[string]*cascadeSourceRef),
 		cascadeSubscriptions: make(map[string]*cascadeDownstreamSubscription),
@@ -199,6 +219,159 @@ func filterUnknowDevices(deviceID string) error {
 	return nil
 }
 
+func (g *GB28181API) respondRegisterChallenge(ctx *sip.Context) {
+	nonce := g.issueRegisterNonce(ctx.DeviceID, registerNonceSourceIP(ctx))
+	resp := g.newRegisterResponse(ctx, http.StatusUnauthorized, http.StatusText(http.StatusUnauthorized))
+	resp.AppendHeader(&sip.GenericHeader{
+		HeaderName: "WWW-Authenticate",
+		Contents:   fmt.Sprintf(`Digest realm="%s",qop="auth",nonce="%s"`, g.cfg.Domain, nonce),
+	})
+	_ = ctx.Tx.Respond(resp)
+}
+
+func (g *GB28181API) issueRegisterNonce(deviceID, sourceIP string) string {
+	now := time.Now()
+	g.registerNonceMu.Lock()
+	defer g.registerNonceMu.Unlock()
+	if g.registerNonces == nil {
+		g.registerNonces = make(map[string]registerNonceState)
+	}
+	var oldestKey string
+	var oldest time.Time
+	for nonce, state := range g.registerNonces {
+		if !state.Expires.After(now) {
+			delete(g.registerNonces, nonce)
+			continue
+		}
+		if oldestKey == "" || state.IssuedAt.Before(oldest) {
+			oldestKey = nonce
+			oldest = state.IssuedAt
+		}
+	}
+	if len(g.registerNonces) >= maxRegisterNonces && oldestKey != "" {
+		delete(g.registerNonces, oldestKey)
+	}
+	for {
+		nonce := sip.RandString(32)
+		if _, exists := g.registerNonces[nonce]; exists {
+			continue
+		}
+		g.registerNonces[nonce] = registerNonceState{
+			DeviceID: strings.TrimSpace(deviceID),
+			SourceIP: strings.TrimSpace(sourceIP),
+			IssuedAt: now,
+			Expires:  now.Add(registerNonceTTL),
+		}
+		return nonce
+	}
+}
+
+func (g *GB28181API) validateRegisterNonce(nonce, deviceID, sourceIP string) error {
+	now := time.Now()
+	g.registerNonceMu.Lock()
+	defer g.registerNonceMu.Unlock()
+	state, ok := g.registerNonces[nonce]
+	if !ok {
+		return fmt.Errorf("Digest nonce was not issued by this server")
+	}
+	if !state.Expires.After(now) {
+		delete(g.registerNonces, nonce)
+		return fmt.Errorf("Digest nonce expired")
+	}
+	if state.DeviceID != strings.TrimSpace(deviceID) {
+		return fmt.Errorf("Digest nonce device mismatch")
+	}
+	if state.SourceIP != "" && state.SourceIP != strings.TrimSpace(sourceIP) {
+		return fmt.Errorf("Digest nonce source mismatch")
+	}
+	return nil
+}
+
+func (g *GB28181API) acceptRegisterNonce(nonce, fingerprint string) error {
+	g.registerNonceMu.Lock()
+	defer g.registerNonceMu.Unlock()
+	state, ok := g.registerNonces[nonce]
+	if !ok || !state.Expires.After(time.Now()) {
+		delete(g.registerNonces, nonce)
+		return fmt.Errorf("Digest nonce expired")
+	}
+	if state.AcceptedFingerprint != "" && state.AcceptedFingerprint != fingerprint {
+		return fmt.Errorf("Digest nonce replay detected")
+	}
+	state.AcceptedFingerprint = fingerprint
+	g.registerNonces[nonce] = state
+	return nil
+}
+
+func registerNonceSourceIP(ctx *sip.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	return parseAddressIP(addrString(ctx.Source))
+}
+
+func (g *GB28181API) validateRegisterAuthorization(ctx *sip.Context, header sip.Header, username, password string) error {
+	if ctx == nil || ctx.Request == nil {
+		return fmt.Errorf("invalid REGISTER request")
+	}
+	generic, ok := header.(*sip.GenericHeader)
+	if !ok || generic == nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(generic.Contents)), "digest ") {
+		return fmt.Errorf("invalid Authorization header")
+	}
+	auth := sip.AuthFromValue(generic.Contents)
+	if auth.Get("realm") != g.cfg.Domain {
+		return fmt.Errorf("Digest realm mismatch")
+	}
+	if !strings.EqualFold(auth.Algorithm(), registerDigestAlgo) {
+		return fmt.Errorf("unsupported REGISTER Digest algorithm %q", auth.Algorithm())
+	}
+	if auth.Get("username") != username {
+		return fmt.Errorf("Digest username mismatch")
+	}
+	if ctx.Request.Recipient() == nil {
+		return fmt.Errorf("REGISTER request URI is missing")
+	}
+	requestURI := ctx.Request.Recipient().String()
+	if auth.Get("uri") != requestURI {
+		return fmt.Errorf("Digest uri mismatch")
+	}
+	if auth.QOP() == "auth" {
+		if len(auth.Get("nc")) != 8 || strings.TrimSpace(auth.Get("cnonce")) == "" {
+			return fmt.Errorf("REGISTER Digest qop=auth requires 8-digit nc and cnonce")
+		}
+		if _, err := hex.DecodeString(auth.Get("nc")); err != nil {
+			return fmt.Errorf("invalid Digest nc")
+		}
+	} else if auth.QOP() != "" {
+		return fmt.Errorf("unsupported REGISTER Digest qop %q", auth.QOP())
+	}
+	if err := g.validateRegisterNonce(auth.Get("nonce"), username, registerNonceSourceIP(ctx)); err != nil {
+		return err
+	}
+	auth.SetPassword(password).SetUsername(username).SetMethod(ctx.Request.Method()).SetURI(requestURI)
+	calculated, err := auth.CalcResponseChecked()
+	if err != nil {
+		return err
+	}
+	provided := strings.ToLower(strings.TrimSpace(auth.Get("response")))
+	if len(provided) != len(calculated) || subtle.ConstantTimeCompare([]byte(provided), []byte(calculated)) != 1 {
+		return fmt.Errorf("Digest response mismatch")
+	}
+	return g.acceptRegisterNonce(auth.Get("nonce"), registerRequestFingerprint(ctx.Request, provided))
+}
+
+func registerRequestFingerprint(request *sip.Request, response string) string {
+	callID := ""
+	if value, ok := request.CallID(); ok && value != nil {
+		callID = value.String()
+	}
+	sequence := ""
+	if value, ok := request.CSeq(); ok && value != nil {
+		sequence = fmt.Sprintf("%d:%s", value.SeqNo, value.MethodName)
+	}
+	return callID + "\x00" + sequence + "\x00" + response
+}
+
 func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	g.metrics.registerRequests.Add(1)
 	if err := filterUnknowDevices(ctx.DeviceID); err != nil {
@@ -265,24 +438,16 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	if password != "" {
 		hdrs := ctx.Request.GetHeaders("Authorization")
 		if len(hdrs) == 0 {
-			resp := g.newRegisterResponse(ctx, http.StatusUnauthorized, http.StatusText(http.StatusUnauthorized))
-			resp.AppendHeader(&sip.GenericHeader{HeaderName: "WWW-Authenticate", Contents: fmt.Sprintf(`Digest realm="%s",qop="auth",nonce="%s"`, g.cfg.Domain, sip.RandString(32))})
-			_ = ctx.Tx.Respond(resp)
+			g.respondRegisterChallenge(ctx)
 			return
 		}
-		authenticateHeader := hdrs[0].(*sip.GenericHeader)
-		auth := sip.AuthFromValue(authenticateHeader.Contents)
-		auth.SetPassword(password)
+		username := ctx.DeviceID
 		if !isNewDev {
-			auth.SetUsername(dev.GetGB28181DeviceID())
-		} else {
-			auth.SetUsername(ctx.DeviceID)
+			username = dev.GetGB28181DeviceID()
 		}
-		auth.SetMethod(ctx.Request.Method())
-		auth.SetURI(auth.Get("uri"))
-		if auth.CalcResponse() != auth.Get("response") {
-			ctx.Log.Info("设备注册鉴权失败")
-			g.respondRegister(ctx, http.StatusUnauthorized, "wrong password")
+		if err := g.validateRegisterAuthorization(ctx, hdrs[0], username, password); err != nil {
+			ctx.Log.Info("设备注册鉴权失败", "err", err)
+			g.respondRegisterChallenge(ctx)
 			return
 		}
 	}
