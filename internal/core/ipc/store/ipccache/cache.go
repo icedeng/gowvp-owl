@@ -61,12 +61,14 @@ func (c *Cache) LoadDeviceToMemory(conn sip.Connection) error {
 	for _, d := range devices {
 		if strings.ToLower(d.Transport) == "tcp" {
 			// 通知相关设备/通道离线
-			c.Change(d.GetGB28181DeviceID(), func(d *ipc.Device) error {
+			if err := c.Change(d.GetGB28181DeviceID(), func(d *ipc.Device) error {
 				d.IsOnline = false
 				return nil
 			}, func(d *gbs.Device) {
 				d.IsOnline = false
-			})
+			}); err != nil {
+				return fmt.Errorf("mark restored TCP device %s offline: %w", d.GetGB28181DeviceID(), err)
+			}
 			continue
 		}
 
@@ -103,7 +105,12 @@ func (c *Cache) Change(deviceID string, changeFn func(*ipc.Device) error, change
 		if err := c.Storer.Device().Update(context.TODO(), &dev, changeFn, orm.Where("device_id=?", deviceID)); err != nil {
 			return err
 		}
-		return fmt.Errorf("device not found")
+		if !dev.IsOnline {
+			if err := c.Storer.Channel().BatchEdit(context.TODO(), "is_online", false, orm.Where("did=?", dev.ID)); err != nil {
+				return fmt.Errorf("mark channels offline: %w", err)
+			}
+		}
+		return nil
 	}
 	return dev2.SerializeRegistrationState(func() error {
 		var dev ipc.Device
