@@ -34,6 +34,8 @@ func (g *GB28181API) sipMessageMediaStatus(ctx *sip.Context) {
 
 	callID := callIDFromRequest(ctx.Request)
 	matched := false
+	var ended *Streams
+	endedDownload := false
 	if callID != "" && g.directDownloads != nil && g.directDownloads.NotifySenderFinished(callID) {
 		matched = true
 	}
@@ -46,25 +48,31 @@ func (g *GB28181API) sipMessageMediaStatus(ctx *sip.Context) {
 				return true
 			}
 			matched = true
+			ended = stream
+			endedDownload = strings.HasPrefix(key, "history:"+historyModeDownload+":") && !stream.DirectTCP
 			stream.Status = 1
 			stream.Stop = true
 			stream.EndReason = "media_status"
-			if strings.HasPrefix(key, "history:"+historyModeDownload+":") && !stream.DirectTCP {
-				g.finishRTPDownload(stream, rtpDownloadCompleted, "media_status")
-			}
-			if stream.mediaServer != nil && g.sms != nil {
-				_, _ = g.sms.CloseRTPServer(stream.mediaServer, zlm.CloseRTPServerRequest{StreamID: stream.StreamID})
-			}
-			if g.core.Store() != nil {
-				_ = g.core.EditPlaying(context.Background(), stream.DeviceID, stream.ChannelID, false)
-			}
 			return false
 		})
 	}
 	if !matched {
 		slog.Debug("MediaStatus session not found", "device_id", ctx.DeviceID, "call_id", callID, "notify_type", notify.NotifyType)
 	}
+	// 先确认设备并保留已收敛的会话终态，媒体服务器/数据库清理慢时不触发 MediaStatus 重传。
 	ctx.String(200, "OK")
+	if ended == nil {
+		return
+	}
+	if endedDownload {
+		g.finishRTPDownload(ended, rtpDownloadCompleted, "media_status")
+	}
+	if ended.mediaServer != nil && g.sms != nil {
+		_, _ = g.sms.CloseRTPServer(ended.mediaServer, zlm.CloseRTPServerRequest{StreamID: ended.StreamID})
+	}
+	if g.core.Store() != nil {
+		_ = g.core.EditPlaying(context.Background(), ended.DeviceID, ended.ChannelID, false)
+	}
 }
 
 func normalizeStoredCallID(value string) string {
