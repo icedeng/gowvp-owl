@@ -1,6 +1,7 @@
 package sip
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -117,18 +118,46 @@ func (tx *Transaction) watch() {
 
 // GetResponse GetResponse
 func (tx *Transaction) GetResponse() *Response {
+	response, _ := tx.GetResponseContext(context.Background())
+	return response
+}
+
+// GetResponseContext 等待最终响应，并允许调用方在超时或取消时立即退出。
+// 1xx 临时响应会被消费，直到收到最终响应、事务关闭或 context 结束。
+func (tx *Transaction) GetResponseContext(ctx context.Context) (*Response, error) {
+	if tx == nil {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for {
-		res := <-tx.resp
-		if res == nil {
-			return res
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case res, ok := <-tx.resp:
+			if !ok || res == nil {
+				return nil, nil
+			}
+			tx.markActive(2)
+			// logrus.Traceln("response tx", tx.key, time.Now().Format("2006-01-02 15:04:05"))
+			if res.StatusCode() == http.StatusContinue || res.statusCode == http.StatusSwitchingProtocols {
+				// Trying and Dialog Establishement 等待下一个返回
+				continue
+			}
+			return res, nil
 		}
-		tx.active <- 2
-		// logrus.Traceln("response tx", tx.key, time.Now().Format("2006-01-02 15:04:05"))
-		if res.StatusCode() == http.StatusContinue || res.statusCode == http.StatusSwitchingProtocols {
-			// Trying and Dialog Establishement 等待下一个返回
-			continue
-		}
-		return res
+	}
+}
+
+func (tx *Transaction) markActive(value int) {
+	if tx == nil || tx.active == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	select {
+	case tx.active <- value:
+	default:
 	}
 }
 
@@ -155,7 +184,7 @@ func (tx *Transaction) receiveResponse(msg *Response) {
 	}
 	// logrus.Traceln("receiveResponse tx", tx.Key(), time.Now().Format("2006-01-02 15:04:05"))
 	tx.resp <- msg
-	tx.active <- 1
+	tx.markActive(1)
 }
 
 // Respond Respond

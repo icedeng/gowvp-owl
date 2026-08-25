@@ -28,7 +28,7 @@ func (g *GB28181API) sipOptionsGeneric(ctx *sip.Context) {
 
 // ProbeOptions 对设备发起 OPTIONS 探测。
 // 探测成功后会刷新设备 Keepalive 时间，避免被离线扫描误判。
-func (g *GB28181API) ProbeOptions(_ context.Context, in *OptionsProbeInput) error {
+func (g *GB28181API) ProbeOptions(ctx context.Context, in *OptionsProbeInput) error {
 	if in == nil || in.DeviceID == "" {
 		return fmt.Errorf("invalid options probe request")
 	}
@@ -44,7 +44,7 @@ func (g *GB28181API) ProbeOptions(_ context.Context, in *OptionsProbeInput) erro
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
-	resp, err := sipResponseWithTimeout(tx, timeout)
+	resp, err := sipResponseWithTimeout(ctx, tx, timeout)
 	if err != nil {
 		return err
 	}
@@ -60,18 +60,18 @@ func (g *GB28181API) ProbeOptions(_ context.Context, in *OptionsProbeInput) erro
 	return nil
 }
 
-func sipResponseWithTimeout(tx *sip.Transaction, timeout time.Duration) (*sip.Response, error) {
-	ch := make(chan *sip.Response, 1)
-	go func() {
-		ch <- tx.GetResponse()
-	}()
-	select {
-	case resp := <-ch:
-		if resp == nil {
-			return nil, sip.NewError(nil, "response timeout", "tx key:", tx.Key())
-		}
-		return resp, nil
-	case <-time.After(timeout):
+func sipResponseWithTimeout(ctx context.Context, tx *sip.Transaction, timeout time.Duration) (*sip.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	response, err := tx.GetResponseContext(waitCtx)
+	if err != nil && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil || response == nil {
 		return nil, sip.NewError(nil, "response timeout", "tx key:", tx.Key())
 	}
+	return response, nil
 }

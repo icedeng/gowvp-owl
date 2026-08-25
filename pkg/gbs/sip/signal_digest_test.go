@@ -1,8 +1,10 @@
 package sip
 
 import (
+	"context"
 	"encoding/hex"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -262,6 +264,29 @@ func TestTransactionSignalDigestAcceptsValidAndDiscardsInvalidResponses(t *testi
 	tx.receiveResponse(tampered)
 	if len(tx.resp) != 0 {
 		t.Fatal("tampered signed response was delivered")
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if response, err := tx.GetResponseContext(waitCtx); err != context.DeadlineExceeded || response != nil {
+		t.Fatalf("invalid response wait = response:%v err:%v", response, err)
+	}
+}
+
+func TestTransactionGetResponseContextSkipsProvisionalResponse(t *testing.T) {
+	tx := &Transaction{key: "context-response", resp: make(chan *Response, 2), active: make(chan int, 2)}
+	provisional := NewResponse("", DefaultSipVersion, http.StatusContinue, "Trying", nil, nil)
+	final := NewResponse("", DefaultSipVersion, http.StatusOK, "OK", nil, nil)
+	tx.resp <- provisional
+	tx.resp <- final
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	response, err := tx.GetResponseContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response != final {
+		t.Fatalf("final response = %p, want %p", response, final)
 	}
 }
 

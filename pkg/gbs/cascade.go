@@ -813,21 +813,19 @@ func (w *cascadeWorker) exchangeRequest(ctx context.Context, request *sip.Reques
 		w.invalidateTCPConnection(request.GetConnection())
 		return nil, err
 	}
-	response := make(chan *sip.Response, 1)
-	go func() { response <- tx.GetResponse() }()
-	timeout := time.NewTimer(defaultCascadeRequestTimeout)
-	defer timeout.Stop()
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-timeout.C:
-		return nil, fmt.Errorf("response timeout")
-	case resp := <-response:
-		if resp == nil {
-			return nil, fmt.Errorf("response timeout")
+	waitCtx, cancel := context.WithTimeout(ctx, defaultCascadeRequestTimeout)
+	defer cancel()
+	response, err := tx.GetResponseContext(waitCtx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
-		return resp, nil
+		return nil, fmt.Errorf("response timeout")
 	}
+	if response == nil {
+		return nil, fmt.Errorf("response timeout")
+	}
+	return response, nil
 }
 
 func (w *cascadeWorker) sendRequest(request *sip.Request) error {
