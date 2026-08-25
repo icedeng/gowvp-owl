@@ -3,6 +3,7 @@ package gbs
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"sort"
 	"strings"
 	"time"
@@ -165,7 +166,115 @@ func (g *GB28181API) GetQueryState(deviceID string) (*QueryState, bool) {
 		return nil, false
 	}
 	state, ok := v.(*QueryState)
-	return state, ok
+	if !ok || state == nil {
+		return nil, false
+	}
+	return cloneQueryState(state), true
+}
+
+func cloneQueryState(state *QueryState) *QueryState {
+	if state == nil {
+		return nil
+	}
+	out := *state
+	out.DeviceStatus = cloneValue(state.DeviceStatus)
+	if out.DeviceStatus != nil {
+		out.DeviceStatus.FaultDeviceIDs = append([]string(nil), state.DeviceStatus.FaultDeviceIDs...)
+	}
+	out.Presets = append([]PresetItemData(nil), state.Presets...)
+	out.HomePosition = cloneValue(state.HomePosition)
+	if out.HomePosition != nil {
+		out.HomePosition.Enabled = cloneValue(state.HomePosition.Enabled)
+		out.HomePosition.ResetTime = cloneValue(state.HomePosition.ResetTime)
+		out.HomePosition.PresetIndex = cloneValue(state.HomePosition.PresetIndex)
+	}
+	out.CruiseTracks = cloneCruiseTracks(state.CruiseTracks)
+	out.CruiseTrack = cloneCruiseTrack(state.CruiseTrack)
+	out.PTZPosition = cloneValue(state.PTZPosition)
+	if out.PTZPosition != nil {
+		out.PTZPosition.Pan = cloneValue(state.PTZPosition.Pan)
+		out.PTZPosition.Tilt = cloneValue(state.PTZPosition.Tilt)
+		out.PTZPosition.Zoom = cloneValue(state.PTZPosition.Zoom)
+		out.PTZPosition.HorizontalFieldAngle = cloneValue(state.PTZPosition.HorizontalFieldAngle)
+		out.PTZPosition.VerticalFieldAngle = cloneValue(state.PTZPosition.VerticalFieldAngle)
+		out.PTZPosition.MaxViewDistance = cloneValue(state.PTZPosition.MaxViewDistance)
+	}
+	out.SDCards = append([]SDCardItemData(nil), state.SDCards...)
+	for index := range out.SDCards {
+		out.SDCards[index].FormatProgress = cloneValue(state.SDCards[index].FormatProgress)
+		out.SDCards[index].Capacity = cloneValue(state.SDCards[index].Capacity)
+		out.SDCards[index].FreeSpace = cloneValue(state.SDCards[index].FreeSpace)
+	}
+	out.MobilePosition = cloneValue(state.MobilePosition)
+	if out.MobilePosition != nil {
+		out.MobilePosition.Longitude = cloneValue(state.MobilePosition.Longitude)
+		out.MobilePosition.Latitude = cloneValue(state.MobilePosition.Latitude)
+		out.MobilePosition.Speed = cloneValue(state.MobilePosition.Speed)
+		out.MobilePosition.Direction = cloneValue(state.MobilePosition.Direction)
+		out.MobilePosition.Altitude = cloneValue(state.MobilePosition.Altitude)
+	}
+	out.VideoUpload = cloneValue(state.VideoUpload)
+	if out.VideoUpload != nil {
+		out.VideoUpload.Longitude = cloneValue(state.VideoUpload.Longitude)
+		out.VideoUpload.Latitude = cloneValue(state.VideoUpload.Latitude)
+	}
+	out.ConfigDownload = cloneConfigDownloadState(state.ConfigDownload)
+	out.DeviceConfig = cloneValue(state.DeviceConfig)
+	if out.DeviceConfig != nil {
+		out.DeviceConfig.SnapShot = cloneValue(state.DeviceConfig.SnapShot)
+	}
+	out.AppendixA4 = append([]AppendixA4Object(nil), state.AppendixA4...)
+	for index := range out.AppendixA4 {
+		out.AppendixA4[index].Fields = maps.Clone(state.AppendixA4[index].Fields)
+	}
+	return &out
+}
+
+func cloneValue[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneCruiseTracks(tracks []CruiseTrackData) []CruiseTrackData {
+	out := append([]CruiseTrackData(nil), tracks...)
+	for index := range out {
+		out[index].Points = append([]CruisePointData(nil), tracks[index].Points...)
+	}
+	return out
+}
+
+func cloneCruiseTrack(track *CruiseTrackData) *CruiseTrackData {
+	out := cloneValue(track)
+	if out != nil {
+		out.Points = append([]CruisePointData(nil), track.Points...)
+	}
+	return out
+}
+
+func cloneConfigDownloadState(state *ConfigDownloadState) *ConfigDownloadState {
+	out := cloneValue(state)
+	if out == nil {
+		return nil
+	}
+	out.BasicParam = cloneValue(state.BasicParam)
+	out.VideoParamOpt = cloneValue(state.VideoParamOpt)
+	out.VideoParamConfig = cloneValue(state.VideoParamConfig)
+	out.AudioParamOpt = cloneValue(state.AudioParamOpt)
+	out.AudioParamConfig = cloneValue(state.AudioParamConfig)
+	out.SVACEncodeConfig = cloneValue(state.SVACEncodeConfig)
+	out.SVACDecodeConfig = cloneValue(state.SVACDecodeConfig)
+	out.VideoParamAttribute = cloneValue(state.VideoParamAttribute)
+	out.VideoRecordPlan = cloneValue(state.VideoRecordPlan)
+	out.VideoAlarmRecord = cloneValue(state.VideoAlarmRecord)
+	out.PictureMask = cloneValue(state.PictureMask)
+	out.FrameMirror = cloneValue(state.FrameMirror)
+	out.AlarmReport = cloneValue(state.AlarmReport)
+	out.OSDConfig = cloneValue(state.OSDConfig)
+	out.SnapShot = cloneValue(state.SnapShot)
+	return out
 }
 
 func (g *GB28181API) cleanupQueryStates(now time.Time) {

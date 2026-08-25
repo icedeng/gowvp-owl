@@ -48,6 +48,71 @@ func TestCleanupQueryStatesExpiresAndBoundsSnapshots(t *testing.T) {
 	}
 }
 
+func TestGetQueryStateReturnsDeepSnapshot(t *testing.T) {
+	api := &GB28181API{}
+	api.queryStates.Store(gb10DeviceID, &QueryState{
+		DeviceStatus: &DeviceStatusData{Online: "ONLINE", FaultDeviceIDs: []string{gb10ChannelID}},
+		CruiseTracks: []CruiseTrackData{{Number: 1, Points: []CruisePointData{{PresetIndex: 7}}}},
+		AppendixA4:   []AppendixA4Object{{Type: "doorType", Fields: map[string]string{"DeviceID": gb10DeviceID}}},
+	})
+
+	snapshot, ok := api.GetQueryState(gb10DeviceID)
+	if !ok {
+		t.Fatal("query state snapshot not found")
+	}
+	snapshot.DeviceStatus.Online = "OFFLINE"
+	snapshot.DeviceStatus.FaultDeviceIDs[0] = "mutated"
+	snapshot.CruiseTracks[0].Points[0].PresetIndex = 99
+	snapshot.AppendixA4[0].Fields["DeviceID"] = "mutated"
+
+	current, ok := api.GetQueryState(gb10DeviceID)
+	if !ok {
+		t.Fatal("query state disappeared")
+	}
+	if current.DeviceStatus.Online != "ONLINE" || current.DeviceStatus.FaultDeviceIDs[0] != gb10ChannelID ||
+		current.CruiseTracks[0].Points[0].PresetIndex != 7 || current.AppendixA4[0].Fields["DeviceID"] != gb10DeviceID {
+		t.Fatalf("GetQueryState leaked internal state: %+v", current)
+	}
+}
+
+func TestQueryStateConcurrentSnapshotsAreIsolated(t *testing.T) {
+	api := &GB28181API{}
+	api.storeQueryState(gb10DeviceID, "DeviceStatus", &DeviceStatusData{Online: "ONLINE", FaultDeviceIDs: []string{gb10ChannelID}})
+	api.storeAppendixA4State(gb10DeviceID, []AppendixA4Object{{Type: "doorType", Fields: map[string]string{"DeviceID": gb10DeviceID}}})
+
+	var group sync.WaitGroup
+	group.Add(3)
+	go func() {
+		defer group.Done()
+		for index := 0; index < 500; index++ {
+			api.storeQueryState(gb10DeviceID, "DeviceStatus", &DeviceStatusData{
+				Online: "ONLINE", FaultDeviceIDs: []string{fmt.Sprintf("fault-%d", index)},
+			})
+			api.storeAppendixA4State(gb10DeviceID, []AppendixA4Object{{
+				Type: "doorType", Fields: map[string]string{"DeviceID": fmt.Sprintf("device-%d", index)},
+			}})
+		}
+	}()
+	for range 2 {
+		go func() {
+			defer group.Done()
+			for index := 0; index < 500; index++ {
+				state, ok := api.GetQueryState(gb10DeviceID)
+				if !ok {
+					continue
+				}
+				if state.DeviceStatus != nil && len(state.DeviceStatus.FaultDeviceIDs) > 0 {
+					state.DeviceStatus.FaultDeviceIDs[0] = "reader mutation"
+				}
+				if len(state.AppendixA4) > 0 {
+					state.AppendixA4[0].Fields["DeviceID"] = "reader mutation"
+				}
+			}
+		}()
+	}
+	group.Wait()
+}
+
 func TestGenericQueryAcknowledgesBeforeSinglePersistence(t *testing.T) {
 	base, _, _ := newCascadeMediaCore(t)
 	deviceStore := &countingQueryDeviceStore{DeviceStorer: base.Store().Device()}
