@@ -32,6 +32,11 @@ func TestDeviceControlStandardParameterRanges(t *testing.T) {
 			t.Fatalf("valid HomePosition preset %d rejected: %v", preset, err)
 		}
 	}
+	legacyAlarm := &deviceControlA23Request{}
+	if err := api.fillDeviceControlRequest("device", deviceControlActionAlarmReset,
+		&DeviceControlInput{AlarmMethod: "vendor", AlarmType: "vendor"}, legacyAlarm); err != nil {
+		t.Fatalf("2.0 compatible alarm reset extension rejected: %v", err)
+	}
 
 	memory.device.setGBVersion(GBVersion30)
 	for _, input := range []*DeviceControlInput{
@@ -50,6 +55,34 @@ func TestDeviceControlStandardParameterRanges(t *testing.T) {
 	}}
 	if err := api.fillDeviceControlRequest("device", deviceControlActionPTZPrecise, valid, &deviceControlA23Request{}); err != nil {
 		t.Fatalf("valid PTZPrecise boundary rejected: %v", err)
+	}
+	for _, input := range []*DeviceControlInput{
+		{AlarmMethod: "8"},
+		{AlarmMethod: "2//5"},
+		{AlarmMethod: "0/2"},
+		{AlarmMethod: "2/2"},
+		{AlarmMethod: "2/5", AlarmType: "1"},
+		{AlarmMethod: "1", AlarmType: "1"},
+		{AlarmMethod: "2", AlarmType: "6"},
+		{AlarmMethod: "5", AlarmType: "14"},
+		{AlarmMethod: "6", AlarmType: "3"},
+		{AlarmType: "1"},
+	} {
+		if err := api.fillDeviceControlRequest("device", deviceControlActionAlarmReset, input, &deviceControlA23Request{}); err == nil {
+			t.Fatalf("invalid 3.0 alarm reset accepted: %+v", input)
+		}
+	}
+	for _, input := range []*DeviceControlInput{
+		{AlarmMethod: "0"},
+		{AlarmMethod: "1/2/5/7"},
+		{AlarmMethod: "2", AlarmType: "5"},
+		{AlarmMethod: "5", AlarmType: "13"},
+		{AlarmMethod: "6", AlarmType: "2"},
+	} {
+		request := &deviceControlA23Request{}
+		if err := api.fillDeviceControlRequest("device", deviceControlActionAlarmReset, input, request); err != nil || request.Info == nil {
+			t.Fatalf("valid 3.0 alarm reset rejected: %+v, err = %v", input, err)
+		}
 	}
 }
 

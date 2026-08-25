@@ -340,13 +340,20 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		req.GuardCmd = "ResetGuard"
 	case deviceControlActionAlarmReset:
 		req.AlarmCmd = "ResetAlarm"
-		if strings.TrimSpace(in.AlarmMethod) != "" || strings.TrimSpace(in.AlarmType) != "" {
+		alarmMethod := strings.TrimSpace(in.AlarmMethod)
+		alarmType := strings.TrimSpace(in.AlarmType)
+		if alarmMethod != "" || alarmType != "" {
 			if err := g.requireGBVersionAtLeast(deviceID, gbVersion2016, "报警复位扩展参数"); err != nil {
 				return err
 			}
+			if g.getDeviceGBProtocolVersion(deviceID).AtLeast(GBVersion30) {
+				if err := validateAlarmResetInfo(alarmMethod, alarmType); err != nil {
+					return err
+				}
+			}
 			req.Info = &deviceControlA23Info{
-				AlarmMethod: strings.TrimSpace(in.AlarmMethod),
-				AlarmType:   strings.TrimSpace(in.AlarmType),
+				AlarmMethod: alarmMethod,
+				AlarmType:   alarmType,
 			}
 		}
 	case deviceControlActionIFrameSend:
@@ -504,4 +511,45 @@ func validFiniteRange(value, minimum, maximum float64) bool {
 
 func validFinite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func validateAlarmResetInfo(method, alarmType string) error {
+	seen := make(map[string]struct{})
+	for _, value := range strings.Split(method, "/") {
+		if len(value) != 1 || value[0] < '0' || value[0] > '7' {
+			return fmt.Errorf("alarm_method must be 0 or a '/'-separated combination of 1..7")
+		}
+		if _, ok := seen[value]; ok {
+			return fmt.Errorf("alarm_method must not contain duplicate values")
+		}
+		seen[value] = struct{}{}
+	}
+	if len(seen) > 1 {
+		if _, ok := seen["0"]; ok {
+			return fmt.Errorf("alarm_method 0 cannot be combined with other values")
+		}
+	}
+	if alarmType == "" {
+		return nil
+	}
+	if len(seen) != 1 {
+		return fmt.Errorf("alarm_type requires a single alarm_method of 2, 5, or 6")
+	}
+	maximum := 0
+	switch method {
+	case "2":
+		maximum = 5
+	case "5":
+		maximum = 13
+	case "6":
+		maximum = 2
+	default:
+		return fmt.Errorf("alarm_type requires alarm_method 2, 5, or 6")
+	}
+	for value := 1; value <= maximum; value++ {
+		if alarmType == fmt.Sprintf("%d", value) {
+			return nil
+		}
+	}
+	return fmt.Errorf("alarm_type is invalid for alarm_method %s", method)
 }
