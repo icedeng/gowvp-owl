@@ -224,7 +224,7 @@ func (g *GB28181API) respondRegisterChallenge(ctx *sip.Context) {
 	resp := g.newRegisterResponse(ctx, http.StatusUnauthorized, http.StatusText(http.StatusUnauthorized))
 	resp.AppendHeader(&sip.GenericHeader{
 		HeaderName: "WWW-Authenticate",
-		Contents:   fmt.Sprintf(`Digest realm="%s",qop="auth",nonce="%s"`, g.cfg.Domain, nonce),
+		Contents:   fmt.Sprintf(`Digest realm="%s",qop="auth",nonce="%s"`, g.cfg.GetDomain(), nonce),
 	})
 	_ = ctx.Tx.Respond(resp)
 }
@@ -319,7 +319,7 @@ func (g *GB28181API) validateRegisterAuthorization(ctx *sip.Context, header sip.
 		return fmt.Errorf("invalid Authorization header")
 	}
 	auth := sip.AuthFromValue(generic.Contents)
-	if auth.Get("realm") != g.cfg.Domain {
+	if auth.Get("realm") != g.cfg.GetDomain() {
 		return fmt.Errorf("Digest realm mismatch")
 	}
 	if !strings.EqualFold(auth.Algorithm(), registerDigestAlgo) {

@@ -195,3 +195,39 @@ func TestRegisterDigestBindsNonceAndAlgorithm(t *testing.T) {
 		t.Fatalf("unadvertised REGISTER algorithm result = %v", err)
 	}
 }
+
+func TestRegisterDigestUsesDomainDerivedFromPlatformID(t *testing.T) {
+	const password = "secret"
+	cfg := &conf.SIP{ID: gb10PlatformID}
+	api := &GB28181API{cfg: cfg, registerNonces: make(map[string]registerNonceState)}
+	connection := newFlowConnection()
+	request := newFlowRequest(t, connection, sip.MethodRegister, "register-derived-domain", nil)
+	ctx := &sip.Context{
+		Request: request, Tx: sip.NewTransaction("register-derived-domain", connection),
+		DeviceID: gb10DeviceID, Source: connection.remote,
+	}
+
+	api.respondRegisterChallenge(ctx)
+	select {
+	case payload := <-connection.writes:
+		if !strings.Contains(string(payload), `realm="3402000000"`) {
+			t.Fatalf("REGISTER challenge did not use derived domain: %s", payload)
+		}
+	default:
+		t.Fatal("REGISTER challenge response missing")
+	}
+
+	nonce := api.issueRegisterNonce(gb10DeviceID, registerNonceSourceIP(ctx))
+	auth := sip.AuthFromValue(fmt.Sprintf(`Digest realm="%s",nonce="%s",algorithm=MD5,qop="auth"`, cfg.GetDomain(), nonce)).
+		SetUsername(gb10DeviceID).
+		SetPassword(password).
+		SetMethod(sip.MethodRegister).
+		SetURI(request.Recipient().String()).
+		SetClientNonce("00000001", "client-nonce")
+	if _, err := auth.CalcResponseChecked(); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.validateRegisterAuthorization(ctx, &sip.GenericHeader{HeaderName: "Authorization", Contents: auth.String()}, gb10DeviceID, password); err != nil {
+		t.Fatalf("REGISTER Digest using derived domain rejected: %v", err)
+	}
+}

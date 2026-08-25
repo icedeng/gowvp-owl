@@ -440,7 +440,7 @@ func (g *GB28181API) sipInviteDirectTCPHistory(ch *Channel, in *HistoryInput, st
 	if contact, _ := resp.Contact(); contact == nil {
 		resp.AppendHeader(&sip.ContactHeader{
 			DisplayName: g.svr.fromAddress.DisplayName,
-			Address:     &sip.URI{FUser: sip.String{Str: g.cfg.ID}, FHost: g.cfg.Domain},
+			Address:     &sip.URI{FUser: sip.String{Str: g.cfg.ID}, FHost: g.cfg.GetDomain()},
 			Params:      sip.NewParams(),
 		})
 	}
@@ -548,7 +548,7 @@ func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, s
 	if contact, _ := resp.Contact(); contact == nil {
 		resp.AppendHeader(&sip.ContactHeader{
 			DisplayName: g.svr.fromAddress.DisplayName,
-			Address:     &sip.URI{FUser: sip.String{Str: g.cfg.ID}, FHost: g.cfg.Domain},
+			Address:     &sip.URI{FUser: sip.String{Str: g.cfg.ID}, FHost: g.cfg.GetDomain()},
 			Params:      sip.NewParams(),
 		})
 	}

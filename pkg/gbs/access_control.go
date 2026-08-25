@@ -41,7 +41,7 @@ func (g *GB28181API) sipAccessControlMiddleware(ctx *sip.Context) {
 			resp := sip.NewResponseFromRequest("", ctx.Request, 401, "Unauthorized", nil)
 			resp.AppendHeader(&sip.GenericHeader{
 				HeaderName: "WWW-Authenticate",
-				Contents:   fmt.Sprintf(`Digest realm="%s",qop="auth",nonce="%s"`, g.cfg.Domain, sip.RandString(32)),
+				Contents:   fmt.Sprintf(`Digest realm="%s",qop="auth",nonce="%s"`, g.cfg.GetDomain(), sip.RandString(32)),
 			})
 			_ = ctx.Tx.Respond(resp)
 			ctx.Abort()
@@ -102,10 +102,23 @@ func (g *GB28181API) checkDigestAuth(ctx *sip.Context) error {
 		return fmt.Errorf("invalid authorization header")
 	}
 	auth := sip.AuthFromValue(h.Contents)
+	if auth.Get("realm") != g.cfg.GetDomain() {
+		return fmt.Errorf("digest realm mismatch")
+	}
+	if auth.Get("username") != cred.DeviceID {
+		return fmt.Errorf("digest username mismatch")
+	}
+	if ctx.Request.Recipient() == nil {
+		return fmt.Errorf("request URI is missing")
+	}
+	requestURI := ctx.Request.Recipient().String()
+	if auth.Get("uri") != requestURI {
+		return fmt.Errorf("digest uri mismatch")
+	}
 	auth.SetPassword(password)
 	auth.SetUsername(cred.DeviceID)
 	auth.SetMethod(ctx.Request.Method())
-	auth.SetURI(auth.Get("uri"))
+	auth.SetURI(requestURI)
 	if auth.CalcResponse() != auth.Get("response") {
 		return fmt.Errorf("digest auth failed")
 	}
