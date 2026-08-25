@@ -75,6 +75,18 @@ func TestAllDeclaredGBCapabilitiesCanBeDisabled(t *testing.T) {
 	}
 }
 
+func TestDeviceSupportsGBFeatureUsesDisabledCapabilityGate(t *testing.T) {
+	api, memory := newVersionGateAPI(GBVersion11)
+	memory.device.setGBProfile(GBVersion11, []string{"config_query"})
+	if api.deviceSupportsGBFeature("device", "config_query", GBVersion11, func(c GBCapabilities) bool { return c.ConfigQuery }) {
+		t.Fatal("registration ConfigDownload gate ignored disabled config_query capability")
+	}
+	memory.device.setGBProfile(GBVersion11, nil)
+	if !api.deviceSupportsGBFeature("device", "config_query", GBVersion11, func(c GBCapabilities) bool { return c.ConfigQuery }) {
+		t.Fatal("registration ConfigDownload gate rejected enabled config_query capability")
+	}
+}
+
 func TestParseGBProtocolVersion(t *testing.T) {
 	tests := []struct {
 		input string

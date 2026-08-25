@@ -119,7 +119,7 @@ func GetCatalogXML(id string) []byte {
 
 // GetRecordInfoXML 获取录像文件列表指令
 func GetRecordInfoXML(id string, sceqNo int, start, end int64) []byte {
-	return fmt.Appendf(nil, RecordInfoXML, sceqNo, id, time.Unix(start, 0).Format("2006-01-02T15:04:05"), time.Unix(end, 0).Format("2006-01-02T15:04:05"))
+	return fmt.Appendf(nil, RecordInfoXML, sceqNo, id, FormatGBTime(time.Unix(start, 0), "2006-01-02T15:04:05"), FormatGBTime(time.Unix(end, 0), "2006-01-02T15:04:05"))
 }
 
 // RFC3261BranchMagicCookie RFC3261BranchMagicCookie

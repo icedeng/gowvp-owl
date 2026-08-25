@@ -508,7 +508,7 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		now := time.Now()
 		state := registerResultState{
 			DeviceID:  ctx.DeviceID,
-			Date:      now.Format("2006-01-02T15:04:05.000"),
+			Date:      sip.FormatGBTime(now, "2006-01-02T15:04:05.000"),
 			ExpiresAt: now.Add(registerResultTTL),
 		}
 		g.storeRegisterResult(requestKey, state, now)
@@ -641,7 +641,7 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	ctx.XGBVer = string(effectiveVersion)
 	g.QueryDeviceInfo(ctx)
 	_ = g.QueryCatalog(dev.GetGB28181DeviceID())
-	if effectiveVersion.Capabilities().ConfigQuery {
+	if g.deviceSupportsGBFeature(dev.GetGB28181DeviceID(), "config_query", effectiveVersion, func(c GBCapabilities) bool { return c.ConfigQuery }) {
 		_ = g.QueryConfigDownloadBasic(dev.GetGB28181DeviceID())
 	}
 }

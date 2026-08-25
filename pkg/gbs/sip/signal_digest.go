@@ -19,8 +19,6 @@ const (
 	signalDigestDateLayout     = "2006-01-02T15:04:05"
 )
 
-var signalDigestBeijingLocation = time.FixedZone("CST", 8*60*60)
-
 // MessageSecurity 在 SIP 消息最终写出及收到响应时执行签名和验签。
 type MessageSecurity interface {
 	Sign(Message) error
@@ -105,7 +103,7 @@ func (security *SignalDigestSecurity) Sign(message Message) error {
 	}
 	message.RemoveHeader("Date")
 	message.RemoveHeader("Note")
-	date := security.now().In(signalDigestBeijingLocation).Format(signalDigestDateLayout)
+	date := FormatGBTime(security.now(), signalDigestDateLayout)
 	message.AppendHeader(&GenericHeader{HeaderName: "Date", Contents: date})
 	digest, err := security.calculate(message, date)
 	if err != nil {
@@ -261,7 +259,7 @@ func parseSignalDigestDate(value string) (time.Time, error) {
 		time.RFC1123,
 		time.RFC1123Z,
 	} {
-		if parsed, err := time.ParseInLocation(layout, value, signalDigestBeijingLocation); err == nil {
+		if parsed, err := ParseGBTime(layout, value); err == nil {
 			return parsed, nil
 		}
 	}

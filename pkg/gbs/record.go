@@ -80,6 +80,13 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 	if !result.Complete && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
+	return recordQueryItemsResult(result)
+}
+
+func recordQueryItemsResult(result multiResponseResult[RecordItem]) ([]RecordItem, error) {
+	if len(result.Items) == 0 && !result.Complete {
+		return nil, errors.New("wait RecordInfo response timeout")
+	}
 	return result.Items, nil
 }
 
@@ -131,8 +138,11 @@ func (g *GB28181API) sipMessageRecordInfo(ctx *sip.Context) {
 func transRecordItems(items []RecordItem, start, end int64) Records {
 	data := make([][]int64, 0, len(items))
 	for _, item := range items {
-		s, _ := time.ParseInLocation("2006-01-02T15:04:05", item.StartTime, time.Local)
-		e, _ := time.ParseInLocation("2006-01-02T15:04:05", item.EndTime, time.Local)
+		s, startErr := sip.ParseGBTime("2006-01-02T15:04:05", item.StartTime)
+		e, endErr := sip.ParseGBTime("2006-01-02T15:04:05", item.EndTime)
+		if startErr != nil || endErr != nil || !e.After(s) {
+			continue
+		}
 		sint := s.Unix()
 		eint := e.Unix()
 		if sint < start {
@@ -170,79 +180,58 @@ type RecordInfo struct {
 
 // 将返回的多组数据合并，时间连续的进行合并，最后按照天返回数据，返回为某天内时间段列表
 func transRecordList(data [][]int64) Records {
-	if len(data) == 0 {
+	valid := make([][]int64, 0, len(data))
+	for _, interval := range data {
+		if len(interval) < 2 || interval[0] >= interval[1] {
+			continue
+		}
+		valid = append(valid, []int64{interval[0], interval[1]})
+	}
+	if len(valid) == 0 {
 		return Records{}
 	}
 	res := Records{}
 	list := map[string][]RecordInfo{}
-	sort.Slice(data, func(i, j int) bool {
-		return data[i][0] < data[j][0]
+	sort.Slice(valid, func(i, j int) bool {
+		return valid[i][0] < valid[j][0]
 	})
-	newData := [][]int64{}
-	newDataIE := []int64{}
-
-	for x, d := range data {
-		if x == 0 {
-			newDataIE = d
+	merged := make([][]int64, 0, len(valid))
+	current := valid[0]
+	for _, interval := range valid[1:] {
+		if interval[0] <= current[1] {
+			if interval[1] > current[1] {
+				current[1] = interval[1]
+			}
 			continue
 		}
-		if d[0] == newDataIE[1] {
-			newDataIE[1] = d[1]
-		} else {
-			newData = append(newData, newDataIE)
-			newDataIE = d
-		}
+		merged = append(merged, current)
+		current = interval
 	}
-	newData = append(newData, newDataIE)
-	var cs, ce time.Time
-	dates := []string{}
-	for _, d := range newData {
-		s := time.Unix(d[0], 0)
-		e := time.Unix(d[1], 0)
-		cs, _ = time.ParseInLocation("20060102", s.Format("20060102"), time.Local)
-		for {
-			ce = cs.Add(24 * time.Hour)
-			if e.Unix() >= ce.Unix() {
-				// 当前时段跨天
-				if v, ok := list[cs.Format("2006-01-02")]; ok {
-					list[cs.Format("2006-01-02")] = append(v, RecordInfo{
-						Start: sip.Max(s.Unix(), cs.Unix()),
-						End:   ce.Unix() - 1,
-					})
-				} else {
-					list[cs.Format("2006-01-02")] = []RecordInfo{
-						{
-							Start: sip.Max(s.Unix(), cs.Unix()),
-							End:   ce.Unix() - 1,
-						},
-					}
-					dates = append(dates, cs.Format("2006-01-02"))
-					res.DayTotal++
-				}
-				res.TimeNum++
-				cs = ce
-			} else {
-				if v, ok := list[cs.Format("2006-01-02")]; ok {
-					list[cs.Format("2006-01-02")] = append(v, RecordInfo{
-						Start: sip.Max(s.Unix(), cs.Unix()),
-						End:   e.Unix(),
-					})
-				} else {
-					list[cs.Format("2006-01-02")] = []RecordInfo{
-						{
-							Start: sip.Max(s.Unix(), cs.Unix()),
-							End:   e.Unix(),
-						},
-					}
-					dates = append(dates, cs.Format("2006-01-02"))
-					res.DayTotal++
-				}
-				res.TimeNum++
-				break
+	merged = append(merged, current)
+
+	dates := make([]string, 0)
+	for _, interval := range merged {
+		segmentStart, intervalEnd := interval[0], interval[1]
+		startTime := time.Unix(segmentStart, 0).In(sip.GBTimeLocation())
+		dayStart := time.Date(startTime.Year(), startTime.Month(), startTime.Day(), 0, 0, 0, 0, sip.GBTimeLocation())
+		for segmentStart < intervalEnd {
+			nextDay := dayStart.AddDate(0, 0, 1)
+			segmentEnd := intervalEnd
+			if segmentEnd >= nextDay.Unix() {
+				segmentEnd = nextDay.Unix() - 1
 			}
+			date := dayStart.Format("2006-01-02")
+			if _, exists := list[date]; !exists {
+				dates = append(dates, date)
+				res.DayTotal++
+			}
+			list[date] = append(list[date], RecordInfo{Start: segmentStart, End: segmentEnd})
+			res.TimeNum++
+			segmentStart = nextDay.Unix()
+			dayStart = nextDay
 		}
 	}
-	resData := []RecordDate{}
+	resData := make([]RecordDate, 0, len(dates))
 	for _, date := range dates {
 		resData = append(resData, RecordDate{
 			Date:  date,

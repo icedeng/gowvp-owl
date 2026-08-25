@@ -47,6 +47,7 @@ go test ./... -count=1
 - 注册、目录、媒体会话、异常断流和直接 TCP 下载灰度计数器。
 - LALMAX `code/msg` 与 `error_code/desp` 响应兼容；`stat/group` 映射媒体存在性、音视频轨道、码率及累计字节；直播、回放和语音接收结束后通过 `stop_rtp_pub` 幂等释放 RTP 接收会话；
 - 四版本级联 REGISTER、Catalog、UDP/TCP/TLS、下载倍速、订阅能力矩阵；
+- 四版本协议时间固定按北京时间编码/解析；查询与控制 SN 为单调正整数，RecordInfo 无响应、空结果、部分分包、重叠区间及午夜分日能够区分；
 - 上级级联信令可配置 UDP/TCP/TLS；TCP/TLS 同一连接完成 REGISTER Digest 与 Keepalive，断线后同一 Call-ID 事务切换新连接，301/302 可切换到 TCP/TLS 或 `sips:` 目标，且 SIPS 不允许降级到明文传输；
 - 2022 上级 REGISTER 301/302 重定向，校验 Contact 的 ServerID、SIPS/transport，重定向后重新 Digest 注册，后续心跳、通知、媒体请求和入向身份校验绑定新地址；
 - 共享通道 DeviceInfo、DeviceStatus 和 RecordInfo 查询，录像响应分包并映射为上级可见编码；NVR 代表已知子通道返回 DeviceInfo 时只更新子通道元数据；

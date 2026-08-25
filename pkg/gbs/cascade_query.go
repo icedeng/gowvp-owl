@@ -858,13 +858,13 @@ func (g *GB28181API) respondCascadeDeviceStatus(ctx context.Context, worker *cas
 		return sendCascadeXML(ctx, worker, cascadeDeviceStatusResponse{
 			CmdType: "DeviceStatus", SN: query.SN, DeviceID: query.DeviceID,
 			Result: "OK", Online: online, Status: status, Encode: encode, Record: "OFF",
-			DeviceTime: time.Now().Format("2006-01-02T15:04:05"), Alarm: cascadeAlarmStatus{},
+			DeviceTime: sip.FormatGBTime(time.Now(), "2006-01-02T15:04:05"), Alarm: cascadeAlarmStatus{},
 		})
 	}
 	return sendCascadeXML(ctx, worker, cascadeDeviceStatusResponse{
 		CmdType: "DeviceStatus", SN: query.SN, DeviceID: worker.platform.localID,
 		Result: "OK", Online: "ONLINE", Status: "OK", Encode: "ON", Record: "OFF",
-		DeviceTime: time.Now().Format("2006-01-02T15:04:05"), Alarm: cascadeAlarmStatus{},
+		DeviceTime: sip.FormatGBTime(time.Now(), "2006-01-02T15:04:05"), Alarm: cascadeAlarmStatus{},
 	})
 }
 
@@ -877,8 +877,8 @@ func (g *GB28181API) respondCascadeRecordInfo(ctx context.Context, worker *casca
 	if err != nil {
 		return err
 	}
-	startAt, startErr := time.ParseInLocation("2006-01-02T15:04:05", strings.TrimSpace(query.StartTime), time.Local)
-	endAt, endErr := time.ParseInLocation("2006-01-02T15:04:05", strings.TrimSpace(query.EndTime), time.Local)
+	startAt, startErr := sip.ParseGBTime("2006-01-02T15:04:05", strings.TrimSpace(query.StartTime))
+	endAt, endErr := sip.ParseGBTime("2006-01-02T15:04:05", strings.TrimSpace(query.EndTime))
 	if startErr != nil || endErr != nil || !endAt.After(startAt) {
 		return g.sendCascadeRecordItems(ctx, worker, query, nil, channel.Name)
 	}

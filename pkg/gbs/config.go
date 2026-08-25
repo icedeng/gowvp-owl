@@ -194,6 +194,10 @@ func NewBasicParamRequest(sn int32, deviceID string) []byte {
 	return xmlData
 }
 
+func (g *GB28181API) newBasicParamRequest(deviceID string) []byte {
+	return NewBasicParamRequest(int32(g.nextQuerySN()), deviceID)
+}
+
 func (g *GB28181API) QueryConfigDownloadBasic(deviceID string) error {
 	slog.Debug("QueryConfigDownloadBasic", "deviceID", deviceID)
 	ipc, ok := g.svr.memoryStorer.Load(deviceID)
@@ -201,7 +205,7 @@ func (g *GB28181API) QueryConfigDownloadBasic(deviceID string) error {
 		return ErrDeviceOffline
 	}
 
-	tx, err := g.svr.wrapRequest(ipc, sip.MethodMessage, &sip.ContentTypeXML, NewBasicParamRequest(1, deviceID))
+	tx, err := g.svr.wrapRequest(ipc, sip.MethodMessage, &sip.ContentTypeXML, g.newBasicParamRequest(deviceID))
 	if err != nil {
 		return err
 	}

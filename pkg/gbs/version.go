@@ -363,9 +363,13 @@ func (g *GB28181API) isDeviceCapabilityDisabled(deviceID, capability string) boo
 	return ok && device != nil && device.isCapabilityDisabled(capability)
 }
 
+func (g *GB28181API) deviceSupportsGBFeature(deviceID, capability string, version GBProtocolVersion, supported func(GBCapabilities) bool) bool {
+	return supported != nil && supported(version.Capabilities()) && !g.isDeviceCapabilityDisabled(deviceID, capability)
+}
+
 func (g *GB28181API) requireGBFeature(deviceID, capability, feature string, supported func(GBCapabilities) bool) error {
 	version := g.getDeviceGBProtocolVersion(deviceID)
-	if !supported(version.Capabilities()) || g.isDeviceCapabilityDisabled(deviceID, capability) {
+	if !g.deviceSupportsGBFeature(deviceID, capability, version, supported) {
 		g.recordUnsupportedGBFeature(deviceID, feature, version)
 		return fmt.Errorf("%s 不受当前协议档案 %s 支持", feature, version.StandardName())
 	}

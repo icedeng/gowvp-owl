@@ -99,7 +99,7 @@ func parseSubscriptionTime(value string) (time.Time, bool, error) {
 		return time.Time{}, false, nil
 	}
 	for _, layout := range []string{"2006-01-02T15:04:05", time.RFC3339, time.DateTime} {
-		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+		if parsed, err := sip.ParseGBTime(layout, value); err == nil {
 			return parsed, true, nil
 		}
 	}

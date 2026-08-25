@@ -44,7 +44,7 @@ func (g *GB28181API) SyncTime(ctx context.Context, in *TimeSyncInput) error {
 			SN:       g.nextControlSN(),
 			DeviceID: in.DeviceID,
 			// 9.10 采用 XML 时间格式：yyyy-MM-ddTHH:mm:ss.SSS
-			Time: time.Now().Format("2006-01-02T15:04:05.000"),
+			Time: sip.FormatGBTime(time.Now(), "2006-01-02T15:04:05.000"),
 		},
 	})
 	if err != nil {

@@ -56,7 +56,7 @@ func (e *AlarmEvent) ParseTime() (time.Time, bool) {
 		return time.Time{}, false
 	}
 	for _, layout := range layouts {
-		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+		if t, err := sip.ParseGBTime(layout, value); err == nil {
 			return t, true
 		}
 	}
