@@ -100,7 +100,7 @@ func (g *GB28181API) sendCascadeDeviceControlDownstream(ctx context.Context, cha
 		return "ERROR", err
 	}
 	waitKey := fmt.Sprintf("%s:%d", channel.DeviceID, downstreamSN)
-	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1)}
+	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1), targetID: channel.ChannelID}
 	if _, loaded := g.pendingDeviceControl.LoadOrStore(waitKey, pending); loaded {
 		return "ERROR", fmt.Errorf("cascade DeviceControl sequence collision")
 	}

@@ -1,6 +1,43 @@
 package gbs
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/gowvp/owl/pkg/gbs/sip"
+)
+
+func TestDeviceControlResponseRejectsInvalidEnvelopeBeforeWait(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1), targetID: gb10ChannelID}
+	api.pendingDeviceControl.Store(gb10DeviceID+":61", pending)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "wrong root", body: `<Notify><CmdType>DeviceControl</CmdType><SN>61</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>OK</Result></Notify>`},
+		{name: "wrong command", body: `<Response><CmdType>DeviceConfig</CmdType><SN>61</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>OK</Result></Response>`},
+		{name: "non-positive SN", body: `<Response><CmdType>DeviceControl</CmdType><SN>0</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>OK</Result></Response>`},
+		{name: "invalid result", body: `<Response><CmdType>DeviceControl</CmdType><SN>61</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>SUCCESS</Result></Response>`},
+		{name: "unknown target", body: `<Response><CmdType>DeviceControl</CmdType><SN>61</SN><DeviceID>34020000001320000009</DeviceID><Result>OK</Result></Response>`},
+		{name: "other owned target", body: `<Response><CmdType>DeviceControl</CmdType><SN>61</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "device-control-invalid-"+test.name, []byte(test.body), api.sipMessageDeviceControl)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("invalid DeviceControl response = %s", response)
+			}
+		})
+	}
+	select {
+	case result := <-pending.wait:
+		t.Fatalf("invalid DeviceControl resolved pending request: %+v", result)
+	default:
+	}
+}
 
 func TestEncodePTZCommandZoomBits(t *testing.T) {
 	tests := []struct {

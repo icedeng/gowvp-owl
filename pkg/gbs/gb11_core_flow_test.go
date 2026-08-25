@@ -27,6 +27,7 @@ func TestGB11SupplementSimulationFlow(t *testing.T) {
 	memory.persistent.Ext.GBDeclaredVersion = string(GBVersion11)
 	memory.persistent.Ext.GBVersionSource = "header"
 	memory.runtime.setGBVersion(GBVersion11)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
 	api := &GB28181API{
 		cfg:              &conf.SIP{ID: gb10PlatformID, Domain: "3402000000"},
 		catalogResponses: newMultiResponseCollector(func(item Channels) string { return item.ChannelID }),

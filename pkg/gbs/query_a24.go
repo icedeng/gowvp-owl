@@ -613,14 +613,22 @@ func (g *GB28181API) validateGenericDeviceQueryResponse(ctx *sip.Context, msg ge
 			return fmt.Errorf("DeviceStatus requires valid Result, Online and Status")
 		}
 	}
-	if msg.DeviceID == strings.TrimSpace(ctx.DeviceID) {
+	return g.validateAuthenticatedResponseTarget(ctx, msg.DeviceID)
+}
+
+func (g *GB28181API) validateAuthenticatedResponseTarget(ctx *sip.Context, targetID string) error {
+	if ctx == nil || strings.TrimSpace(ctx.DeviceID) == "" {
+		return fmt.Errorf("response requires authenticated device")
+	}
+	targetID = strings.TrimSpace(targetID)
+	if targetID == strings.TrimSpace(ctx.DeviceID) {
 		return nil
 	}
 	if g == nil || g.svr == nil || g.svr.memoryStorer == nil {
-		return fmt.Errorf("query response target mismatch")
+		return fmt.Errorf("response target mismatch")
 	}
-	if _, ok := g.svr.memoryStorer.GetChannel(ctx.DeviceID, msg.DeviceID); !ok {
-		return fmt.Errorf("query response target mismatch")
+	if _, ok := g.svr.memoryStorer.GetChannel(ctx.DeviceID, targetID); !ok {
+		return fmt.Errorf("response target mismatch")
 	}
 	return nil
 }

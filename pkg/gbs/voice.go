@@ -450,6 +450,22 @@ func (g *GB28181API) sipMessageBroadcastResponse(ctx *sip.Context) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
+	response.CmdType = strings.TrimSpace(response.CmdType)
+	response.DeviceID = strings.TrimSpace(response.DeviceID)
+	response.Result = strings.TrimSpace(response.Result)
+	if response.XMLName.Local != "Response" || !strings.EqualFold(response.CmdType, "Broadcast") ||
+		response.SN <= 0 || !isGBResultValue(response.Result) {
+		ctx.String(400, "invalid Broadcast response")
+		return
+	}
+	if !g.getDeviceGBProtocolVersion(ctx.DeviceID).AtLeast(GBVersion11) {
+		ctx.String(400, "Broadcast requires GB/T 28181-2014 or later")
+		return
+	}
+	if err := g.validateAuthenticatedResponseTarget(ctx, response.DeviceID); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 	key := buildPendingBroadcastKey(response.DeviceID, response.SN)
 	if value, ok := g.pendingBroadcast.Load(key); ok {
 		select {

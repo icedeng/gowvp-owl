@@ -95,7 +95,8 @@ type deviceControlResponse struct {
 }
 
 type pendingDeviceControl struct {
-	wait chan *deviceControlResponse
+	wait     chan *deviceControlResponse
+	targetID string
 }
 
 func (g *GB28181API) PTZ(in *PTZInput) (*PTZOutput, error) {
@@ -146,7 +147,7 @@ func (g *GB28181API) PTZContext(ctx context.Context, in *PTZInput) (*PTZOutput, 
 	}
 
 	waitKey := fmt.Sprintf("%s:%d", in.DeviceID, sn)
-	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1)}
+	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1), targetID: in.ChannelID}
 	g.pendingDeviceControl.Store(waitKey, pending)
 	defer g.pendingDeviceControl.Delete(waitKey)
 
@@ -202,15 +203,28 @@ func (g *GB28181API) sipMessageDeviceControl(ctx *sip.Context) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
-	if msg.SN <= 0 {
-		ctx.String(200, "OK")
+	msg.CmdType = strings.TrimSpace(msg.CmdType)
+	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	msg.Result = strings.TrimSpace(msg.Result)
+	if msg.XMLName.Local != "Response" || !strings.EqualFold(msg.CmdType, ptzCmdTypeDeviceControl) ||
+		msg.SN <= 0 || !isGBResultValue(msg.Result) {
+		ctx.String(400, "invalid DeviceControl response")
+		return
+	}
+	if err := g.validateAuthenticatedResponseTarget(ctx, msg.DeviceID); err != nil {
+		ctx.String(400, err.Error())
 		return
 	}
 
 	waitKey := fmt.Sprintf("%s:%d", ctx.DeviceID, msg.SN)
 	if v, ok := g.pendingDeviceControl.Load(waitKey); ok {
+		pending := v.(*pendingDeviceControl)
+		if pending.targetID != "" && !strings.EqualFold(strings.TrimSpace(pending.targetID), msg.DeviceID) {
+			ctx.String(400, "DeviceControl response target mismatch")
+			return
+		}
 		select {
-		case v.(*pendingDeviceControl).wait <- &msg:
+		case pending.wait <- &msg:
 		default:
 		}
 	}

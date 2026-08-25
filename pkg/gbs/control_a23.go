@@ -224,7 +224,7 @@ func (g *GB28181API) DeviceControl(ctx context.Context, in *DeviceControlInput) 
 	}
 
 	waitKey := fmt.Sprintf("%s:%d", deviceID, sn)
-	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1)}
+	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1), targetID: targetID}
 	g.pendingDeviceControl.Store(waitKey, pending)
 	defer g.pendingDeviceControl.Delete(waitKey)
 

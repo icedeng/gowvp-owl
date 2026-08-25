@@ -69,6 +69,7 @@ go test ./... -count=1
 - 通用查询响应的根节点、正 SN、命令版本和目标所有权校验；未知跨设备响应不能改变状态或解除等待；
 - DeviceInfo 非法根、命令、SN 或未知目标不得覆盖父设备/子通道信息或解除等待；
 - DeviceStatus 缺失或非法 Result、Online、Status 枚举不得写状态或解除等待；失败结果及子通道状态不得改写父设备在线运行态；
+- DeviceControl 与 Broadcast 非法根、固定命令、SN、结果枚举、未知目标或不匹配在途请求目标不得解除业务等待；
 - ConfigDownload 失败响应和子通道 BasicParam 不得改写父设备心跳运行态；
 - DeviceConfig 非法版本、根、命令、SN 或目标不得写状态、附录 A.4 或解除等待；
 - Catalog 非法根、命令、SN、非 20 位顶层目标或负 SumNum 不得进入多响应聚合或解除查询等待；

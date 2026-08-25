@@ -128,7 +128,7 @@ func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOut
 	}
 
 	waitKey := fmt.Sprintf("%s:%d", in.DeviceID, sn)
-	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1)}
+	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1), targetID: in.ChannelID}
 	g.pendingDeviceControl.Store(waitKey, pending)
 	defer g.pendingDeviceControl.Delete(waitKey)
 
