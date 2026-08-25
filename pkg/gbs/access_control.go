@@ -42,7 +42,7 @@ type messageNonceState struct {
 // 2) require_message_auth：要求 MESSAGE/NOTIFY 携带 Digest 鉴权。
 func (g *GB28181API) sipAccessControlMiddleware(ctx *sip.Context) {
 	if g != nil && g.svr != nil && g.svr.cascade != nil {
-		if worker, ok := g.svr.cascade.matchRegistered(ctx.DeviceID, ctx.Source); ok {
+		if worker, ok := g.svr.cascade.matchRegistered(ctx.DeviceID, ctx.Source, ctx.Request.GetConnection()); ok {
 			ctx.Set(cascadeWorkerContextKey, worker)
 			ctx.XGBVer = string(worker.protocolVersion())
 			ctx.XGBVerRaw = ctx.XGBVer

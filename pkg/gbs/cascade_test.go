@@ -4,11 +4,15 @@ import (
 	"bufio"
 	"context"
 	"crypto/md5"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -42,6 +46,21 @@ func testCascadeTCPPlatform(t *testing.T, version string) cascadePlatform {
 		LocalHost: "192.0.2.20", Password: "cascade-secret",
 		Version: version, Expires: 3600, KeepaliveInterval: conf.Duration(30 * time.Second),
 	}, conf.SIP{ID: gb10DeviceID, Domain: "local.example", Host: "192.0.2.20", Port: 5060}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return platform
+}
+
+func testCascadeTLSPlatform(t *testing.T, version string) cascadePlatform {
+	t.Helper()
+	platform, err := normalizeCascadePlatform(conf.SIPUpstream{
+		Name: "provincial-tls", Enabled: true,
+		ServerID: gb10PlatformID, Host: "192.0.2.30", Transport: "tls",
+		Domain: "remote.example", LocalID: gb10DeviceID, LocalDomain: "local.example",
+		LocalHost: "192.0.2.20", Password: "cascade-secret", TLSServerName: "sip.example.com",
+		Version: version, Expires: 3600, KeepaliveInterval: conf.Duration(30 * time.Second),
+	}, conf.SIP{ID: gb10DeviceID, Domain: "local.example", Host: "192.0.2.20", Port: 5060, EnableTLS: true, TLSPort: 5061}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,6 +295,143 @@ func TestCascadeRegisterOverTCPReusesConnectionForDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	close(allowRegistrarClose)
+}
+
+func TestCascadeRegisterOverTLSUsesVerifiedPersistentConnection(t *testing.T) {
+	platform := testCascadeTLSPlatform(t, "3.0")
+	localURI, err := sip.ParseSipURI("sip:" + gb10DeviceID + "@192.0.2.20:5061")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sipServer := sip.NewServer(&sip.Address{URI: &localURI, Params: sip.NewParams()})
+	defer sipServer.Close()
+	worker := newCascadeWorker(&Server{Server: sipServer}, platform)
+	defer worker.closeTCPConnection()
+	if worker.platform.tlsConfig == nil || worker.platform.tlsConfig.InsecureSkipVerify || worker.platform.tlsConfig.ServerName != "sip.example.com" {
+		t.Fatalf("TLS verification config = %+v", worker.platform.tlsConfig)
+	}
+
+	registrarErr := make(chan error, 1)
+	allowRegistrarClose := make(chan struct{})
+	dialCalls := 0
+	worker.dialTLS = func(_ context.Context, address, serverName string) (net.Conn, error) {
+		dialCalls++
+		if address != "192.0.2.30:5061" || serverName != "sip.example.com" {
+			return nil, fmt.Errorf("TLS dial target = %s server_name=%s", address, serverName)
+		}
+		client, registrar := net.Pipe()
+		clientConn := &cascadeTestTCPConn{
+			Conn:   client,
+			local:  &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 41002},
+			remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5061},
+		}
+		go func() {
+			defer registrar.Close()
+			reader := bufio.NewReader(registrar)
+			for index := 0; index < 3; index++ {
+				request, readErr := readCascadeTestTCPMessage(reader)
+				if readErr != nil {
+					registrarErr <- readErr
+					return
+				}
+				if !strings.Contains(request, "Via: SIP/2.0/TLS") || !strings.Contains(request, "<sips:"+gb10DeviceID+"@192.0.2.20:5061;transport=tls>") {
+					registrarErr <- fmt.Errorf("TLS request missing transport markers: %s", request)
+					return
+				}
+				status, reason := http.StatusUnauthorized, "Unauthorized"
+				extra := `WWW-Authenticate: Digest realm="3402000000",qop="auth",nonce="tls-nonce"`
+				if index == 1 {
+					status, reason, extra = http.StatusOK, "OK", "Expires: 120\r\nX-GB-Ver: 3.0"
+				} else if index == 2 {
+					if !strings.HasPrefix(request, "MESSAGE ") {
+						registrarErr <- fmt.Errorf("unexpected TLS keepalive request: %s", request)
+						return
+					}
+					status, reason, extra = http.StatusOK, "OK", ""
+				}
+				if _, writeErr := io.WriteString(registrar, cascadeTestTCPResponse(request, status, reason, extra)); writeErr != nil {
+					registrarErr <- writeErr
+					return
+				}
+			}
+			registrarErr <- nil
+			<-allowRegistrarClose
+		}()
+		return clientConn, nil
+	}
+
+	if err := worker.register(t.Context(), worker.platform.expires); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewCascadeManager(nil)
+	manager.items[worker.platform.name] = worker
+	source := &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5061}
+	if _, ok := manager.matchRegistered(gb10PlatformID, source); ok {
+		t.Fatal("TLS upstream was authorized without its verified connection")
+	}
+	worker.connMu.Lock()
+	verifiedConnection := worker.tcpConn
+	worker.connMu.Unlock()
+	if matched, ok := manager.matchRegistered(gb10PlatformID, source, verifiedConnection); !ok || matched != worker {
+		t.Fatalf("verified TLS upstream source match = %v, %v", matched, ok)
+	}
+	if err := worker.keepalive(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if dialCalls != 1 {
+		t.Fatalf("TLS cascade dial calls = %d, want 1", dialCalls)
+	}
+	if err := <-registrarErr; err != nil {
+		t.Fatal(err)
+	}
+	close(allowRegistrarClose)
+}
+
+func TestCascadeTLSDialerVerifiesServerCertificate(t *testing.T) {
+	registrar := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer registrar.Close()
+	certificate, err := x509.ParseCertificate(registrar.TLS.Certificates[0].Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverName := ""
+	if len(certificate.DNSNames) > 0 {
+		serverName = certificate.DNSNames[0]
+	} else if len(certificate.IPAddresses) > 0 {
+		serverName = certificate.IPAddresses[0].String()
+	}
+	if serverName == "" {
+		t.Fatal("test TLS certificate has no verifiable DNS name or IP address")
+	}
+	address := registrar.Listener.Addr().String()
+	caFile := t.TempDir() + "/upstream-ca.pem"
+	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tlsConfig, err := cascadeTLSClientConfig(conf.SIPUpstream{TLSCA: caFile, TLSServerName: serverName}, "ignored.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tlsConfig.RootCAs == nil || len(tlsConfig.RootCAs.Subjects()) != 1 {
+		t.Fatalf("custom TLS CA pool subjects = %d, want 1", len(tlsConfig.RootCAs.Subjects()))
+	}
+
+	trusted := testCascadeTLSPlatform(t, "3.0")
+	trusted.tlsConfig = tlsConfig
+	worker := newCascadeWorker(nil, trusted)
+	connection, err := worker.dialTLS(t.Context(), address, serverName)
+	if err != nil {
+		t.Fatalf("trusted TLS certificate rejected: %v", err)
+	}
+	_ = connection.Close()
+
+	untrusted := testCascadeTLSPlatform(t, "3.0")
+	untrusted.tlsConfig.ServerName = serverName
+	untrustedWorker := newCascadeWorker(nil, untrusted)
+	if connection, err := untrustedWorker.dialTLS(t.Context(), address, serverName); err == nil {
+		_ = connection.Close()
+		t.Fatal("untrusted TLS certificate was accepted")
+	}
 }
 
 func TestCascadeTCPDateNoteSignalDigestLifecycle(t *testing.T) {
@@ -536,7 +692,7 @@ func TestCascadeRegisterRejectsUnsafeRedirect(t *testing.T) {
 		contact string
 	}{
 		{name: "different server", contact: "sip:34020000002000009999@192.0.2.31:5070"},
-		{name: "sips unsupported", contact: "sips:" + gb10PlatformID + "@192.0.2.31:5071"},
+		{name: "sips transport conflict", contact: "sips:" + gb10PlatformID + "@192.0.2.31:5071;transport=tcp"},
 		{name: "transport unsupported", contact: "sip:" + gb10PlatformID + "@192.0.2.31:5070;transport=ws"},
 	}
 	for _, test := range tests {
@@ -575,6 +731,36 @@ func TestCascadeRegisterRedirectSupportsTCPTransport(t *testing.T) {
 	}
 }
 
+func TestCascadeRegisterRedirectSupportsSIPS(t *testing.T) {
+	request := sip.NewRequest("", sip.MethodRegister, &sip.URI{FHost: "remote.example"}, sip.DefaultSipVersion, nil, nil)
+	response := sip.NewResponseFromRequest("", request, http.StatusMovedPermanently, "Moved Permanently", nil)
+	redirectURI, err := sip.ParseSipURI("sips:" + gb10PlatformID + "@192.0.2.31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.AppendHeader(&sip.ContactHeader{Address: &redirectURI, Params: sip.NewParams()})
+	uri, remote, err := cascadeRegisterRedirectTarget(response, gb10PlatformID, "udp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uri == nil || !uri.FIsEncrypted || remote == nil || cascadeTransportForAddr(remote) != "tls" || remote.String() != "192.0.2.31:5061" {
+		t.Fatalf("SIPS redirect target = %v / %v", uri, remote)
+	}
+}
+
+func TestCascadeRegisterRedirectRejectsSIPSDowngrade(t *testing.T) {
+	request := sip.NewRequest("", sip.MethodRegister, &sip.URI{FHost: "remote.example"}, sip.DefaultSipVersion, nil, nil)
+	response := sip.NewResponseFromRequest("", request, http.StatusMovedPermanently, "Moved Permanently", nil)
+	redirectURI, err := sip.ParseSipURI("sip:" + gb10PlatformID + "@192.0.2.31:5060;transport=udp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.AppendHeader(&sip.ContactHeader{Address: &redirectURI, Params: sip.NewParams()})
+	if _, _, err := cascadeRegisterRedirectTarget(response, gb10PlatformID, "tls"); err == nil || !strings.Contains(err.Error(), "downgrade") {
+		t.Fatalf("SIPS downgrade error = %v", err)
+	}
+}
+
 func TestCascadeRegisterRedirectUpdatesRequestTransport(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -584,6 +770,7 @@ func TestCascadeRegisterRedirectUpdatesRequestTransport(t *testing.T) {
 	}{
 		{name: "udp to tcp", platform: testCascadePlatform, redirect: "tcp", wantTransport: "TCP"},
 		{name: "tcp to udp", platform: testCascadeTCPPlatform, redirect: "udp", wantTransport: "UDP"},
+		{name: "udp to tls", platform: testCascadePlatform, redirect: "tls", wantTransport: "TLS"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -613,8 +800,9 @@ func TestCascadeRegisterRedirectUpdatesRequestTransport(t *testing.T) {
 			if via == nil || via.Transport != test.wantTransport || cascadeTransportForAddr(requests[1].Destination()) != strings.ToLower(test.wantTransport) {
 				t.Fatalf("redirect transport = via %v destination %v", via, requests[1].Destination())
 			}
-			hasTCPContact := contact != nil && contact.Address != nil && strings.Contains(strings.ToLower(contact.Address.String()), "transport=tcp")
-			if hasTCPContact != (test.wantTransport == "TCP") {
+			wantParam := strings.ToLower(test.wantTransport)
+			hasTransportContact := contact != nil && contact.Address != nil && strings.Contains(strings.ToLower(contact.Address.String()), "transport="+wantParam)
+			if hasTransportContact != (test.wantTransport != "UDP") {
 				t.Fatalf("redirect Contact = %v", contact)
 			}
 		})
@@ -712,6 +900,26 @@ func TestNormalizeCascadePlatformsRejectsUnsafeConfiguration(t *testing.T) {
 	invalid.Transport = "sctp"
 	if _, err := normalizeCascadePlatforms(local, []conf.SIPUpstream{invalid}, ""); err == nil || !strings.Contains(err.Error(), "transport") {
 		t.Fatalf("invalid transport error = %v", err)
+	}
+	invalid = base
+	invalid.Transport = "tls"
+	if _, err := normalizeCascadePlatforms(local, []conf.SIPUpstream{invalid}, ""); err == nil || !strings.Contains(err.Error(), "local SIP-TLS listener") {
+		t.Fatalf("TLS without local listener error = %v", err)
+	}
+	invalid = base
+	invalid.Transport = "tls"
+	invalid.TLSCert = "client.crt"
+	if _, err := normalizeCascadePlatforms(local, []conf.SIPUpstream{invalid}, ""); err == nil || !strings.Contains(err.Error(), "together") {
+		t.Fatalf("incomplete TLS client credentials error = %v", err)
+	}
+	invalid = base
+	invalid.Transport = "tls"
+	invalid.TLSCA = t.TempDir() + "/invalid-ca.pem"
+	if err := os.WriteFile(invalid.TLSCA, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := normalizeCascadePlatforms(local, []conf.SIPUpstream{invalid}, ""); err == nil || !strings.Contains(err.Error(), "valid certificate") {
+		t.Fatalf("invalid TLS CA error = %v", err)
 	}
 	invalid = base
 	local.Port = 0

@@ -208,9 +208,15 @@ export interface SipUpstream {
   domain?: string
   host: string
   port: number
+  transport?: "udp" | "tcp" | "tls"
+  tls_ca?: string
+  tls_cert?: string
+  tls_key?: string
+  tls_server_name?: string
   local_id?: string
   local_domain?: string
   local_host?: string
+  local_port?: number
   password?: string
   version: "1.0" | "1.1" | "2.0" | "3.0"
   expires: number

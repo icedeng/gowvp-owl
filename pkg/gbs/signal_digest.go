@@ -57,7 +57,7 @@ func (g *GB28181API) resolveSignalDigestSecurity(request *sip.Request) (sip.Mess
 		return nil, nil
 	}
 	if g.svr != nil && g.svr.cascade != nil {
-		if worker, ok := g.svr.cascade.matchRegistered(deviceID, request.Source()); ok && worker != nil {
+		if worker, ok := g.svr.cascade.matchRegistered(deviceID, request.Source(), request.GetConnection()); ok && worker != nil {
 			return newSignalDigestSecurity(cfg, cascadeSignalDigestSeed(worker.platform, cfg.SignalDigest.Seed))
 		}
 	}

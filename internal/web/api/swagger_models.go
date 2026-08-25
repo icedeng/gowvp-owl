@@ -114,10 +114,15 @@ type SwaggerSIPUpstream struct {
 	Domain            string            `json:"domain" example:"3402000000"`
 	Host              string            `json:"host" example:"192.0.2.30"`
 	Port              int               `json:"port" example:"5060"`
-	Transport         string            `json:"transport" example:"udp"`
+	Transport         string            `json:"transport" example:"tls"`
+	TLSCA             string            `json:"tls_ca" example:"configs/certs/upstream-ca.crt"`
+	TLSCert           string            `json:"tls_cert" example:"configs/certs/cascade-client.crt"`
+	TLSKey            string            `json:"tls_key" example:"configs/certs/cascade-client.key"`
+	TLSServerName     string            `json:"tls_server_name" example:"sip.example.com"`
 	LocalID           string            `json:"local_id" example:"34020000002000000002"`
 	LocalDomain       string            `json:"local_domain" example:"3402000000"`
 	LocalHost         string            `json:"local_host" example:"192.0.2.20"`
+	LocalPort         int               `json:"local_port" example:"5061"`
 	Password          string            `json:"password" example:"123456"`
 	SignalDigestSeed  string            `json:"signal_digest_seed" example:"upstream-shared-secret"`
 	Version           string            `json:"version" example:"1.1"`

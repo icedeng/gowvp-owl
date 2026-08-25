@@ -71,10 +71,16 @@ function editableUpstream(item: Partial<SipUpstream> = {}): EditableUpstream {
     server_id: item.server_id || "",
     domain: item.domain || "",
     host: item.host || "",
-    port: item.port || 5060,
+    port: item.port ?? 0,
+    transport: item.transport || "udp",
+    tls_ca: item.tls_ca || "",
+    tls_cert: item.tls_cert || "",
+    tls_key: item.tls_key || "",
+    tls_server_name: item.tls_server_name || "",
     local_id: item.local_id || "",
     local_domain: item.local_domain || "",
     local_host: item.local_host || "",
+    local_port: item.local_port || 0,
     password: item.password || "",
     password_input: "",
     version: item.version || "1.0",
@@ -114,9 +120,15 @@ function upstreamPayload(item: EditableUpstream): SipUpstream {
     domain: item.domain?.trim(),
     host: item.host.trim(),
     port: item.port,
+    transport: item.transport || "udp",
+    tls_ca: item.tls_ca?.trim(),
+    tls_cert: item.tls_cert?.trim(),
+    tls_key: item.tls_key?.trim(),
+    tls_server_name: item.tls_server_name?.trim(),
     local_id: item.local_id?.trim(),
     local_domain: item.local_domain?.trim(),
     local_host: item.local_host?.trim(),
+    local_port: item.local_port || undefined,
     password: item.password_input || item.password || "",
     version: item.version,
     expires: item.expires,
@@ -309,7 +321,7 @@ onUnmounted(() => {
         <div id="upstreams" class="section-heading mt-6">
           <div>
             <h3 class="section-title">上级平台级联</h3>
-            <p class="form-help">本平台作为下级，通过 UDP 向上级平台注册、续期并发送 Keepalive。</p>
+            <p class="form-help">本平台作为下级，通过 UDP、TCP 或经证书校验的 TLS 向上级平台注册、续期并发送 Keepalive。</p>
           </div>
           <button class="btn btn-sm" type="button" @click="addUpstream"><Plus />添加上级平台</button>
         </div>
@@ -335,11 +347,19 @@ onUnmounted(() => {
             <label class="form-group"><span class="form-label">协议档案</span><select v-model="item.version" class="input plain w-full"><option value="1.0">2011（1.0）</option><option value="1.1">2014（1.1）</option><option value="2.0">2016（2.0）</option><option value="3.0">2022（3.0）</option></select></label>
             <label class="form-group full"><span class="form-label">上级平台 ID</span><input v-model.trim="item.server_id" class="input plain w-full mono" pattern="[0-9]{20}" maxlength="20" :required="item.enabled" /></label>
             <label class="form-group"><span class="form-label">上级地址</span><input v-model.trim="item.host" class="input plain w-full mono" :required="item.enabled" /></label>
-            <label class="form-group"><span class="form-label">上级端口</span><input v-model.number="item.port" class="input plain w-full" type="number" min="1" max="65535" :required="item.enabled" /></label>
+            <label class="form-group"><span class="form-label">上级端口</span><input v-model.number="item.port" class="input plain w-full" type="number" min="0" max="65535" placeholder="0 表示 UDP/TCP 5060、TLS 5061" :required="item.enabled" /></label>
+            <label class="form-group"><span class="form-label">信令传输</span><select v-model="item.transport" class="input plain w-full"><option value="udp">UDP</option><option value="tcp">TCP</option><option value="tls">TLS</option></select></label>
             <label class="form-group"><span class="form-label">上级 SIP 域</span><input v-model.trim="item.domain" class="input plain w-full mono" placeholder="默认取上级 ID 前 10 位" /></label>
+            <template v-if="item.transport === 'tls'">
+              <label class="form-group"><span class="form-label">TLS CA 文件</span><input v-model.trim="item.tls_ca" class="input plain w-full mono" placeholder="留空使用系统 CA" /></label>
+              <label class="form-group"><span class="form-label">TLS 服务端名称</span><input v-model.trim="item.tls_server_name" class="input plain w-full mono" placeholder="默认使用上级地址" /></label>
+              <label class="form-group"><span class="form-label">TLS 客户端证书</span><input v-model.trim="item.tls_cert" class="input plain w-full mono" placeholder="双向认证时填写" /></label>
+              <label class="form-group"><span class="form-label">TLS 客户端私钥</span><input v-model.trim="item.tls_key" class="input plain w-full mono" placeholder="与客户端证书同时填写" /></label>
+            </template>
             <label class="form-group"><span class="form-label">本平台 ID</span><input v-model.trim="item.local_id" class="input plain w-full mono" pattern="[0-9]{20}" maxlength="20" placeholder="默认使用 SIP 服务 ID" /></label>
             <label class="form-group"><span class="form-label">本平台 SIP 域</span><input v-model.trim="item.local_domain" class="input plain w-full mono" placeholder="默认使用本平台域" /></label>
             <label class="form-group"><span class="form-label">Contact 地址</span><input v-model.trim="item.local_host" class="input plain w-full mono" placeholder="默认使用对外宣告地址" /></label>
+            <label class="form-group"><span class="form-label">Contact 端口</span><input v-model.number="item.local_port" class="input plain w-full" type="number" min="0" max="65535" placeholder="0 表示使用对应监听端口" /></label>
             <label class="form-group"><span class="form-label">新注册密码</span><input v-model="item.password_input" class="input plain w-full" type="password" autocomplete="new-password" placeholder="留空保留当前密码" /></label>
             <label class="form-group"><span class="form-label">注册有效期（秒）</span><input v-model.number="item.expires" class="input plain w-full" type="number" min="60" max="86400" :required="item.enabled" /></label>
             <label class="form-group"><span class="form-label">心跳间隔（秒）</span><input v-model.number="item.keepalive_seconds" class="input plain w-full" type="number" min="5" max="3600" :required="item.enabled" /></label>

@@ -67,7 +67,7 @@ func TestSwaggerSIPConfigDocumentsCascadeFields(t *testing.T) {
 		t.Fatal("Swagger is missing api.SwaggerSIPUpstream")
 	}
 	upstreamProperties := upstream["properties"].(map[string]any)
-	for _, name := range []string{"server_id", "transport", "local_id", "local_domain", "version", "shared_channels", "channel_id_map", "media_allowed_cidrs"} {
+	for _, name := range []string{"server_id", "transport", "tls_ca", "tls_cert", "tls_key", "tls_server_name", "local_id", "local_domain", "local_host", "local_port", "version", "shared_channels", "channel_id_map", "media_allowed_cidrs"} {
 		if _, ok := upstreamProperties[name]; !ok {
 			t.Errorf("Swagger upstream config is missing %s", name)
 		}

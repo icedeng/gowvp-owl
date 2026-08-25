@@ -139,10 +139,15 @@ type SIPUpstream struct {
 	Domain            string            `json:"domain" comment:"上级平台 SIP 域；为空时取 server_id 前 10 位"`
 	Host              string            `json:"host" comment:"上级平台 SIP 地址"`
 	Port              int               `json:"port" comment:"上级平台 SIP 端口"`
-	Transport         string            `json:"transport,omitempty" comment:"上级平台 SIP 信令传输：udp/tcp；空值默认 udp"`
+	Transport         string            `json:"transport,omitempty" comment:"上级平台 SIP 信令传输：udp/tcp/tls；空值默认 udp"`
+	TLSCA             string            `json:"tls_ca,omitempty" comment:"TLS 上级服务端证书的 CA 文件；为空时使用系统 CA"`
+	TLSCert           string            `json:"tls_cert,omitempty" comment:"TLS 客户端证书文件；与 tls_key 同时配置"`
+	TLSKey            string            `json:"tls_key,omitempty" comment:"TLS 客户端私钥文件；与 tls_cert 同时配置"`
+	TLSServerName     string            `json:"tls_server_name,omitempty" comment:"TLS 服务端证书名称；为空时使用 host"`
 	LocalID           string            `json:"local_id" comment:"向上级注册使用的本平台国标编码；为空时使用 Sip.ID"`
 	LocalDomain       string            `json:"local_domain" comment:"向上级注册使用的本平台 SIP 域；为空时使用 Sip.Domain 或 local_id 前 10 位"`
 	LocalHost         string            `json:"local_host" comment:"Contact 宣告地址；为空时使用 Sip.Host"`
+	LocalPort         int               `json:"local_port,omitempty" comment:"Contact 宣告端口；空值按传输使用本机 SIP 或 TLS 监听端口"`
 	Password          string            `json:"password" comment:"上级平台注册密码"`
 	SignalDigestSeed  string            `json:"signal_digest_seed,omitempty" comment:"与该上级约定的 Note 摘要 seed；为空时使用 Password 或 Sip.SignalDigest.Seed"`
 	Version           string            `json:"version" comment:"级联档案版本：1.0/1.1/2.0/3.0"`

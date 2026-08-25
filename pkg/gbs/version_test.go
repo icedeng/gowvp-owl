@@ -21,8 +21,8 @@ func TestRefreshDeviceVersionUpdatesCapabilitySnapshot(t *testing.T) {
 }
 
 func TestGBDisabledCapabilitiesNormalizationAndGate(t *testing.T) {
-	normalized, err := NormalizeGBDisabledCapabilities([]string{" Voice_Intercom ", "voice_intercom", "ptz_position", "h265"})
-	if err != nil || len(normalized) != 3 || normalized[0] != "voice_intercom" || normalized[1] != "ptz_position" || normalized[2] != "h265" {
+	normalized, err := NormalizeGBDisabledCapabilities([]string{" Voice_Intercom ", "voice_intercom", "ptz_position", "h265", "aac", "target_track"})
+	if err != nil || len(normalized) != 5 || normalized[0] != "voice_intercom" || normalized[1] != "ptz_position" || normalized[2] != "h265" || normalized[3] != "aac" || normalized[4] != "target_track" {
 		t.Fatalf("normalized capabilities = %v, err = %v", normalized, err)
 	}
 	if _, err := NormalizeGBDisabledCapabilities([]string{"voice_typo"}); err == nil {
@@ -46,7 +46,7 @@ func TestGBDisabledCapabilitiesNormalizationAndGate(t *testing.T) {
 		t.Fatal("2.0 device accepted the 3.0 PTZ position subscription")
 	}
 	api, memory = newVersionGateAPI(GBVersion30)
-	memory.device.setGBProfile(GBVersion30, []string{"ptz_position", "sdcard"})
+	memory.device.setGBProfile(GBVersion30, []string{"ptz_position", "sdcard", "target_track"})
 	if err := api.Subscribe(t.Context(), &SubscribeInput{DeviceID: "device", Event: "PTZPosition"}); err == nil {
 		t.Fatal("device-level disabled PTZ position subscription was accepted")
 	}
@@ -56,6 +56,22 @@ func TestGBDisabledCapabilitiesNormalizationAndGate(t *testing.T) {
 	}
 	if _, err := api.resolveDeviceQueryCmdType("device", deviceQueryActionSDCardStatus, ""); err == nil {
 		t.Fatal("device-level disabled SD card query was accepted")
+	}
+	if err := api.requireGBFeature("device", "target_track", "目标跟踪", func(c GBCapabilities) bool {
+		return c.TargetTrack
+	}); err == nil {
+		t.Fatal("device-level disabled target tracking was accepted")
+	}
+}
+
+func TestAllDeclaredGBCapabilitiesCanBeDisabled(t *testing.T) {
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30} {
+		for _, capability := range version.CapabilityNames() {
+			normalized, err := NormalizeGBDisabledCapabilities([]string{capability})
+			if err != nil || len(normalized) != 1 || normalized[0] != capability {
+				t.Errorf("%s capability %q cannot be disabled: normalized=%v err=%v", version, capability, normalized, err)
+			}
+		}
 	}
 }
 

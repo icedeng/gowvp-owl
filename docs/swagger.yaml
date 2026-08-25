@@ -965,6 +965,9 @@ definitions:
       local_id:
         example: "34020000002000000002"
         type: string
+      local_port:
+        example: 5061
+        type: integer
       media_allowed_cidrs:
         example:
         - 198.51.100.0/24
@@ -990,8 +993,20 @@ definitions:
       signal_digest_seed:
         example: upstream-shared-secret
         type: string
+      tls_ca:
+        example: configs/certs/upstream-ca.crt
+        type: string
+      tls_cert:
+        example: configs/certs/cascade-client.crt
+        type: string
+      tls_key:
+        example: configs/certs/cascade-client.key
+        type: string
+      tls_server_name:
+        example: sip.example.com
+        type: string
       transport:
-        example: udp
+        example: tls
         type: string
       version:
         example: "1.1"

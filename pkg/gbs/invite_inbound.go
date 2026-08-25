@@ -44,7 +44,7 @@ func (g *GB28181API) sipInviteGeneric(ctx *sip.Context) {
 		return
 	}
 	if g.svr != nil && g.svr.cascade != nil {
-		if worker, ok := g.svr.cascade.matchRegistered(ctx.DeviceID, ctx.Source); ok {
+		if worker, ok := g.svr.cascade.matchRegistered(ctx.DeviceID, ctx.Source, ctx.Request.GetConnection()); ok {
 			g.sipInviteCascade(ctx, callID, worker)
 			return
 		}
@@ -533,7 +533,7 @@ func (g *GB28181API) authorizeCascadeWorker(worker *cascadeWorker, ctx *sip.Cont
 		return false
 	}
 	if g.svr != nil && g.svr.cascade != nil {
-		matched, ok := g.svr.cascade.matchRegistered(ctx.DeviceID, ctx.Source)
+		matched, ok := g.svr.cascade.matchRegistered(ctx.DeviceID, ctx.Source, ctx.Request.GetConnection())
 		return ok && matched == worker
 	}
 	if strings.TrimSpace(ctx.DeviceID) != worker.platform.serverID {

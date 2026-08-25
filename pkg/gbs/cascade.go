@@ -2,10 +2,13 @@ package gbs
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/xml"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,6 +51,8 @@ type cascadePlatform struct {
 	localDomain       string
 	localHost         string
 	localPort         int
+	localTLSPort      int
+	localTLSEnabled   bool
 	password          string
 	signalDigestSeed  string
 	version           GBProtocolVersion
@@ -57,6 +62,21 @@ type cascadePlatform struct {
 	channelIDMap      map[string]string
 	exposedChannelMap map[string]string
 	mediaAllowedCIDRs []*net.IPNet
+	tlsConfig         *tls.Config
+}
+
+type cascadeTLSAddr struct {
+	*net.TCPAddr
+	serverName string
+}
+
+func (a *cascadeTLSAddr) Network() string { return "tls" }
+
+func (p cascadePlatform) contactPort(transport string) int {
+	if strings.EqualFold(strings.TrimSpace(transport), "tls") && p.localTLSPort > 0 {
+		return p.localTLSPort
+	}
+	return p.localPort
 }
 
 func normalizeCascadePlatform(in conf.SIPUpstream, local conf.SIP, fallbackHost string) (cascadePlatform, error) {
@@ -75,26 +95,38 @@ func normalizeCascadePlatform(in conf.SIPUpstream, local conf.SIP, fallbackHost 
 	if host == "" {
 		return cascadePlatform{}, fmt.Errorf("upstream host is required")
 	}
-	port := in.Port
-	if port == 0 {
-		port = 5060
-	}
-	if port < 1 || port > 65535 {
-		return cascadePlatform{}, fmt.Errorf("upstream port must be between 1 and 65535")
-	}
 	transport := strings.ToLower(strings.TrimSpace(in.Transport))
 	if transport == "" {
 		transport = "udp"
 	}
+	port := in.Port
+	if port == 0 {
+		port = 5060
+		if transport == "tls" {
+			port = 5061
+		}
+	}
+	if port < 1 || port > 65535 {
+		return cascadePlatform{}, fmt.Errorf("upstream port must be between 1 and 65535")
+	}
 	var remote net.Addr
-	var err error
+	tlsConfig, err := cascadeTLSClientConfig(in, host)
+	if err != nil {
+		return cascadePlatform{}, err
+	}
 	switch transport {
 	case "udp":
 		remote, err = net.ResolveUDPAddr("udp", net.JoinHostPort(host, strconv.Itoa(port)))
 	case "tcp":
 		remote, err = net.ResolveTCPAddr("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	case "tls":
+		var tcpAddr *net.TCPAddr
+		tcpAddr, err = net.ResolveTCPAddr("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+		if err == nil {
+			remote = &cascadeTLSAddr{TCPAddr: tcpAddr, serverName: tlsConfig.ServerName}
+		}
 	default:
-		return cascadePlatform{}, fmt.Errorf("upstream transport only supports udp/tcp")
+		return cascadePlatform{}, fmt.Errorf("upstream transport only supports udp/tcp/tls")
 	}
 	if err != nil {
 		return cascadePlatform{}, fmt.Errorf("resolve upstream %s address: %w", transport, err)
@@ -144,6 +176,22 @@ func normalizeCascadePlatform(in conf.SIPUpstream, local conf.SIP, fallbackHost 
 	}
 	if local.Port < 1 || local.Port > 65535 {
 		return cascadePlatform{}, fmt.Errorf("local SIP port must be between 1 and 65535")
+	}
+	localTLSPort := local.TLSPort
+	if localTLSPort == 0 {
+		localTLSPort = local.Port
+	}
+	if in.LocalPort != 0 {
+		localTLSPort = in.LocalPort
+		if transport != "tls" {
+			local.Port = in.LocalPort
+		}
+	}
+	if localTLSPort < 1 || localTLSPort > 65535 || local.Port < 1 || local.Port > 65535 {
+		return cascadePlatform{}, fmt.Errorf("upstream local_port must be between 1 and 65535")
+	}
+	if transport == "tls" && !local.EnableTLS {
+		return cascadePlatform{}, fmt.Errorf("upstream TLS transport requires the local SIP-TLS listener")
 	}
 	if _, err := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s", serverID, remoteDomain)); err != nil {
 		return cascadePlatform{}, fmt.Errorf("upstream domain: %w", err)
@@ -220,17 +268,50 @@ func normalizeCascadePlatform(in conf.SIPUpstream, local conf.SIP, fallbackHost 
 	}
 	return cascadePlatform{
 		name: name, serverID: serverID, remoteDomain: remoteDomain, remote: remote, transport: transport,
-		localID: localID, localDomain: localDomain, localHost: localHost, localPort: local.Port,
+		localID: localID, localDomain: localDomain, localHost: localHost, localPort: local.Port, localTLSPort: localTLSPort, localTLSEnabled: local.EnableTLS,
 		password: in.Password, signalDigestSeed: strings.TrimSpace(in.SignalDigestSeed),
 		version: version, expires: expires, keepaliveInterval: keepalive,
 		sharedChannels: sharedChannels, channelIDMap: channelIDMap,
 		exposedChannelMap: exposedChannelMap, mediaAllowedCIDRs: mediaAllowedCIDRs,
+		tlsConfig: tlsConfig,
 	}, nil
+}
+
+func cascadeTLSClientConfig(in conf.SIPUpstream, host string) (*tls.Config, error) {
+	certFile := strings.TrimSpace(in.TLSCert)
+	keyFile := strings.TrimSpace(in.TLSKey)
+	if (certFile == "") != (keyFile == "") {
+		return nil, fmt.Errorf("upstream TLS client certificate and key must be configured together")
+	}
+	config := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: strings.TrimSpace(in.TLSServerName)}
+	if config.ServerName == "" {
+		config.ServerName = strings.TrimSpace(host)
+	}
+	if caFile := strings.TrimSpace(in.TLSCA); caFile != "" {
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read upstream TLS CA: %w", err)
+		}
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("upstream TLS CA does not contain a valid certificate")
+		}
+		config.RootCAs = roots
+	}
+	if certFile != "" {
+		certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load upstream TLS client certificate: %w", err)
+		}
+		config.Certificates = []tls.Certificate{certificate}
+	}
+	return config, nil
 }
 
 type cascadeExchange func(context.Context, *sip.Request) (*sip.Response, error)
 type cascadeSend func(*sip.Request) error
 type cascadeTCPDial func(context.Context, string) (net.Conn, error)
+type cascadeTLSDial func(context.Context, string, string) (net.Conn, error)
 
 type cascadeWorker struct {
 	server   *Server
@@ -256,14 +337,17 @@ type cascadeWorker struct {
 	tcpConn   sip.Connection
 	tcpRemote string
 	dialTCP   cascadeTCPDial
+	dialTLS   cascadeTLSDial
 }
 
 func newCascadeWorker(server *Server, platform cascadePlatform) *cascadeWorker {
 	ctx, cancel := context.WithCancel(context.Background())
-	remoteURI, _ := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s", platform.serverID, platform.remoteDomain))
-	if platform.transport == "tcp" {
-		remoteURI.FUriParams.Add("transport", sip.String{Str: "tcp"})
+	scheme := "sip"
+	if platform.transport == "tls" {
+		scheme = "sips"
 	}
+	remoteURI, _ := sip.ParseSipURI(fmt.Sprintf("%s:%s@%s", scheme, platform.serverID, platform.remoteDomain))
+	setCascadeURITransport(&remoteURI, platform.transport)
 	w := &cascadeWorker{
 		server: server, platform: platform, ctx: ctx, cancel: cancel, done: make(chan struct{}),
 		callID: sip.CallID("cascade-register-" + sip.RandString(24)), fromTag: sip.RandString(24),
@@ -276,6 +360,18 @@ func newCascadeWorker(server *Server, platform cascadePlatform) *cascadeWorker {
 	}
 	w.dialTCP = func(ctx context.Context, address string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: defaultCascadeRequestTimeout}).DialContext(ctx, "tcp", address)
+	}
+	w.dialTLS = func(ctx context.Context, address, serverName string) (net.Conn, error) {
+		config := platform.tlsConfig
+		if config == nil {
+			return nil, fmt.Errorf("cascade SIP/TLS configuration is unavailable")
+		}
+		config = config.Clone()
+		if strings.TrimSpace(serverName) != "" {
+			config.ServerName = strings.TrimSpace(serverName)
+		}
+		dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: defaultCascadeRequestTimeout}, Config: config}
+		return dialer.DialContext(ctx, "tcp", address)
 	}
 	w.exchange = w.exchangeRequest
 	w.send = w.sendRequest
@@ -507,11 +603,12 @@ func (w *cascadeWorker) newKeepaliveRequest(body []byte) *sip.Request {
 }
 
 func (w *cascadeWorker) contactAddress() *sip.Address {
-	uri, err := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s", w.platform.localID, net.JoinHostPort(w.platform.localHost, strconv.Itoa(w.platform.localPort))))
+	transport := cascadeTransportForAddr(w.remoteDestination())
+	uri, err := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s", w.platform.localID, net.JoinHostPort(w.platform.localHost, strconv.Itoa(w.platform.contactPort(transport)))))
 	if err != nil {
 		return nil
 	}
-	setCascadeURITransport(&uri, cascadeTransportForAddr(w.remoteDestination()))
+	setCascadeURITransport(&uri, transport)
 	return &sip.Address{URI: &uri, Params: sip.NewParams()}
 }
 
@@ -528,10 +625,12 @@ func (w *cascadeWorker) remoteTarget() (*sip.URI, net.Addr) {
 	remote := w.target
 	w.mu.RUnlock()
 	if uri == nil {
-		fallback, _ := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s", w.platform.serverID, w.platform.remoteDomain))
-		if w.platform.transport == "tcp" {
-			fallback.FUriParams.Add("transport", sip.String{Str: "tcp"})
+		scheme := "sip"
+		if w.platform.transport == "tls" {
+			scheme = "sips"
 		}
+		fallback, _ := sip.ParseSipURI(fmt.Sprintf("%s:%s@%s", scheme, w.platform.serverID, w.platform.remoteDomain))
+		setCascadeURITransport(&fallback, w.platform.transport)
 		uri = &fallback
 	}
 	if remote == nil {
@@ -575,8 +674,9 @@ func (w *cascadeWorker) sendMessage(ctx context.Context, body []byte) error {
 func (w *cascadeWorker) newRequest(method string, contentType *sip.ContentType, body []byte, callID *sip.CallID, cseq uint32, expires int, auth *sip.Authorization) *sip.Request {
 	remoteURI, remote := w.remoteTarget()
 	transport := cascadeTransportForAddr(remote)
+	localPort := w.platform.contactPort(transport)
 	localURI, _ := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s", w.platform.localID, w.platform.localDomain))
-	contactURI, _ := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s", w.platform.localID, net.JoinHostPort(w.platform.localHost, strconv.Itoa(w.platform.localPort))))
+	contactURI, _ := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s", w.platform.localID, net.JoinHostPort(w.platform.localHost, strconv.Itoa(localPort))))
 	setCascadeURITransport(&contactURI, transport)
 	from := &sip.Address{URI: &localURI, Params: sip.NewParams().Add("tag", sip.String{Str: w.fromTag})}
 	toURI := remoteURI.Clone()
@@ -594,7 +694,7 @@ func (w *cascadeWorker) newRequest(method string, contentType *sip.ContentType, 
 		SetSeqNo(uint(cseq)).
 		SetCallID(callID).
 		SetXGBVerValue(string(w.protocolVersion())).
-		AddVia(&sip.ViaHop{Host: w.platform.localHost, Port: sip.NewPort(w.platform.localPort), Transport: strings.ToUpper(transport), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).
+		AddVia(&sip.ViaHop{Host: w.platform.localHost, Port: sip.NewPort(localPort), Transport: strings.ToUpper(transport), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).
 		Build()
 	if expires >= 0 {
 		headers = append(headers, &sip.GenericHeader{HeaderName: "Expires", Contents: strconv.Itoa(expires)})
@@ -616,8 +716,14 @@ func (w *cascadeWorker) newRequest(method string, contentType *sip.ContentType, 
 }
 
 func cascadeTransportForAddr(addr net.Addr) string {
-	if addr != nil && strings.HasPrefix(strings.ToLower(strings.TrimSpace(addr.Network())), "tcp") {
-		return "tcp"
+	if addr != nil {
+		network := strings.ToLower(strings.TrimSpace(addr.Network()))
+		if strings.HasPrefix(network, "tls") {
+			return "tls"
+		}
+		if strings.HasPrefix(network, "tcp") {
+			return "tcp"
+		}
 	}
 	return "udp"
 }
@@ -650,8 +756,10 @@ func setCascadeURITransport(uri *sip.URI, transport string) {
 			}
 		}
 	}
-	if strings.EqualFold(strings.TrimSpace(transport), "tcp") {
-		params.Add("transport", sip.String{Str: "tcp"})
+	transport = strings.ToLower(strings.TrimSpace(transport))
+	uri.FIsEncrypted = transport == "tls"
+	if transport == "tcp" || transport == "tls" {
+		params.Add("transport", sip.String{Str: transport})
 	}
 	uri.FUriParams = params
 }
@@ -671,9 +779,6 @@ func cascadeRegisterRedirectTarget(response *sip.Response, serverID, defaultTran
 		return nil, nil, fmt.Errorf("cascade REGISTER redirect missing Contact")
 	}
 	uri := contact.Address.Clone()
-	if uri.FIsEncrypted {
-		return nil, nil, fmt.Errorf("cascade REGISTER redirect does not support SIPS")
-	}
 	if uri.FPassword != nil && strings.TrimSpace(uri.FPassword.String()) != "" {
 		return nil, nil, fmt.Errorf("cascade REGISTER redirect Contact must not contain password")
 	}
@@ -687,19 +792,33 @@ func cascadeRegisterRedirectTarget(response *sip.Response, serverID, defaultTran
 	if transport == "" {
 		transport = "udp"
 	}
+	explicitTransport := false
 	if uri.FUriParams != nil {
 		if value, exists := uri.FUriParams.Get("transport"); exists && value != nil {
 			transport = strings.ToLower(strings.TrimSpace(value.String()))
+			explicitTransport = true
 		}
 	}
-	if transport != "udp" && transport != "tcp" {
-		return nil, nil, fmt.Errorf("cascade REGISTER redirect only supports UDP/TCP transport")
+	if uri.FIsEncrypted {
+		if explicitTransport && transport != "tls" {
+			return nil, nil, fmt.Errorf("cascade REGISTER SIPS redirect has conflicting transport")
+		}
+		transport = "tls"
+	}
+	if strings.EqualFold(strings.TrimSpace(defaultTransport), "tls") && transport != "tls" {
+		return nil, nil, fmt.Errorf("cascade REGISTER redirect must not downgrade SIPS transport")
+	}
+	if transport != "udp" && transport != "tcp" && transport != "tls" {
+		return nil, nil, fmt.Errorf("cascade REGISTER redirect only supports UDP/TCP/TLS transport")
 	}
 	host := strings.TrimSpace(uri.Host())
 	if host == "" {
 		return nil, nil, fmt.Errorf("cascade REGISTER redirect Contact host is empty")
 	}
 	port := 5060
+	if transport == "tls" {
+		port = 5061
+	}
 	if uri.FPort != nil {
 		port = int(*uri.FPort)
 	}
@@ -707,12 +826,19 @@ func cascadeRegisterRedirectTarget(response *sip.Response, serverID, defaultTran
 	var err error
 	if transport == "tcp" {
 		remote, err = net.ResolveTCPAddr("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	} else if transport == "tls" {
+		var tcpAddr *net.TCPAddr
+		tcpAddr, err = net.ResolveTCPAddr("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+		if err == nil {
+			remote = &cascadeTLSAddr{TCPAddr: tcpAddr, serverName: host}
+		}
 	} else {
 		remote, err = net.ResolveUDPAddr("udp", net.JoinHostPort(host, strconv.Itoa(port)))
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve cascade REGISTER redirect: %w", err)
 	}
+	setCascadeURITransport(uri, transport)
 	return uri, remote, nil
 }
 
@@ -732,6 +858,13 @@ func cloneCascadeAddr(value net.Addr) net.Addr {
 		clone := *addr
 		clone.IP = append(net.IP(nil), addr.IP...)
 		return &clone
+	case *cascadeTLSAddr:
+		if addr == nil || addr.TCPAddr == nil {
+			return nil
+		}
+		clone := *addr.TCPAddr
+		clone.IP = append(net.IP(nil), addr.IP...)
+		return &cascadeTLSAddr{TCPAddr: &clone, serverName: addr.serverName}
 	default:
 		return value
 	}
@@ -870,7 +1003,11 @@ func (w *cascadeWorker) prepareRequestConnection(ctx context.Context, request *s
 		_, remote = w.remoteTarget()
 		request.SetDestination(remote)
 	}
-	if cascadeTransportForAddr(remote) == "udp" {
+	transport := cascadeTransportForAddr(remote)
+	if transport == "tls" && !w.platform.localTLSEnabled {
+		return fmt.Errorf("cascade SIP/TLS requires the local SIP-TLS listener")
+	}
+	if transport == "udp" {
 		w.closeTCPConnection()
 		if w.server.UDPConn() == nil {
 			return fmt.Errorf("SIP UDP listener is unavailable")
@@ -886,17 +1023,19 @@ func (w *cascadeWorker) prepareRequestConnection(ctx context.Context, request *s
 	}
 	request.SetConnection(conn)
 	request.SetSource(conn.LocalAddr())
-	applyCascadeRequestTransport(request, "tcp")
+	applyCascadeRequestTransport(request, transport)
 	return nil
 }
 
 func (w *cascadeWorker) ensureTCPConnection(ctx context.Context, remote net.Addr) (sip.Connection, error) {
-	if remote == nil || cascadeTransportForAddr(remote) != "tcp" {
-		return nil, fmt.Errorf("invalid cascade SIP/TCP target")
+	transport := cascadeTransportForAddr(remote)
+	if remote == nil || transport == "udp" {
+		return nil, fmt.Errorf("invalid cascade SIP/TCP or SIP/TLS target")
 	}
 	address := remote.String()
+	connectionKey := transport + "|" + address
 	w.connMu.Lock()
-	if w.tcpConn != nil && w.tcpRemote == address {
+	if w.tcpConn != nil && w.tcpRemote == connectionKey {
 		conn := w.tcpConn
 		w.connMu.Unlock()
 		return conn, nil
@@ -905,20 +1044,34 @@ func (w *cascadeWorker) ensureTCPConnection(ctx context.Context, remote net.Addr
 	w.tcpConn = nil
 	w.tcpRemote = ""
 	dial := w.dialTCP
+	dialTLS := w.dialTLS
 	w.connMu.Unlock()
 	if previous != nil {
 		_ = previous.Close()
 	}
-	if dial == nil {
-		return nil, fmt.Errorf("cascade SIP/TCP dialer is unavailable")
+	var raw net.Conn
+	var err error
+	if transport == "tls" {
+		if dialTLS == nil {
+			return nil, fmt.Errorf("cascade SIP/TLS dialer is unavailable")
+		}
+		serverName := ""
+		if target, ok := remote.(*cascadeTLSAddr); ok && target != nil {
+			serverName = target.serverName
+		}
+		raw, err = dialTLS(ctx, address, serverName)
+	} else {
+		if dial == nil {
+			return nil, fmt.Errorf("cascade SIP/TCP dialer is unavailable")
+		}
+		raw, err = dial(ctx, address)
 	}
-	raw, err := dial(ctx, address)
 	if err != nil {
-		return nil, fmt.Errorf("dial cascade SIP/TCP %s: %w", address, err)
+		return nil, fmt.Errorf("dial cascade SIP/%s %s: %w", strings.ToUpper(transport), address, err)
 	}
 	conn := sip.NewTCPConnection(raw)
 	w.connMu.Lock()
-	if w.tcpConn != nil && w.tcpRemote == address {
+	if w.tcpConn != nil && w.tcpRemote == connectionKey {
 		existing := w.tcpConn
 		w.connMu.Unlock()
 		_ = conn.Close()
@@ -926,7 +1079,7 @@ func (w *cascadeWorker) ensureTCPConnection(ctx context.Context, remote net.Addr
 	}
 	existing := w.tcpConn
 	w.tcpConn = conn
-	w.tcpRemote = address
+	w.tcpRemote = connectionKey
 	w.connMu.Unlock()
 	if existing != nil {
 		_ = existing.Close()
@@ -1084,7 +1237,7 @@ func (m *CascadeManager) Statuses() []CascadePlatformStatus {
 	return out
 }
 
-func (m *CascadeManager) matchRegistered(serverID string, source net.Addr) (*cascadeWorker, bool) {
+func (m *CascadeManager) matchRegistered(serverID string, source net.Addr, connections ...sip.Connection) (*cascadeWorker, bool) {
 	if m == nil || strings.TrimSpace(serverID) == "" || source == nil {
 		return nil, false
 	}
@@ -1097,6 +1250,18 @@ func (m *CascadeManager) matchRegistered(serverID string, source net.Addr) (*cas
 	for _, worker := range m.items {
 		if worker.platform.serverID != serverID || !worker.remoteAddressMatches(source) {
 			continue
+		}
+		if cascadeTransportForAddr(worker.remoteDestination()) == "tls" {
+			var connection sip.Connection
+			if len(connections) > 0 {
+				connection = connections[0]
+			}
+			worker.connMu.Lock()
+			trustedConnection := worker.tcpConn
+			worker.connMu.Unlock()
+			if connection == nil || trustedConnection == nil || connection != trustedConnection {
+				return nil, false
+			}
 		}
 		if !worker.snapshot().Registered {
 			return nil, false

@@ -5023,6 +5023,10 @@
                     "type": "string",
                     "example": "34020000002000000002"
                 },
+                "local_port": {
+                    "type": "integer",
+                    "example": 5061
+                },
                 "media_allowed_cidrs": {
                     "type": "array",
                     "items": {
@@ -5058,9 +5062,25 @@
                     "type": "string",
                     "example": "upstream-shared-secret"
                 },
+                "tls_ca": {
+                    "type": "string",
+                    "example": "configs/certs/upstream-ca.crt"
+                },
+                "tls_cert": {
+                    "type": "string",
+                    "example": "configs/certs/cascade-client.crt"
+                },
+                "tls_key": {
+                    "type": "string",
+                    "example": "configs/certs/cascade-client.key"
+                },
+                "tls_server_name": {
+                    "type": "string",
+                    "example": "sip.example.com"
+                },
                 "transport": {
                     "type": "string",
-                    "example": "udp"
+                    "example": "tls"
                 },
                 "version": {
                     "type": "string",
