@@ -199,6 +199,8 @@ func (g *GB28181API) DeviceQuery(_ context.Context, in *DeviceQueryInput) (*Devi
 	select {
 	case out := <-pending.wait:
 		return out, nil
+	case <-g.serviceDone():
+		return nil, ErrServiceStopped
 	case <-timer.C:
 		return nil, fmt.Errorf("wait query response timeout")
 	}

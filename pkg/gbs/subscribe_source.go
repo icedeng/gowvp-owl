@@ -116,6 +116,10 @@ func (t *subscriptionTarget) GBVersion() string {
 
 // sipSubscribeEvent 处理事件源侧 SUBSCRIBE 请求。
 func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
+	if g.serviceStopped() {
+		ctx.String(503, ErrServiceStopped.Error())
+		return
+	}
 	var req subscribeEventRequest
 	if len(ctx.Request.Body()) == 0 {
 		ctx.String(400, "empty subscribe body")
@@ -300,6 +304,15 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 		} else {
 			g.eventSubscribers.Store(key, sub)
 		}
+	}
+	if g.serviceStopped() {
+		if g.eventSubscribers.CompareAndDelete(key, sub) {
+			sub.mu.Lock()
+			downstreamKeys := append([]string(nil), sub.DownstreamKeys...)
+			sub.mu.Unlock()
+			g.releaseCascadeDownstreamSubscriptions(context.Background(), downstreamKeys)
+		}
+		return
 	}
 	if initial && shouldSendCascadeInitialCatalogNotify(cascade, cmdType) {
 		go func() {

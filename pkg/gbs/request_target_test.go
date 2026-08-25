@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -77,6 +78,26 @@ func TestWrapRequestRejectsIncompleteTarget(t *testing.T) {
 				t.Fatalf("incomplete target error = %v", err)
 			}
 		})
+	}
+}
+
+func TestWrapRequestRejectsStoppedService(t *testing.T) {
+	local, err := sip.ParseSipURI("sip:34020000002000000001@127.0.0.1:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &GB28181API{lifecycleDone: make(chan struct{})}
+	server := &Server{
+		Server:      sip.NewServer(&sip.Address{URI: &local, Params: sip.NewParams()}),
+		gb:          api,
+		fromAddress: sip.Address{URI: &local, Params: sip.NewParams()},
+	}
+	api.svr = server
+	t.Cleanup(server.Close)
+	api.close()
+
+	if _, err = server.wrapRequest(&Channel{}, sip.MethodMessage, &sip.ContentTypeXML, nil); !errors.Is(err, ErrServiceStopped) {
+		t.Fatalf("stopped service error = %v; want %v", err, ErrServiceStopped)
 	}
 }
 

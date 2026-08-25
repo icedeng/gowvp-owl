@@ -25,7 +25,7 @@
 | AI-301 Catalog 扩展 | 完成 | 目录树五类节点、2014 字段、厂商 XML 保留；`catalog_extension_test.go` |
 | AI-302 配置读写 | 完成 | ConfigDownload 支持 BasicParam、VideoParamOpt/Config、AudioParamOpt/Config、SVACEncode/DecodeConfig 多响应聚合；DeviceConfig 写入支持 BasicParam、结构化 VideoParamConfig/AudioParamConfig 及经过 XML 完整性/指令校验的 SVACEncodeConfig/SVACDecodeConfig，可组合下发并保留 BasicParam 兼容 API；Web/Core/Adapter/Swagger 已贯通；`config_11_test.go`、`gb_config_test.go`、`ipc_gb_config_test.go` |
 | AI-303 MediaStatus | 完成 | Call-ID 关联、121、未知/重复幂等；`media_status_test.go`；并纳入 1.1 串联模拟流程 |
-| AI-304 多响应 | 完成 | 乱序、重复、总数冲突、超时部分结果、同设备并发；XML 的 UTF-8→GBK/GB18030 兼容回退使用临时对象原子解码，首轮失败的部分目录/录像切片不会残留并在第二轮重复追加，完全失败也不污染调用方目标；`multi_response_test.go`、`sip/xml_decode_test.go` |
+| AI-304 多响应 | 完成 | 乱序、重复、总数冲突、超时部分结果、同设备并发；服务关闭会并发幂等地关闭 Catalog/RecordInfo 聚合器并立即唤醒等待者，关闭后拒绝创建新聚合项；XML 的 UTF-8→GBK/GB18030 兼容回退使用临时对象原子解码，首轮失败的部分目录/录像切片不会残留并在第二轮重复追加，完全失败也不污染调用方目标；`multi_response_test.go`、`sip/xml_decode_test.go` |
 | AI-305 目录/事件订阅 | 完成（自动化） | Catalog 初始、续订、取消、Event id、部分目录目标及真实 ADD/DEL/ON/OFF/UPDATE 增量；2011 Catalog 通知使用 `Response` 根，2014+ 使用 `Notify` 根；空消息体 terminated NOTIFY 正确确认、清理并在仍被上级引用时重订；Alarm 查询过滤参数、MobilePosition Interval、PTZPosition 版本门禁；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅自动桥接下级并按引用计数复用及释放，目录快照变化后重新计算 Catalog 下级来源；`subscribe_11_test.go`、`cascade_subscribe_test.go`、`cascade_query_test.go` |
 | AI-401 广播时序 | 完成（自动化） | 接收者主动 INVITE；1.1 `PS/90000` 与 2.0/3.0 `PCMA/8000` 分派；ZLM `startSendRtp/stopSendRtp`；ACK/BYE 清理；`broadcast_11_test.go`、`pkg/zlm/rtp_test.go` |
 | AI-402 技术验证 | 完成 | `docs/adr/gb28181-2014-direct-tcp-download.md`，已采用 Owl 内置客户端 |
@@ -71,6 +71,7 @@
 
 ```bash
 go test ./...
+go test -race -vet=off ./pkg/gbs/... -count=1
 go test -race -vet=off ./internal/conf ./internal/web/api ./pkg/gbs/... ./internal/core/ipc/store/ipccache ./internal/app
 go test ./pkg/gbs/sip -run '^$' -fuzz FuzzParseSIPAddressesDoNotPanic -fuzztime=5s
 go test ./pkg/gbs/sip -run '^$' -fuzz FuzzParseSIPHeaderDoesNotPanic -fuzztime=8s
@@ -92,7 +93,7 @@ git diff --check
 | SIP 传输资源上限 | 已加固并有自动化证据 | TCP 使用有界 `ReadSlice`，单头行 8 KiB、总头 64 KiB、正文 1 MiB；超限 `Content-Length` 在 `make` 前拒绝，重复长度和正文提前断开不再把部分报文交给解析器。长连接空闲等待首字节不计时，首字节到达后整帧必须在 30 秒内完成，防止慢速逐字节占用；UDP 的解析头和 Packet 分配有同一正文上限，并要求声明长度与报文正文精确一致，拒绝重复长度、截断正文和尾随正文，避免报文走私或部分 XML 进入业务层；2014 附录 O 文件数据走独立裸 TCP 下载链路，不受 SIP XML 正文上限影响；`server_tcp_test.go` |
 | SIP 连接错误边界 | 已加固并有自动化证据 | 出站请求在创建事务前统一拒绝缺失连接或目的地址；UDP 包读写不再依赖会 panic 的直接类型断言，监听型 UDP 的空 `RemoteAddr` 在关闭错误路径可安全记录；TCP 包装明确按构造类型走流式写入，不受测试连接或代理连接的 `Network()` 文本影响；`connection_test.go`、`request_validation_test.go` |
 | SIP 监听器启动与后台任务 | 已加固并有自动化证据 | UDP/TCP/TLS 在构建应用时同步完成地址解析、证书加载和端口绑定，错误沿 `NewServer → wireApp → Run` 返回，不再在后台 goroutine `panic` 或无限等待 UDP 初始化；持久化设备/通道恢复失败同样返回构建错误，不再由缓存层 `panic`。已成功绑定的监听器在后续启动步骤失败时统一回收。设备离线检查随 GB28181 生命周期退出，不再使用永不取消的后台 context；保留的包级旧停止接口通过原子默认实例访问，不再由无保护全局指针产生竞态；`server_listener_test.go`、`server_lifecycle_test.go` |
-| 下载/查询状态与媒体关闭 | 已加固并有 race 证据 | RTP 下载、Direct TCP 终态和设备结构化查询快照均有 TTL 与容量上限；小时清理器随 GB28181 生命周期启动和停止，无新业务时仍执行，活动下载及其临时文件受保护。关闭服务会停止普通和级联广播/对讲发送、关闭 RTP 接收端口、取消直接下载并清空流会话；合法已建立级联会话不再被 10 分钟 SIP 静默清理器误终止；`direct_tcp_download_test.go`、`rtp_download_state_test.go`、`query_state_test.go`、`media_lifecycle_test.go`、`server_lifecycle_test.go` |
+| 下载/查询状态与媒体关闭 | 已加固并有 race 证据 | RTP 下载、Direct TCP 终态和设备结构化查询快照均有 TTL 与容量上限；小时清理器随 GB28181 生命周期启动和停止，无新业务时仍执行，活动下载及其临时文件受保护。关闭服务会停止普通和级联广播/对讲发送、关闭 RTP 接收端口、取消直接下载并清空流会话；PTZ、DeviceControl、DeviceQuery、DeviceConfig、Upgrade、Snapshot、Broadcast、级联控制/媒体/语音及 Catalog/RecordInfo 等等待会立即返回统一停服错误，不再等待 6～10 秒业务超时；在途请求、响应别名及订阅索引同时清空，停服后统一出站入口拒绝创建 SIP 请求。合法已建立级联会话不再被 10 分钟 SIP 静默清理器误终止；`direct_tcp_download_test.go`、`rtp_download_state_test.go`、`query_state_test.go`、`media_lifecycle_test.go`、`server_lifecycle_test.go`、`request_target_test.go`、`multi_response_test.go` |
 | SIP 报文日志生命周期 | 已加固并有 race 证据 | 全局日志器只在监听器全部绑定成功后安装，启动失败关闭候选日志器；关闭与并发报文写入使用同一互斥锁，输出对象只关闭一次并置空，停服或启动回滚不再与在途日志写入竞争；`traffic_logger_test.go` |
 | `Date + Note` 信令数字摘要 | 已形成自动化闭环，待真实互通 | 按 `From + To + Call-ID + Date + seed + 消息体` 计算；Date 使用北京时间并校验可配置时间窗；支持 MD5/SHA-1/SHA-256/SM3，SM3 使用成熟国密库并以 GB/T 32905 已知向量校验；nonce 默认 Base64 输出，可配置 hex 并可兼容接收标准示例中的十六进制形式；REGISTER 请求/响应免签。`Enabled` 启用出站签名，并对入向已携带 Note 的报文验签；`Required` 还会拒绝缺失或验签失败的入向报文；无效响应被丢弃，级联和 OPTIONS 使用 context-aware 事务等待，在 deadline 到达时退出且不遗留阻塞等待 goroutine。默认 MD5 且整体默认关闭以保持旧设备兼容。`RequireMessageAuth` 仍是另一套 RFC Digest 兼容开关，二者不能混同；`signal_digest.go`、`signal_digest_test.go`、`sip/signal_digest_test.go`、`cascade_test.go` |
 | SIP 配置加载与热更新 | 已加固并有自动化证据 | 启动及 API 更新统一校验 20 位平台 ID、10 位有效域、端口、TLS 必填项、设备历史范围和信令摘要。候选配置先写临时文件并原子替换，成功后才提交内存及 SIP 运行时快照；失败保持原配置。Host、ID/Domain、Port、TLS 和 SIP 报文日志会影响监听器、身份或全局日志器，API 明确拒绝伪热更新并提示修改文件后重启；密码、访问控制、摘要、历史、2014 直连下载及上级级联可安全热更新。SIP 请求只读取受锁配置快照；`config_sip_test.go`、`config_reload_test.go`、`signal_digest_test.go` |

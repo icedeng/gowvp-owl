@@ -30,6 +30,7 @@ type multiResponseCollector[T any] struct {
 	mu      sync.Mutex
 	entries map[string]*multiResponseEntry[T]
 	keyFn   func(T) string
+	closed  bool
 }
 
 func newMultiResponseCollector[T any](keyFn func(T) string) *multiResponseCollector[T] {
@@ -41,6 +42,10 @@ func newMultiResponseCollector[T any](keyFn func(T) string) *multiResponseCollec
 
 func (c *multiResponseCollector[T]) Start(key string) {
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
 	c.entries[key] = &multiResponseEntry[T]{
 		expected: -1,
 		items:    make([]T, 0),
@@ -119,5 +124,26 @@ func (c *multiResponseCollector[T]) Wait(ctx context.Context, key string) multiR
 func (c *multiResponseCollector[T]) Cancel(key string) {
 	c.mu.Lock()
 	delete(c.entries, key)
+	c.mu.Unlock()
+}
+
+func (c *multiResponseCollector[T]) Close() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.closed = true
+	entries := c.entries
+	c.entries = make(map[string]*multiResponseEntry[T])
+	for _, entry := range entries {
+		if entry != nil && !entry.complete {
+			entry.complete = true
+			close(entry.done)
+		}
+	}
 	c.mu.Unlock()
 }

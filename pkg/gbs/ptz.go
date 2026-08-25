@@ -164,6 +164,8 @@ func (g *GB28181API) PTZ(in *PTZInput) (*PTZOutput, error) {
 			Channel:  in.ChannelID,
 			Result:   result,
 		}, nil
+	case <-g.serviceDone():
+		return nil, ErrServiceStopped
 	case <-timer.C:
 		cfg := g.configSnapshot()
 		if cfg != nil && cfg.PTZWeakConfirm {

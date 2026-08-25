@@ -159,6 +159,26 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 	return &g
 }
 
+func (g *GB28181API) serviceDone() <-chan struct{} {
+	if g == nil {
+		return nil
+	}
+	return g.lifecycleDone
+}
+
+func (g *GB28181API) serviceStopped() bool {
+	done := g.serviceDone()
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
 func (g *GB28181API) configSnapshot() *conf.SIP {
 	if g == nil {
 		return nil

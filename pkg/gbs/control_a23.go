@@ -247,6 +247,8 @@ func (g *GB28181API) DeviceControl(_ context.Context, in *DeviceControlInput) (*
 			TargetID: targetID,
 			Result:   result,
 		}, nil
+	case <-g.serviceDone():
+		return nil, ErrServiceStopped
 	case <-timer.C:
 		// 统一返回更明确的中文错误，避免调用方误以为命令未发送。
 		return nil, fmt.Errorf("%s", ptzTimeoutErrorMessage)

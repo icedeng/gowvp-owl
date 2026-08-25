@@ -181,6 +181,9 @@ func (g *GB28181API) QueryCatalog(deviceID string) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	result := g.catalogResponses.Wait(ctx, key)
+	if g.serviceStopped() {
+		return ErrServiceStopped
+	}
 	if len(result.Items) == 0 && !result.Complete {
 		return fmt.Errorf("wait Catalog response timeout")
 	}
@@ -312,6 +315,9 @@ func (s *Server) wrapRequest(t Targeter, method string, contentType *sip.Content
 	}
 	if t == nil {
 		return nil, fmt.Errorf("SIP request target is unavailable")
+	}
+	if s.gb.serviceStopped() {
+		return nil, ErrServiceStopped
 	}
 	to, conn, source := requestTargetSnapshot(t)
 	if to == nil || to.URI == nil || strings.TrimSpace(to.URI.Host()) == "" {

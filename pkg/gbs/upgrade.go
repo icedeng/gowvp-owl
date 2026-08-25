@@ -157,6 +157,8 @@ func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOut
 		return nil, errors.New("wait device upgrade response timeout")
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-g.serviceDone():
+		return nil, ErrServiceStopped
 	}
 }
 

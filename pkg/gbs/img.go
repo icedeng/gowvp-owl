@@ -82,6 +82,8 @@ func (g *GB28181API) QuerySnapshot(deviceID, targetID, coverKey string) (*Snapsh
 			return &state, nil
 		}
 		return nil, fmt.Errorf("snapshot config failed: %s", resp.Result)
+	case <-g.serviceDone():
+		return nil, ErrServiceStopped
 	case <-timer.C:
 		return nil, fmt.Errorf("wait snapshot response timeout")
 	}

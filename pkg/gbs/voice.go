@@ -242,6 +242,8 @@ func (g *GB28181API) startTalk(ctx context.Context, ch *Channel, in *VoiceInput)
 		}
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-g.serviceDone():
+		return ErrServiceStopped
 	case <-timer.C:
 		return fmt.Errorf("wait Talk media stream timeout")
 	}
@@ -289,6 +291,8 @@ func (g *GB28181API) startBroadcast(ctx context.Context, ch *Channel, in *VoiceI
 		}
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-g.serviceDone():
+		return ErrServiceStopped
 	case <-timer.C:
 		return fmt.Errorf("wait Broadcast INVITE timeout")
 	}
@@ -417,6 +421,8 @@ func (g *GB28181API) startBroadcastNotification(ctx context.Context, ch *Channel
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-g.serviceDone():
+		return ErrServiceStopped
 	case <-timer.C:
 		return fmt.Errorf("wait Broadcast response timeout")
 	}

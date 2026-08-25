@@ -3,6 +3,7 @@ package gbs
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,6 +56,49 @@ func TestMultiResponseCollectorConcurrentQueriesSameDevice(t *testing.T) {
 			t.Fatalf("query %d result = %+v", sn, result)
 		}
 	}
+}
+
+func TestMultiResponseCollectorCloseWakesWaitersAndRejectsNewEntries(t *testing.T) {
+	collector := newMultiResponseCollector(func(item multiResponseFixture) string { return item.ID })
+	collector.Start("device:Catalog:close")
+	waitDone := make(chan multiResponseResult[multiResponseFixture], 1)
+	go func() {
+		waitDone <- collector.Wait(context.Background(), "device:Catalog:close")
+	}()
+
+	collector.Close()
+	collector.Close()
+	select {
+	case result := <-waitDone:
+		if result.Complete || result.Expected != -1 || len(result.Items) != 0 {
+			t.Fatalf("closed collector result = %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("collector close did not wake waiter")
+	}
+
+	collector.Start("device:Catalog:after-close")
+	if collector.Add("device:Catalog:after-close", 1, []multiResponseFixture{{ID: "1"}}) {
+		t.Fatal("closed collector accepted a new entry")
+	}
+}
+
+func TestMultiResponseCollectorAddAndCloseConcurrent(t *testing.T) {
+	collector := newMultiResponseCollector(func(item multiResponseFixture) string { return item.ID })
+	collector.Start("device:Catalog:race")
+	var workers sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		workers.Add(1)
+		go func(worker int) {
+			defer workers.Done()
+			for item := 0; item < 100; item++ {
+				collector.Add("device:Catalog:race", 1000, []multiResponseFixture{{ID: fmt.Sprintf("%d-%d", worker, item)}})
+			}
+		}(worker)
+	}
+	collector.Close()
+	workers.Wait()
+	collector.Close()
 }
 
 func TestRecordInfo11DecodesRecorderAndFileSize(t *testing.T) {

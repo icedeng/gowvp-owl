@@ -328,6 +328,8 @@ func (g *GB28181API) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput)
 		return state, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-g.serviceDone():
+		return nil, ErrServiceStopped
 	case <-timer.C:
 		return nil, fmt.Errorf("wait DeviceConfig response timeout")
 	}

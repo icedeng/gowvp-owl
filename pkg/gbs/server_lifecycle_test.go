@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -114,6 +115,55 @@ func TestCloseCleansOrdinaryMediaSessionsOnce(t *testing.T) {
 	}
 	if syncMapLen(&api.talkSessions) != 0 || syncMapLen(&api.broadcastSessions) != 0 {
 		t.Fatal("voice sessions survived close")
+	}
+}
+
+func TestCloseCancelsPendingWorkAndClearsRuntimeIndexes(t *testing.T) {
+	api := &GB28181API{
+		catalogResponses: newMultiResponseCollector(func(item Channels) string { return item.ChannelID }),
+		recordResponses:  newMultiResponseCollector(func(item RecordItem) string { return item.FilePath }),
+		lifecycleDone:    make(chan struct{}),
+	}
+	api.catalogResponses.Start("device:Catalog:1")
+	waitDone := make(chan struct{})
+	go func() {
+		api.catalogResponses.Wait(context.Background(), "device:Catalog:1")
+		close(waitDone)
+	}()
+
+	api.pendingDeviceControl.Store("control", &pendingDeviceControl{})
+	api.pendingDeviceQuery.Store("query", &pendingQueryWait{})
+	api.pendingDeviceConfig.Store("config", &pendingDeviceConfig{})
+	api.pendingBroadcast.Store("broadcast", &pendingBroadcastResponse{})
+	api.recordResponseAliases.Store("alias", "record")
+	api.eventSubscribers.Store("event", &eventSubscription{})
+	api.outgoingSubscriptions.Store("outgoing", &outgoingSubscriptionDialog{})
+
+	api.close()
+	api.close()
+
+	select {
+	case <-api.serviceDone():
+	default:
+		t.Fatal("GB28181 lifecycle was not closed")
+	}
+	select {
+	case <-waitDone:
+	case <-time.After(time.Second):
+		t.Fatal("catalog waiter did not stop with GB28181 lifecycle")
+	}
+	for name, values := range map[string]*sync.Map{
+		"device control":   &api.pendingDeviceControl,
+		"device query":     &api.pendingDeviceQuery,
+		"device config":    &api.pendingDeviceConfig,
+		"broadcast":        &api.pendingBroadcast,
+		"record alias":     &api.recordResponseAliases,
+		"event subscriber": &api.eventSubscribers,
+		"outgoing dialog":  &api.outgoingSubscriptions,
+	} {
+		if count := syncMapLen(values); count != 0 {
+			t.Errorf("%s entries survived close: %d", name, count)
+		}
 	}
 }
 

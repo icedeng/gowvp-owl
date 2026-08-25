@@ -71,6 +71,9 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 	waitCtx, cancel := context.WithTimeout(ctx, in.Timeout)
 	defer cancel()
 	result := g.recordResponses.Wait(waitCtx, recordKey)
+	if g.serviceStopped() {
+		return nil, ErrServiceStopped
+	}
 	return result.Items, nil
 }
 

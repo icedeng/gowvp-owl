@@ -467,6 +467,9 @@ func (g *GB28181API) acquireCascadeSource(ctx context.Context, server *sms.Media
 	case <-ctx.Done():
 		g.releaseCascadeSource(source, false)
 		return nil, ctx.Err()
+	case <-g.serviceDone():
+		g.releaseCascadeSource(source, false)
+		return nil, ErrServiceStopped
 	default:
 		return source, nil
 	}
@@ -485,6 +488,8 @@ func (g *GB28181API) waitCascadeSource(ctx context.Context, server *sms.MediaSer
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-g.serviceDone():
+			return ErrServiceStopped
 		case <-timeout.C:
 			return fmt.Errorf("cascade source stream timeout: %s", streamID)
 		case <-ticker.C:

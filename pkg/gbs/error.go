@@ -13,4 +13,5 @@ var (
 
 	ErrDeviceOffline  = errors.New("device offline")
 	ErrChannelOffline = errors.New("channel offline")
+	ErrServiceStopped = errors.New("GB28181 service stopped")
 )

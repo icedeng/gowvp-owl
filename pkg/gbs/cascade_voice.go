@@ -136,6 +136,8 @@ func (g *GB28181API) forwardCascadeBroadcast(ctx context.Context, worker *cascad
 		}
 	case <-ctx.Done():
 		return fail(ctx.Err())
+	case <-g.serviceDone():
+		return fail(ErrServiceStopped)
 	case <-timer.C:
 		return fail(fmt.Errorf("wait cascade Broadcast receiver INVITE timeout"))
 	}
@@ -320,6 +322,8 @@ func (g *GB28181API) waitCascadeVoiceSource(ctx context.Context, server *sms.Med
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-g.serviceDone():
+			return ErrServiceStopped
 		case <-timer.C:
 			return fmt.Errorf("cascade Broadcast source stream timeout: %s", streamID)
 		case <-ticker.C:

@@ -113,6 +113,8 @@ func (g *GB28181API) sendCascadeDeviceControlDownstream(ctx context.Context, cha
 	select {
 	case <-ctx.Done():
 		return "ERROR", ctx.Err()
+	case <-g.serviceDone():
+		return "ERROR", ErrServiceStopped
 	case response := <-pending.wait:
 		result := strings.ToUpper(strings.TrimSpace(response.Result))
 		if result == "" {

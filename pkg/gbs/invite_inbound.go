@@ -767,6 +767,15 @@ func (g *GB28181API) close() {
 		if g.lifecycleDone != nil {
 			close(g.lifecycleDone)
 		}
+		g.catalogResponses.Close()
+		g.recordResponses.Close()
+		g.pendingDeviceControl.Clear()
+		g.pendingDeviceQuery.Clear()
+		g.pendingDeviceConfig.Clear()
+		g.pendingBroadcast.Clear()
+		g.recordResponseAliases.Clear()
+		g.eventSubscribers.Clear()
+		g.outgoingSubscriptions.Clear()
 		g.closeCascadeDownstreamSubscriptions()
 		g.closeCascadeMediaSessions()
 		g.closeCascadeVoiceSessions()
