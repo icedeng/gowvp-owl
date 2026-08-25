@@ -518,20 +518,21 @@ func validateDeviceConfigXMLFragment(name, value string) error {
 }
 
 func (g *GB28181API) completeBasicParam(targetID string, device *Device, in BasicParam) (BasicParam, error) {
-	if g == nil || g.cfg == nil {
+	cfg := g.configSnapshot()
+	if cfg == nil {
 		return BasicParam{}, fmt.Errorf("SIP configuration is unavailable")
 	}
 	out := in
 	out.DeviceID = strings.TrimSpace(targetID)
-	out.SIPServerID = strings.TrimSpace(g.cfg.ID)
-	out.SIPServerIP = strings.TrimSpace(g.cfg.Host)
-	out.SIPServerPort = g.cfg.Port
-	out.DomainName = strings.TrimSpace(g.cfg.GetDomain())
+	out.SIPServerID = strings.TrimSpace(cfg.ID)
+	out.SIPServerIP = strings.TrimSpace(cfg.Host)
+	out.SIPServerPort = cfg.Port
+	out.DomainName = strings.TrimSpace(cfg.GetDomain())
 	if device != nil {
 		out.Password = device.Password
 	}
 	if out.Password == "" {
-		out.Password = g.cfg.Password
+		out.Password = cfg.Password
 	}
 	if out.Password == ignorePassword {
 		out.Password = ""

@@ -4,7 +4,7 @@
 
 ## 1. 审计结论
 
-代码建设、自动化测试和本地协议模拟器已完成到开发计划的 AI-502；AI-403 的 2014 附录 O 裸 TCP 下载已经实现，不再是代码阻断项。2022 的设备升级、图像抓拍、目标跟踪、扩展配置写入、注册重定向、AAC/H.265 SDP 和主动视频上传通知已补齐代码闭环，其中升级与抓拍现在同时覆盖受理应答、最终通知和会话状态查询，不再把“命令已受理”误判为“业务已完成”。四版本除 REGISTER 外的 `Date + Note` 信令摘要已经形成请求/响应、时间窗、设备及上级独立 seed 的自动化闭环，但默认关闭，尚未经过真实设备和真实上级平台互通。SIP URI/地址解析已补齐短输入、纯空白、缺失闭合符、空主机及括号 IPv6 的边界处理；畸形报文返回解析错误，不再触发切片越界。SSRC 生成会校验 10 位数字域编码，并将配置错误显式返回给直播、回放、下载、广播、对讲和级联媒体调用链。
+代码建设、自动化测试和本地协议模拟器已完成到开发计划的 AI-502；AI-403 的 2014 附录 O 裸 TCP 下载已经实现，不再是代码阻断项。2022 的设备升级、图像抓拍、目标跟踪、扩展配置写入、注册重定向、AAC/H.265 SDP 和主动视频上传通知已补齐代码闭环，其中升级与抓拍现在同时覆盖受理应答、最终通知和会话状态查询，不再把“命令已受理”误判为“业务已完成”。四版本除 REGISTER 外的 `Date + Note` 信令摘要已经形成请求/响应、时间窗、设备及上级独立 seed 的自动化闭环，但默认关闭，尚未经过真实设备和真实上级平台互通。SIP URI/地址解析已补齐短输入、纯空白、缺失闭合符、空主机及括号 IPv6 的边界处理；畸形报文返回解析错误，不再触发切片越界。SSRC 生成会校验 10 位数字域编码，并将配置错误显式返回给直播、回放、下载、广播、对讲和级联媒体调用链。SIP 配置加载和 API 更新现在统一校验平台 ID、有效域、监听端口、TLS 必填项、历史范围及信令摘要；配置先原子写盘再提交运行时快照，失败不再污染内存。监听地址、平台身份、TLS 和报文日志等不能安全热更新的字段会明确要求重启，不再返回“成功”但继续使用旧监听器；运行中的 SIP 请求通过受锁快照读取配置，避免更新时发生数据竞争。
 
 目标尚不能标记为生产完成，原因是 AI-503 真实设备矩阵和 AI-602 部署灰度/回滚必须在外部设备及目标环境执行。上下级平台级联的 UDP/TCP 注册、查询、目录、事件订阅、直播、回放、下载和语音广播/对讲代码链路已经补齐；2022 附录 H 指定路径级联已完成自动化闭环；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅现在会自动建立、续订、复用和取消下级订阅，但仍需要真实上级平台及真实设备共同验证。
 
@@ -32,7 +32,7 @@
 | AI-403 裸 TCP 下载 | 完成（模拟器） | 独立 `tcp` SDP、文件客户端、进度/取消 API、SHA-256、原子落盘、大小/并发/超时/地址策略；`direct_tcp_*_test.go` |
 | AI-404 媒体保活 | 完成 | ZLM/LALMAX 流事件收敛、MediaStatus/BYE 竞争；无持久化通道记录的 `cascade-*` 指定路径/语音级联流也能接收注册与注销事件并释放会话；LALMAX 新旧响应结构兼容，通过 `stat/group` 提供媒体源状态、轨道和下载进度，并通过 `stop_rtp_pub` 幂等释放 RTP 接收会话；`media_lifecycle_test.go`、`zlm_webhook_gb_test.go`、`driver_lalmax_test.go`、`pkg/lalmax/rtp_test.go`、`pkg/lalmax/stat_test.go` |
 | AI-501 2.0/3.0 回归 | 完成（自动化） | RTP over TCP、双向对讲 RTP；2022 升级覆盖 `DeviceUpgrade` 受理、`DeviceUpgradeResult` 最终结果和状态查询；抓拍覆盖 `SnapShotConfig`、受约束 HTTP 上传、`UploadSnapShotFinished` 最终通知和状态查询；另含 TargetTrack、PTZ 精准控制、存储卡、VideoUploadNotify、A.4、H.265/AAC SDP 及八类 2022 DeviceConfig 写入；`version_regression_test.go`、`upgrade_test.go`、`img_test.go`、`voice_talk_test.go` |
-| AI-502 诊断/API | 完成 | 有效版本、来源、过滤后的能力、设备级 `gb_disabled_capabilities`、最近拒绝；手动版本设置/清除；下载状态、取消和灰度指标 API |
+| AI-502 诊断/API | 完成 | 有效版本、来源、过滤后的能力、设备级 `gb_disabled_capabilities`、最近拒绝；手动版本设置/清除；下载状态、取消和灰度指标 API；SIP 配置写盘成功后才提交运行时快照，监听器/身份/TLS/日志字段明确要求重启，运行时读取和更新由并发快照隔离；`config_sip_test.go`、`config_reload_test.go` |
 | AI-503 真实设备矩阵 | 待外部执行 | `docs/testing/gb28181-device-matrix.md` 提供证据模板，`docs/testing/gb28181-interoperability-runbook.md` 提供逐步执行与回滚手册 |
 | AI-601 发布候选验证 | 完成（自动化） | 全仓 test/vet/race 和补丁检查通过；外部真实设备与部署验收归入 AI-503/AI-602 |
 | AI-602 灰度/回滚 | 待目标环境执行 | 已具备按设备手动版本覆盖、诊断、`GET /gb28181/metrics` 和关闭下载即取消活动任务；尚无目标环境指标及回滚演练证据 |
@@ -71,7 +71,7 @@
 
 ```bash
 go test ./...
-go test -race -vet=off ./pkg/gbs/...
+go test -race -vet=off ./internal/conf ./internal/web/api ./pkg/gbs/...
 go test ./pkg/gbs/sip -run '^$' -fuzz FuzzParseSIPAddressesDoNotPanic -fuzztime=5s
 go test ./pkg/gbs/sip -run '^$' -fuzz FuzzParseSIPHeaderDoesNotPanic -fuzztime=8s
 GOCACHE=/tmp/owl-gocache go vet ./...
@@ -89,6 +89,7 @@ git diff --check
 | 畸形 SIP 地址与 SSRC 配置 | 已加固并有自动化证据 | `ParseSipURI`、`ParseAddressValue(s)` 对空串、短 scheme、纯空白、空用户/主机、缺失引号或 `>` 返回错误；裸 `addr-spec` 和括号 IPv6 正常解析；模糊测试覆盖任意字符串不 panic。SSRC 仅接受 0/1 流类型和 10 位数字域编码，错误沿媒体调用链返回，不再直接切片；`parser_robustness_test.go`、`stream_test.go` |
 | SIP 传输资源上限 | 已加固并有自动化证据 | TCP 使用有界 `ReadSlice`，单头行 8 KiB、总头 64 KiB、正文 1 MiB；超限 `Content-Length` 在 `make` 前拒绝，重复长度和正文提前断开不再把部分报文交给解析器。长连接空闲等待首字节不计时，首字节到达后整帧必须在 30 秒内完成，防止慢速逐字节占用；UDP 的解析头和 Packet 分配有同一正文上限；2014 附录 O 文件数据走独立裸 TCP 下载链路，不受 SIP XML 正文上限影响；`server_tcp_test.go` |
 | `Date + Note` 信令数字摘要 | 已形成自动化闭环，待真实互通 | 按 `From + To + Call-ID + Date + seed + 消息体` 计算；Date 使用北京时间并校验可配置时间窗；支持 MD5/SHA-1/SHA-256/SM3，SM3 使用成熟国密库并以 GB/T 32905 已知向量校验；nonce 默认 Base64 输出，可配置 hex 并可兼容接收标准示例中的十六进制形式；REGISTER 请求/响应免签。`Enabled` 启用出站签名，并对入向已携带 Note 的报文验签；`Required` 还会拒绝缺失或验签失败的入向报文；无效响应被丢弃，级联和 OPTIONS 使用 context-aware 事务等待，在 deadline 到达时退出且不遗留阻塞等待 goroutine。默认 MD5 且整体默认关闭以保持旧设备兼容。`RequireMessageAuth` 仍是另一套 RFC Digest 兼容开关，二者不能混同；`signal_digest.go`、`signal_digest_test.go`、`sip/signal_digest_test.go`、`cascade_test.go` |
+| SIP 配置加载与热更新 | 已加固并有自动化证据 | 启动及 API 更新统一校验 20 位平台 ID、10 位有效域、端口、TLS 必填项、设备历史范围和信令摘要。候选配置先写临时文件并原子替换，成功后才提交内存及 SIP 运行时快照；失败保持原配置。Host、ID/Domain、Port、TLS 和 SIP 报文日志会影响监听器、身份或全局日志器，API 明确拒绝伪热更新并提示修改文件后重启；密码、访问控制、摘要、历史、2014 直连下载及上级级联可安全热更新。SIP 请求只读取受锁配置快照；`config_sip_test.go`、`config_reload_test.go`、`signal_digest_test.go` |
 | 数字证书双向认证、CRL | 未实现完整协议闭环 | 高安全级别专项，不能宣称支持 |
 | `Monitor-User-Identity` 跨域身份头 | 未实现完整生成、逐级追加和验证 | 与安全路由网关身份体系一起设计，不能仅做字符串透传后宣称完成 |
 | NTP 服务端/客户端 | 项目未内置 NTP 服务 | 标准要求 IP 接入设备通过 REGISTER `200 OK` 的 `Date` 校时，代码已实现；NTP 是可配置部署能力，不把非标准主动 `DeviceControl(Time)` 当成 NTP 完成证据 |

@@ -241,23 +241,18 @@ func buildSIPListenPlan(cfg conf.SIP) sipListenPlan {
 	return plan
 }
 
-// SetConfig 热更新 SIP 配置，用于配置变更时更新 from 地址而无需重启服务
-func (s *Server) SetConfig() {
-	cfg := s.gb.cfg
-	iip := ip.InternalIP()
-	uri, _ := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s:%d", cfg.ID, iip, cfg.Port))
-	from := sip.Address{
-		DisplayName: sip.String{Str: "gowvp/owl"},
-		URI:         &uri,
-		Params:      sip.NewParams(),
+// SetConfig 热更新不依赖监听器和平台身份重建的 SIP 配置。
+func (s *Server) SetConfig(cfg conf.SIP) {
+	if s == nil || s.gb == nil {
+		return
 	}
-	s.fromAddress = from
-	s.Server.SetFrom(&from)
-	if s.gb.boot != nil {
-		s.gb.applyDirectTCPConfig(s.gb.boot.Sip.DirectTCPDownload)
+	s.gb.setConfig(cfg)
+	s.gb.applyDirectTCPConfig(cfg.DirectTCPDownload)
+	if s.gb.directDownloads != nil {
+		s.gb.directDownloads.Reconfigure(directTCPDownloadOptions(cfg.DirectTCPDownload))
 	}
 	if s.cascade != nil {
-		if err := s.cascade.Apply(*cfg, cfg.Upstreams); err != nil {
+		if err := s.cascade.Apply(cfg, cfg.Upstreams); err != nil {
 			slog.Error("reload GB28181 cascade upstreams failed", "err", err)
 		}
 	}

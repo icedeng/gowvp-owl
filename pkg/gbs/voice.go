@@ -323,6 +323,10 @@ func (g *GB28181API) newBroadcastSession(in *VoiceInput) (*broadcastSession, err
 }
 
 func (g *GB28181API) resolveVoiceMediaSource(in *VoiceInput) (*voiceMediaSource, error) {
+	cfg := g.configSnapshot()
+	if cfg == nil {
+		return nil, fmt.Errorf("SIP configuration is unavailable")
+	}
 	if g.sms == nil || in.SMS == nil {
 		return nil, fmt.Errorf("media server is required for voice")
 	}
@@ -343,7 +347,7 @@ func (g *GB28181API) resolveVoiceMediaSource(in *VoiceInput) (*voiceMediaSource,
 	}
 	sourceID := strings.TrimSpace(in.SourceID)
 	if sourceID == "" {
-		sourceID = g.cfg.ID
+		sourceID = cfg.ID
 	}
 	if err := filterUnknowDevices(sourceID); err != nil {
 		return nil, fmt.Errorf("invalid voice source_id: %w", err)
@@ -374,11 +378,15 @@ func hasReadyG711Audio(items []zlm.MediaItem) bool {
 }
 
 func (g *GB28181API) startBroadcastNotification(ctx context.Context, ch *Channel, in *VoiceInput) error {
+	cfg := g.configSnapshot()
+	if cfg == nil {
+		return fmt.Errorf("SIP configuration is unavailable")
+	}
 	sn := g.nextControlSN()
 	body, err := sip.XMLEncode(broadcastNotify{
 		CmdType:  "Broadcast",
 		SN:       sn,
-		SourceID: broadcastSourceID(g.cfg.ID, in.SourceID),
+		SourceID: broadcastSourceID(cfg.ID, in.SourceID),
 		TargetID: ch.ChannelID,
 	})
 	if err != nil {
@@ -693,6 +701,10 @@ func parseBroadcastPayload(media *sdp.Media, version GBProtocolVersion) (payload
 }
 
 func (g *GB28181API) sipInviteVoice(ch *Channel, in *VoiceInput, port int, stream *Streams) error {
+	cfg := g.configSnapshot()
+	if cfg == nil {
+		return fmt.Errorf("SIP configuration is unavailable")
+	}
 	protocol := "TCP/RTP/AVP"
 	if in.StreamMode == 0 {
 		protocol = "RTP/AVP"
@@ -746,7 +758,7 @@ func (g *GB28181API) sipInviteVoice(ch *Channel, in *VoiceInput, port int, strea
 	body := msg.Append(nil).AppendTo(nil)
 	body = append(body, "f=v/////a/1/8/1\r\n"...)
 	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
-		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, g.cfg.ID)})
+		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, cfg.ID)})
 	})
 	if err != nil {
 		return err

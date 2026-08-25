@@ -2,7 +2,9 @@
 package api
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/conf"
@@ -12,7 +14,6 @@ import (
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/reason"
 	"github.com/ixugo/goddd/pkg/web"
-	"github.com/jinzhu/copier"
 	"gorm.io/gorm"
 )
 
@@ -20,11 +21,17 @@ type ConfigAPI struct {
 	configCore config.Core
 	conf       *conf.Bootstrap
 	uc         *Usecase
+	sipMu      *sync.RWMutex
+	sipConfig  *conf.SIP
 }
 
-func NewConfigAPI(db *gorm.DB, conf *conf.Bootstrap) ConfigAPI {
+func NewConfigAPI(db *gorm.DB, cfg *conf.Bootstrap) ConfigAPI {
 	core := config.NewCore(configdb.NewDB(db).AutoMigrate(orm.GetEnabledAutoMigrate()))
-	return ConfigAPI{configCore: core, conf: conf}
+	var sipConfig conf.SIP
+	if cfg != nil {
+		sipConfig = cfg.Sip
+	}
+	return ConfigAPI{configCore: core, conf: cfg, sipMu: new(sync.RWMutex), sipConfig: &sipConfig}
 }
 
 // configIDInput 配置 ID 路径参数
@@ -88,20 +95,17 @@ type SIPAccessInfo struct {
 	Password string `json:"password"`
 }
 
-func sipAccessInfo(cfg *conf.Bootstrap) SIPAccessInfo {
-	if cfg == nil {
-		return SIPAccessInfo{}
-	}
-	serverIP := strings.TrimSpace(cfg.Sip.Host)
+func sipAccessInfo(cfg conf.SIP, fallbackHost string) SIPAccessInfo {
+	serverIP := strings.TrimSpace(cfg.Host)
 	if serverIP == "" {
-		serverIP = strings.TrimSpace(cfg.Media.SDPIP)
+		serverIP = strings.TrimSpace(fallbackHost)
 	}
 	return SIPAccessInfo{
 		ServerIP: serverIP,
-		ID:       cfg.Sip.ID,
-		Domain:   cfg.Sip.GetDomain(),
-		Port:     cfg.Sip.Port,
-		Password: cfg.Sip.Password,
+		ID:       cfg.ID,
+		Domain:   cfg.GetDomain(),
+		Port:     cfg.Port,
+		Password: cfg.Password,
 	}
 }
 
@@ -122,9 +126,20 @@ type updateSIPInput struct {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /configs/info [get]
 func (a ConfigAPI) getConfigInfo(c *gin.Context, _ *struct{}) (*getConfigInfoOutput, error) {
+	if a.conf == nil {
+		return nil, reason.ErrServer.WithMsg("系统配置不可用")
+	}
+	if a.sipMu != nil {
+		a.sipMu.RLock()
+		defer a.sipMu.RUnlock()
+	}
+	cfg := a.conf.Sip
+	if a.sipConfig != nil {
+		cfg = *a.sipConfig
+	}
 	return &getConfigInfoOutput{
-		SIP:        a.conf.Sip,
-		AccessInfo: sipAccessInfo(a.conf),
+		SIP:        cfg,
+		AccessInfo: sipAccessInfo(cfg, a.conf.Media.SDPIP),
 	}, nil
 }
 
@@ -139,39 +154,97 @@ func (a ConfigAPI) getConfigInfo(c *gin.Context, _ *struct{}) (*getConfigInfoOut
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /configs/info/sip [put]
 func (a ConfigAPI) updateSIP(_ *gin.Context, in *updateSIPInput) (gin.H, error) {
-	next := mergeSIPUpdate(a.conf.Sip, in)
-	if next.DeviceHistory.MaxRecords < 0 || next.DeviceHistory.MaxRecords > 100000 {
-		return nil, reason.ErrBadRequest.WithMsg("设备历史最大记录数应在 0–100000 之间")
+	if a.conf == nil {
+		return nil, reason.ErrServer.WithMsg("系统配置不可用")
 	}
-	if next.DeviceHistory.MaxDays < 0 || next.DeviceHistory.MaxDays > 3650 {
-		return nil, reason.ErrBadRequest.WithMsg("设备历史保留天数应在 0–3650 之间")
+	if a.sipMu != nil {
+		a.sipMu.Lock()
+		defer a.sipMu.Unlock()
 	}
-	if err := conf.ValidateSignalDigestConfig(next.SignalDigest); err != nil {
+	current := a.conf.Sip
+	if a.sipConfig != nil {
+		current = *a.sipConfig
+	}
+	next := mergeSIPUpdate(current, in)
+	if err := conf.ValidateSIPConfig(next); err != nil {
 		return nil, reason.ErrBadRequest.WithMsg(err.Error())
+	}
+	if fields := sipRestartRequiredFields(current, next); len(fields) > 0 {
+		return nil, reason.ErrBadRequest.WithMsg(fmt.Sprintf("修改 %s 后需要重启服务，请修改配置文件并重启", strings.Join(fields, "、")))
 	}
 	if a.uc != nil && a.uc.SipServer != nil {
 		if err := a.uc.SipServer.ValidateCascadeConfig(next); err != nil {
 			return nil, reason.ErrBadRequest.WithMsg(err.Error())
 		}
 	}
-	if err := copier.Copy(&a.conf.Sip, &next); err != nil {
+	candidate := *a.conf
+	candidate.Sip = next
+	if err := conf.WriteConfig(&candidate, a.conf.ConfigPath); err != nil {
 		return nil, reason.ErrServer.WithMsg(err.Error())
 	}
-
-	if err := conf.WriteConfig(a.conf, a.conf.ConfigPath); err != nil {
-		return nil, reason.ErrServer.WithMsg(err.Error())
+	if a.sipConfig != nil {
+		*a.sipConfig = next
 	}
+	applyHotSIPConfig(&a.conf.Sip, next)
 	if a.uc != nil && a.uc.GB28181API.ipc.DeviceHistory() != nil {
 		a.uc.GB28181API.ipc.DeviceHistory().SetConfig(ipc.DeviceHistoryConfig{
-			MaxRecords: a.conf.Sip.DeviceHistory.MaxRecords,
-			MaxDays:    a.conf.Sip.DeviceHistory.MaxDays,
+			MaxRecords: next.DeviceHistory.MaxRecords,
+			MaxDays:    next.DeviceHistory.MaxDays,
 		})
 	}
 	if a.uc != nil && a.uc.SipServer != nil {
-		a.uc.SipServer.SetConfig()
+		a.uc.SipServer.SetConfig(next)
 	}
 
 	return gin.H{"msg": "ok"}, nil
+}
+
+func applyHotSIPConfig(target *conf.SIP, next conf.SIP) {
+	if target == nil {
+		return
+	}
+	// 监听器、平台身份和日志配置已在提交前禁止热更新，这里只同步运行时可安全应用的字段。
+	target.Password = next.Password
+	target.StrictSourceCheck = next.StrictSourceCheck
+	target.RequireMessageAuth = next.RequireMessageAuth
+	target.PTZWeakConfirm = next.PTZWeakConfirm
+	target.RegisterRedirect = next.RegisterRedirect
+	target.SignalDigest = next.SignalDigest
+	target.DeviceHistory = next.DeviceHistory
+	target.DirectTCPDownload = next.DirectTCPDownload
+	target.Upstreams = append([]conf.SIPUpstream(nil), next.Upstreams...)
+}
+
+func sipRestartRequiredFields(current, next conf.SIP) []string {
+	fields := make([]string, 0, 9)
+	if current.Host != next.Host {
+		fields = append(fields, "Host")
+	}
+	if current.ID != next.ID {
+		fields = append(fields, "ID")
+	}
+	if current.GetDomain() != next.GetDomain() {
+		fields = append(fields, "Domain")
+	}
+	if current.Port != next.Port {
+		fields = append(fields, "Port")
+	}
+	if current.EnableTLS != next.EnableTLS {
+		fields = append(fields, "EnableTLS")
+	}
+	if current.TLSPort != next.TLSPort {
+		fields = append(fields, "TLSPort")
+	}
+	if current.TLSCert != next.TLSCert {
+		fields = append(fields, "TLSCert")
+	}
+	if current.TLSKey != next.TLSKey {
+		fields = append(fields, "TLSKey")
+	}
+	if current.Log != next.Log {
+		fields = append(fields, "Log")
+	}
+	return fields
 }
 
 func mergeSIPUpdate(current conf.SIP, in *updateSIPInput) conf.SIP {

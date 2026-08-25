@@ -847,7 +847,11 @@ func (w *cascadeWorker) signalDigestSecurity() (sip.MessageSecurity, error) {
 	if w == nil || w.server == nil || w.server.gb == nil {
 		return nil, nil
 	}
-	return w.server.gb.newSignalDigestSecurity(cascadeSignalDigestSeed(w.platform, w.server.gb.cfg.SignalDigest.Seed))
+	cfg := w.server.gb.configSnapshot()
+	if cfg == nil {
+		return nil, nil
+	}
+	return newSignalDigestSecurity(cfg, cascadeSignalDigestSeed(w.platform, cfg.SignalDigest.Seed))
 }
 
 func (w *cascadeWorker) prepareRequestConnection(ctx context.Context, request *sip.Request) error {

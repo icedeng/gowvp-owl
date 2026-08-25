@@ -239,6 +239,10 @@ func GetIP(input string) (string, error) {
 }
 
 func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *Streams) error {
+	cfg := g.configSnapshot()
+	if cfg == nil {
+		return fmt.Errorf("SIP configuration is unavailable")
+	}
 	// 获取配置值
 	ipstr := in.SMS.GetSDPIP()
 	ip4str, err := GetIP(ipstr)
@@ -274,7 +278,7 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 	// channel.addr = &sip.Address{URI: uri}
 	// _serverDevices.addr.Params.Add("tag", sip.String{Str: sip.RandString(20)})
 	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
-		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, g.cfg.ID)})
+		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, cfg.ID)})
 		if in.preferredPath != "" {
 			r.AppendHeader(&sip.GenericHeader{HeaderName: cascadePreferredPathHeader, Contents: in.preferredPath})
 		}
@@ -292,7 +296,7 @@ func (g *GB28181API) sipPlayPush2(ch *Channel, in *PlayInput, port int, stream *
 	if contact, _ := resp.Contact(); contact == nil {
 		resp.AppendHeader(&sip.ContactHeader{
 			DisplayName: g.svr.fromAddress.DisplayName,
-			Address:     &sip.URI{FUser: sip.String{Str: g.cfg.ID}, FHost: g.cfg.GetDomain()},
+			Address:     &sip.URI{FUser: sip.String{Str: cfg.ID}, FHost: cfg.GetDomain()},
 			Params:      sip.NewParams(),
 		})
 	}

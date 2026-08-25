@@ -40,9 +40,10 @@ type registerNonceState struct {
 }
 
 type GB28181API struct {
-	cfg  *conf.SIP
-	boot *conf.Bootstrap
-	core ipc.Adapter
+	cfgMu sync.RWMutex
+	cfg   *conf.SIP
+	boot  *conf.Bootstrap
+	core  ipc.Adapter
 
 	catalogResponses *multiResponseCollector[Channels]
 	recordResponses  *multiResponseCollector[RecordItem]
@@ -127,8 +128,9 @@ type GB28181API struct {
 }
 
 func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager) *GB28181API {
+	sipConfig := cfg.Sip
 	g := GB28181API{
-		cfg:  &cfg.Sip,
+		cfg:  &sipConfig,
 		boot: cfg,
 		core: store,
 		sms:  sms,
@@ -145,7 +147,7 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 		cascadeSubscriptions: make(map[string]*cascadeDownstreamSubscription),
 		upgradeStates:        make(map[string]UpgradeState),
 		snapshotStates:       make(map[string]SnapshotState),
-		directDownloads:      NewDirectTCPDownloadManager(directTCPDownloadOptions(cfg)),
+		directDownloads:      NewDirectTCPDownloadManager(directTCPDownloadOptions(cfg.Sip.DirectTCPDownload)),
 		lifecycleDone:        make(chan struct{}),
 	}
 	g.controlSN.Store(uint32(sip.RandInt(100000, 999999)))
@@ -154,6 +156,28 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 	go g.startEventSubscriberCleaner()
 	go g.startInviteDialogCleaner()
 	return &g
+}
+
+func (g *GB28181API) configSnapshot() *conf.SIP {
+	if g == nil {
+		return nil
+	}
+	g.cfgMu.RLock()
+	defer g.cfgMu.RUnlock()
+	if g.cfg == nil {
+		return nil
+	}
+	cfg := *g.cfg
+	return &cfg
+}
+
+func (g *GB28181API) setConfig(cfg conf.SIP) {
+	if g == nil {
+		return
+	}
+	g.cfgMu.Lock()
+	g.cfg = &cfg
+	g.cfgMu.Unlock()
 }
 
 type directTCPRuntimePolicy struct {
@@ -180,9 +204,6 @@ func (g *GB28181API) applyDirectTCPConfig(in conf.SIPDirectTCPDownload) {
 	if wasEnabled && !in.Enabled && g.directDownloads != nil {
 		g.directDownloads.CancelAll()
 	}
-	if g.directDownloads != nil && g.boot != nil {
-		g.directDownloads.Reconfigure(directTCPDownloadOptions(g.boot))
-	}
 }
 
 func (g *GB28181API) directTCPPolicySnapshot() directTCPRuntimePolicy {
@@ -192,8 +213,7 @@ func (g *GB28181API) directTCPPolicySnapshot() directTCPRuntimePolicy {
 	return policy
 }
 
-func directTCPDownloadOptions(cfg *conf.Bootstrap) DirectTCPDownloadOptions {
-	in := cfg.Sip.DirectTCPDownload
+func directTCPDownloadOptions(in conf.SIPDirectTCPDownload) DirectTCPDownloadOptions {
 	return DirectTCPDownloadOptions{
 		StorageDir:           in.StorageDir,
 		RetainDays:           in.RetainDays,
@@ -224,11 +244,16 @@ func filterUnknowDevices(deviceID string) error {
 }
 
 func (g *GB28181API) respondRegisterChallenge(ctx *sip.Context) {
+	cfg := g.configSnapshot()
+	domain := ""
+	if cfg != nil {
+		domain = cfg.GetDomain()
+	}
 	nonce := g.issueRegisterNonce(ctx.DeviceID, registerNonceSourceIP(ctx))
 	resp := g.newRegisterResponse(ctx, http.StatusUnauthorized, http.StatusText(http.StatusUnauthorized))
 	resp.AppendHeader(&sip.GenericHeader{
 		HeaderName: "WWW-Authenticate",
-		Contents:   fmt.Sprintf(`Digest realm="%s",qop="auth",nonce="%s"`, g.cfg.GetDomain(), nonce),
+		Contents:   fmt.Sprintf(`Digest realm="%s",qop="auth",nonce="%s"`, domain, nonce),
 	})
 	_ = ctx.Tx.Respond(resp)
 }
@@ -322,8 +347,12 @@ func (g *GB28181API) validateRegisterAuthorization(ctx *sip.Context, header sip.
 	if !ok || generic == nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(generic.Contents)), "digest ") {
 		return fmt.Errorf("invalid Authorization header")
 	}
+	cfg := g.configSnapshot()
+	if cfg == nil {
+		return fmt.Errorf("SIP configuration is unavailable")
+	}
 	auth := sip.AuthFromValue(generic.Contents)
-	if auth.Get("realm") != g.cfg.GetDomain() {
+	if auth.Get("realm") != cfg.GetDomain() {
 		return fmt.Errorf("Digest realm mismatch")
 	}
 	if !strings.EqualFold(auth.Algorithm(), registerDigestAlgo) {
@@ -381,6 +410,11 @@ func registerRequestFingerprint(request *sip.Request, response string) string {
 
 func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	g.metrics.registerRequests.Add(1)
+	cfg := g.configSnapshot()
+	if cfg == nil {
+		g.respondRegister(ctx, http.StatusServiceUnavailable, "SIP configuration is unavailable")
+		return
+	}
 	if err := filterUnknowDevices(ctx.DeviceID); err != nil {
 		slog.Error("过滤设备，拒绝注册", "device_id", ctx.DeviceID, "err", err)
 		g.respondRegister(ctx, http.StatusBadRequest, err.Error())
@@ -388,8 +422,8 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	}
 	// Request-URI 的 user 应为平台 SIP ID。非空且不匹配时尽早拒绝，避免后续信令静默失败。
 	if recipient := ctx.Request.Recipient(); recipient != nil {
-		if user := recipient.User(); user != nil && user.String() != "" && user.String() != g.cfg.ID {
-			g.respondRegister(ctx, http.StatusForbidden, fmt.Sprintf("server id mismatch, expect %s got %s", g.cfg.ID, user.String()))
+		if user := recipient.User(); user != nil && user.String() != "" && user.String() != cfg.ID {
+			g.respondRegister(ctx, http.StatusForbidden, fmt.Sprintf("server id mismatch, expect %s got %s", cfg.ID, user.String()))
 			return
 		}
 	}
@@ -401,7 +435,7 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 
 	// 9.1.2.3 注册重定向。目标只读取服务端配置，不能信任设备请求头，避免形成开放重定向。
 	// 示例值：sip:34020000002000000001@10.0.0.8:5060
-	if redirect := strings.TrimSpace(g.cfg.RegisterRedirect); redirect != "" && ctx.XGBVer == string(GBVersion30) {
+	if redirect := strings.TrimSpace(cfg.RegisterRedirect); redirect != "" && ctx.XGBVer == string(GBVersion30) {
 		uri, err := sip.ParseSipURI(redirect)
 		if err != nil {
 			g.respondRegister(ctx, http.StatusBadRequest, "invalid redirect uri")
@@ -430,11 +464,11 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		isNewDev = true
 	}
 
-	password := g.cfg.Password
+	password := cfg.Password
 	if !isNewDev {
 		password = dev.Password
 		if password == "" {
-			password = g.cfg.Password
+			password = cfg.Password
 		}
 		// 免鉴权
 		if dev.Password == ignorePassword {

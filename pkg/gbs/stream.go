@@ -86,10 +86,11 @@ func (g *GB28181API) getSSRC(t int) (string, error) {
 	if t != 0 && t != 1 {
 		return "", fmt.Errorf("invalid GB28181 SSRC stream type %d", t)
 	}
-	if g == nil || g.cfg == nil {
+	cfg := g.configSnapshot()
+	if cfg == nil {
 		return "", fmt.Errorf("GB28181 SIP configuration is unavailable")
 	}
-	domain := strings.TrimSpace(g.cfg.GetDomain())
+	domain := strings.TrimSpace(cfg.GetDomain())
 	if len(domain) != 10 {
 		return "", fmt.Errorf("GB28181 SIP domain must be a 10-digit code, got %q", domain)
 	}

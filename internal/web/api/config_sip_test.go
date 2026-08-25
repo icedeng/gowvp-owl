@@ -2,6 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -95,5 +98,110 @@ func TestUpdateSIPInputAcceptsReadableDurationStrings(t *testing.T) {
 	}
 	if input.Upstreams == nil || len(*input.Upstreams) != 1 || (*input.Upstreams)[0].Transport != "tcp" || (*input.Upstreams)[0].KeepaliveInterval != conf.Duration(time.Minute) || input.DirectTCPDownload.DialTimeout != conf.Duration(5*time.Second) {
 		t.Fatalf("decoded readable durations = upstreams %+v direct %+v", input.Upstreams, input.DirectTCPDownload)
+	}
+}
+
+func TestUpdateSIPDoesNotMutateMemoryWhenWriteFails(t *testing.T) {
+	config := conf.DefaultConfig()
+	config.ConfigPath = filepath.Join(t.TempDir(), "missing", "config.toml")
+	current := config.Sip
+	next := current
+	next.Password = "new-password"
+	runtimeConfig := current
+	api := ConfigAPI{conf: &config, sipMu: new(sync.RWMutex), sipConfig: &runtimeConfig}
+
+	if _, err := api.updateSIP(nil, &updateSIPInput{SIP: next}); err == nil {
+		t.Fatal("configuration write failure was accepted")
+	}
+	if runtimeConfig.Password != current.Password {
+		t.Fatalf("runtime config changed after write failure: got %q want %q", runtimeConfig.Password, current.Password)
+	}
+	if config.Sip.Password != current.Password {
+		t.Fatalf("shared config changed after write failure: got %q want %q", config.Sip.Password, current.Password)
+	}
+}
+
+func TestUpdateSIPPersistsBeforeCommittingMemory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	config := conf.DefaultConfig()
+	config.ConfigPath = path
+	if err := conf.WriteConfig(&config, path); err != nil {
+		t.Fatal(err)
+	}
+	next := config.Sip
+	next.Password = "new-password"
+	runtimeConfig := config.Sip
+	api := ConfigAPI{conf: &config, sipMu: new(sync.RWMutex), sipConfig: &runtimeConfig}
+
+	if _, err := api.updateSIP(nil, &updateSIPInput{SIP: next}); err != nil {
+		t.Fatal(err)
+	}
+	if runtimeConfig.Password != next.Password {
+		t.Fatalf("runtime password = %q, want %q", runtimeConfig.Password, next.Password)
+	}
+	if config.Sip.Password != next.Password {
+		t.Fatalf("shared password = %q, want %q", config.Sip.Password, next.Password)
+	}
+	var persisted conf.Bootstrap
+	if err := conf.SetupConfig(&persisted, path); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Sip.Password != next.Password {
+		t.Fatalf("persisted password = %q, want %q", persisted.Sip.Password, next.Password)
+	}
+}
+
+func TestUpdateSIPRejectsRestartRequiredFields(t *testing.T) {
+	config := conf.DefaultConfig()
+	config.ConfigPath = filepath.Join(t.TempDir(), "config.toml")
+	if err := conf.WriteConfig(&config, config.ConfigPath); err != nil {
+		t.Fatal(err)
+	}
+	next := config.Sip
+	next.Port++
+	runtimeConfig := config.Sip
+	api := ConfigAPI{conf: &config, sipMu: new(sync.RWMutex), sipConfig: &runtimeConfig}
+
+	_, err := api.updateSIP(nil, &updateSIPInput{SIP: next})
+	if err == nil || !strings.Contains(err.Error(), "需要重启") || !strings.Contains(err.Error(), "Port") {
+		t.Fatalf("restart-required update error = %v", err)
+	}
+	if runtimeConfig.Port != conf.DefaultConfig().Sip.Port {
+		t.Fatalf("restart-required update changed runtime port to %d", runtimeConfig.Port)
+	}
+}
+
+func TestSIPRestartRequiredFields(t *testing.T) {
+	current := conf.DefaultConfig().Sip
+	tests := []struct {
+		name   string
+		change func(*conf.SIP)
+	}{
+		{name: "host", change: func(config *conf.SIP) { config.Host = "192.0.2.20" }},
+		{name: "id", change: func(config *conf.SIP) { config.ID = "34020000002000000002" }},
+		{name: "domain", change: func(config *conf.SIP) { config.Domain = "3402000000" }},
+		{name: "port", change: func(config *conf.SIP) { config.Port++ }},
+		{name: "enable TLS", change: func(config *conf.SIP) { config.EnableTLS = true }},
+		{name: "TLS port", change: func(config *conf.SIP) { config.TLSPort++ }},
+		{name: "TLS certificate", change: func(config *conf.SIP) { config.TLSCert = "server.crt" }},
+		{name: "TLS key", change: func(config *conf.SIP) { config.TLSKey = "server.key" }},
+		{name: "log", change: func(config *conf.SIP) { config.Log.Enabled = !config.Log.Enabled }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			next := current
+			test.change(&next)
+			if fields := sipRestartRequiredFields(current, next); len(fields) == 0 {
+				t.Fatal("restart-required change was not detected")
+			}
+		})
+	}
+
+	hot := current
+	hot.Password = "updated"
+	hot.StrictSourceCheck = !hot.StrictSourceCheck
+	hot.Upstreams = []conf.SIPUpstream{{Name: "upstream"}}
+	if fields := sipRestartRequiredFields(current, hot); len(fields) != 0 {
+		t.Fatalf("hot-reloadable changes require restart: %v", fields)
 	}
 }

@@ -8,7 +8,7 @@ import (
 
 func TestSetupConfigDefaultsMissingDeviceHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte("[Sip]\nPort = 5060\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("[Sip]\nPort = 5060\nID = '34020000002000000001'\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var cfg Bootstrap
@@ -22,7 +22,7 @@ func TestSetupConfigDefaultsMissingDeviceHistory(t *testing.T) {
 
 func TestSetupConfigKeepsExplicitUnlimitedDeviceHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	content := "[Sip.DeviceHistory]\nMaxRecords = 0\nMaxDays = 0\n"
+	content := "[Sip]\nPort = 5060\nID = '34020000002000000001'\n\n[Sip.DeviceHistory]\nMaxRecords = 0\nMaxDays = 0\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -120,7 +120,8 @@ func (g *GB28181API) sendCascadeDeviceControlDownstream(ctx context.Context, cha
 		}
 		return result, nil
 	case <-timer.C:
-		if g.cfg != nil && g.cfg.PTZWeakConfirm {
+		cfg := g.configSnapshot()
+		if cfg != nil && cfg.PTZWeakConfirm {
 			return ptzResultOK, nil
 		}
 		return "ERROR", fmt.Errorf("%s", ptzTimeoutErrorMessage)

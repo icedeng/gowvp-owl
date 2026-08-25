@@ -404,6 +404,10 @@ func (g *GB28181API) startDirectTCPHistory(ctx context.Context, ch *Channel, in 
 }
 
 func (g *GB28181API) sipInviteDirectTCPHistory(ch *Channel, in *HistoryInput, stream *Streams, port int) (directTCPDownloadOffer, error) {
+	cfg := g.configSnapshot()
+	if cfg == nil {
+		return directTCPDownloadOffer{}, fmt.Errorf("SIP configuration is unavailable")
+	}
 	ip4str, err := GetIP(g.boot.Media.SDPIP)
 	if err != nil {
 		return directTCPDownloadOffer{}, err
@@ -430,7 +434,7 @@ func (g *GB28181API) sipInviteDirectTCPHistory(ch *Channel, in *HistoryInput, st
 		return directTCPDownloadOffer{}, err
 	}
 	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
-		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, g.cfg.ID)})
+		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, cfg.ID)})
 	})
 	if err != nil {
 		return directTCPDownloadOffer{}, err
@@ -446,7 +450,7 @@ func (g *GB28181API) sipInviteDirectTCPHistory(ch *Channel, in *HistoryInput, st
 	if contact, _ := resp.Contact(); contact == nil {
 		resp.AppendHeader(&sip.ContactHeader{
 			DisplayName: g.svr.fromAddress.DisplayName,
-			Address:     &sip.URI{FUser: sip.String{Str: g.cfg.ID}, FHost: g.cfg.GetDomain()},
+			Address:     &sip.URI{FUser: sip.String{Str: cfg.ID}, FHost: cfg.GetDomain()},
 			Params:      sip.NewParams(),
 		})
 	}
@@ -513,6 +517,10 @@ func addressIP(address net.Addr) net.IP {
 }
 
 func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, stream *Streams) error {
+	cfg := g.configSnapshot()
+	if cfg == nil {
+		return fmt.Errorf("SIP configuration is unavailable")
+	}
 	ip4str, err := GetIP(in.SMS.GetSDPIP())
 	if err != nil {
 		return err
@@ -543,7 +551,7 @@ func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, s
 		return err
 	}
 	tx, err := g.svr.wrapRequest(ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
-		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, g.cfg.ID)})
+		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, cfg.ID)})
 		if in.preferredPath != "" {
 			r.AppendHeader(&sip.GenericHeader{HeaderName: cascadePreferredPathHeader, Contents: in.preferredPath})
 		}
@@ -558,7 +566,7 @@ func (g *GB28181API) sipInviteHistory(ch *Channel, in *HistoryInput, port int, s
 	if contact, _ := resp.Contact(); contact == nil {
 		resp.AppendHeader(&sip.ContactHeader{
 			DisplayName: g.svr.fromAddress.DisplayName,
-			Address:     &sip.URI{FUser: sip.String{Str: g.cfg.ID}, FHost: g.cfg.GetDomain()},
+			Address:     &sip.URI{FUser: sip.String{Str: cfg.ID}, FHost: cfg.GetDomain()},
 			Params:      sip.NewParams(),
 		})
 	}

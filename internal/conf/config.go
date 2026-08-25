@@ -187,6 +187,57 @@ func ValidateSignalDigestConfig(config SIPSignalDigest) error {
 	return nil
 }
 
+// ValidateSIPConfig 校验 SIP 服务启动和运行所依赖的基础配置。
+func ValidateSIPConfig(config SIP) error {
+	if !isDigitCode(config.ID, 20) {
+		return fmt.Errorf("SIP 平台 ID 必须是 20 位数字")
+	}
+	domain := config.GetDomain()
+	if !isDigitCode(domain, 10) {
+		return fmt.Errorf("SIP 域必须是 10 位数字；留空时从平台 ID 前 10 位派生")
+	}
+	if config.Port < 1 || config.Port > 65535 {
+		return fmt.Errorf("SIP 监听端口应在 1–65535 之间")
+	}
+	if config.TLSPort < 0 || config.TLSPort > 65535 {
+		return fmt.Errorf("SIP-TLS 监听端口应为 0 或 1–65535；0 表示与 SIP 端口相同")
+	}
+	if config.EnableTLS {
+		tlsPort := config.TLSPort
+		if tlsPort == 0 {
+			tlsPort = config.Port
+		}
+		if tlsPort < 1 || tlsPort > 65535 {
+			return fmt.Errorf("SIP-TLS 监听端口应为 0 或 1–65535；0 表示与 SIP 端口相同")
+		}
+		if strings.TrimSpace(config.TLSCert) == "" {
+			return fmt.Errorf("启用 SIP-TLS 时必须配置证书文件")
+		}
+		if strings.TrimSpace(config.TLSKey) == "" {
+			return fmt.Errorf("启用 SIP-TLS 时必须配置私钥文件")
+		}
+	}
+	if config.DeviceHistory.MaxRecords < 0 || config.DeviceHistory.MaxRecords > 100000 {
+		return fmt.Errorf("设备历史最大记录数应在 0–100000 之间")
+	}
+	if config.DeviceHistory.MaxDays < 0 || config.DeviceHistory.MaxDays > 3650 {
+		return fmt.Errorf("设备历史保留天数应在 0–3650 之间")
+	}
+	return ValidateSignalDigestConfig(config.SignalDigest)
+}
+
+func isDigitCode(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 type DeviceHistoryConfig struct {
 	MaxRecords int `comment:"每台设备最多保留记录条数，0 表示不限制" json:"max_records"`
 	MaxDays    int `comment:"最多保留天数，0 表示不限制" json:"max_days"`

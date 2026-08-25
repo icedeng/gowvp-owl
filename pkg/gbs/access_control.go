@@ -62,11 +62,16 @@ func (g *GB28181API) sipAccessControlMiddleware(ctx *sip.Context) {
 }
 
 func (g *GB28181API) respondMessageDigestChallenge(ctx *sip.Context) {
+	cfg := g.configSnapshot()
+	domain := ""
+	if cfg != nil {
+		domain = cfg.GetDomain()
+	}
 	nonce := g.issueMessageNonce(ctx.DeviceID, parseAddressIP(addrString(ctx.Source)))
 	resp := sip.NewResponseFromRequest("", ctx.Request, 401, "Unauthorized", nil)
 	resp.AppendHeader(&sip.GenericHeader{
 		HeaderName: "WWW-Authenticate",
-		Contents:   fmt.Sprintf(`Digest realm="%s",qop="auth",nonce="%s"`, g.cfg.GetDomain(), nonce),
+		Contents:   fmt.Sprintf(`Digest realm="%s",qop="auth",nonce="%s"`, domain, nonce),
 	})
 	_ = ctx.Tx.Respond(resp)
 	ctx.Abort()
@@ -74,7 +79,8 @@ func (g *GB28181API) respondMessageDigestChallenge(ctx *sip.Context) {
 
 // checkSourceAddress 校验源地址（仅比较 IP，忽略端口变化）。
 func (g *GB28181API) checkSourceAddress(ctx *sip.Context) error {
-	if g == nil || g.cfg == nil || !g.cfg.StrictSourceCheck {
+	cfg := g.configSnapshot()
+	if cfg == nil || !cfg.StrictSourceCheck {
 		return nil
 	}
 	srcIP := parseAddressIP(addrString(ctx.Source))
@@ -97,7 +103,8 @@ func (g *GB28181API) checkSourceAddress(ctx *sip.Context) error {
 
 // checkDigestAuth 校验 Digest 鉴权。
 func (g *GB28181API) checkDigestAuth(ctx *sip.Context) error {
-	if g == nil || g.cfg == nil || !g.cfg.RequireMessageAuth {
+	cfg := g.configSnapshot()
+	if cfg == nil || !cfg.RequireMessageAuth {
 		return nil
 	}
 	cred, err := g.lookupDeviceCredential(ctx.DeviceID)
@@ -106,7 +113,7 @@ func (g *GB28181API) checkDigestAuth(ctx *sip.Context) error {
 	}
 	password := strings.TrimSpace(cred.Password)
 	if password == "" {
-		password = strings.TrimSpace(g.cfg.Password)
+		password = strings.TrimSpace(cfg.Password)
 	}
 	// ignorePassword 表示免鉴权，保持与 REGISTER 逻辑一致。
 	if password == "" || password == ignorePassword {
@@ -121,7 +128,7 @@ func (g *GB28181API) checkDigestAuth(ctx *sip.Context) error {
 		return fmt.Errorf("invalid authorization header")
 	}
 	auth := sip.AuthFromValue(h.Contents)
-	if auth.Get("realm") != g.cfg.GetDomain() {
+	if auth.Get("realm") != cfg.GetDomain() {
 		return fmt.Errorf("digest realm mismatch")
 	}
 	if !strings.EqualFold(auth.Algorithm(), registerDigestAlgo) {

@@ -35,7 +35,7 @@ func SetupConfig(v any, path string) error {
 		if sections.SIP.SignalDigest == nil {
 			bootstrap.Sip.SignalDigest = DefaultConfig().Sip.SignalDigest
 		}
-		if err := ValidateSignalDigestConfig(bootstrap.Sip.SignalDigest); err != nil {
+		if err := ValidateSIPConfig(bootstrap.Sip); err != nil {
 			return err
 		}
 	}

@@ -200,16 +200,21 @@ func (g *GB28181API) persistCatalogResult(deviceID string, result multiResponseR
 }
 
 func (g *GB28181API) saveCatalogChannels(deviceID string, items []Channels) {
+	cfg := g.configSnapshot()
+	domain := ""
+	if cfg != nil {
+		domain = cfg.GetDomain()
+	}
 	if device, ok := g.svr.memoryStorer.Load(deviceID); ok {
 		seen := make(map[string]struct{}, len(items))
 		for _, item := range items {
 			seen[item.ChannelID] = struct{}{}
 			channel := &Channel{ChannelID: item.ChannelID, device: device}
-			domain := g.cfg.GetDomain()
+			channelDomain := domain
 			if device.To() != nil && device.To().URI != nil && device.To().URI.Host() != "" {
-				domain = device.To().URI.Host()
+				channelDomain = device.To().URI.Host()
 			}
-			channel.init(domain)
+			channel.init(channelDomain)
 			device.Channels.Store(channel.ChannelID, channel)
 		}
 		device.Channels.Range(func(channelID string, _ *Channel) bool {
