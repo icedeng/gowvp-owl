@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -10,6 +11,72 @@ import (
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
+
+func TestRemovingCascadeSubscriptionDoesNotWaitForNotifyResponse(t *testing.T) {
+	platform := testSharedCascadePlatform(t)
+	local := mustFlowAddress(t, "sip:"+platform.localID+"@local.example")
+	remote := mustFlowAddress(t, "sip:"+platform.serverID+"@remote.example")
+	callID := sip.CallID("cascade-notify-removal")
+	request := sip.NewRequest("", sip.MethodSubscribe, local.URI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodSubscribe).SetCallID(&callID).
+			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
+	response := sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil)
+	worker := newCascadeWorker(&Server{}, platform)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	worker.exchange = func(ctx context.Context, req *sip.Request) (*sip.Response, error) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-release:
+			return sip.NewResponseFromRequest("", req, http.StatusOK, "OK", nil), nil
+		}
+	}
+	sub := &eventSubscription{
+		Key: "cascade-notify-removal", CmdType: "Alarm", DeviceID: platform.localID,
+		ExpiresAt: time.Now().Add(time.Minute), To: remote, GBVersion: string(GBVersion30),
+		Event: "presence", Response: response, Cascade: worker,
+	}
+	api := &GB28181API{}
+	api.eventSubscribers.Store(sub.Key, sub)
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- api.sendCascadeEventNotify(sub, "Alarm", []byte(`<Notify><CmdType>Alarm</CmdType></Notify>`))
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("cascade NOTIFY did not start")
+	}
+
+	removeDone := make(chan struct{})
+	go func() {
+		api.removeCascadeEventSubscriptions(worker)
+		close(removeDone)
+	}()
+	select {
+	case <-removeDone:
+	case <-time.After(200 * time.Millisecond):
+		close(release)
+		<-sendDone
+		<-removeDone
+		t.Fatal("removing cascade subscription waited for in-flight NOTIFY response")
+	}
+	if _, exists := api.eventSubscribers.Load(sub.Key); exists {
+		t.Fatal("cascade subscription remained after worker removal")
+	}
+
+	worker.cancel()
+	select {
+	case err := <-sendDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled cascade NOTIFY error = %v; want %v", err, context.Canceled)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled cascade NOTIFY did not stop")
+	}
+}
 
 func TestAlarmSubscriptionFilterValidationAndMatch(t *testing.T) {
 	valid := subscribeEventRequest{

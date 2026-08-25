@@ -57,6 +57,7 @@ type cascadeDownstreamSubscription struct {
 type eventSubscription struct {
 	mu        sync.Mutex
 	catalogMu sync.Mutex
+	notifyMu  sync.Mutex
 
 	Key      string
 	CmdType  string
@@ -806,24 +807,47 @@ func (g *GB28181API) sendEventNotify(sub *eventSubscription, cmdType string, bod
 }
 
 func (g *GB28181API) sendCascadeEventNotify(sub *eventSubscription, cmdType string, body []byte) error {
+	sub.notifyMu.Lock()
+	defer sub.notifyMu.Unlock()
+
 	sub.mu.Lock()
-	defer sub.mu.Unlock()
 	if sub.Response == nil || sub.Cascade == nil {
+		sub.mu.Unlock()
 		return fmt.Errorf("cascade subscription dialog is unavailable")
 	}
 	if !time.Now().Before(sub.ExpiresAt) {
+		sub.mu.Unlock()
 		return fmt.Errorf("cascade subscription has expired")
 	}
-	local, localOK := sub.Response.To()
-	remote, remoteOK := sub.Response.From()
-	callID, callIDOK := sub.Response.CallID()
-	if !localOK || local == nil || local.Address == nil || !remoteOK || remote == nil || remote.Address == nil || !callIDOK || callID == nil || sub.To == nil || sub.To.URI == nil {
+	if sub.To == nil || sub.To.URI == nil {
+		sub.mu.Unlock()
+		return fmt.Errorf("cascade subscription target is unavailable")
+	}
+	dialogResponse := sub.Response
+	cascade := sub.Cascade
+	to := sub.To.Clone()
+	var contact *sip.Address
+	if sub.Contact != nil {
+		contact = sub.Contact.Clone()
+	}
+	gbVersion := sub.GBVersion
+	event := sub.Event
+	deviceID := sub.DeviceID
+	expiresAt := sub.ExpiresAt
+	local, localOK := dialogResponse.To()
+	remote, remoteOK := dialogResponse.From()
+	callID, callIDOK := dialogResponse.CallID()
+	if !localOK || local == nil || local.Address == nil || !remoteOK || remote == nil || remote.Address == nil || !callIDOK || callID == nil {
+		sub.mu.Unlock()
 		return fmt.Errorf("cascade subscription target is unavailable")
 	}
 	sub.CSeq++
 	if sub.CSeq == 0 {
 		sub.CSeq = 1
 	}
+	cseq := sub.CSeq
+	sub.mu.Unlock()
+
 	localAddress := &sip.Address{DisplayName: local.DisplayName, URI: local.Address.Clone(), Params: local.Params.Clone()}
 	remoteAddress := &sip.Address{DisplayName: remote.DisplayName, URI: remote.Address.Clone(), Params: remote.Params.Clone()}
 	headers := sip.NewHeaderBuilder().
@@ -831,25 +855,25 @@ func (g *GB28181API) sendCascadeEventNotify(sub *eventSubscription, cmdType stri
 		SetToWithParam(remoteAddress).
 		SetContentType(&sip.ContentTypeXML).
 		SetMethod(sip.MethodNotify).
-		SetSeqNo(uint(sub.CSeq)).
+		SetSeqNo(uint(cseq)).
 		SetCallID(callID).
-		SetXGBVerValue(sub.GBVersion).
+		SetXGBVerValue(gbVersion).
 		AddVia(&sip.ViaHop{
-			Host: sub.Cascade.platform.localHost, Port: sip.NewPort(sub.Cascade.platform.localPort), Transport: "UDP",
+			Host: cascade.platform.localHost, Port: sip.NewPort(cascade.platform.localPort), Transport: "UDP",
 			Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
 		}).Build()
-	if sub.Contact != nil && sub.Contact.URI != nil {
-		headers = append(headers, &sip.ContactHeader{DisplayName: sub.Contact.DisplayName, Address: sub.Contact.URI.Clone(), Params: sub.Contact.Params.Clone()})
+	if contact != nil && contact.URI != nil {
+		headers = append(headers, &sip.ContactHeader{DisplayName: contact.DisplayName, Address: contact.URI.Clone(), Params: contact.Params.Clone()})
 	}
-	eventValue := strings.TrimSpace(sub.Event)
+	eventValue := strings.TrimSpace(event)
 	if eventValue == "" {
-		version, ok := ParseGBProtocolVersion(sub.GBVersion)
+		version, ok := ParseGBProtocolVersion(gbVersion)
 		if !ok {
 			version = GBVersion10
 		}
-		eventValue = buildSubscriptionEventValueForVersion(version, cmdType, sub.DeviceID)
+		eventValue = buildSubscriptionEventValueForVersion(version, cmdType, deviceID)
 	}
-	expires := int(time.Until(sub.ExpiresAt).Seconds())
+	expires := int(time.Until(expiresAt).Seconds())
 	state := "terminated;reason=timeout"
 	if expires > 0 {
 		state = fmt.Sprintf("active;expires=%d", expires)
@@ -858,13 +882,17 @@ func (g *GB28181API) sendCascadeEventNotify(sub *eventSubscription, cmdType stri
 		&sip.GenericHeader{HeaderName: "Event", Contents: eventValue},
 		&sip.GenericHeader{HeaderName: "Subscription-State", Contents: state},
 	)
-	request := sip.NewRequest("", sip.MethodNotify, sub.To.URI.Clone(), sip.DefaultSipVersion, headers, body)
-	request.SetDestination(sub.Cascade.remoteDestination())
+	request := sip.NewRequest("", sip.MethodNotify, to.URI.Clone(), sip.DefaultSipVersion, headers, body)
+	request.SetDestination(cascade.remoteDestination())
 	if g != nil && g.svr != nil && g.svr.UDPConn() != nil {
 		request.SetConnection(g.svr.UDPConn())
 		request.SetSource(g.svr.UDPConn().LocalAddr())
 	}
-	response, err := sub.Cascade.exchange(context.Background(), request)
+	exchangeCtx := cascade.ctx
+	if exchangeCtx == nil {
+		exchangeCtx = context.Background()
+	}
+	response, err := cascade.exchange(exchangeCtx, request)
 	if err != nil {
 		return err
 	}
