@@ -109,7 +109,9 @@ func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
 		return err
 	}
 
-	ch.device.playMutex.Lock()
+	if err := ch.device.playMutex.LockContext(ctx); err != nil {
+		return err
+	}
 	defer ch.device.playMutex.Unlock()
 
 	key := resolveHistorySessionKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID, in.sessionKey)
@@ -177,7 +179,9 @@ func (g *GB28181API) StopHistory(ctx context.Context, in *StopHistoryInput) erro
 	if !ok {
 		return ErrChannelNotExist
 	}
-	ch.device.playMutex.Lock()
+	if err := ch.device.playMutex.LockContext(ctx); err != nil {
+		return err
+	}
 	defer ch.device.playMutex.Unlock()
 	err := g.stopHistoryNoLockContext(ctx, ch, in)
 	if !g.hasActiveChannelStream(in.Channel.DeviceID, in.Channel.ChannelID) {
@@ -380,7 +384,9 @@ func (g *GB28181API) startDirectTCPHistory(ctx context.Context, ch *Channel, in 
 		return fmt.Errorf("direct TCP download manager is unavailable")
 	}
 
-	ch.device.playMutex.Lock()
+	if err := ch.device.playMutex.LockContext(ctx); err != nil {
+		return err
+	}
 	defer ch.device.playMutex.Unlock()
 	key := historyKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID)
 	if existing, existed := g.streams.Load(key); existed {

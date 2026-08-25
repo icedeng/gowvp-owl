@@ -79,7 +79,9 @@ func (g *GB28181API) StopPlay(ctx context.Context, in *StopPlayInput) error {
 		return ErrDeviceNotExist
 	}
 
-	ch.device.playMutex.Lock()
+	if err := ch.device.playMutex.LockContext(ctx); err != nil {
+		return err
+	}
 	defer ch.device.playMutex.Unlock()
 
 	err := g.stopPlay(ch, in)
@@ -112,7 +114,9 @@ func (g *GB28181API) PlayContext(ctx context.Context, in *PlayInput) error {
 		return ErrChannelNotExist
 	}
 
-	ch.device.playMutex.Lock()
+	if err := ch.device.playMutex.LockContext(ctx); err != nil {
+		return err
+	}
 	defer ch.device.playMutex.Unlock()
 
 	if !ch.device.IsOnlineNow() {

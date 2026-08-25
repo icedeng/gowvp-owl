@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -14,6 +15,51 @@ import (
 	"github.com/ixugo/goddd/pkg/conc"
 )
 
+type cancelableMutex struct {
+	once  sync.Once
+	token chan struct{}
+}
+
+func (m *cancelableMutex) init() {
+	m.once.Do(func() {
+		m.token = make(chan struct{}, 1)
+		m.token <- struct{}{}
+	})
+}
+
+func (m *cancelableMutex) Lock() {
+	_ = m.LockContext(context.Background())
+}
+
+func (m *cancelableMutex) LockContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.init()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-m.token:
+		if err := ctx.Err(); err != nil {
+			m.token <- struct{}{}
+			return err
+		}
+		return nil
+	}
+}
+
+func (m *cancelableMutex) Unlock() {
+	m.init()
+	select {
+	case m.token <- struct{}{}:
+	default:
+		panic("gbs: unlock of unlocked cancelable mutex")
+	}
+}
+
 var (
 	// sip服务用户信息
 	_serverDevices Devices
@@ -24,7 +70,7 @@ type Device struct {
 
 	registerWithKeepaliveMutex sync.Mutex
 	// 播放互斥锁也可以移动到 channel 属性
-	playMutex sync.Mutex
+	playMutex cancelableMutex
 	stateMu   sync.RWMutex
 
 	IsOnline    bool
