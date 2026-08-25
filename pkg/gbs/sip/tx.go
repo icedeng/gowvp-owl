@@ -1,6 +1,7 @@
 package sip
 
 import (
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -40,11 +41,13 @@ func (txs *transacionts) rmTX(tx *Transaction) {
 
 // Transaction Transaction
 type Transaction struct {
-	connMu sync.RWMutex
-	conn   Connection
-	key    string
-	resp   chan *Response
-	active chan int
+	connMu     sync.RWMutex
+	conn       Connection
+	securityMu sync.RWMutex
+	security   MessageSecurity
+	key        string
+	resp       chan *Response
+	active     chan int
 }
 
 func (tx *Transaction) setConnection(conn Connection) {
@@ -64,6 +67,26 @@ func (tx *Transaction) connection() Connection {
 	conn := tx.conn
 	tx.connMu.RUnlock()
 	return conn
+}
+
+// SetMessageSecurity 为事务的出站消息签名，并校验该事务收到的响应。
+func (tx *Transaction) SetMessageSecurity(security MessageSecurity) {
+	if tx == nil {
+		return
+	}
+	tx.securityMu.Lock()
+	tx.security = security
+	tx.securityMu.Unlock()
+}
+
+func (tx *Transaction) messageSecurity() MessageSecurity {
+	if tx == nil {
+		return nil
+	}
+	tx.securityMu.RLock()
+	security := tx.security
+	tx.securityMu.RUnlock()
+	return security
 }
 
 // NewTransaction NewTransaction
@@ -124,6 +147,12 @@ func (tx *Transaction) receiveResponse(msg *Response) {
 			// logrus.Errorln("send to closed channel, txkey:", tx.key, "message: \n", msg.String())
 		}
 	}()
+	if security := tx.messageSecurity(); security != nil {
+		if err := security.Verify(msg); err != nil {
+			slog.Warn("discard SIP response with invalid signal Digest", "tx_key", tx.key, "err", err)
+			return
+		}
+	}
 	// logrus.Traceln("receiveResponse tx", tx.Key(), time.Now().Format("2006-01-02 15:04:05"))
 	tx.resp <- msg
 	tx.active <- 1
@@ -136,6 +165,11 @@ func (tx *Transaction) Respond(res *Response) error {
 	if conn == nil {
 		return NewError(nil, "transaction connection is unavailable")
 	}
+	if security := tx.messageSecurity(); security != nil {
+		if err := security.Sign(res); err != nil {
+			return NewError(err, "sign SIP response failed")
+		}
+	}
 	payload := []byte(res.String())
 	logTraffic("out", conn.Network(), conn.LocalAddr(), res.dest, payload)
 	_, err := conn.WriteTo(payload, res.dest)
@@ -147,6 +181,11 @@ func (tx *Transaction) Request(req *Request) error {
 	conn := tx.connection()
 	if conn == nil {
 		return NewError(nil, "transaction connection is unavailable")
+	}
+	if security := tx.messageSecurity(); security != nil {
+		if err := security.Sign(req); err != nil {
+			return NewError(err, "sign SIP request failed")
+		}
 	}
 	str := req.String()
 	s := unsafe.Slice(unsafe.StringData(str), len(str))

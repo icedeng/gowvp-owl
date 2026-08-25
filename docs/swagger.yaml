@@ -861,6 +861,10 @@ definitions:
         description: 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
         example: false
         type: boolean
+      signal_digest:
+        allOf:
+        - $ref: '#/definitions/api.SwaggerSIPSignalDigest'
+        description: Date+Note 信令数字摘要配置
       strict_source_check:
         description: 是否严格校验源 IP
         example: true
@@ -901,6 +905,32 @@ definitions:
       rotation_time:
         description: 纳秒
         example: 43200000000000
+        type: integer
+    type: object
+  api.SwaggerSIPSignalDigest:
+    properties:
+      accept_legacy_hex:
+        example: true
+        type: boolean
+      algorithm:
+        example: MD5
+        type: string
+      enabled:
+        example: false
+        type: boolean
+      encoding:
+        example: base64
+        type: string
+      required:
+        description: 强制模式；同时启用出站签名并拒绝缺失或验签失败的入站报文
+        example: false
+        type: boolean
+      seed:
+        example: shared-secret
+        type: string
+      window:
+        description: 纳秒
+        example: 600000000000
         type: integer
     type: object
   api.SwaggerSIPUpstream:
@@ -956,6 +986,9 @@ definitions:
         items:
           type: string
         type: array
+      signal_digest_seed:
+        example: upstream-shared-secret
+        type: string
       transport:
         example: udp
         type: string

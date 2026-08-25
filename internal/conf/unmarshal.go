@@ -23,6 +23,7 @@ func SetupConfig(v any, path string) error {
 		var sections struct {
 			SIP struct {
 				DeviceHistory *DeviceHistoryConfig
+				SignalDigest  *SIPSignalDigest
 			}
 		}
 		if err := toml.Unmarshal(b, &sections); err != nil {
@@ -30,6 +31,12 @@ func SetupConfig(v any, path string) error {
 		}
 		if sections.SIP.DeviceHistory == nil {
 			bootstrap.Sip.DeviceHistory = DeviceHistoryConfig{MaxRecords: 1000, MaxDays: 30}
+		}
+		if sections.SIP.SignalDigest == nil {
+			bootstrap.Sip.SignalDigest = DefaultConfig().Sip.SignalDigest
+		}
+		if err := ValidateSignalDigestConfig(bootstrap.Sip.SignalDigest); err != nil {
+			return err
 		}
 	}
 	return nil

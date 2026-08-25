@@ -300,5 +300,9 @@ func (s *Server) wrapRequest(t Targeter, method string, contentType *sip.Content
 		opt(req)
 	}
 
-	return s.Request(req)
+	security, err := s.gb.newSignalDigestSecurity(targetSignalDigestSeed(t))
+	if err != nil {
+		return nil, err
+	}
+	return s.RequestWithSecurity(req, security)
 }

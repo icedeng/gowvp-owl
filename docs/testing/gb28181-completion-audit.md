@@ -4,7 +4,7 @@
 
 ## 1. 审计结论
 
-代码建设、自动化测试和本地协议模拟器已完成到开发计划的 AI-502；AI-403 的 2014 附录 O 裸 TCP 下载已经实现，不再是代码阻断项。2022 的设备升级、图像抓拍、目标跟踪、扩展配置写入、注册重定向、AAC/H.265 SDP 和主动视频上传通知已补齐代码闭环，其中升级与抓拍现在同时覆盖受理应答、最终通知和会话状态查询，不再把“命令已受理”误判为“业务已完成”。
+代码建设、自动化测试和本地协议模拟器已完成到开发计划的 AI-502；AI-403 的 2014 附录 O 裸 TCP 下载已经实现，不再是代码阻断项。2022 的设备升级、图像抓拍、目标跟踪、扩展配置写入、注册重定向、AAC/H.265 SDP 和主动视频上传通知已补齐代码闭环，其中升级与抓拍现在同时覆盖受理应答、最终通知和会话状态查询，不再把“命令已受理”误判为“业务已完成”。四版本除 REGISTER 外的 `Date + Note` 信令摘要已经形成请求/响应、时间窗、设备及上级独立 seed 的自动化闭环，但默认关闭，尚未经过真实设备和真实上级平台互通。
 
 目标尚不能标记为生产完成，原因是 AI-503 真实设备矩阵和 AI-602 部署灰度/回滚必须在外部设备及目标环境执行。上下级平台级联的 UDP/TCP 注册、查询、目录、事件订阅、直播、回放、下载和语音广播/对讲代码链路已经补齐；2022 附录 H 指定路径级联已完成自动化闭环；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅现在会自动建立、续订、复用和取消下级订阅，但仍需要真实上级平台及真实设备共同验证。
 
@@ -42,6 +42,7 @@
 | 能力 | 状态 | 当前证据 |
 |---|---|---|
 | 多上级注册 | 完成（自动化） | `SIPUpstream.transport` 支持 UDP/TCP 且空值默认 UDP；TCP 持久连接覆盖 REGISTER→401 Digest→认证 REGISTER→Keepalive、断线重连事务换连接和入向身份绑定；Digest/qop、续注册、注销、退避、热更新、实际 Expires；2022 301/302 支持 UDP/TCP 重定向并校验 Contact/ServerID/传输；`cascade_test.go`、`server_tcp_test.go` |
+| `Date + Note` 信令摘要 | 完成（自动化，默认关闭） | 除 REGISTER 请求/响应外，级联 MESSAGE/Keepalive 在写出前签名并校验响应；入向已注册上级按 `SignalDigestSeed → Password → 全局 Seed` 选择 seed，设备按设备独立密码优先；Required 模式丢弃无签名、超时或正文被篡改的响应且事务不阻塞；`cascade_test.go`、`signal_digest_test.go`、`sip/signal_digest_test.go` |
 | 查询与目录 | 完成（自动化） | 平台与共享通道 DeviceInfo/DeviceStatus、共享通道 RecordInfo 下级查询及响应编码映射；可信 NVR 可代表其已知子通道返回 DeviceInfo，通道元数据单独落库且不会覆盖父设备，非法跨设备编码仍拒绝；按上级版本安全转发 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 CruiseTrackListQuery/CruiseTrackQuery/PTZPosition/SDCardStatus；巡航轨迹编号、列表、预置位、停留时间和速度结构化解析；上下级 SN 独立、响应恢复上级 SN，DeviceID/ParentID 映射且未知下级编码不透传，多上级并发响应隔离；Catalog 支持平台根或单个共享通道目标、共享白名单、20 条查询分包和版本化 Info；录像列表 20 条分包且不泄露下级编码；`cascade_query_test.go`、`device_info_channel_test.go` |
 | 设备控制 | 完成（共享通道安全子集） | PTZ、录像控制及版本匹配的 IFrame/DragZoom/HomePosition/精准 PTZ/TargetTrack 转发下级并映射业务响应；TargetTrack 仅允许控制当前共享通道，`DeviceID2` 会映射为真实下级编码，禁止借此越权控制未共享通道；校验 PTZ 校验和、上下级版本与设备能力关闭项；重启、布撤防、报警复位、格式化等设备级操作不允许经仅共享通道越权执行；`cascade_control_test.go` |
 | 订阅通知 | 完成（自动化） | 1.1+ Catalog 初始通知仅发送离线/异常目录并携带 `Status=OK`，默认 Expires 600 秒；1.0、Alarm、MobilePosition、PTZPosition 不误发初始 Catalog；2011 Catalog 变化通知使用 `Response` 根，2014+ 使用 `Notify` 根；平台根和单个共享通道订阅分别维护可见目录快照，只发送 ADD/DEL/ON/OFF/UPDATE 增量，单包 `SumNum` 与 `DeviceList Num` 一致；同一订阅的增量计算、分包发送和快照提交串行执行，失败不提交快照且重试补发；刷新保留原对话与 NOTIFY CSeq，未重复携带 X-GB-Ver 时复用注册协商版本；空消息体 terminated NOTIFY 返回 200、清理出向对话，并在仍有级联引用时自动重订；上级 Catalog 订阅自动映射到承载共享通道的下级 NVR，目录快照变化后重新计算来源并为新增或迁移通道补订阅；Catalog/Alarm/MobilePosition/PTZPosition 下级订阅支持续订、退订、过期/上级移除清理和多上级引用计数，续订与过期清理串行收敛；Alarm 完整支持 Start/EndAlarmPriority、AlarmMethod、AlarmType、Start/EndAlarmTime 过滤，兼容 2011 示例的 StartTime/EndTime 别名；事件通知按平台级、指定共享通道和过滤条件二次筛选并映射编码；2.0 起支持 AlarmType，3.0 支持 PTZ 精准位置变化订阅/通知且 1.0/1.1/2.0 明确拒绝；非标准级联订阅明确拒绝；`cascade_subscribe_test.go`、`cascade_query_test.go`、`subscribe_11_test.go` |
@@ -83,12 +84,12 @@ git diff --check
 | 项目 | 当前状态 | 处理结论 |
 |---|---|---|
 | SIP REGISTER 口令摘要认证 | 已加固并有自动化证据 | nonce 由服务端使用密码学安全随机源签发，绑定设备与源 IP、5 分钟失效且有界保存；首次成功后仅允许同 Call-ID/CSeq/摘要的 UDP 幂等重传，拒绝跨请求重放、任意 nonce、错误 realm/username/URI 和算法混淆；服务端保持 MD5 设备兼容，级联客户端支持 MD5/SHA-1/SHA-256 并明确拒绝未知算法；`register_version_test.go`、`sip/auth_test.go`、`cascade_test.go` |
-| 附录 H `Note` 信令数字摘要 | 未形成完整的收发、时间窗和 seed 管理闭环 | 属于四版本安全专项；当前 `RequireMessageAuth` 是 RFC Digest 兼容开关，不能等同于标准附录 H `Note` |
+| `Date + Note` 信令数字摘要 | 已形成自动化闭环，待真实互通 | 按 `From + To + Call-ID + Date + seed + 消息体` 计算；Date 使用北京时间并校验可配置时间窗；支持 MD5/SHA-1/SHA-256，nonce 默认 Base64 输出，可配置 hex 并可兼容接收标准示例中的十六进制形式；REGISTER 请求/响应免签。`Enabled` 启用出站签名，并对入向已携带 Note 的报文验签；`Required` 还会拒绝缺失或验签失败的入向报文；默认关闭以保持旧设备兼容。`RequireMessageAuth` 仍是另一套 RFC Digest 兼容开关，二者不能混同。2022 建议的 SM3 尚未实现；`signal_digest.go`、`signal_digest_test.go`、`sip/signal_digest_test.go`、`cascade_test.go` |
 | 数字证书双向认证、CRL | 未实现完整协议闭环 | 高安全级别专项，不能宣称支持 |
 | `Monitor-User-Identity` 跨域身份头 | 未实现完整生成、逐级追加和验证 | 与安全路由网关身份体系一起设计，不能仅做字符串透传后宣称完成 |
 | NTP 服务端/客户端 | 项目未内置 NTP 服务 | 标准要求 IP 接入设备通过 REGISTER `200 OK` 的 `Date` 校时，代码已实现；NTP 是可配置部署能力，不把非标准主动 `DeviceControl(Time)` 当成 NTP 完成证据 |
 | 升级/抓拍状态持久化 | 当前为有界内存状态 | 进程重启后可接收合法最终通知并重建终态，但重启前的 accepted/uploading 中间态不会恢复 |
-| 真实设备、真实上级和三级路径 | 未执行 | 仍是生产完成阶段门，不得由模拟器结果替代 |
+| 真实设备、真实上级和三级路径 | 未执行 | 包括 `Date + Note` 的 Base64/hex、算法和 seed 协商互通；仍是生产完成阶段门，不得由模拟器结果替代 |
 
 ## 7. 生产完成所需证据
 

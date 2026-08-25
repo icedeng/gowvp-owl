@@ -85,10 +85,21 @@ type SwaggerSIPConfig struct {
 	StrictSourceCheck  bool                           `json:"strict_source_check" example:"true"`       // 是否严格校验源 IP
 	RequireMessageAuth bool                           `json:"require_message_auth" example:"false"`     // 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
 	PTZWeakConfirm     bool                           `json:"ptz_weak_confirm" example:"false"`         // 是否启用 PTZ 弱确认模式
+	SignalDigest       SwaggerSIPSignalDigest         `json:"signal_digest"`                            // Date+Note 信令数字摘要配置
 	DeviceHistory      SwaggerDeviceHistoryConfig     `json:"device_history"`                           // 设备注册与心跳历史保留策略
 	DirectTCPDownload  SwaggerDirectTCPDownloadConfig `json:"direct_tcp_download"`                      // 2014 附录 O 裸 TCP 下载配置
 	Upstreams          []SwaggerSIPUpstream           `json:"upstreams"`                                // 上级 GB/T 28181 平台配置
 	Log                SwaggerSIPLog                  `json:"log"`                                      // SIP 报文日志配置；更新时可省略以保留当前值
+}
+
+type SwaggerSIPSignalDigest struct {
+	Enabled         bool   `json:"enabled" example:"false"`
+	Required        bool   `json:"required" example:"false"` // 强制模式；同时启用出站签名并拒绝缺失或验签失败的入站报文
+	Seed            string `json:"seed" example:"shared-secret"`
+	Algorithm       string `json:"algorithm" example:"MD5"`
+	Encoding        string `json:"encoding" example:"base64"`
+	AcceptLegacyHex bool   `json:"accept_legacy_hex" example:"true"`
+	Window          int64  `json:"window" example:"600000000000"` // 纳秒
 }
 
 type SwaggerDeviceHistoryConfig struct {
@@ -108,6 +119,7 @@ type SwaggerSIPUpstream struct {
 	LocalDomain       string            `json:"local_domain" example:"3402000000"`
 	LocalHost         string            `json:"local_host" example:"192.0.2.20"`
 	Password          string            `json:"password" example:"123456"`
+	SignalDigestSeed  string            `json:"signal_digest_seed" example:"upstream-shared-secret"`
 	Version           string            `json:"version" example:"1.1"`
 	Expires           int               `json:"expires" example:"3600"`
 	KeepaliveInterval int64             `json:"keepalive_interval" example:"60000000000"` // 纳秒，与配置 API 的 Duration 数值一致

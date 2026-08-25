@@ -56,7 +56,16 @@ func DefaultConfig() Bootstrap {
 			RequireMessageAuth: false,
 			PTZWeakConfirm:     false,
 			RegisterRedirect:   "",
-			DeviceHistory:      DeviceHistoryConfig{MaxRecords: 1000, MaxDays: 30},
+			SignalDigest: SIPSignalDigest{
+				Enabled:         false,
+				Required:        false,
+				Seed:            "",
+				Algorithm:       "MD5",
+				Encoding:        "base64",
+				AcceptLegacyHex: true,
+				Window:          Duration(10 * time.Minute),
+			},
+			DeviceHistory: DeviceHistoryConfig{MaxRecords: 1000, MaxDays: 30},
 			DirectTCPDownload: SIPDirectTCPDownload{
 				Enabled:              false,
 				DeviceAllowlist:      nil,

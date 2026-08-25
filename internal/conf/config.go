@@ -3,6 +3,7 @@ package conf
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -123,6 +124,7 @@ type SIP struct {
 	RequireMessageAuth bool                 `comment:"是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权" json:"require_message_auth"`
 	PTZWeakConfirm     bool                 `comment:"是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理" json:"ptz_weak_confirm"`
 	RegisterRedirect   string               `comment:"GB/T 28181-2022 注册重定向目标 SIP URI；为空表示不重定向" json:"register_redirect,omitempty"`
+	SignalDigest       SIPSignalDigest      `comment:"GB/T 28181 Date+Note 信令数字摘要" json:"signal_digest"`
 	DeviceHistory      DeviceHistoryConfig  `comment:"设备心跳与注册历史保留策略" json:"device_history"`
 	DirectTCPDownload  SIPDirectTCPDownload `comment:"GB/T 28181-2014 附录 O 裸 TCP 文件下载" json:"direct_tcp_download"`
 	Upstreams          []SIPUpstream        `comment:"上下级平台级联：本平台作为下级注册到上级平台" json:"upstreams,omitempty"`
@@ -142,12 +144,47 @@ type SIPUpstream struct {
 	LocalDomain       string            `json:"local_domain" comment:"向上级注册使用的本平台 SIP 域；为空时使用 Sip.Domain 或 local_id 前 10 位"`
 	LocalHost         string            `json:"local_host" comment:"Contact 宣告地址；为空时使用 Sip.Host"`
 	Password          string            `json:"password" comment:"上级平台注册密码"`
+	SignalDigestSeed  string            `json:"signal_digest_seed,omitempty" comment:"与该上级约定的 Note 摘要 seed；为空时使用 Password 或 Sip.SignalDigest.Seed"`
 	Version           string            `json:"version" comment:"级联档案版本：1.0/1.1/2.0/3.0"`
 	Expires           int               `json:"expires" comment:"注册有效期秒数"`
 	KeepaliveInterval Duration          `json:"keepalive_interval" comment:"心跳间隔"`
 	SharedChannels    []string          `json:"shared_channels,omitempty" comment:"共享给该上级的本地国标通道编码；空列表表示不共享"`
 	ChannelIDMap      map[string]string `json:"channel_id_map,omitempty" comment:"本地通道编码到上级可见国标编码的映射"`
 	MediaAllowedCIDRs []string          `json:"media_allowed_cidrs,omitempty" comment:"除上级信令 IP 外允许接收级联媒体的 IP/CIDR 白名单"`
+}
+
+// SIPSignalDigest 控制 GB/T 28181 除 REGISTER 外的 Date + Note 信令摘要。
+type SIPSignalDigest struct {
+	Enabled         bool     `comment:"是否为出站请求和响应添加 Date+Note" json:"enabled"`
+	Required        bool     `comment:"强制模式；同时启用出站签名，并拒绝未携带或校验失败的 Date+Note 入站消息" json:"required"`
+	Seed            string   `comment:"设备未配置密码时使用的全局摘要 seed" json:"seed,omitempty"`
+	Algorithm       string   `comment:"摘要算法：MD5/SHA-1/SHA-256" json:"algorithm"`
+	Encoding        string   `comment:"nonce 编码：base64/hex" json:"encoding"`
+	AcceptLegacyHex bool     `comment:"base64 模式下是否兼容接收厂商十六进制 nonce" json:"accept_legacy_hex"`
+	Window          Duration `comment:"Date 允许的时间偏差，缺省 10 分钟" json:"window"`
+}
+
+// ValidateSignalDigestConfig 校验 Date+Note 信令摘要配置。
+// Required 模式在运行时同时启用出站签名，因此不要求调用方额外设置 Enabled。
+func ValidateSignalDigestConfig(config SIPSignalDigest) error {
+	algorithm := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(config.Algorithm), "_", "-"))
+	switch algorithm {
+	case "MD5", "SHA-1", "SHA1", "SHA-256", "SHA256":
+	default:
+		return fmt.Errorf("不支持的信令摘要算法 %q，仅支持 MD5、SHA-1、SHA-256", config.Algorithm)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(config.Encoding)) {
+	case "base64", "hex":
+	default:
+		return fmt.Errorf("不支持的信令摘要编码 %q，仅支持 base64、hex", config.Encoding)
+	}
+
+	window := config.Window.Duration()
+	if window < time.Second || window > 24*time.Hour {
+		return fmt.Errorf("信令摘要时间窗应在 1s–24h 之间")
+	}
+	return nil
 }
 
 type DeviceHistoryConfig struct {

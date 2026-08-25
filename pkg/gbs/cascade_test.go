@@ -3,6 +3,8 @@ package gbs
 import (
 	"bufio"
 	"context"
+	"crypto/md5"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -276,6 +278,94 @@ func TestCascadeRegisterOverTCPReusesConnectionForDigest(t *testing.T) {
 	close(allowRegistrarClose)
 }
 
+func TestCascadeTCPDateNoteSignalDigestLifecycle(t *testing.T) {
+	platform := testCascadeTCPPlatform(t, "3.0")
+	platform.signalDigestSeed = "upstream-note-seed"
+	localURI, err := sip.ParseSipURI("sip:" + gb10DeviceID + "@192.0.2.20:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sipServer := sip.NewServer(&sip.Address{URI: &localURI, Params: sip.NewParams()})
+	defer sipServer.Close()
+	api := &GB28181API{cfg: &conf.SIP{
+		Password: "global-password",
+		SignalDigest: conf.SIPSignalDigest{
+			Enabled: true, Required: true, Seed: "global-note-seed", Algorithm: "MD5",
+			Encoding: "base64", Window: conf.Duration(10 * time.Minute),
+		},
+	}}
+	server := &Server{Server: sipServer, gb: api}
+	api.svr = server
+	worker := newCascadeWorker(server, platform)
+	defer worker.closeTCPConnection()
+
+	registrarErr := make(chan error, 1)
+	allowRegistrarClose := make(chan struct{})
+	worker.dialTCP = func(_ context.Context, _ string) (net.Conn, error) {
+		client, registrar := net.Pipe()
+		clientConn := &cascadeTestTCPConn{
+			Conn:   client,
+			local:  &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 41001},
+			remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060},
+		}
+		go func() {
+			defer registrar.Close()
+			reader := bufio.NewReader(registrar)
+			register, readErr := readCascadeTestTCPMessage(reader)
+			if readErr != nil {
+				registrarErr <- readErr
+				return
+			}
+			if !strings.HasPrefix(register, "REGISTER ") || hasSignalDigestHeaders(register) {
+				registrarErr <- fmt.Errorf("REGISTER must not carry Date+Note: %s", register)
+				return
+			}
+			if _, writeErr := io.WriteString(registrar, cascadeTestTCPResponse(register, http.StatusOK, "OK", "Expires: 120")); writeErr != nil {
+				registrarErr <- writeErr
+				return
+			}
+
+			keepalive, readErr := readCascadeTestTCPMessage(reader)
+			if readErr != nil {
+				registrarErr <- readErr
+				return
+			}
+			if !strings.HasPrefix(keepalive, "MESSAGE ") || !strings.Contains(keepalive, "<CmdType>Keepalive</CmdType>") {
+				registrarErr <- fmt.Errorf("unexpected secured keepalive: %s", keepalive)
+				return
+			}
+			if verifyErr := verifyCascadeTestSignalDigest(keepalive, platform.signalDigestSeed); verifyErr != nil {
+				registrarErr <- verifyErr
+				return
+			}
+			response := cascadeTestSignedTCPResponse(keepalive, http.StatusOK, "OK", platform.signalDigestSeed)
+			if _, writeErr := io.WriteString(registrar, response); writeErr != nil {
+				registrarErr <- writeErr
+				return
+			}
+			registrarErr <- nil
+			<-allowRegistrarClose
+		}()
+		return clientConn, nil
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := worker.register(ctx, worker.platform.expires); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.keepalive(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-registrarErr; err != nil {
+		t.Fatal(err)
+	}
+	close(allowRegistrarClose)
+	if status := worker.snapshot(); !status.Registered || status.LastKeepaliveAt.IsZero() {
+		t.Fatalf("secured cascade status = %+v", status)
+	}
+}
+
 type cascadeTestTCPConn struct {
 	net.Conn
 	local  net.Addr
@@ -317,16 +407,7 @@ func readCascadeTestTCPMessage(reader *bufio.Reader) (string, error) {
 }
 
 func cascadeTestTCPResponse(request string, status int, reason, extra string) string {
-	header := func(name string) string {
-		for line := range strings.SplitSeq(request, "\r\n") {
-			key, value, ok := strings.Cut(line, ":")
-			if ok && strings.EqualFold(strings.TrimSpace(key), name) {
-				return strings.TrimSpace(value)
-			}
-		}
-		return ""
-	}
-	to := header("To")
+	to := cascadeTestHeader(request, "To")
 	if !strings.Contains(strings.ToLower(to), ";tag=") {
 		to += ";tag=tcp-registrar"
 	}
@@ -334,7 +415,53 @@ func cascadeTestTCPResponse(request string, status int, reason, extra string) st
 		extra += "\r\n"
 	}
 	return fmt.Sprintf("SIP/2.0 %d %s\r\nVia: %s\r\nFrom: %s\r\nTo: %s\r\nCall-ID: %s\r\nCSeq: %s\r\n%sContent-Length: 0\r\n\r\n",
-		status, reason, header("Via"), header("From"), to, header("Call-ID"), header("CSeq"), extra)
+		status, reason, cascadeTestHeader(request, "Via"), cascadeTestHeader(request, "From"), to,
+		cascadeTestHeader(request, "Call-ID"), cascadeTestHeader(request, "CSeq"), extra)
+}
+
+func cascadeTestHeader(message, name string) string {
+	for line := range strings.SplitSeq(message, "\r\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if ok && strings.EqualFold(strings.TrimSpace(key), name) {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func hasSignalDigestHeaders(message string) bool {
+	return cascadeTestHeader(message, "Date") != "" || cascadeTestHeader(message, "Note") != ""
+}
+
+func verifyCascadeTestSignalDigest(message, seed string) error {
+	date := cascadeTestHeader(message, "Date")
+	note := cascadeTestHeader(message, "Note")
+	if date == "" || note == "" {
+		return fmt.Errorf("secured cascade message is missing Date or Note")
+	}
+	body := ""
+	if _, value, ok := strings.Cut(message, "\r\n\r\n"); ok {
+		body = value
+	}
+	digest := md5.Sum([]byte(cascadeTestHeader(message, "From") + cascadeTestHeader(message, "To") +
+		cascadeTestHeader(message, "Call-ID") + date + seed + body))
+	expected := base64.StdEncoding.EncodeToString(digest[:])
+	auth := sip.AuthFromValue(note)
+	if auth.Get("nonce") != expected || !strings.EqualFold(auth.Algorithm(), "MD5") {
+		return fmt.Errorf("invalid cascade Date+Note digest: %s", note)
+	}
+	return nil
+}
+
+func cascadeTestSignedTCPResponse(request string, status int, reason, seed string) string {
+	to := cascadeTestHeader(request, "To")
+	if !strings.Contains(strings.ToLower(to), ";tag=") {
+		to += ";tag=tcp-registrar"
+	}
+	date := time.Now().In(time.FixedZone("CST", 8*60*60)).Format("2006-01-02T15:04:05")
+	digest := md5.Sum([]byte(cascadeTestHeader(request, "From") + to + cascadeTestHeader(request, "Call-ID") + date + seed))
+	extra := fmt.Sprintf("Date: %s\r\nNote: Digest nonce=\"%s\",algorithm=MD5", date, base64.StdEncoding.EncodeToString(digest[:]))
+	return cascadeTestTCPResponse(request, status, reason, extra)
 }
 
 func TestCascadeRegisterFollows2022Redirect(t *testing.T) {

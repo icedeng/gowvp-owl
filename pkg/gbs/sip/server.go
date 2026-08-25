@@ -31,6 +31,8 @@ type Server struct {
 
 	// 全局中间件链，通过 Use() 注册，在所有路由 handler 之前执行
 	middlewares []HandlerFunc
+	securityMu  sync.RWMutex
+	security    RequestSecurityResolver
 
 	port *Port
 	host net.IP
@@ -46,6 +48,9 @@ type Server struct {
 
 	from *Address
 }
+
+// RequestSecurityResolver 为入向请求解析对端 seed/算法，并返回事务级签名验签器。
+type RequestSecurityResolver func(*Request) (MessageSecurity, error)
 
 // NewServer sip server
 func NewServer(form *Address) *Server {
@@ -64,6 +69,19 @@ func NewServer(form *Address) *Server {
 // 中间件内调用 ctx.Abort() 可中断后续链路
 func (s *Server) Use(middleware ...HandlerFunc) {
 	s.middlewares = append(s.middlewares, middleware...)
+}
+
+func (s *Server) SetRequestSecurityResolver(resolver RequestSecurityResolver) {
+	s.securityMu.Lock()
+	s.security = resolver
+	s.securityMu.Unlock()
+}
+
+func (s *Server) requestSecurityResolver() RequestSecurityResolver {
+	s.securityMu.RLock()
+	resolver := s.security
+	s.securityMu.RUnlock()
+	return resolver
 }
 
 // SetFrom 热更新 SIP 源地址配置，用于配置变更时无需重启服务
@@ -373,6 +391,22 @@ func (s *Server) handlerListen(msgs chan Message) {
 
 func (s *Server) handlerRequest(msg *Request) {
 	tx := s.mustTX(msg)
+	if resolver := s.requestSecurityResolver(); resolver != nil {
+		security, err := resolver(msg)
+		if err != nil {
+			slog.Warn("resolve SIP signal Digest security failed", "method", msg.Method(), "err", err)
+			_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusForbidden, "signal Digest unavailable", nil))
+			return
+		}
+		tx.SetMessageSecurity(security)
+		if security != nil {
+			if err := security.Verify(msg); err != nil {
+				slog.Warn("reject SIP request with invalid signal Digest", "method", msg.Method(), "err", err)
+				_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusForbidden, "invalid signal Digest", nil))
+				return
+			}
+		}
+	}
 	// logrus.Traceln("receive request from:", msg.Source(), ",method:", msg.Method(), "txKey:", tx.key, "message: \n", msg.String())
 
 	key, err := requestRouteKey(msg)
@@ -447,6 +481,11 @@ func (s *Server) handlerResponse(msg *Response) {
 
 // Request Request
 func (s *Server) Request(req *Request) (*Transaction, error) {
+	return s.RequestWithSecurity(req, nil)
+}
+
+// RequestWithSecurity 在报文写出前安装事务级签名器，避免响应早于验签器安装的竞态。
+func (s *Server) RequestWithSecurity(req *Request, security MessageSecurity) (*Transaction, error) {
 	viaHop, ok := req.ViaHop()
 	if !ok {
 		return nil, fmt.Errorf("missing required 'Via' header")
@@ -467,6 +506,7 @@ func (s *Server) Request(req *Request) (*Transaction, error) {
 	slog.Debug("SIP 最终发送报文", "method", req.Method(), "request", req.String())
 
 	tx := s.mustTX(req)
+	tx.SetMessageSecurity(security)
 	return tx, tx.Request(req)
 }
 

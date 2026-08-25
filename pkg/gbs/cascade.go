@@ -49,6 +49,7 @@ type cascadePlatform struct {
 	localHost         string
 	localPort         int
 	password          string
+	signalDigestSeed  string
 	version           GBProtocolVersion
 	expires           int
 	keepaliveInterval time.Duration
@@ -220,7 +221,8 @@ func normalizeCascadePlatform(in conf.SIPUpstream, local conf.SIP, fallbackHost 
 	return cascadePlatform{
 		name: name, serverID: serverID, remoteDomain: remoteDomain, remote: remote, transport: transport,
 		localID: localID, localDomain: localDomain, localHost: localHost, localPort: local.Port,
-		password: in.Password, version: version, expires: expires, keepaliveInterval: keepalive,
+		password: in.Password, signalDigestSeed: strings.TrimSpace(in.SignalDigestSeed),
+		version: version, expires: expires, keepaliveInterval: keepalive,
 		sharedChannels: sharedChannels, channelIDMap: channelIDMap,
 		exposedChannelMap: exposedChannelMap, mediaAllowedCIDRs: mediaAllowedCIDRs,
 	}, nil
@@ -802,7 +804,11 @@ func (w *cascadeWorker) exchangeRequest(ctx context.Context, request *sip.Reques
 	if err := w.prepareRequestConnection(ctx, request); err != nil {
 		return nil, err
 	}
-	tx, err := w.server.Request(request)
+	security, err := w.signalDigestSecurity()
+	if err != nil {
+		return nil, err
+	}
+	tx, err := w.server.RequestWithSecurity(request, security)
 	if err != nil {
 		w.invalidateTCPConnection(request.GetConnection())
 		return nil, err
@@ -828,11 +834,22 @@ func (w *cascadeWorker) sendRequest(request *sip.Request) error {
 	if err := w.prepareRequestConnection(w.ctx, request); err != nil {
 		return err
 	}
-	_, err := w.server.Request(request)
+	security, err := w.signalDigestSecurity()
+	if err != nil {
+		return err
+	}
+	_, err = w.server.RequestWithSecurity(request, security)
 	if err != nil {
 		w.invalidateTCPConnection(request.GetConnection())
 	}
 	return err
+}
+
+func (w *cascadeWorker) signalDigestSecurity() (sip.MessageSecurity, error) {
+	if w == nil || w.server == nil || w.server.gb == nil {
+		return nil, nil
+	}
+	return w.server.gb.newSignalDigestSecurity(cascadeSignalDigestSeed(w.platform, w.server.gb.cfg.SignalDigest.Seed))
 }
 
 func (w *cascadeWorker) prepareRequestConnection(ctx context.Context, request *sip.Request) error {

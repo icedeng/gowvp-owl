@@ -108,6 +108,7 @@ func sipAccessInfo(cfg *conf.Bootstrap) SIPAccessInfo {
 type updateSIPInput struct {
 	conf.SIP
 	DeviceHistory *conf.DeviceHistoryConfig `json:"device_history"`
+	SignalDigest  *conf.SIPSignalDigest     `json:"signal_digest"`
 	Upstreams     *[]conf.SIPUpstream       `json:"upstreams"`
 	Log           *conf.SIPLog              `json:"log"`
 }
@@ -144,6 +145,9 @@ func (a ConfigAPI) updateSIP(_ *gin.Context, in *updateSIPInput) (gin.H, error) 
 	}
 	if next.DeviceHistory.MaxDays < 0 || next.DeviceHistory.MaxDays > 3650 {
 		return nil, reason.ErrBadRequest.WithMsg("设备历史保留天数应在 0–3650 之间")
+	}
+	if err := conf.ValidateSignalDigestConfig(next.SignalDigest); err != nil {
+		return nil, reason.ErrBadRequest.WithMsg(err.Error())
 	}
 	if a.uc != nil && a.uc.SipServer != nil {
 		if err := a.uc.SipServer.ValidateCascadeConfig(next); err != nil {
@@ -184,6 +188,11 @@ func mergeSIPUpdate(current conf.SIP, in *updateSIPInput) conf.SIP {
 		next.Upstreams = append([]conf.SIPUpstream(nil), current.Upstreams...)
 	} else {
 		next.Upstreams = append([]conf.SIPUpstream(nil), (*in.Upstreams)...)
+	}
+	if in.SignalDigest == nil {
+		next.SignalDigest = current.SignalDigest
+	} else {
+		next.SignalDigest = *in.SignalDigest
 	}
 	if in.Log == nil {
 		next.Log = current.Log

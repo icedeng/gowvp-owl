@@ -4881,6 +4881,14 @@
                     "type": "boolean",
                     "example": false
                 },
+                "signal_digest": {
+                    "description": "Date+Note 信令数字摘要配置",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/api.SwaggerSIPSignalDigest"
+                        }
+                    ]
+                },
                 "strict_source_check": {
                     "description": "是否严格校验源 IP",
                     "type": "boolean",
@@ -4934,6 +4942,41 @@
                     "description": "纳秒",
                     "type": "integer",
                     "example": 43200000000000
+                }
+            }
+        },
+        "api.SwaggerSIPSignalDigest": {
+            "type": "object",
+            "properties": {
+                "accept_legacy_hex": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "algorithm": {
+                    "type": "string",
+                    "example": "MD5"
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "encoding": {
+                    "type": "string",
+                    "example": "base64"
+                },
+                "required": {
+                    "description": "强制模式；同时启用出站签名并拒绝缺失或验签失败的入站报文",
+                    "type": "boolean",
+                    "example": false
+                },
+                "seed": {
+                    "type": "string",
+                    "example": "shared-secret"
+                },
+                "window": {
+                    "description": "纳秒",
+                    "type": "integer",
+                    "example": 600000000000
                 }
             }
         },
@@ -5009,6 +5052,10 @@
                     "items": {
                         "type": "string"
                     }
+                },
+                "signal_digest_seed": {
+                    "type": "string",
+                    "example": "upstream-shared-secret"
                 },
                 "transport": {
                     "type": "string",

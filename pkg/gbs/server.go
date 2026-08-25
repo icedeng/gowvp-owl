@@ -169,6 +169,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 		memoryStorer: store.Store().(MemoryStorer),
 	}
 	api.svr = &c
+	svr.SetRequestSecurityResolver(api.resolveSignalDigestSecurity)
 
 	listenPlan := buildSIPListenPlan(cfg.Sip)
 	go svr.ListenUDPServer(fmt.Sprintf(":%d", cfg.Sip.Port))
