@@ -150,6 +150,8 @@ type DirectTCPDownloadManager struct {
 	deviceCount map[string]int
 	activeCount int
 	pendingOpts *DirectTCPDownloadOptions
+	closed      bool
+	wg          sync.WaitGroup
 }
 
 func NewDirectTCPDownloadManager(opts DirectTCPDownloadOptions) *DirectTCPDownloadManager {
@@ -201,6 +203,10 @@ func (m *DirectTCPDownloadManager) Reconfigure(opts DirectTCPDownloadOptions) {
 	}
 	opts = normalizeDirectTCPDownloadOptions(opts)
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
 	if m.activeCount > 0 {
 		m.pendingOpts = &opts
 	} else {
@@ -227,7 +233,11 @@ func (m *DirectTCPDownloadManager) Start(parent context.Context, req DirectTCPDo
 	}
 	m.mu.RLock()
 	opts := m.opts
+	closed := m.closed
 	m.mu.RUnlock()
+	if closed {
+		return errors.New("direct TCP download manager is closed")
+	}
 	if req.FileSizeKnown && req.FileSize > opts.MaxFileSize {
 		return fmt.Errorf("direct TCP download file size %d exceeds limit %d", req.FileSize, opts.MaxFileSize)
 	}
@@ -242,6 +252,11 @@ func (m *DirectTCPDownloadManager) Start(parent context.Context, req DirectTCPDo
 	session := &directTCPDownloadSession{request: req, opts: opts, ctx: ctx, cancel: cancel, done: make(chan struct{})}
 
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		cancel()
+		return errors.New("direct TCP download manager is closed")
+	}
 	if _, exists := m.active[req.SessionID]; exists {
 		m.mu.Unlock()
 		cancel()
@@ -270,9 +285,13 @@ func (m *DirectTCPDownloadManager) Start(parent context.Context, req DirectTCPDo
 		StartedAt:     now,
 		UpdatedAt:     now,
 	}
+	m.wg.Add(1)
 	m.mu.Unlock()
 
-	go m.run(session)
+	go func() {
+		defer m.wg.Done()
+		m.run(session)
+	}()
 	return nil
 }
 
@@ -364,6 +383,24 @@ func (m *DirectTCPDownloadManager) CancelAll() int {
 	return len(sessions)
 }
 
+// Shutdown 永久停止管理器，取消并等待全部活动下载退出。
+func (m *DirectTCPDownloadManager) Shutdown() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.closed = true
+	sessions := make([]*directTCPDownloadSession, 0, len(m.active))
+	for _, session := range m.active {
+		sessions = append(sessions, session)
+	}
+	m.mu.Unlock()
+	for _, session := range sessions {
+		session.requestCancel()
+	}
+	m.wg.Wait()
+}
+
 // CancelDevice 取消指定设备的全部活动下载，其他设备不受影响。
 func (m *DirectTCPDownloadManager) CancelDevice(deviceID string) int {
 	if m == nil {
@@ -428,14 +465,19 @@ func (m *DirectTCPDownloadManager) run(session *directTCPDownloadSession) {
 	defer conn.Close()
 
 	watchDone := make(chan struct{})
+	watchExited := make(chan struct{})
 	go func() {
+		defer close(watchExited)
 		select {
 		case <-session.ctx.Done():
 			session.closeConn()
 		case <-watchDone:
 		}
 	}()
-	defer close(watchDone)
+	defer func() {
+		close(watchDone)
+		<-watchExited
+	}()
 
 	root, err := filepath.Abs(opts.StorageDir)
 	if err != nil {

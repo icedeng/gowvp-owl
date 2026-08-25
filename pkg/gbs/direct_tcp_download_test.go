@@ -327,6 +327,95 @@ func TestDirectTCPDownloadManagerTerminalRaceIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestDirectTCPDownloadManagerShutdownWaitsAndRejectsNewDownloads(t *testing.T) {
+	serverRelease := make(chan struct{})
+	address := startDirectTCPFixture(t, func(net.Conn) { <-serverRelease })
+	t.Cleanup(func() { close(serverRelease) })
+	manager := newTestDirectTCPManager(t)
+	finishStarted := make(chan struct{})
+	finishRelease := make(chan struct{})
+	req := directTCPRequest("shutdown", address)
+	req.OnFinish = func(DirectTCPDownloadState) {
+		close(finishStarted)
+		<-finishRelease
+	}
+	startDirectTCPTestDownload(t, manager, req)
+	waitDirectTCPReceiving(t, manager, req.SessionID)
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		manager.Shutdown()
+		close(shutdownDone)
+	}()
+	select {
+	case <-finishStarted:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not cancel the active download")
+	}
+	select {
+	case <-shutdownDone:
+		t.Fatal("shutdown returned before the active download exited")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(finishRelease)
+	select {
+	case <-shutdownDone:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not return after the active download exited")
+	}
+
+	state, ok := manager.State(req.SessionID)
+	if !ok || state.Status != directTCPStatusCancelled {
+		t.Fatalf("shutdown state = %+v, exists=%v", state, ok)
+	}
+	if err := manager.Start(context.Background(), directTCPRequest("after-shutdown", address)); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("start after shutdown error = %v", err)
+	}
+	manager.Shutdown()
+}
+
+func TestGB28181APICloseWaitsForDirectTCPDownloads(t *testing.T) {
+	serverRelease := make(chan struct{})
+	address := startDirectTCPFixture(t, func(net.Conn) { <-serverRelease })
+	t.Cleanup(func() { close(serverRelease) })
+	manager := newTestDirectTCPManager(t)
+	finishStarted := make(chan struct{})
+	finishRelease := make(chan struct{})
+	req := directTCPRequest("api-close", address)
+	req.OnFinish = func(DirectTCPDownloadState) {
+		close(finishStarted)
+		<-finishRelease
+	}
+	startDirectTCPTestDownload(t, manager, req)
+	waitDirectTCPReceiving(t, manager, req.SessionID)
+
+	api := &GB28181API{directDownloads: manager, lifecycleDone: make(chan struct{})}
+	closeDone := make(chan struct{})
+	go func() {
+		api.close()
+		close(closeDone)
+	}()
+	select {
+	case <-finishStarted:
+	case <-time.After(time.Second):
+		t.Fatal("GB28181 close did not cancel the direct TCP download")
+	}
+	select {
+	case <-closeDone:
+		t.Fatal("GB28181 close returned before the direct TCP download exited")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(finishRelease)
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("GB28181 close did not wait for the direct TCP download")
+	}
+	if err := manager.Start(context.Background(), directTCPRequest("after-api-close", address)); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("start after GB28181 close error = %v", err)
+	}
+}
+
 func TestDirectTCPDownloadManagerDefersReconfigureUntilIdle(t *testing.T) {
 	release := make(chan struct{})
 	address := startDirectTCPFixture(t, func(net.Conn) { <-release })

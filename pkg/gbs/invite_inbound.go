@@ -785,7 +785,7 @@ func (g *GB28181API) close() {
 		g.closeCascadeVoiceSessions()
 		g.closeVoiceSessions()
 		if g.directDownloads != nil {
-			g.directDownloads.CancelAll()
+			g.directDownloads.Shutdown()
 		}
 		g.closeRemainingMediaSessions()
 	})
