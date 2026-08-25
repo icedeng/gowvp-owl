@@ -138,3 +138,28 @@ func TestUpgradeAndSnapshotStateCleanupConcurrent(t *testing.T) {
 	}()
 	workers.Wait()
 }
+
+func TestUpgradeFinalNotificationOutranksLateControlResponse(t *testing.T) {
+	api := &GB28181API{}
+	sessionID := "upgrade-final-first-00000000000001"
+	api.storeUpgradeState(UpgradeState{
+		DeviceID: gb10DeviceID, SessionID: sessionID, Status: "completed", Result: "OK", Firmware: "V2",
+	})
+	for _, status := range []string{"accepted", "rejected"} {
+		api.storeUpgradeState(UpgradeState{
+			DeviceID: gb10DeviceID, SessionID: sessionID, Status: status, Result: "ERROR", Firmware: "V1",
+		})
+	}
+	state, ok := api.UpgradeState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "completed" || state.Result != "OK" || state.Firmware != "V2" {
+		t.Fatalf("late control response replaced final upgrade state = %+v, %v", state, ok)
+	}
+
+	api.storeUpgradeState(UpgradeState{
+		DeviceID: gb10DeviceID, SessionID: sessionID, Status: "failed", Result: "ERROR", FailedReason: "02",
+	})
+	state, ok = api.UpgradeState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "failed" || state.FailedReason != "02" {
+		t.Fatalf("new final notification did not update final upgrade state = %+v, %v", state, ok)
+	}
+}

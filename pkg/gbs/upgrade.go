@@ -209,9 +209,13 @@ func (g *GB28181API) storeUpgradeState(state UpgradeState) {
 		g.upgradeStates = make(map[string]UpgradeState)
 	}
 	key := upgradeStateKey(state.DeviceID, state.SessionID)
-	if current, ok := g.upgradeStates[key]; ok && isUpgradeTerminal(current.Status) && !isUpgradeTerminal(state.Status) {
-		g.upgradeStateMu.Unlock()
-		return
+	if current, ok := g.upgradeStates[key]; ok {
+		// DeviceUpgradeResult 是标准定义的最终通知，优先级高于控制应答。
+		// 防止通知先到、迟到的 accepted/rejected 再覆盖 completed/failed。
+		if isUpgradeFinal(current.Status) && !isUpgradeFinal(state.Status) {
+			g.upgradeStateMu.Unlock()
+			return
+		}
 	}
 	g.upgradeStates[key] = state
 	if len(g.upgradeStates) > maxUpgradeStates {
@@ -228,13 +232,8 @@ func (g *GB28181API) storeUpgradeState(state UpgradeState) {
 	g.upgradeStateMu.Unlock()
 }
 
-func isUpgradeTerminal(status string) bool {
-	switch status {
-	case "completed", "failed", "rejected":
-		return true
-	default:
-		return false
-	}
+func isUpgradeFinal(status string) bool {
+	return status == "completed" || status == "failed"
 }
 
 // UpgradeState 返回指定设备和会话的最新升级状态。
