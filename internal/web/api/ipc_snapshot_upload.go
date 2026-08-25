@@ -30,6 +30,9 @@ func readGBSnapshotUploadBody(w http.ResponseWriter, r *http.Request) ([]byte, s
 	if err != nil {
 		return nil, "", err
 	}
+	if len(payload) == 0 {
+		return nil, "", fmt.Errorf("snapshot payload is empty")
+	}
 	if len(payload) > maxSnapshotBytes {
 		return nil, "", errGBSnapshotUploadTooLarge
 	}

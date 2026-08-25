@@ -36,6 +36,13 @@ func TestReadGBSnapshotUploadBodyEnforcesLimits(t *testing.T) {
 	}
 }
 
+func TestReadGBSnapshotUploadBodyRejectsEmptyPayload(t *testing.T) {
+	request := httptest.NewRequest("POST", "/gb28181/snapshot", bytes.NewReader(nil))
+	if _, _, err := readGBSnapshotUploadBody(httptest.NewRecorder(), request); err == nil {
+		t.Fatal("empty snapshot upload was accepted")
+	}
+}
+
 func TestReadGBSnapshotUploadBodyExtractsMultipartFile(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)

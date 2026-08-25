@@ -689,12 +689,13 @@ func (a IPCAPI) gbSnapshotUpload(c *gin.Context) {
 		}
 		if err := writeCover(a.uc.Conf.ConfigDir, coverKey, payload); err != nil {
 			slog.ErrorContext(c.Request.Context(), "write cover", "err", err, "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID)
-		} else {
-			if sessionID != "" {
-				a.uc.SipServer.MarkSnapshotUploaded(deviceID, sessionID)
-			}
-			slog.InfoContext(c.Request.Context(), "GBSNAPSHOT_UPLOAD_OK", "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID, "size", len(payload), "payload_type", payloadType, "content_type", detectedContentType)
+			c.JSON(http.StatusInternalServerError, gin.H{"msg": "save snapshot failed"})
+			return
 		}
+		if sessionID != "" {
+			a.uc.SipServer.MarkSnapshotUploaded(deviceID, sessionID)
+		}
+		slog.InfoContext(c.Request.Context(), "GBSNAPSHOT_UPLOAD_OK", "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID, "size", len(payload), "payload_type", payloadType, "content_type", detectedContentType)
 	}
 	c.JSON(200, gin.H{"msg": "ok"})
 }
