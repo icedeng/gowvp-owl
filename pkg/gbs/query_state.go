@@ -51,16 +51,24 @@ type queryStateCleanupEntry struct {
 
 // DeviceStatusData 对应 DeviceStatus 查询结果。
 type DeviceStatusData struct {
-	CmdType        string   `json:"cmd_type"`
-	SN             int      `json:"sn"`
-	DeviceID       string   `json:"device_id"`
-	Result         string   `json:"result,omitempty"`
-	Online         string   `json:"online,omitempty"`
-	Status         string   `json:"status,omitempty"`
-	DeviceTime     string   `json:"device_time,omitempty"`
-	Encode         string   `json:"encode,omitempty"`
-	Record         string   `json:"record,omitempty"`
-	FaultDeviceIDs []string `json:"fault_device_ids,omitempty"`
+	CmdType        string                  `json:"cmd_type"`
+	SN             int                     `json:"sn"`
+	DeviceID       string                  `json:"device_id"`
+	Result         string                  `json:"result,omitempty"`
+	Online         string                  `json:"online,omitempty"`
+	Status         string                  `json:"status,omitempty"`
+	Reason         string                  `json:"reason,omitempty"`
+	DeviceTime     string                  `json:"device_time,omitempty"`
+	Encode         string                  `json:"encode,omitempty"`
+	Record         string                  `json:"record,omitempty"`
+	FaultDeviceIDs []string                `json:"fault_device_ids,omitempty"`
+	AlarmStatuses  []DeviceAlarmStatusData `json:"alarm_statuses,omitempty"`
+}
+
+// DeviceAlarmStatusData 对应 DeviceStatus Alarmstatus 中的单个报警设备状态。
+type DeviceAlarmStatusData struct {
+	DeviceID   string `json:"device_id,omitempty"`
+	DutyStatus string `json:"duty_status,omitempty"`
 }
 
 // PresetItemData 是预置位查询条目。
@@ -197,6 +205,7 @@ func cloneQueryState(state *QueryState) *QueryState {
 	out.DeviceStatus = cloneValue(state.DeviceStatus)
 	if out.DeviceStatus != nil {
 		out.DeviceStatus.FaultDeviceIDs = append([]string(nil), state.DeviceStatus.FaultDeviceIDs...)
+		out.DeviceStatus.AlarmStatuses = append([]DeviceAlarmStatusData(nil), state.DeviceStatus.AlarmStatuses...)
 	}
 	out.Presets = append([]PresetItemData(nil), state.Presets...)
 	out.HomePosition = cloneValue(state.HomePosition)
@@ -650,15 +659,30 @@ func (g *GB28181API) applyDeviceStatus(deviceID string, in *DeviceStatusData) {
 }
 
 type queryDeviceStatusXML struct {
-	CmdType    string `xml:"CmdType"`
-	SN         int    `xml:"SN"`
-	DeviceID   string `xml:"DeviceID"`
-	Result     string `xml:"Result"`
-	Online     string `xml:"Online"`
-	Status     string `xml:"Status"`
-	DeviceTime string `xml:"DeviceTime"`
-	Encode     string `xml:"Encode"`
-	Record     string `xml:"Record"`
+	CmdType    string                `xml:"CmdType"`
+	SN         int                   `xml:"SN"`
+	DeviceID   string                `xml:"DeviceID"`
+	Result     string                `xml:"Result"`
+	Online     string                `xml:"Online"`
+	Status     string                `xml:"Status"`
+	Reason     string                `xml:"Reason"`
+	DeviceTime *string               `xml:"DeviceTime"`
+	Encode     *string               `xml:"Encode"`
+	Record     *string               `xml:"Record"`
+	Alarm      *deviceAlarmStatusXML `xml:"Alarmstatus"`
+}
+
+type deviceAlarmStatusXML struct {
+	Num      *int                       `xml:"Num,attr"`
+	LowerNum *int                       `xml:"num,attr"`
+	Items    []deviceAlarmStatusItemXML `xml:"Item"`
+}
+
+type deviceAlarmStatusItemXML struct {
+	DeviceID         *string `xml:"DeviceID"`
+	Status           *string `xml:"Status"`
+	StatusDutyStatus *string `xml:"StatusDutyStatus"`
+	DutyStatus       *string `xml:"DutyStatus"`
 }
 
 func decodeDeviceStatusData(body []byte) *DeviceStatusData {
@@ -666,17 +690,47 @@ func decodeDeviceStatusData(body []byte) *DeviceStatusData {
 	if err := sip.XMLDecode(body, &msg); err != nil {
 		return nil
 	}
-	return &DeviceStatusData{
-		CmdType:    strings.TrimSpace(msg.CmdType),
-		SN:         msg.SN,
-		DeviceID:   strings.TrimSpace(msg.DeviceID),
-		Result:     strings.TrimSpace(msg.Result),
-		Online:     strings.TrimSpace(msg.Online),
-		Status:     strings.TrimSpace(msg.Status),
-		DeviceTime: strings.TrimSpace(msg.DeviceTime),
-		Encode:     strings.TrimSpace(msg.Encode),
-		Record:     strings.TrimSpace(msg.Record),
+	data := &DeviceStatusData{
+		CmdType:  strings.TrimSpace(msg.CmdType),
+		SN:       msg.SN,
+		DeviceID: strings.TrimSpace(msg.DeviceID),
+		Result:   strings.TrimSpace(msg.Result),
+		Online:   strings.TrimSpace(msg.Online),
+		Status:   strings.TrimSpace(msg.Status),
+		Reason:   strings.TrimSpace(msg.Reason),
 	}
+	if msg.DeviceTime != nil {
+		data.DeviceTime = strings.TrimSpace(*msg.DeviceTime)
+	}
+	if msg.Encode != nil {
+		data.Encode = strings.TrimSpace(*msg.Encode)
+	}
+	if msg.Record != nil {
+		data.Record = strings.TrimSpace(*msg.Record)
+	}
+	if msg.Alarm != nil {
+		data.AlarmStatuses = make([]DeviceAlarmStatusData, 0, len(msg.Alarm.Items))
+		for _, item := range msg.Alarm.Items {
+			deviceID := ""
+			if item.DeviceID != nil {
+				deviceID = strings.TrimSpace(*item.DeviceID)
+			}
+			data.AlarmStatuses = append(data.AlarmStatuses, DeviceAlarmStatusData{
+				DeviceID:   deviceID,
+				DutyStatus: strings.TrimSpace(firstNonNilString(item.DutyStatus, item.StatusDutyStatus, item.Status)),
+			})
+		}
+	}
+	return data
+}
+
+func firstNonNilString(values ...*string) string {
+	for _, value := range values {
+		if value != nil {
+			return *value
+		}
+	}
+	return ""
 }
 
 type presetQueryXML struct {
@@ -865,6 +919,23 @@ func decodeSDCardStatusData(body []byte) []SDCardItemData {
 
 func validateGenericQueryPayload(version GBProtocolVersion, cmdType string, body []byte) error {
 	switch cmdType {
+	case "DeviceStatus":
+		var msg queryDeviceStatusXML
+		if err := sip.XMLDecode(body, &msg); err != nil {
+			return ErrXMLDecode
+		}
+		if msg.Encode != nil && !equalFoldAny(strings.TrimSpace(*msg.Encode), "ON", "OFF") {
+			return fmt.Errorf("DeviceStatus Encode must be ON or OFF")
+		}
+		if msg.Record != nil && !equalFoldAny(strings.TrimSpace(*msg.Record), "ON", "OFF") {
+			return fmt.Errorf("DeviceStatus Record must be ON or OFF")
+		}
+		if msg.DeviceTime != nil && !validGBDateTime(*msg.DeviceTime) {
+			return fmt.Errorf("DeviceStatus DeviceTime must be dateTime")
+		}
+		if err := validateDeviceAlarmStatus(version, msg.Alarm); err != nil {
+			return err
+		}
 	case "PresetQuery":
 		var msg presetQueryXML
 		if err := sip.XMLDecode(body, &msg); err != nil {
@@ -1003,6 +1074,49 @@ func validateGenericQueryPayload(version GBProtocolVersion, cmdType string, body
 			if *item.Capacity < 0 || *item.FreeSpace < 0 || *item.FreeSpace > *item.Capacity {
 				return fmt.Errorf("SDCardStatus capacity values are invalid")
 			}
+		}
+	}
+	return nil
+}
+
+func validateDeviceAlarmStatus(version GBProtocolVersion, alarm *deviceAlarmStatusXML) error {
+	if alarm == nil {
+		return nil
+	}
+	if alarm.Num != nil && alarm.LowerNum != nil {
+		return fmt.Errorf("DeviceStatus Alarmstatus has duplicate Num")
+	}
+	num := alarm.Num
+	if num == nil {
+		num = alarm.LowerNum
+	}
+	if num == nil || *num < 0 || *num != len(alarm.Items) {
+		return fmt.Errorf("DeviceStatus Alarmstatus count mismatch")
+	}
+	for _, item := range alarm.Items {
+		if item.DeviceID != nil && !isGBDeviceIdentifier(strings.TrimSpace(*item.DeviceID)) {
+			return fmt.Errorf("DeviceStatus Alarmstatus has invalid DeviceID")
+		}
+		var status *string
+		switch version {
+		case GBVersion10:
+			status = item.Status
+			if item.StatusDutyStatus != nil || item.DutyStatus != nil {
+				return fmt.Errorf("DeviceStatus Alarmstatus field does not match protocol")
+			}
+		case GBVersion11:
+			status = item.StatusDutyStatus
+			if item.Status != nil || item.DutyStatus != nil {
+				return fmt.Errorf("DeviceStatus Alarmstatus field does not match protocol")
+			}
+		default:
+			status = item.DutyStatus
+			if item.Status != nil || item.StatusDutyStatus != nil {
+				return fmt.Errorf("DeviceStatus Alarmstatus field does not match protocol")
+			}
+		}
+		if status != nil && !equalFoldAny(strings.TrimSpace(*status), "ONDUTY", "OFFDUTY", "ALARM") {
+			return fmt.Errorf("DeviceStatus Alarmstatus has invalid duty status")
 		}
 	}
 	return nil

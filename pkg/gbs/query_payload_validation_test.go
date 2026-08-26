@@ -32,6 +32,13 @@ func TestGenericQueryPayloadRejectsInvalidDataBeforeSideEffects(t *testing.T) {
 		{name: "sd missing sum", cmdType: "SDCardStatus", payload: `<SDCardStatusInfo Num="0"/>`},
 		{name: "sd invalid status", cmdType: "SDCardStatus", payload: `<SumNum>1</SumNum><SDCardStatusInfo Num="1"><Item><ID>1</ID><HddName>card</HddName><Status>ready</Status><Capacity>10</Capacity><FreeSpace>5</FreeSpace></Item></SDCardStatusInfo>`},
 		{name: "sd invalid capacity", cmdType: "SDCardStatus", payload: `<SumNum>1</SumNum><SDCardStatusInfo Num="1"><Item><ID>1</ID><HddName>card</HddName><Status>ok</Status><Capacity>10</Capacity><FreeSpace>11</FreeSpace></Item></SDCardStatusInfo>`},
+		{name: "device status invalid encode", cmdType: "DeviceStatus", payload: `<Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Encode>YES</Encode>`},
+		{name: "device status invalid record", cmdType: "DeviceStatus", payload: `<Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Record>YES</Record>`},
+		{name: "device status invalid time", cmdType: "DeviceStatus", payload: `<Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><DeviceTime>invalid</DeviceTime>`},
+		{name: "device status missing alarm count", cmdType: "DeviceStatus", payload: `<Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Alarmstatus/>`},
+		{name: "device status alarm count mismatch", cmdType: "DeviceStatus", payload: `<Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Alarmstatus Num="2"><Item/></Alarmstatus>`},
+		{name: "device status invalid alarm id", cmdType: "DeviceStatus", payload: `<Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Alarmstatus Num="1"><Item><DeviceID>bad</DeviceID><DutyStatus>ONDUTY</DutyStatus></Item></Alarmstatus>`},
+		{name: "device status invalid duty status", cmdType: "DeviceStatus", payload: `<Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Alarmstatus Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><DutyStatus>READY</DutyStatus></Item></Alarmstatus>`},
 	}
 
 	for index, test := range tests {
@@ -52,6 +59,39 @@ func TestGenericQueryPayloadRejectsInvalidDataBeforeSideEffects(t *testing.T) {
 			}
 			if _, ok := api.GetQueryState(gb10DeviceID); ok {
 				t.Fatal("invalid payload changed query state")
+			}
+		})
+	}
+}
+
+func TestDeviceStatusPayloadUsesVersionSpecificAlarmField(t *testing.T) {
+	tests := []struct {
+		version GBProtocolVersion
+		count   string
+		field   string
+	}{
+		{version: GBVersion10, count: "Num", field: "Status"},
+		{version: GBVersion11, count: "Num", field: "StatusDutyStatus"},
+		{version: GBVersion20, count: "num", field: "DutyStatus"},
+		{version: GBVersion30, count: "Num", field: "DutyStatus"},
+	}
+	for _, test := range tests {
+		t.Run(string(test.version), func(t *testing.T) {
+			body := []byte(`<Response><CmdType>DeviceStatus</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID +
+				`</DeviceID><Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Encode>ON</Encode><Record>OFF</Record>` +
+				`<DeviceTime>2026-08-25T10:00:00+08:00</DeviceTime><Alarmstatus ` + test.count + `="1"><Item><DeviceID>` + gb10ChannelID +
+				`</DeviceID><` + test.field + `>ONDUTY</` + test.field + `></Item></Alarmstatus></Response>`)
+			if err := validateGenericQueryPayload(test.version, "DeviceStatus", body); err != nil {
+				t.Fatalf("valid %s DeviceStatus rejected: %v", test.version, err)
+			}
+			data := decodeDeviceStatusData(body)
+			if data == nil || data.Encode != "ON" || data.Record != "OFF" || data.DeviceTime == "" ||
+				len(data.AlarmStatuses) != 1 || data.AlarmStatuses[0].DeviceID != gb10ChannelID || data.AlarmStatuses[0].DutyStatus != "ONDUTY" {
+				t.Fatalf("decoded %s DeviceStatus = %+v", test.version, data)
+			}
+			wrong := strings.Replace(string(body), "<"+test.field+">ONDUTY</"+test.field+">", "<DutyStatus>ONDUTY</DutyStatus>", 1)
+			if test.field != "DutyStatus" && validateGenericQueryPayload(test.version, "DeviceStatus", []byte(wrong)) == nil {
+				t.Fatalf("%s accepted DutyStatus from another protocol profile", test.version)
 			}
 		})
 	}

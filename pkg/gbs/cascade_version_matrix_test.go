@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"encoding/xml"
 	"net/http"
 	"strconv"
 	"strings"
@@ -60,6 +61,17 @@ func TestCascadeFourVersionProtocolMatrix(t *testing.T) {
 			}
 			if items[0].DeviceID != testExposedChannelID || items[0].ParentID != gb10DeviceID {
 				t.Fatalf("Catalog mapping = %+v", items[0])
+			}
+			alarmXML, err := xml.Marshal(cascadeAlarmStatusForVersion(test.version, 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantAlarmCount := `Num="0"`
+			if test.version == GBVersion20 {
+				wantAlarmCount = `num="0"`
+			}
+			if !strings.Contains(string(alarmXML), wantAlarmCount) {
+				t.Fatalf("DeviceStatus Alarmstatus profile = %s, want %s", alarmXML, wantAlarmCount)
 			}
 
 			if _, err := parseCascadeVideoOffer(cascadeOfferSDP("RTP/AVP", "192.0.2.30", ""), test.version, platform); err != nil {

@@ -82,7 +82,7 @@ go test ./... -count=1
 - DeviceInfo 固定 `Response` 根和必填 `OK/ERROR` 结果校验；空结果或 Notify 根不得更新父设备/子通道元数据或解除等待；
 - PresetQuery/HomePositionQuery/CruiseTrackListQuery/CruiseTrackQuery/PTZPosition/SDCardStatus 业务载荷的必填字段、列表计数、枚举、数值范围和有限浮点校验；非法载荷不能写状态、解除等待或转发订阅，2014/2016 PresetQuery 仍兼容无 `SumNum` 应答；
 - DeviceInfo 非法根、命令、SN 或未知目标不得覆盖父设备/子通道信息或解除等待；
-- DeviceStatus 缺失或非法 Result、Online、Status 枚举不得写状态或解除等待；失败结果及子通道状态不得改写父设备在线运行态；
+- DeviceStatus 缺失或非法 Result、Online、Status 枚举不得写状态或解除等待；可选 Encode/Record、DeviceTime 及四版本 Alarmstatus 计数、设备编码、枚举和版本字段名同样必须在副作用前校验；失败结果及子通道状态不得改写父设备在线运行态；
 - DeviceControl 与 Broadcast 非法根、固定命令、SN、结果枚举、未知目标或不匹配在途请求目标不得解除业务等待；
 - Keepalive 非法根、命令、SN、源设备、状态枚举或故障设备编码不得补载设备、改在线态、写查询状态或触发 Catalog；空 Status 及 ON/OFF 兼容路径须保留；
 - Alarm 非法根、命令、SN、目标、级别、方式、时间或非有限经纬度不得写附录 A.4、触发业务回调或向订阅方转发；

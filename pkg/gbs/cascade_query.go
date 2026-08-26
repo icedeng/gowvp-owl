@@ -132,7 +132,15 @@ type cascadeDeviceStatusResponse struct {
 }
 
 type cascadeAlarmStatus struct {
-	Num int `xml:"Num,attr"`
+	Num      *int `xml:"Num,attr,omitempty"`
+	LowerNum *int `xml:"num,attr,omitempty"`
+}
+
+func cascadeAlarmStatusForVersion(version GBProtocolVersion, count int) cascadeAlarmStatus {
+	if version == GBVersion20 {
+		return cascadeAlarmStatus{LowerNum: &count}
+	}
+	return cascadeAlarmStatus{Num: &count}
 }
 
 type cascadeQueryErrorResponse struct {
@@ -977,13 +985,13 @@ func (g *GB28181API) respondCascadeDeviceStatus(ctx context.Context, worker *cas
 		return sendCascadeXML(ctx, worker, cascadeDeviceStatusResponse{
 			CmdType: "DeviceStatus", SN: query.SN, DeviceID: query.DeviceID,
 			Result: "OK", Online: online, Status: status, Encode: encode, Record: "OFF",
-			DeviceTime: sip.FormatGBTime(time.Now(), "2006-01-02T15:04:05"), Alarm: cascadeAlarmStatus{},
+			DeviceTime: sip.FormatGBTime(time.Now(), "2006-01-02T15:04:05"), Alarm: cascadeAlarmStatusForVersion(worker.protocolVersion(), 0),
 		})
 	}
 	return sendCascadeXML(ctx, worker, cascadeDeviceStatusResponse{
 		CmdType: "DeviceStatus", SN: query.SN, DeviceID: worker.platform.localID,
 		Result: "OK", Online: "ONLINE", Status: "OK", Encode: "ON", Record: "OFF",
-		DeviceTime: sip.FormatGBTime(time.Now(), "2006-01-02T15:04:05"), Alarm: cascadeAlarmStatus{},
+		DeviceTime: sip.FormatGBTime(time.Now(), "2006-01-02T15:04:05"), Alarm: cascadeAlarmStatusForVersion(worker.protocolVersion(), 0),
 	})
 }
 
