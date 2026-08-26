@@ -20,18 +20,19 @@ import (
 // 1. 用于补齐 9.5/9.6 的结构化语义。
 // 2. 为上层接口提供可复用的解析结果，避免重复 XML 解析。
 type QueryState struct {
-	UpdatedAt      time.Time            `json:"updated_at"`
-	DeviceStatus   *DeviceStatusData    `json:"device_status,omitempty"`
-	Presets        []PresetItemData     `json:"presets,omitempty"`
-	HomePosition   *HomePositionData    `json:"home_position,omitempty"`
-	CruiseTracks   []CruiseTrackData    `json:"cruise_tracks,omitempty"`
-	CruiseTrack    *CruiseTrackData     `json:"cruise_track,omitempty"`
-	PTZPosition    *PTZPositionData     `json:"ptz_position,omitempty"`
-	SDCards        []SDCardItemData     `json:"sd_cards,omitempty"`
-	MobilePosition *MobilePositionData  `json:"mobile_position,omitempty"`
-	VideoUpload    *VideoUploadData     `json:"video_upload,omitempty"`
-	ConfigDownload *ConfigDownloadState `json:"config_download,omitempty"`
-	DeviceConfig   *DeviceConfigState   `json:"device_config,omitempty"`
+	UpdatedAt       time.Time            `json:"updated_at"`
+	DeviceStatus    *DeviceStatusData    `json:"device_status,omitempty"`
+	Presets         []PresetItemData     `json:"presets,omitempty"`
+	HomePosition    *HomePositionData    `json:"home_position,omitempty"`
+	CruiseTracks    []CruiseTrackData    `json:"cruise_tracks,omitempty"`
+	CruiseTrack     *CruiseTrackData     `json:"cruise_track,omitempty"`
+	PTZPosition     *PTZPositionData     `json:"ptz_position,omitempty"`
+	SDCards         []SDCardItemData     `json:"sd_cards,omitempty"`
+	MobilePosition  *MobilePositionData  `json:"mobile_position,omitempty"`
+	MobilePositions []MobilePositionData `json:"mobile_positions,omitempty"`
+	VideoUpload     *VideoUploadData     `json:"video_upload,omitempty"`
+	ConfigDownload  *ConfigDownloadState `json:"config_download,omitempty"`
+	DeviceConfig    *DeviceConfigState   `json:"device_config,omitempty"`
 	// AppendixA4 保存附录 A.4 扩展对象结构化快照。
 	AppendixA4 []AppendixA4Object `json:"appendix_a4,omitempty"`
 }
@@ -109,12 +110,15 @@ type SDCardItemData struct {
 
 // MobilePositionData 是移动位置状态。
 type MobilePositionData struct {
-	Time      string   `json:"time,omitempty"`
-	Longitude *float64 `json:"longitude,omitempty"`
-	Latitude  *float64 `json:"latitude,omitempty"`
-	Speed     *float64 `json:"speed,omitempty"`
-	Direction *float64 `json:"direction,omitempty"`
-	Altitude  *float64 `json:"altitude,omitempty"`
+	DeviceID    string   `json:"device_id,omitempty"`
+	Time        string   `json:"time,omitempty"`
+	CaptureTime string   `json:"capture_time,omitempty"`
+	Longitude   *float64 `json:"longitude,omitempty"`
+	Latitude    *float64 `json:"latitude,omitempty"`
+	Speed       *float64 `json:"speed,omitempty"`
+	Direction   *float64 `json:"direction,omitempty"`
+	Altitude    *float64 `json:"altitude,omitempty"`
+	Height      *float64 `json:"height,omitempty"`
 }
 
 // VideoUploadData 是 2022 A.2.5.8 设备实时视音频回传通知。
@@ -223,7 +227,9 @@ func cloneQueryState(state *QueryState) *QueryState {
 		out.MobilePosition.Speed = cloneValue(state.MobilePosition.Speed)
 		out.MobilePosition.Direction = cloneValue(state.MobilePosition.Direction)
 		out.MobilePosition.Altitude = cloneValue(state.MobilePosition.Altitude)
+		out.MobilePosition.Height = cloneValue(state.MobilePosition.Height)
 	}
+	out.MobilePositions = cloneMobilePositions(state.MobilePositions)
 	out.VideoUpload = cloneValue(state.VideoUpload)
 	if out.VideoUpload != nil {
 		out.VideoUpload.Longitude = cloneValue(state.VideoUpload.Longitude)
@@ -236,6 +242,19 @@ func cloneQueryState(state *QueryState) *QueryState {
 	}
 	out.AppendixA4 = cloneAppendixA4Objects(state.AppendixA4)
 	return &out
+}
+
+func cloneMobilePositions(items []MobilePositionData) []MobilePositionData {
+	out := append([]MobilePositionData(nil), items...)
+	for index := range out {
+		out[index].Longitude = cloneValue(items[index].Longitude)
+		out[index].Latitude = cloneValue(items[index].Latitude)
+		out[index].Speed = cloneValue(items[index].Speed)
+		out[index].Direction = cloneValue(items[index].Direction)
+		out[index].Altitude = cloneValue(items[index].Altitude)
+		out[index].Height = cloneValue(items[index].Height)
+	}
+	return out
 }
 
 func cloneValue[T any](value *T) *T {

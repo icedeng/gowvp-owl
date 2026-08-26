@@ -2,8 +2,11 @@ package gbs
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
@@ -92,11 +95,40 @@ func recordQueryItemsResult(result multiResponseResult[RecordItem]) ([]RecordIte
 
 // MessageRecordInfoResponse 目录列表
 type MessageRecordInfoResponse struct {
-	CmdType  string       `xml:"CmdType"`
-	SN       int          `xml:"SN"`
-	DeviceID string       `xml:"DeviceID"`
-	SumNum   int          `xml:"SumNum"`
-	Item     []RecordItem `xml:"RecordList>Item"`
+	XMLName   xml.Name
+	CmdType   string       `xml:"CmdType"`
+	SN        int          `xml:"SN"`
+	DeviceID  string       `xml:"DeviceID"`
+	Name      string       `xml:"Name"`
+	SumNum    int          `xml:"SumNum"`
+	HasSumNum bool         `xml:"-"`
+	Item      []RecordItem `xml:"-"`
+	ListNum   *int         `xml:"-"`
+}
+
+func (m *MessageRecordInfoResponse) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
+	var value struct {
+		CmdType  string `xml:"CmdType"`
+		SN       int    `xml:"SN"`
+		DeviceID string `xml:"DeviceID"`
+		Name     string `xml:"Name"`
+		SumNum   *int   `xml:"SumNum"`
+		List     struct {
+			Num  *int         `xml:"Num,attr"`
+			Item []RecordItem `xml:"Item"`
+		} `xml:"RecordList"`
+	}
+	if err := decoder.DecodeElement(&value, &start); err != nil {
+		return err
+	}
+	*m = MessageRecordInfoResponse{
+		XMLName: start.Name, CmdType: value.CmdType, SN: value.SN, DeviceID: value.DeviceID, Name: value.Name,
+		Item: value.List.Item, ListNum: value.List.Num,
+	}
+	if value.SumNum != nil {
+		m.SumNum, m.HasSumNum = *value.SumNum, true
+	}
+	return nil
 }
 
 // RecordItem 目录详情
@@ -122,17 +154,71 @@ func (g *GB28181API) sipMessageRecordInfo(ctx *sip.Context) {
 		return
 	}
 
-	if g.recordResponses != nil {
-		recordKey := buildMultiResponseKey(message.DeviceID, "RecordInfo", message.SN)
-		if !g.recordResponses.Add(recordKey, message.SumNum, message.Item) {
-			aliasKey := buildMultiResponseKey(ctx.DeviceID, "RecordInfo", message.SN)
-			if value, ok := g.recordResponseAliases.Load(aliasKey); ok {
-				g.recordResponses.Add(value.(string), message.SumNum, message.Item)
-			}
-		}
+	message.CmdType = strings.TrimSpace(message.CmdType)
+	message.DeviceID = strings.TrimSpace(message.DeviceID)
+	message.Name = strings.TrimSpace(message.Name)
+	recordKey, expectedTarget := g.recordResponseTarget(ctx, message)
+	if err := g.validateRecordInfoEnvelope(ctx, message, expectedTarget); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
+	if g.recordResponses != nil && recordKey != "" {
+		g.recordResponses.Add(recordKey, message.SumNum, message.Item)
 	}
 
 	ctx.String(200, "OK")
+}
+
+func (g *GB28181API) recordResponseTarget(ctx *sip.Context, message *MessageRecordInfoResponse) (string, string) {
+	if g == nil || g.recordResponses == nil || message == nil {
+		return "", ""
+	}
+	directKey := buildMultiResponseKey(message.DeviceID, "RecordInfo", message.SN)
+	if g.recordResponses.Has(directKey) {
+		return directKey, message.DeviceID
+	}
+	if ctx == nil {
+		return "", ""
+	}
+	aliasKey := buildMultiResponseKey(strings.TrimSpace(ctx.DeviceID), "RecordInfo", message.SN)
+	value, ok := g.recordResponseAliases.Load(aliasKey)
+	if !ok {
+		return "", ""
+	}
+	recordKey, ok := value.(string)
+	if !ok {
+		return "", ""
+	}
+	separator := strings.IndexByte(recordKey, ':')
+	if separator <= 0 {
+		return "", ""
+	}
+	return recordKey, recordKey[:separator]
+}
+
+func (g *GB28181API) validateRecordInfoEnvelope(ctx *sip.Context, message *MessageRecordInfoResponse, expectedTarget string) error {
+	if message == nil || message.XMLName.Local != "Response" || !strings.EqualFold(message.CmdType, "RecordInfo") || message.SN <= 0 {
+		return fmt.Errorf("invalid RecordInfo envelope")
+	}
+	if !isGBDeviceIdentifier(message.DeviceID) || message.Name == "" || !message.HasSumNum || message.SumNum < 0 || message.ListNum == nil || *message.ListNum < 0 {
+		return fmt.Errorf("invalid RecordInfo response")
+	}
+	if *message.ListNum != len(message.Item) || len(message.Item) > message.SumNum {
+		return fmt.Errorf("invalid RecordInfo list count")
+	}
+	if err := g.validateAuthenticatedResponseTarget(ctx, message.DeviceID); err != nil {
+		return err
+	}
+	if expectedTarget == "" {
+		expectedTarget = message.DeviceID
+	}
+	for index := range message.Item {
+		message.Item[index].DeviceID = strings.TrimSpace(message.Item[index].DeviceID)
+		if message.Item[index].DeviceID != expectedTarget {
+			return fmt.Errorf("RecordInfo item target mismatch")
+		}
+	}
+	return nil
 }
 
 func transRecordItems(items []RecordItem, start, end int64) Records {

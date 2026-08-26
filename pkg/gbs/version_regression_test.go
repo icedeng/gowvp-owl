@@ -391,7 +391,7 @@ func TestGB30CruiseTrackQueriesDecodeStructuredState(t *testing.T) {
 }
 
 func TestGB20MobilePositionNotifyStoresStructuredState(t *testing.T) {
-	api := &GB28181API{}
+	api, _ := newVersionGateAPI(GBVersion20)
 	conn := newFlowConnection()
 	body := []byte(`<Notify><CmdType>MobilePosition</CmdType><SN>73</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Time>2026-08-25T12:00:00</Time><Longitude>120.5</Longitude><Latitude>30.25</Latitude><Speed>18.5</Speed><Direction>90</Direction></Notify>`)
 	response := runFlowHandler(t, conn, api, sip.MethodNotify, "mobile-position-notify", body, api.sipNotifyMobilePosition)

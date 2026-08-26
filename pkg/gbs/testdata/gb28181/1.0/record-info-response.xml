@@ -3,6 +3,7 @@
   <CmdType>RecordInfo</CmdType>
   <SN>3</SN>
   <DeviceID>34020000001320000002</DeviceID>
+  <Name>camera-1</Name>
   <SumNum>1</SumNum>
   <RecordList Num="1">
     <Item>

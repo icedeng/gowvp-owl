@@ -36,6 +36,8 @@ go test ./... -count=1
 - BasicParam、VideoParamConfig、AudioParamConfig、SVACEncodeConfig、SVACDecodeConfig 查询与写入报文、组合下发、SVAC XML 片段安全校验及原始响应保存；
 - MediaStatus/121 幂等收敛；
 - Catalog/RecordInfo 多响应乱序、重复、总数冲突、超时部分结果和同设备并发；
+- RecordInfo 响应包络、列表计数、目标所有权和在途通道绑定；非法分包不得进入聚合器，NVR 顶层父设备编码别名仍可映射到原查询通道；
+- MobilePosition 的 2011/2014 版本门禁、2016 单点坐标及 2022 批量 `DeviceList` 解码；非法时间、坐标、方向、计数或目标不得写状态和转发；
 - `Event: Catalog;id=...` 初始订阅、续订、取消；
 - Broadcast 通知与业务应答、接收者主动 INVITE、版本化 SDP、ZLM RTP 启停和 ACK/BYE 清理；
 - 2016/2022 对讲在设备音频流建立后复用 RTP 连接反向发送 G.711 A-law 音频；

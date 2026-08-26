@@ -87,6 +87,16 @@ func (c *multiResponseCollector[T]) Add(key string, expected int, items []T) boo
 	return true
 }
 
+func (c *multiResponseCollector[T]) Has(key string) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	_, ok := c.entries[key]
+	c.mu.Unlock()
+	return ok
+}
+
 func (c *multiResponseCollector[T]) Wait(ctx context.Context, key string) multiResponseResult[T] {
 	c.mu.Lock()
 	entry, ok := c.entries[key]

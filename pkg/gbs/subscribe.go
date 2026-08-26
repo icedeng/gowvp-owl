@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -237,25 +238,174 @@ func (g *GB28181API) sipNotifyCatalog(ctx *sip.Context) {
 
 // sipNotifyMobilePosition 处理位置订阅通知，结构化保存并转发给本级订阅方。
 func (g *GB28181API) sipNotifyMobilePosition(ctx *sip.Context) {
-	var msg struct {
-		CmdType  string `xml:"CmdType"`
-		DeviceID string `xml:"DeviceID"`
-	}
-	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err == nil {
-		deviceID := strings.TrimSpace(ctx.DeviceID)
-		if deviceID == "" {
-			deviceID = strings.TrimSpace(msg.DeviceID)
-		}
-		cmdType := strings.TrimSpace(msg.CmdType)
-		if cmdType == "" {
-			cmdType = "MobilePosition"
-		}
-		decoded := g.decodeAndStoreQueryResult(deviceID, cmdType, ctx.Request.Body())
-		ctx.String(200, "OK")
-		g.persistDecodedQuery(deviceID, cmdType, decoded)
-		// 9.11 事件源侧：移动位置事件通知订阅方。
-		g.publishEventNotify(cmdType, deviceID, ctx.Request.Body())
+	var msg mobilePositionNotify
+	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
+		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
+	deviceID := strings.TrimSpace(ctx.DeviceID)
+	msg.CmdType = strings.TrimSpace(msg.CmdType)
+	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	position, positions, err := g.validateMobilePositionNotify(ctx, &msg)
+	if err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
+	extended := g.decodeAppendixA4Objects("MobilePosition", ctx.Request.Body())
+	g.storeMobilePositionState(deviceID, position, positions)
+	if len(extended) > 0 {
+		g.storeAppendixA4State(deviceID, extended)
+	}
 	ctx.String(200, "OK")
+	if len(extended) > 0 {
+		g.persistAppendixA4Objects(deviceID, extended)
+	}
+	// 9.11 事件源侧：移动位置事件通知订阅方。
+	g.publishEventNotify("MobilePosition", deviceID, ctx.Request.Body())
+}
+
+type mobilePositionNotify struct {
+	XMLName    xml.Name
+	CmdType    string   `xml:"CmdType"`
+	SN         int      `xml:"SN"`
+	DeviceID   string   `xml:"DeviceID"`
+	Time       string   `xml:"Time"`
+	SumNum     *int     `xml:"SumNum"`
+	Longitude  *float64 `xml:"Longitude"`
+	Latitude   *float64 `xml:"Latitude"`
+	Speed      *float64 `xml:"Speed"`
+	Direction  *float64 `xml:"Direction"`
+	Altitude   *float64 `xml:"Altitude"`
+	DeviceList struct {
+		XMLName xml.Name
+		Num     *int                    `xml:"Num,attr"`
+		Item    []mobilePositionItemXML `xml:"Item"`
+	} `xml:"DeviceList"`
+}
+
+type mobilePositionItemXML struct {
+	DeviceID    string   `xml:"DeviceID"`
+	CaptureTime string   `xml:"CaptureTime"`
+	Longitude   *float64 `xml:"Longitude"`
+	Latitude    *float64 `xml:"Latitude"`
+	Speed       *float64 `xml:"Speed"`
+	Direction   *float64 `xml:"Direction"`
+	Altitude    *float64 `xml:"Altitude"`
+	Height      *float64 `xml:"Height"`
+}
+
+func (g *GB28181API) validateMobilePositionNotify(ctx *sip.Context, msg *mobilePositionNotify) (*MobilePositionData, []MobilePositionData, error) {
+	if msg == nil || msg.XMLName.Local != "Notify" || !strings.EqualFold(msg.CmdType, "MobilePosition") || msg.SN <= 0 {
+		return nil, nil, fmt.Errorf("invalid MobilePosition envelope")
+	}
+	if !isGBDeviceIdentifier(msg.DeviceID) {
+		return nil, nil, fmt.Errorf("invalid MobilePosition device id")
+	}
+	if err := g.validateAuthenticatedResponseTarget(ctx, msg.DeviceID); err != nil {
+		return nil, nil, err
+	}
+	if !validGBDateTime(msg.Time) {
+		return nil, nil, fmt.Errorf("invalid MobilePosition time")
+	}
+	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
+	if !version.AtLeast(GBVersion20) {
+		return nil, nil, fmt.Errorf("MobilePosition requires GB/T 28181-2016 or later")
+	}
+	hasBatch := msg.SumNum != nil || msg.DeviceList.XMLName.Local != ""
+	if hasBatch {
+		if !version.AtLeast(GBVersion30) {
+			return nil, nil, fmt.Errorf("batch MobilePosition requires GB/T 28181-2022")
+		}
+		return g.validateBatchMobilePosition(ctx, msg)
+	}
+	position := &MobilePositionData{
+		DeviceID: msg.DeviceID, Time: strings.TrimSpace(msg.Time), Longitude: msg.Longitude, Latitude: msg.Latitude,
+		Speed: msg.Speed, Direction: msg.Direction, Altitude: msg.Altitude,
+	}
+	if err := validateMobilePositionData(position); err != nil {
+		return nil, nil, err
+	}
+	return position, nil, nil
+}
+
+func (g *GB28181API) validateBatchMobilePosition(ctx *sip.Context, msg *mobilePositionNotify) (*MobilePositionData, []MobilePositionData, error) {
+	if msg.SumNum == nil || *msg.SumNum < 0 {
+		return nil, nil, fmt.Errorf("invalid MobilePosition SumNum")
+	}
+	if msg.DeviceList.XMLName.Local == "" {
+		if *msg.SumNum == 0 {
+			return nil, []MobilePositionData{}, nil
+		}
+		return nil, nil, fmt.Errorf("missing MobilePosition DeviceList")
+	}
+	if msg.DeviceList.Num == nil || *msg.DeviceList.Num < 0 || *msg.DeviceList.Num != len(msg.DeviceList.Item) || len(msg.DeviceList.Item) > *msg.SumNum {
+		return nil, nil, fmt.Errorf("invalid MobilePosition DeviceList count")
+	}
+	positions := make([]MobilePositionData, 0, len(msg.DeviceList.Item))
+	for _, item := range msg.DeviceList.Item {
+		position := MobilePositionData{
+			DeviceID: strings.TrimSpace(item.DeviceID), Time: strings.TrimSpace(item.CaptureTime), CaptureTime: strings.TrimSpace(item.CaptureTime),
+			Longitude: item.Longitude, Latitude: item.Latitude, Speed: item.Speed, Direction: item.Direction, Altitude: item.Altitude, Height: item.Height,
+		}
+		if err := g.validateAuthenticatedResponseTarget(ctx, position.DeviceID); err != nil {
+			return nil, nil, err
+		}
+		if !validGBDateTime(position.CaptureTime) {
+			return nil, nil, fmt.Errorf("invalid MobilePosition capture time")
+		}
+		if err := validateMobilePositionData(&position); err != nil {
+			return nil, nil, err
+		}
+		positions = append(positions, position)
+	}
+	if len(positions) == 0 {
+		return nil, positions, nil
+	}
+	latest := positions[len(positions)-1]
+	return &latest, positions, nil
+}
+
+func validateMobilePositionData(position *MobilePositionData) error {
+	if position == nil || !isGBDeviceIdentifier(position.DeviceID) || position.Longitude == nil || position.Latitude == nil ||
+		!validFiniteRange(*position.Longitude, -180, 180) || !validFiniteRange(*position.Latitude, -90, 90) {
+		return fmt.Errorf("invalid MobilePosition coordinates")
+	}
+	for _, value := range []*float64{position.Speed, position.Altitude, position.Height} {
+		if value != nil && !validFinite(*value) {
+			return fmt.Errorf("invalid MobilePosition value")
+		}
+	}
+	if position.Direction != nil && (!validFinite(*position.Direction) || *position.Direction < 0 || *position.Direction >= 360) {
+		return fmt.Errorf("invalid MobilePosition direction")
+	}
+	return nil
+}
+
+func validGBDateTime(value string) bool {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02T15:04:05Z07:00", time.RFC3339} {
+		if _, err := sip.ParseGBTime(layout, value); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *GB28181API) storeMobilePositionState(deviceID string, position *MobilePositionData, positions []MobilePositionData) {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return
+	}
+	g.queryStateMu.Lock()
+	defer g.queryStateMu.Unlock()
+	state := &QueryState{}
+	if value, ok := g.queryStates.Load(deviceID); ok {
+		if previous, ok := value.(*QueryState); ok && previous != nil {
+			*state = *previous
+		}
+	}
+	state.UpdatedAt = time.Now()
+	state.MobilePosition = position
+	state.MobilePositions = cloneMobilePositions(positions)
+	g.queryStates.Store(deviceID, state)
 }
