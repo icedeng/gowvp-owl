@@ -83,6 +83,10 @@ func TestDeviceInfoResponseRejectsInvalidEnvelopeBeforeWait(t *testing.T) {
 		{name: "missing result", body: `<Response><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><DeviceName>Untrusted</DeviceName></Response>`},
 		{name: "invalid result", body: `<Response><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>SUCCESS</Result><DeviceName>Untrusted</DeviceName></Response>`},
 		{name: "unknown target", body: `<Response><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>34020000001320000009</DeviceID><Result>OK</Result></Response>`},
+		{name: "2011 device name", body: `<Response><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><DeviceName>new field</DeviceName></Response>`},
+		{name: "negative channel", body: `<Response><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><Channel>-1</Channel></Response>`},
+		{name: "negative max camera", body: `<Response><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><MaxCamera>-1</MaxCamera></Response>`},
+		{name: "negative max alarm", body: `<Response><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><MaxAlarm>-1</MaxAlarm></Response>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -96,6 +100,29 @@ func TestDeviceInfoResponseRejectsInvalidEnvelopeBeforeWait(t *testing.T) {
 	case output := <-pending.wait:
 		t.Fatalf("invalid DeviceInfo resolved pending query: %+v", output)
 	default:
+	}
+}
+
+func TestDeviceInfoResponseAcceptsVersionFields(t *testing.T) {
+	for _, test := range []struct {
+		version GBProtocolVersion
+		name    string
+	}{
+		{version: GBVersion10},
+		{version: GBVersion11, name: "camera"},
+		{version: GBVersion20, name: "camera"},
+		{version: GBVersion30, name: "camera"},
+	} {
+		t.Run(string(test.version), func(t *testing.T) {
+			api, _ := newVersionGateAPI(test.version)
+			body := `<Response><CmdType>DeviceInfo</CmdType><SN>904</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>ERROR</Result>`
+			if test.name != "" {
+				body += `<DeviceName>` + test.name + `</DeviceName>`
+			}
+			body += `<Channel>0</Channel><MaxCamera>0</MaxCamera><MaxAlarm>0</MaxAlarm></Response>`
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "device-info-version-fields", []byte(body), api.sipMessageDeviceInfo)
+			assertFlowOK(t, response)
+		})
 	}
 }
 

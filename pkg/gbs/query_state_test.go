@@ -364,7 +364,9 @@ func TestDeviceInfoAcknowledgesBeforePersistence(t *testing.T) {
 		release:      make(chan struct{}),
 	}
 	store := &queryTestStore{Storer: base.Store(), device: deviceStore}
-	api := &GB28181API{core: ipc.NewAdapter(store, uniqueid.Core{})}
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion11)
+	api := &GB28181API{core: ipc.NewAdapter(store, uniqueid.Core{}), svr: &Server{memoryStorer: memory}}
 	conn := newFlowConnection()
 	body := []byte(`<Response><CmdType>DeviceInfo</CmdType><SN>95</SN><DeviceID>` + gb10DeviceID +
 		`</DeviceID><Result>OK</Result><DeviceName>Slow IPC</DeviceName></Response>`)

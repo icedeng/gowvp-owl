@@ -26,15 +26,47 @@ func (g *GB28181API) QueryDeviceInfo(ctx *sip.Context) {
 
 // MessageDeviceInfoResponse 设备信息查询应答结构
 type MessageDeviceInfoResponse struct {
-	XMLName      xml.Name
-	CmdType      string `xml:"CmdType"`
-	SN           int    `xml:"SN"`
-	DeviceID     string `xml:"DeviceID"`     // 目标设备的编码(必选)
-	DeviceName   string `xml:"DeviceName"`   // 目标设备的名称(可选
-	Manufacturer string `xml:"Manufacturer"` // 设备生产商(可选)
-	Model        string `xml:"Model"`        // 设备型号(可选)
-	Firmware     string `xml:"Firmware"`     // 设备固件版本(可选)
-	Result       string `xml:"Result"`       // 査询结果(必选)
+	XMLName       xml.Name
+	CmdType       string `xml:"CmdType"`
+	SN            int    `xml:"SN"`
+	DeviceID      string `xml:"DeviceID"`   // 目标设备的编码(必选)
+	DeviceName    string `xml:"DeviceName"` // 目标设备的名称(2014+ 可选)
+	HasDeviceName bool   `xml:"-"`
+	Manufacturer  string `xml:"Manufacturer"` // 设备生产商(可选)
+	Model         string `xml:"Model"`        // 设备型号(可选)
+	Firmware      string `xml:"Firmware"`     // 设备固件版本(可选)
+	Result        string `xml:"Result"`       // 査询结果(必选)
+	Channel       *int   `xml:"Channel"`      // 视频输入通道数(可选)
+	MaxCamera     *int   `xml:"MaxCamera"`    // 标准示例兼容字段
+	MaxAlarm      *int   `xml:"MaxAlarm"`     // 标准示例兼容字段
+}
+
+func (m *MessageDeviceInfoResponse) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
+	var value struct {
+		CmdType      string  `xml:"CmdType"`
+		SN           int     `xml:"SN"`
+		DeviceID     string  `xml:"DeviceID"`
+		DeviceName   *string `xml:"DeviceName"`
+		Manufacturer string  `xml:"Manufacturer"`
+		Model        string  `xml:"Model"`
+		Firmware     string  `xml:"Firmware"`
+		Result       string  `xml:"Result"`
+		Channel      *int    `xml:"Channel"`
+		MaxCamera    *int    `xml:"MaxCamera"`
+		MaxAlarm     *int    `xml:"MaxAlarm"`
+	}
+	if err := decoder.DecodeElement(&value, &start); err != nil {
+		return err
+	}
+	*m = MessageDeviceInfoResponse{
+		XMLName: start.Name, CmdType: value.CmdType, SN: value.SN, DeviceID: value.DeviceID,
+		Manufacturer: value.Manufacturer, Model: value.Model, Firmware: value.Firmware, Result: value.Result,
+		Channel: value.Channel, MaxCamera: value.MaxCamera, MaxAlarm: value.MaxAlarm,
+	}
+	if value.DeviceName != nil {
+		m.DeviceName, m.HasDeviceName = *value.DeviceName, true
+	}
+	return nil
 }
 
 // sipMessageDeviceInfo 设备信息查询应答
@@ -60,6 +92,17 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 	}); err != nil {
 		ctx.String(400, err.Error())
 		return
+	}
+	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
+	if msg.HasDeviceName && !version.AtLeast(GBVersion11) {
+		ctx.String(400, "DeviceInfo DeviceName requires protocol 1.1")
+		return
+	}
+	for _, count := range []*int{msg.Channel, msg.MaxCamera, msg.MaxAlarm} {
+		if count != nil && *count < 0 {
+			ctx.String(400, "DeviceInfo channel counts must not be negative")
+			return
+		}
 	}
 	isChannelResponse := msg.DeviceID != ctx.DeviceID
 

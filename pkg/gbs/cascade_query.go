@@ -107,7 +107,7 @@ type cascadeDeviceInfoResponse struct {
 	SN           int      `xml:"SN"`
 	DeviceID     string   `xml:"DeviceID"`
 	Result       string   `xml:"Result"`
-	DeviceName   string   `xml:"DeviceName"`
+	DeviceName   string   `xml:"DeviceName,omitempty"`
 	DeviceType   string   `xml:"DeviceType"`
 	Manufacturer string   `xml:"Manufacturer"`
 	Model        string   `xml:"Model"`
@@ -115,6 +115,13 @@ type cascadeDeviceInfoResponse struct {
 	Channel      int      `xml:"Channel"`
 	MaxCamera    int      `xml:"MaxCamera"`
 	MaxAlarm     int      `xml:"MaxAlarm"`
+}
+
+func cascadeDeviceInfoName(version GBProtocolVersion, name string) string {
+	if !version.AtLeast(GBVersion11) {
+		return ""
+	}
+	return name
 }
 
 type cascadeDeviceStatusResponse struct {
@@ -942,12 +949,13 @@ func (g *GB28181API) respondCascadeDeviceInfo(ctx context.Context, worker *casca
 		if err != nil {
 			return err
 		}
-		return sendCascadeXML(ctx, worker, cascadeDeviceInfoResponse{
+		response := cascadeDeviceInfoResponse{
 			CmdType: "DeviceInfo", SN: query.SN, DeviceID: query.DeviceID, Result: "OK",
-			DeviceName: firstNonEmpty(channel.Name, channel.Ext.Name, query.DeviceID), DeviceType: "IPC",
-			Manufacturer: channel.Ext.Manufacturer, Model: channel.Ext.Model, Firmware: channel.Ext.Firmware,
+			DeviceType: "IPC", Manufacturer: channel.Ext.Manufacturer, Model: channel.Ext.Model, Firmware: channel.Ext.Firmware,
 			Channel: 1, MaxCamera: 1,
-		})
+		}
+		response.DeviceName = cascadeDeviceInfoName(worker.protocolVersion(), firstNonEmpty(channel.Name, channel.Ext.Name, query.DeviceID))
+		return sendCascadeXML(ctx, worker, response)
 	}
 	channels, err := g.loadCascadeChannels(ctx, worker.platform)
 	if err != nil {
@@ -958,11 +966,12 @@ func (g *GB28181API) respondCascadeDeviceInfo(ctx context.Context, worker *casca
 	if g.boot != nil {
 		firmware = strings.TrimSpace(g.boot.BuildVersion)
 	}
-	return sendCascadeXML(ctx, worker, cascadeDeviceInfoResponse{
+	response := cascadeDeviceInfoResponse{
 		CmdType: "DeviceInfo", SN: query.SN, DeviceID: worker.platform.localID, Result: "OK",
-		DeviceName: "GoWVP OWL", DeviceType: "NVR", Manufacturer: "GoWVP", Model: "OWL",
-		Firmware: firmware, Channel: count, MaxCamera: count,
-	})
+		DeviceType: "NVR", Manufacturer: "GoWVP", Model: "OWL", Firmware: firmware, Channel: count, MaxCamera: count,
+	}
+	response.DeviceName = cascadeDeviceInfoName(worker.protocolVersion(), "GoWVP OWL")
+	return sendCascadeXML(ctx, worker, response)
 }
 
 func (g *GB28181API) respondCascadeDeviceStatus(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope) error {

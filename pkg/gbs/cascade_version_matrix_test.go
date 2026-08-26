@@ -73,6 +73,15 @@ func TestCascadeFourVersionProtocolMatrix(t *testing.T) {
 			if !strings.Contains(string(alarmXML), wantAlarmCount) {
 				t.Fatalf("DeviceStatus Alarmstatus profile = %s, want %s", alarmXML, wantAlarmCount)
 			}
+			deviceInfoXML, err := xml.Marshal(cascadeDeviceInfoResponse{
+				DeviceName: cascadeDeviceInfoName(test.version, "camera"), Result: "OK", Channel: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(deviceInfoXML), "<DeviceName>") != test.version.AtLeast(GBVersion11) {
+				t.Fatalf("DeviceInfo DeviceName profile = %s", deviceInfoXML)
+			}
 
 			if _, err := parseCascadeVideoOffer(cascadeOfferSDP("RTP/AVP", "192.0.2.30", ""), test.version, platform); err != nil {
 				t.Fatalf("UDP Play rejected: %v", err)

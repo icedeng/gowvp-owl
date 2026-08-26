@@ -64,7 +64,7 @@ go test ./... -count=1
 - 四版本协议时间固定按北京时间编码/解析；查询与控制 SN 为单调正整数，RecordInfo 无响应、空结果、部分分包、重叠区间及午夜分日能够区分；
 - 上级级联信令可配置 UDP/TCP/TLS；TCP/TLS 同一连接完成 REGISTER Digest 与 Keepalive，断线后同一 Call-ID 事务切换新连接，301/302 可切换到 TCP/TLS 或 `sips:` 目标，且 SIPS 不允许降级到明文传输；
 - 2022 上级 REGISTER 301/302 重定向，校验 Contact 的 ServerID、SIPS/transport，重定向后重新 Digest 注册，后续心跳、通知、媒体请求和入向身份校验绑定新地址；
-- 共享通道 DeviceInfo、DeviceStatus 和 RecordInfo 查询，录像响应分包并映射为上级可见编码；NVR 代表已知子通道返回 DeviceInfo 时只更新子通道元数据；
+- 共享通道 DeviceInfo、DeviceStatus 和 RecordInfo 查询，录像响应分包并映射为上级可见编码；NVR 代表已知子通道返回 DeviceInfo 时只更新子通道元数据，Channel/MaxCamera/MaxAlarm 计数须非负，2014 新增 DeviceName 不得向 2011 透传；
 - 上级 Query 请求的固定根、正 SN、20 位目标、命令白名单及专属载荷校验；RecordInfo 缺失/倒置时间、MobilePosition 负间隔和 CruiseTrackQuery 缺失/越界 Number 必须在启动下级任务前拒绝；
 - 共享通道 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 PTZPosition/SDCardStatus 查询转发；上下级 SN 转换、DeviceID/ParentID 安全映射、未知编码拒绝、下级失败业务应答及多上级响应隔离；
 - 3.0 附录 A.4 扩展对象按 Catalog ExtraInfo、Alarm/MobilePosition 嵌套对象和 DeviceStatus 响应的真实承载路径级联；共享对象递归编码映射，未知 20 位对象编码整条拒绝，且 1.0/1.1/2.0 不输出 3.0 ExtraInfo；
