@@ -714,7 +714,7 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		b.KeepaliveAt = orm.Now()
 		b.Expires = expires
 		b.Address = ctx.Source.String()
-		b.Transport = ctx.Source.Network()
+		b.Transport = requestSignalingTransport(ctx)
 		applyGBProtocolVersion(&b.Ext, ctx.XGBVer)
 		return nil
 	}); err != nil {
@@ -744,6 +744,19 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	if g.deviceSupportsGBFeature(dev.GetGB28181DeviceID(), "config_query", effectiveVersion, func(c GBCapabilities) bool { return c.ConfigQuery }) {
 		_ = g.QueryConfigDownloadBasic(dev.GetGB28181DeviceID())
 	}
+}
+
+func requestSignalingTransport(ctx *sip.Context) string {
+	if ctx == nil || ctx.Request == nil {
+		return ""
+	}
+	if transport := strings.ToLower(sip.SignalingTransport(ctx.Request.GetConnection())); transport != "" {
+		return transport
+	}
+	if ctx.Source != nil {
+		return strings.ToLower(strings.TrimSpace(ctx.Source.Network()))
+	}
+	return ""
 }
 
 func registerResultKey(ctx *sip.Context) [sha256.Size]byte {

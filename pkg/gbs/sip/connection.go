@@ -71,36 +71,74 @@ type Connection interface {
 	WriteTo(buf []byte, raddr net.Addr) (num int, err error)
 }
 
+type signalingTransportConnection interface {
+	SignalingTransport() string
+}
+
 // Connection implementation.
 type connection struct {
 	baseConn net.Conn
 	laddr    net.Addr
 	raddr    net.Addr
 	// mu       sync.RWMutex
-	logKey string
-	packet bool
+	logKey    string
+	packet    bool
+	transport string
 }
 
 func NewUDPConnection(baseConn net.Conn) Connection {
 	conn := &connection{
-		baseConn: baseConn,
-		laddr:    baseConn.LocalAddr(),
-		raddr:    baseConn.RemoteAddr(),
-		logKey:   "udp ",
-		packet:   true,
+		baseConn:  baseConn,
+		laddr:     baseConn.LocalAddr(),
+		raddr:     baseConn.RemoteAddr(),
+		logKey:    "udp ",
+		packet:    true,
+		transport: "UDP",
 	}
 	return conn
 }
 
 func NewTCPConnection(baseConn net.Conn) Connection {
 	conn := &connection{
-		baseConn: baseConn,
-		laddr:    baseConn.LocalAddr(),
-		raddr:    baseConn.RemoteAddr(),
-		logKey:   "tcp ",
+		baseConn:  baseConn,
+		laddr:     baseConn.LocalAddr(),
+		raddr:     baseConn.RemoteAddr(),
+		logKey:    "tcp ",
+		transport: "TCP",
 	}
 	return conn
 }
+
+// NewTLSConnection 包装 SIP/TLS 流连接，同时保留底层 Network() 的 TCP 套接字语义。
+func NewTLSConnection(baseConn net.Conn) Connection {
+	conn := NewTCPConnection(baseConn).(*connection)
+	conn.logKey = "tls "
+	conn.transport = "TLS"
+	return conn
+}
+
+// SignalingTransport 返回连接实际承载的 SIP 传输类型。
+func SignalingTransport(conn Connection) string {
+	if conn == nil {
+		return ""
+	}
+	if value, ok := conn.(signalingTransportConnection); ok {
+		return strings.ToUpper(strings.TrimSpace(value.SignalingTransport()))
+	}
+	network := strings.ToLower(strings.TrimSpace(conn.Network()))
+	switch {
+	case strings.HasPrefix(network, "tls"):
+		return "TLS"
+	case strings.HasPrefix(network, "tcp"):
+		return "TCP"
+	case strings.HasPrefix(network, "udp"):
+		return "UDP"
+	default:
+		return strings.ToUpper(network)
+	}
+}
+
+func (conn *connection) SignalingTransport() string { return conn.transport }
 
 func (conn *connection) Read(buf []byte) (int, error) {
 	var (

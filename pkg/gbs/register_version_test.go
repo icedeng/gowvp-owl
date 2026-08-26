@@ -52,6 +52,24 @@ func TestRegisterResponseIncludesPlatformVersion(t *testing.T) {
 	}
 }
 
+func TestRequestSignalingTransportDistinguishesTLS(t *testing.T) {
+	base := newFlowConnection()
+	connection := &registerTransportConnection{flowConnection: base, transport: "TLS"}
+	ctx := newRegisterHandlerTestContext(t, base, "register-tls-transport", 3600)
+	ctx.Request.SetConnection(connection)
+	if got := requestSignalingTransport(ctx); got != "tls" {
+		t.Fatalf("REGISTER signaling transport = %q", got)
+	}
+}
+
+type registerTransportConnection struct {
+	*flowConnection
+	transport string
+}
+
+func (*registerTransportConnection) Network() string              { return "tcp" }
+func (c *registerTransportConnection) SignalingTransport() string { return c.transport }
+
 func TestRegisterRedirectUsesTrustedServerConfiguration(t *testing.T) {
 	cfg := &conf.SIP{
 		ID: gb10PlatformID, Domain: "3402000000",

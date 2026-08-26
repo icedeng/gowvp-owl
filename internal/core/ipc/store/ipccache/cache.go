@@ -59,7 +59,7 @@ func (c *Cache) LoadDeviceToMemory(conn sip.Connection) error {
 	}
 
 	for _, d := range devices {
-		if strings.ToLower(d.Transport) == "tcp" {
+		if transport := strings.ToLower(d.Transport); transport == "tcp" || transport == "tls" {
 			// 通知相关设备/通道离线
 			if err := c.Change(d.GetGB28181DeviceID(), func(d *ipc.Device) error {
 				d.IsOnline = false

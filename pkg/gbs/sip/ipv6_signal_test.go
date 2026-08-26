@@ -96,10 +96,12 @@ func TestFormatSIPHostDoesNotDoubleBracketIPv6(t *testing.T) {
 
 func TestRequestFillsViaFromServerAddress(t *testing.T) {
 	for _, test := range []struct {
-		name, localURI, remoteURI, localIP, remoteIP, wantVia string
+		name, localURI, remoteURI, localIP, remoteIP, network, transport, wantVia string
 	}{
-		{"IPv4", "sip:34020000002000000001@192.0.2.20:5060", "sip:34020000001320000001@192.0.2.30:5060", "192.0.2.20", "192.0.2.30", "Via: SIP/2.0/UDP 192.0.2.20:5060;"},
-		{"IPv6", "sip:34020000002000000001@[2001:db8::20]:5060", "sip:34020000001320000001@[2001:db8::30]:5060", "2001:db8::20", "2001:db8::30", "Via: SIP/2.0/UDP [2001:db8::20]:5060;"},
+		{"IPv4 UDP", "sip:34020000002000000001@192.0.2.20:5060", "sip:34020000001320000001@192.0.2.30:5060", "192.0.2.20", "192.0.2.30", "udp", "UDP", "Via: SIP/2.0/UDP 192.0.2.20:5060;"},
+		{"IPv4 TCP", "sip:34020000002000000001@192.0.2.20:5060", "sip:34020000001320000001@192.0.2.30:5060", "192.0.2.20", "192.0.2.30", "tcp", "TCP", "Via: SIP/2.0/TCP 192.0.2.20:5060;"},
+		{"IPv6 UDP", "sip:34020000002000000001@[2001:db8::20]:5060", "sip:34020000001320000001@[2001:db8::30]:5060", "2001:db8::20", "2001:db8::30", "udp", "UDP", "Via: SIP/2.0/UDP [2001:db8::20]:5060;"},
+		{"IPv6 TLS separate port", "sip:34020000002000000001@[2001:db8::20]:5060", "sips:34020000001320000001@[2001:db8::30]:5061", "2001:db8::20", "2001:db8::30", "tcp", "TLS", "Via: SIP/2.0/TLS [2001:db8::20]:5061;"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			localURI, err := ParseSipURI(test.localURI)
@@ -108,14 +110,22 @@ func TestRequestFillsViaFromServerAddress(t *testing.T) {
 			}
 			server := NewServer(&Address{URI: &localURI, Params: NewParams()})
 			defer server.Close()
-			connection := &captureConnection{
-				local:  &net.UDPAddr{IP: net.ParseIP(test.localIP), Port: 5060},
-				remote: &net.UDPAddr{IP: net.ParseIP(test.remoteIP), Port: 5060},
-			}
-			server.udpConn = connection
 			remoteURI, err := ParseSipURI(test.remoteURI)
 			if err != nil {
 				t.Fatal(err)
+			}
+			localPort := int(*localURI.FPort)
+			if test.transport == "TLS" {
+				localPort = 5061
+			}
+			connection := &captureConnection{
+				local:     &net.UDPAddr{IP: net.ParseIP(test.localIP), Port: localPort},
+				remote:    &net.UDPAddr{IP: net.ParseIP(test.remoteIP), Port: int(*remoteURI.FPort)},
+				network:   test.network,
+				transport: test.transport,
+			}
+			if test.network == "udp" {
+				server.udpConn = connection
 			}
 			request := NewRequest("", MethodOptions, &remoteURI, DefaultSipVersion,
 				NewHeaderBuilder().SetMethod(MethodOptions).
@@ -139,6 +149,8 @@ func TestRequestFillsViaFromServerAddress(t *testing.T) {
 type captureConnection struct {
 	local, remote net.Addr
 	payload       []byte
+	network       string
+	transport     string
 }
 
 func (c *captureConnection) Read([]byte) (int, error)               { return 0, io.EOF }
@@ -149,7 +161,8 @@ func (c *captureConnection) RemoteAddr() net.Addr                   { return c.r
 func (c *captureConnection) SetDeadline(time.Time) error            { return nil }
 func (c *captureConnection) SetReadDeadline(time.Time) error        { return nil }
 func (c *captureConnection) SetWriteDeadline(time.Time) error       { return nil }
-func (c *captureConnection) Network() string                        { return "udp" }
+func (c *captureConnection) Network() string                        { return c.network }
+func (c *captureConnection) SignalingTransport() string             { return c.transport }
 func (c *captureConnection) ReadFrom([]byte) (int, net.Addr, error) { return 0, c.remote, io.EOF }
 func (c *captureConnection) WriteTo(payload []byte, _ net.Addr) (int, error) {
 	c.payload = append([]byte(nil), payload...)

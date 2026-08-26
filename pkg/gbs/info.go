@@ -117,7 +117,7 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 				}
 
 				d.Address = ctx.Source.String()
-				d.Transport = ctx.Source.Network()
+				d.Transport = requestSignalingTransport(ctx)
 			})
 		}
 	}

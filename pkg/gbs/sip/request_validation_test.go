@@ -49,3 +49,40 @@ func TestServerRequestRejectsUnsupportedSIPVersionAndInvalidVia(t *testing.T) {
 		t.Fatalf("invalid outbound Via error = %v", err)
 	}
 }
+
+func TestInboundMessageTransportMustMatchConnection(t *testing.T) {
+	localURI, err := ParseSipURI("sip:34020000002000000001@192.0.2.20:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteURI, err := ParseSipURI("sip:34020000001320000001@192.0.2.30:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, peer := net.Pipe()
+	defer base.Close()
+	defer peer.Close()
+	connection := NewTCPConnection(base)
+	request := NewRequest("", MethodOptions, &localURI, DefaultSipVersion,
+		NewHeaderBuilder().SetMethod(MethodOptions).
+			SetFrom(&Address{URI: &remoteURI, Params: NewParams()}).
+			SetTo(&Address{URI: &localURI, Params: NewParams()}).
+			AddVia(&ViaHop{Host: "192.0.2.30", Port: NewPort(5060), Transport: "UDP", Params: NewParams()}).Build(), nil)
+	request.SetConnection(connection)
+	if err := validateInboundRequestHeaders(request); err == nil || !strings.Contains(err.Error(), "transport") {
+		t.Fatalf("mismatched inbound request transport error = %v", err)
+	}
+	via, _ := request.ViaHop()
+	via.Transport = "TCP"
+	if err := validateInboundRequestHeaders(request); err != nil {
+		t.Fatalf("matching inbound request transport rejected: %v", err)
+	}
+
+	response := NewResponseFromRequest("", request, 200, "OK", nil)
+	response.SetConnection(connection)
+	via, _ = response.ViaHop()
+	via.Transport = "UDP"
+	if err := validateInboundResponseHeaders(response); err == nil || !strings.Contains(err.Error(), "transport") {
+		t.Fatalf("mismatched inbound response transport error = %v", err)
+	}
+}

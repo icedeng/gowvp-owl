@@ -74,7 +74,15 @@ func TestChangeWaitsForDeviceRegistrationStateLock(t *testing.T) {
 	}
 }
 
-func TestLoadDeviceToMemoryMarksRestoredTCPDeviceAndChannelsOffline(t *testing.T) {
+func TestLoadDeviceToMemoryMarksRestoredStreamDeviceAndChannelsOffline(t *testing.T) {
+	for _, transport := range []string{"tcp", "tls"} {
+		t.Run(transport, func(t *testing.T) {
+			testLoadDeviceToMemoryMarksRestoredStreamOffline(t, transport)
+		})
+	}
+}
+
+func testLoadDeviceToMemoryMarksRestoredStreamOffline(t *testing.T, transport string) {
 	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())))
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +90,7 @@ func TestLoadDeviceToMemoryMarksRestoredTCPDeviceAndChannelsOffline(t *testing.T
 	store := ipcdb.NewDB(db).AutoMigrate(true)
 	device := &ipc.Device{
 		ID: "GB_restored_tcp", DeviceID: "34020000001320000002", Type: ipc.TypeGB28181,
-		Transport: "tcp", IsOnline: true,
+		Transport: transport, IsOnline: true,
 	}
 	channel := &ipc.Channel{
 		ID: "GBC_restored_tcp", DID: device.ID, DeviceID: device.DeviceID,
@@ -108,10 +116,10 @@ func TestLoadDeviceToMemoryMarksRestoredTCPDeviceAndChannelsOffline(t *testing.T
 		t.Fatal(err)
 	}
 	if restoredDevice.IsOnline || restoredChannel.IsOnline {
-		t.Fatalf("restored TCP state = device:%v channel:%v, want both offline", restoredDevice.IsOnline, restoredChannel.IsOnline)
+		t.Fatalf("restored %s state = device:%v channel:%v, want both offline", transport, restoredDevice.IsOnline, restoredChannel.IsOnline)
 	}
 	if _, ok := cache.Load(device.DeviceID); ok {
-		t.Fatal("restored TCP device unexpectedly retained an unusable runtime connection")
+		t.Fatalf("restored %s device unexpectedly retained an unusable runtime connection", transport)
 	}
 }
 

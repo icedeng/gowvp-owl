@@ -1141,7 +1141,12 @@ func (w *cascadeWorker) ensureTCPConnection(ctx context.Context, remote net.Addr
 	if err != nil {
 		return nil, fmt.Errorf("dial cascade SIP/%s %s: %w", strings.ToUpper(transport), address, err)
 	}
-	conn := sip.NewTCPConnection(raw)
+	var conn sip.Connection
+	if transport == "tls" {
+		conn = sip.NewTLSConnection(raw)
+	} else {
+		conn = sip.NewTCPConnection(raw)
+	}
 	w.connMu.Lock()
 	if w.tcpConn != nil && w.tcpRemote == connectionKey {
 		existing := w.tcpConn

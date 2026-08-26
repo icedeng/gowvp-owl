@@ -351,7 +351,7 @@ func (s *Server) serveTCP(listener *net.TCPListener, addr string) error {
 				}
 				return fmt.Errorf("accept SIP TCP connection: %w", err)
 			}
-			connection := NewTCPConnection(conn)
+			connection := NewTLSConnection(conn)
 			if !s.trackConnection(connection) {
 				_ = connection.Close()
 				continue
@@ -872,7 +872,22 @@ func validateInboundRequestHeaders(msg *Request) error {
 	if !ok || !isValidSIPViaHop(via) {
 		return fmt.Errorf("request Via header is invalid")
 	}
+	if !messageTransportMatchesConnection(msg) {
+		return fmt.Errorf("request Via transport does not match connection")
+	}
 	return nil
+}
+
+func messageTransportMatchesConnection(msg Message) bool {
+	if msg == nil {
+		return false
+	}
+	transport := SignalingTransport(msg.GetConnection())
+	if transport == "" {
+		return true
+	}
+	via, ok := msg.ViaHop()
+	return ok && via != nil && strings.EqualFold(strings.TrimSpace(via.Transport), transport)
 }
 
 func (s *Server) startRequestContext(ctx *Context) {
@@ -985,6 +1000,9 @@ func validateInboundResponseHeaders(msg *Response) error {
 	if !ok || !isValidSIPViaHop(via) {
 		return fmt.Errorf("response Via header is invalid")
 	}
+	if !messageTransportMatchesConnection(msg) {
+		return fmt.Errorf("response Via transport does not match connection")
+	}
 	return nil
 }
 
@@ -1031,8 +1049,14 @@ func (s *Server) RequestWithSecurity(req *Request, security MessageSecurity) (*T
 	if viaHop.Host == "" {
 		viaHop.Host = s.host
 	}
+	if transport := SignalingTransport(req.GetConnection()); transport != "" {
+		viaHop.Transport = transport
+	}
 	if viaHop.Port == nil {
-		viaHop.Port = s.port
+		viaHop.Port = connectionLocalPort(req.GetConnection())
+		if viaHop.Port == nil {
+			viaHop.Port = s.port
+		}
 	}
 	if !isValidSIPViaHop(viaHop) {
 		return nil, fmt.Errorf("invalid SIP Via header")
@@ -1059,6 +1083,31 @@ func (s *Server) RequestWithSecurity(req *Request, security MessageSecurity) (*T
 	tx := s.mustTX(req)
 	tx.SetMessageSecurity(security)
 	return tx, tx.Request(req)
+}
+
+func connectionLocalPort(conn Connection) *Port {
+	if conn == nil || conn.LocalAddr() == nil {
+		return nil
+	}
+	switch addr := conn.LocalAddr().(type) {
+	case *net.UDPAddr:
+		if addr != nil && addr.Port > 0 {
+			return NewPort(addr.Port)
+		}
+	case *net.TCPAddr:
+		if addr != nil && addr.Port > 0 {
+			return NewPort(addr.Port)
+		}
+	}
+	_, rawPort, err := net.SplitHostPort(conn.LocalAddr().String())
+	if err != nil {
+		return nil
+	}
+	value, err := strconv.ParseUint(rawPort, 10, 16)
+	if err != nil || value == 0 {
+		return nil
+	}
+	return NewPort(int(value))
 }
 
 func handlerMethodNotAllowed(req *Request, tx *Transaction) {

@@ -316,6 +316,8 @@ func TestRequestSecurityResolverRejectsUnsignedRequestWithSignedResponse(t *test
 	defer server.Close()
 	server.SetRequestSecurityResolver(func(*Request) (MessageSecurity, error) { return security, nil })
 	request := newSignalDigestTestRequest(t, MethodOptions, nil)
+	via, _ := request.ViaHop()
+	via.Transport = "TCP"
 	request.SetConnection(connection)
 	request.SetSource(connection.RemoteAddr())
 	request.SetDestination(connection.LocalAddr())

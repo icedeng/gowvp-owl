@@ -72,7 +72,7 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		// 兼容省略 Status 的厂商，同时保留显式 OFF/ERROR 状态的语义。
 		d.IsOnline = isOnline
 		d.Address = ctx.Source.String()
-		d.Transport = ctx.Source.Network()
+		d.Transport = requestSignalingTransport(ctx)
 		effectiveVersion = applyGBProtocolVersion(&d.Ext, ctx.XGBVer)
 		disabledCapabilities = append(disabledCapabilities[:0], d.Ext.GBDisabledCapabilities...)
 		return nil

@@ -52,6 +52,26 @@ func TestTCPConnectionWriteToUsesStreamWrite(t *testing.T) {
 	}
 }
 
+func TestSignalingTransportDistinguishesTLSFromTCP(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		wrap func(net.Conn) Connection
+		want string
+	}{
+		{name: "TCP", wrap: NewTCPConnection, want: "TCP"},
+		{name: "TLS", wrap: NewTLSConnection, want: "TLS"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base, peer := net.Pipe()
+			defer base.Close()
+			defer peer.Close()
+			if got := SignalingTransport(test.wrap(base)); got != test.want {
+				t.Fatalf("signaling transport = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 type connectionTestConn struct {
 	local    net.Addr
 	remote   net.Addr
