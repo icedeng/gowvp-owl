@@ -285,15 +285,18 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 
 	sessionCtx, cancel := context.WithCancel(monitorUserIdentityContext(ctx))
 	session := &cascadeMediaSession{worker: worker, ssrc: offer.SSRC, vhost: cascadeSourceVHost, app: cascadeSourceApp, cancel: cancel}
+	remoteCSeq, remoteCSeqSet := sipRequestCSeq(ctx.Request, sip.MethodInvite)
 	dialog := &inboundInviteDialog{
 		CallID: callID, DeviceID: ctx.DeviceID, RemoteTag: sipRequestFromTag(ctx.Request), InitialToTag: sipRequestToTag(ctx.Request), TagsBound: true, CreatedAt: time.Now(), UpdatedAt: time.Now(),
-		LocalCSeq: 1, Request: ctx.Request, Cascade: session, InviteTx: ctx.Tx,
+		LocalCSeq: 1, InitialRemoteCSeq: remoteCSeq, InitialRemoteCSeqSet: remoteCSeqSet,
+		RemoteCSeq: remoteCSeq, RemoteCSeqSet: remoteCSeqSet, RemoteMethod: sip.MethodInvite,
+		Request: ctx.Request, Cascade: session, InviteTx: ctx.Tx,
 	}
 	actual, loaded := g.inviteDialogs.LoadOrStore(callID, dialog)
 	if loaded {
 		cancel()
 		previous, ok := actual.(*inboundInviteDialog)
-		if !ok || previous == nil || previous.Cascade == nil || previous.Cascade.worker != worker || !inboundDialogTagsMatch(previous, ctx.Request, false) {
+		if !ok || previous == nil || previous.Cascade == nil || previous.Cascade.worker != worker || !inboundInviteTransactionMatches(previous, ctx.Request) {
 			respondCascadeInviteStatus(ctx, worker, 491, "Call-ID already in use")
 			return
 		}

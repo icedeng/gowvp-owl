@@ -452,9 +452,10 @@ func TestCascadeCancelTerminatesPendingInvite(t *testing.T) {
 	remote := mustFlowAddress(t, "sip:"+gb10PlatformID+"@remote.example")
 	remote.Params.Add("tag", sip.String{Str: "pending-remote-tag"})
 	local := mustFlowAddress(t, "sip:"+testExposedChannelID+"@local.example")
+	inviteBranch := sip.GenerateBranch()
 	invite := sip.NewRequest("", sip.MethodInvite, local.URI, sip.DefaultSipVersion,
 		sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodInvite).SetCallID(&callID).
-			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
+			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: inviteBranch})}).Build(), nil)
 	invite.SetConnection(connection)
 	invite.SetSource(connection.remote)
 	invite.SetDestination(connection.local)
@@ -465,7 +466,7 @@ func TestCascadeCancelTerminatesPendingInvite(t *testing.T) {
 	api.inviteDialogs.Store(string(callID), dialog)
 	cancelRequest := sip.NewRequest("", sip.MethodCancel, local.URI, sip.DefaultSipVersion,
 		sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodCancel).SetCallID(&callID).
-			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
+			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: inviteBranch})}).Build(), nil)
 	cancelRequest.SetConnection(connection)
 	cancelRequest.SetSource(connection.remote)
 	cancelRequest.SetDestination(connection.local)
@@ -494,6 +495,72 @@ func TestCascadeCancelTerminatesPendingInvite(t *testing.T) {
 	if _, ok := api.inviteDialogs.Load(string(callID)); ok {
 		t.Fatal("cascade pending dialog survived CANCEL")
 	}
+}
+
+func TestCascadeCancelRejectsDifferentInviteTransaction(t *testing.T) {
+	connection := newFlowConnection()
+	connection.remote = &net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060}
+	server := &Server{}
+	api := &GB28181API{svr: server}
+	server.gb = api
+	worker := newCascadeWorker(server, testSharedCascadePlatform(t))
+	worker.updateStatus(func(state *CascadePlatformStatus) { state.Registered = true })
+	callID := sip.CallID("cascade-cancel-transaction")
+	remote := mustFlowAddress(t, "sip:"+gb10PlatformID+"@remote.example")
+	remote.Params.Add("tag", sip.String{Str: "cancel-remote-tag"})
+	local := mustFlowAddress(t, "sip:"+testExposedChannelID+"@local.example")
+	invite := sip.NewRequest("", sip.MethodInvite, local.URI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodInvite).SetSeqNo(7).SetCallID(&callID).
+			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: "z9hG4bK-owner"})}).Build(), nil)
+	invite.SetConnection(connection)
+	invite.SetSource(connection.remote)
+	invite.SetDestination(connection.local)
+	cancelled := false
+	dialog := &inboundInviteDialog{
+		CallID: string(callID), DeviceID: gb10PlatformID, RemoteTag: "cancel-remote-tag", TagsBound: true,
+		InitialRemoteCSeq: 7, InitialRemoteCSeqSet: true, RemoteCSeq: 7, RemoteCSeqSet: true, RemoteMethod: sip.MethodInvite,
+		Request: invite, Cascade: &cascadeMediaSession{worker: worker, cancel: func() { cancelled = true }}, UpdatedAt: time.Now(),
+	}
+	api.inviteDialogs.Store(dialog.CallID, dialog)
+	makeCancel := func(recipient *sip.URI, branch string, cseq uint) *sip.Request {
+		request := sip.NewRequest("", sip.MethodCancel, recipient, sip.DefaultSipVersion,
+			sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodCancel).SetSeqNo(cseq).SetCallID(&callID).
+				AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: branch})}).Build(), nil)
+		request.SetConnection(connection)
+		request.SetSource(connection.remote)
+		request.SetDestination(connection.local)
+		return request
+	}
+	assertRejected := func(name string, request *sip.Request) {
+		t.Helper()
+		api.sipCancelGeneric(&sip.Context{Request: request, Tx: sip.NewTransaction(name, connection), DeviceID: gb10PlatformID, Source: connection.remote})
+		select {
+		case payload := <-connection.writes:
+			if !strings.Contains(string(payload), "SIP/2.0 481") {
+				t.Fatalf("%s response = %s", name, payload)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s response timeout", name)
+		}
+		if cancelled {
+			t.Fatalf("%s cancelled owner transaction", name)
+		}
+		if _, exists := api.inviteDialogs.Load(dialog.CallID); !exists {
+			t.Fatalf("%s removed owner dialog", name)
+		}
+	}
+	assertRejected("cancel-wrong-cseq", makeCancel(local.URI, "z9hG4bK-owner", 8))
+	assertRejected("cancel-wrong-branch", makeCancel(local.URI, "z9hG4bK-other", 7))
+	other := local.URI.Clone()
+	other.FUser = sip.String{Str: "34020000001320000912"}
+	assertRejected("cancel-wrong-uri", makeCancel(other, "z9hG4bK-owner", 7))
+	wrongSentBy := makeCancel(local.URI, "z9hG4bK-owner", 7)
+	wrongSentByVia, ok := wrongSentBy.ViaHop()
+	if !ok || wrongSentByVia == nil {
+		t.Fatal("CANCEL missing Via")
+	}
+	wrongSentByVia.Host = "192.0.2.31"
+	assertRejected("cancel-wrong-via-sent-by", wrongSentBy)
 }
 
 func TestCascadeDialogControlRejectsDifferentUpstream(t *testing.T) {
@@ -666,6 +733,154 @@ func TestCascadeDialogControlRejectsMismatchedTags(t *testing.T) {
 	}
 	if _, ok := api.inviteDialogs.Load(dialog.CallID); !ok {
 		t.Fatal("mismatched dialog tags removed the owner dialog")
+	}
+}
+
+func TestInboundInviteDialogEnforcesRemoteCSeq(t *testing.T) {
+	connection := newFlowConnection()
+	connection.remote = &net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060}
+	server := &Server{}
+	api := &GB28181API{svr: server}
+	server.gb = api
+	worker := newCascadeWorker(server, testSharedCascadePlatform(t))
+	worker.updateStatus(func(state *CascadePlatformStatus) { state.Registered = true })
+	callID := sip.CallID("cascade-dialog-cseq")
+	remote := mustFlowAddress(t, "sip:"+gb10PlatformID+"@remote.example")
+	remote.Params.Add("tag", sip.String{Str: "remote-cseq-tag"})
+	local := mustFlowAddress(t, "sip:"+testExposedChannelID+"@local.example")
+	invite := sip.NewRequest("", sip.MethodInvite, local.URI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodInvite).SetSeqNo(10).SetCallID(&callID).
+			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: "z9hG4bK-cseq-invite"})}).Build(), nil)
+	invite.SetConnection(connection)
+	invite.SetSource(connection.remote)
+	invite.SetDestination(connection.local)
+	source := &cascadeSourceRef{
+		key: "history:Playback:device:channel:cascade:cseq", mode: historyModePlayback,
+		channel: &ipc.Channel{DeviceID: gb10DeviceID, ChannelID: testCascadeChannelID}, stream: &Streams{},
+	}
+	stopped := false
+	dialog := &inboundInviteDialog{
+		CallID: string(callID), DeviceID: gb10PlatformID,
+		RemoteTag: "remote-cseq-tag", InitialToTag: "", LocalTag: "local-cseq-tag", TagsBound: true,
+		InitialRemoteCSeq: 10, InitialRemoteCSeqSet: true, RemoteCSeq: 10, RemoteCSeqSet: true, RemoteMethod: sip.MethodInvite,
+		Request: invite, Cascade: &cascadeMediaSession{worker: worker, source: source, cancel: func() { stopped = true }}, UpdatedAt: time.Now(),
+	}
+	api.inviteDialogs.Store(dialog.CallID, dialog)
+	newRequest := func(method string, cseq uint32, established bool) *sip.Request {
+		to := local.Clone()
+		if established {
+			to.Params.Add("tag", sip.String{Str: dialog.LocalTag})
+		}
+		request := sip.NewRequest("", method, local.URI, sip.DefaultSipVersion,
+			sip.NewHeaderBuilder().SetFrom(remote).SetToWithParam(to).SetMethod(method).SetSeqNo(uint(cseq)).SetCallID(&callID).
+				AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
+		request.SetConnection(connection)
+		request.SetSource(connection.remote)
+		request.SetDestination(connection.local)
+		return request
+	}
+	response := func(t *testing.T) string {
+		t.Helper()
+		select {
+		case payload := <-connection.writes:
+			return string(payload)
+		case <-time.After(time.Second):
+			t.Fatal("dialog CSeq response timeout")
+			return ""
+		}
+	}
+
+	api.sipAckGeneric(&sip.Context{Request: newRequest(sip.MethodACK, 11, true), DeviceID: gb10PlatformID, Source: connection.remote})
+	dialog.mu.Lock()
+	if dialog.Established {
+		dialog.mu.Unlock()
+		t.Fatal("ACK with wrong CSeq established dialog")
+	}
+	dialog.mu.Unlock()
+	api.sipAckGeneric(&sip.Context{Request: newRequest(sip.MethodACK, 10, true), DeviceID: gb10PlatformID, Source: connection.remote})
+	dialog.mu.Lock()
+	established := dialog.Established
+	dialog.mu.Unlock()
+	if !established {
+		t.Fatal("ACK with INVITE CSeq did not establish dialog")
+	}
+
+	controlCalls := 0
+	api.cascadeControlHistory = func(context.Context, *ControlHistoryInput) error {
+		controlCalls++
+		return nil
+	}
+	info := newRequest(sip.MethodInfo, 11, true)
+	info.SetBody([]byte("PLAY MANSRTSP/1.0\r\nCSeq: 1\r\nScale: 1.0\r\n\r\n"), true)
+	info.AppendHeader(&sip.GenericHeader{HeaderName: "Content-Type", Contents: "Application/MANSRTSP"})
+	infoCtx := &sip.Context{Request: info, Tx: sip.NewTransaction("cascade-dialog-cseq-info", connection), DeviceID: gb10PlatformID, Source: connection.remote}
+	api.sipInfoGeneric(infoCtx)
+	if got := response(t); !strings.Contains(got, "SIP/2.0 200 OK") {
+		t.Fatalf("valid INFO response = %s", got)
+	}
+	duplicate := info.Clone().(*sip.Request)
+	duplicate.SetConnection(connection)
+	duplicate.SetSource(connection.remote)
+	duplicate.SetDestination(connection.local)
+	api.sipInfoGeneric(&sip.Context{Request: duplicate, Tx: sip.NewTransaction("cascade-dialog-cseq-info-duplicate", connection), DeviceID: gb10PlatformID, Source: connection.remote})
+	if got := response(t); !strings.Contains(got, "SIP/2.0 200 OK") {
+		t.Fatalf("duplicate INFO response = %s", got)
+	}
+	if controlCalls != 1 {
+		t.Fatalf("duplicate INFO downstream calls = %d; want 1", controlCalls)
+	}
+	altered := info.Clone().(*sip.Request)
+	altered.SetBody([]byte("PLAY MANSRTSP/1.0\r\nCSeq: 2\r\nScale: 2.0\r\n\r\n"), true)
+	altered.SetConnection(connection)
+	altered.SetSource(connection.remote)
+	altered.SetDestination(connection.local)
+	api.sipInfoGeneric(&sip.Context{Request: altered, Tx: sip.NewTransaction("cascade-dialog-cseq-info-altered", connection), DeviceID: gb10PlatformID, Source: connection.remote})
+	if got := response(t); !strings.Contains(got, "SIP/2.0 500 CSeq out of order") {
+		t.Fatalf("altered same-CSeq INFO response = %s", got)
+	}
+	if controlCalls != 1 {
+		t.Fatalf("altered same-CSeq INFO downstream calls = %d; want 1", controlCalls)
+	}
+	unsupported := newRequest(sip.MethodInfo, 12, true)
+	unsupported.SetBody([]byte("PLAY MANSRTSP/1.0\r\nCSeq: 3\r\nScale: 1.0\r\n\r\n"), true)
+	unsupportedCtx := &sip.Context{Request: unsupported, Tx: sip.NewTransaction("cascade-dialog-cseq-info-unsupported", connection), DeviceID: gb10PlatformID, Source: connection.remote}
+	api.sipInfoGeneric(unsupportedCtx)
+	if got := response(t); !strings.Contains(got, "SIP/2.0 415 Content-Type must be Application/MANSRTSP") {
+		t.Fatalf("unsupported INFO response = %s", got)
+	}
+	unsupportedDuplicate := unsupported.Clone().(*sip.Request)
+	unsupportedDuplicate.SetConnection(connection)
+	unsupportedDuplicate.SetSource(connection.remote)
+	unsupportedDuplicate.SetDestination(connection.local)
+	api.sipInfoGeneric(&sip.Context{Request: unsupportedDuplicate, Tx: sip.NewTransaction("cascade-dialog-cseq-info-unsupported-duplicate", connection), DeviceID: gb10PlatformID, Source: connection.remote})
+	if got := response(t); !strings.Contains(got, "SIP/2.0 415 Content-Type must be Application/MANSRTSP") {
+		t.Fatalf("duplicate unsupported INFO response = %s", got)
+	}
+	if controlCalls != 1 {
+		t.Fatalf("unsupported INFO downstream calls = %d; want 1", controlCalls)
+	}
+
+	replayedBYE := newRequest(sip.MethodBYE, 12, true)
+	api.sipByeGeneric(&sip.Context{Request: replayedBYE, Tx: sip.NewTransaction("cascade-dialog-cseq-bye-replay", connection), DeviceID: gb10PlatformID, Source: connection.remote})
+	if got := response(t); !strings.Contains(got, "SIP/2.0 500 CSeq out of order") || !strings.Contains(got, "Retry-After: 0") {
+		t.Fatalf("replayed BYE response = %s", got)
+	}
+	if stopped {
+		t.Fatal("replayed BYE stopped cascade media")
+	}
+	if _, exists := api.inviteDialogs.Load(dialog.CallID); !exists {
+		t.Fatal("replayed BYE removed dialog")
+	}
+	validBYE := newRequest(sip.MethodBYE, 13, true)
+	api.sipByeGeneric(&sip.Context{Request: validBYE, Tx: sip.NewTransaction("cascade-dialog-cseq-bye-valid", connection), DeviceID: gb10PlatformID, Source: connection.remote})
+	if got := response(t); !strings.Contains(got, "SIP/2.0 200 OK") {
+		t.Fatalf("valid BYE response = %s", got)
+	}
+	if !stopped {
+		t.Fatal("valid BYE did not stop cascade media")
+	}
+	if _, exists := api.inviteDialogs.Load(dialog.CallID); exists {
+		t.Fatal("valid BYE did not remove dialog")
 	}
 }
 
@@ -904,6 +1119,7 @@ func TestCascadeRealtimeInviteEstablishesAndReleasesB2BUA(t *testing.T) {
 	local.Params.Add("tag", sip.String{Str: dialog.LocalTag})
 	bye := sip.NewRequest("", sip.MethodBYE, local.URI, sip.DefaultSipVersion,
 		sip.NewHeaderBuilder().SetFrom(remote).SetToWithParam(local).SetMethod(sip.MethodBYE).SetCallID(&callID).
+			SetSeqNo(2).
 			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
 	bye.SetConnection(connection)
 	bye.SetSource(connection.remote)
@@ -1070,6 +1286,7 @@ func TestCascadeHistoryDialogFourVersionEndToEnd(t *testing.T) {
 			infoBody = append(infoBody, "\r\n"...)
 			info := sip.NewRequest("", sip.MethodInfo, local.URI, sip.DefaultSipVersion,
 				sip.NewHeaderBuilder().SetFrom(remote).SetToWithParam(local).SetMethod(sip.MethodInfo).SetCallID(&callID).
+					SetSeqNo(2).
 					AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), infoBody)
 			info.AppendHeader(&sip.GenericHeader{HeaderName: "Content-Type", Contents: "Application/MANSRTSP"})
 			info.SetConnection(connection)
@@ -1094,6 +1311,7 @@ func TestCascadeHistoryDialogFourVersionEndToEnd(t *testing.T) {
 
 			bye := sip.NewRequest("", sip.MethodBYE, local.URI, sip.DefaultSipVersion,
 				sip.NewHeaderBuilder().SetFrom(remote).SetToWithParam(local).SetMethod(sip.MethodBYE).SetCallID(&callID).
+					SetSeqNo(3).
 					AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
 			bye.SetConnection(connection)
 			bye.SetSource(connection.remote)

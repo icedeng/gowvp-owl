@@ -61,12 +61,69 @@ func TestProcessTCPConnRejectsMissingRequiredRoutingHeaders(t *testing.T) {
 		{
 			name: "From",
 			headers: "Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-missing-from\r\n" +
-				"To: <sip:34020000002000000001@127.0.0.1>\r\n",
+				"To: <sip:34020000002000000001@127.0.0.1>\r\n" +
+				"Call-ID: missing-from\r\nCSeq: 1 OPTIONS\r\n",
 		},
 		{
 			name: "Via",
 			headers: "From: <sip:34020000001320000001@127.0.0.1>;tag=from-missing-via\r\n" +
-				"To: <sip:34020000002000000001@127.0.0.1>\r\n",
+				"To: <sip:34020000002000000001@127.0.0.1>\r\n" +
+				"Call-ID: missing-via\r\nCSeq: 1 OPTIONS\r\n",
+		},
+		{
+			name: "To",
+			headers: "Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-missing-to\r\n" +
+				"From: <sip:34020000001320000001@127.0.0.1>;tag=from-missing-to\r\n" +
+				"Call-ID: missing-to\r\nCSeq: 1 OPTIONS\r\n",
+		},
+		{
+			name: "Call-ID",
+			headers: "Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-missing-call-id\r\n" +
+				"From: <sip:34020000001320000001@127.0.0.1>;tag=from-missing-call-id\r\n" +
+				"To: <sip:34020000002000000001@127.0.0.1>\r\nCSeq: 1 OPTIONS\r\n",
+		},
+		{
+			name: "CSeq",
+			headers: "Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-missing-cseq\r\n" +
+				"From: <sip:34020000001320000001@127.0.0.1>;tag=from-missing-cseq\r\n" +
+				"To: <sip:34020000002000000001@127.0.0.1>\r\nCall-ID: missing-cseq\r\n",
+		},
+		{
+			name: "mismatched CSeq method",
+			headers: "Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-mismatched-cseq\r\n" +
+				"From: <sip:34020000001320000001@127.0.0.1>;tag=from-mismatched-cseq\r\n" +
+				"To: <sip:34020000002000000001@127.0.0.1>\r\n" +
+				"Call-ID: mismatched-cseq\r\nCSeq: 1 BYE\r\n",
+		},
+		{
+			name: "duplicate From",
+			headers: "Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-duplicate-from\r\n" +
+				"From: <sip:34020000001320000001@127.0.0.1>;tag=duplicate-from-1\r\n" +
+				"From: <sip:34020000001320000002@127.0.0.1>;tag=duplicate-from-2\r\n" +
+				"To: <sip:34020000002000000001@127.0.0.1>\r\n" +
+				"Call-ID: duplicate-from\r\nCSeq: 1 OPTIONS\r\n",
+		},
+		{
+			name: "duplicate To",
+			headers: "Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-duplicate-to\r\n" +
+				"From: <sip:34020000001320000001@127.0.0.1>;tag=duplicate-to\r\n" +
+				"To: <sip:34020000002000000001@127.0.0.1>\r\n" +
+				"To: <sip:34020000002000000002@127.0.0.1>\r\n" +
+				"Call-ID: duplicate-to\r\nCSeq: 1 OPTIONS\r\n",
+		},
+		{
+			name: "duplicate Call-ID",
+			headers: "Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-duplicate-call-id\r\n" +
+				"From: <sip:34020000001320000001@127.0.0.1>;tag=duplicate-call-id\r\n" +
+				"To: <sip:34020000002000000001@127.0.0.1>\r\n" +
+				"Call-ID: duplicate-call-id-1\r\nCall-ID: duplicate-call-id-2\r\nCSeq: 1 OPTIONS\r\n",
+		},
+		{
+			name: "duplicate CSeq",
+			headers: "Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-duplicate-cseq\r\n" +
+				"From: <sip:34020000001320000001@127.0.0.1>;tag=duplicate-cseq\r\n" +
+				"To: <sip:34020000002000000001@127.0.0.1>\r\n" +
+				"Call-ID: duplicate-cseq\r\nCSeq: 1 OPTIONS\r\nCSeq: 2 OPTIONS\r\n",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -83,9 +140,7 @@ func TestProcessTCPConnRejectsMissingRequiredRoutingHeaders(t *testing.T) {
 				remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 5060},
 			}
 			go server.ProcessTcpConn(serverConn)
-			request := "OPTIONS sip:34020000002000000001@127.0.0.1 SIP/2.0\r\n" + test.headers +
-				"Call-ID: missing-" + strings.ToLower(test.name) + "\r\n" +
-				"CSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n"
+			request := "OPTIONS sip:34020000002000000001@127.0.0.1 SIP/2.0\r\n" + test.headers + "Content-Length: 0\r\n\r\n"
 			if _, err := clientConn.Write([]byte(request)); err != nil {
 				t.Fatal(err)
 			}
@@ -428,6 +483,67 @@ func TestServerUpdatesExistingTransactionToReconnectedTCPConnection(t *testing.T
 	}
 	if transaction.connection() != second {
 		t.Fatal("reconnected TCP transaction kept stale connection")
+	}
+}
+
+func TestMalformedRequestDoesNotReplaceExistingTransactionConnection(t *testing.T) {
+	localURI, err := ParseSipURI("sip:34020000002000000001@127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteURI, err := ParseSipURI("sip:34020000001320000001@127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &localURI, Params: NewParams()})
+	defer server.Close()
+	newConnection := func(localPort int) (Connection, net.Conn) {
+		client, peer := net.Pipe()
+		wrapped := &sipTestTCPConn{
+			Conn: client, local: &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: localPort},
+			remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060},
+		}
+		return NewTCPConnection(wrapped), peer
+	}
+	ownerConnection, ownerPeer := newConnection(41000)
+	defer ownerConnection.Close()
+	defer ownerPeer.Close()
+	malformedConnection, malformedPeer := newConnection(41001)
+	defer malformedConnection.Close()
+	defer malformedPeer.Close()
+
+	callID := CallID("malformed-transaction-isolation")
+	from := &Address{URI: &remoteURI, Params: NewParams().Add("tag", String{Str: "owner"})}
+	to := &Address{URI: &localURI, Params: NewParams()}
+	request := NewRequest("", MethodOptions, &localURI, DefaultSipVersion,
+		NewHeaderBuilder().SetFrom(from).SetTo(to).SetCallID(&callID).SetMethod(MethodOptions).SetSeqNo(7).
+			AddVia(&ViaHop{ProtocolName: "SIP", ProtocolVersion: "2.0", Transport: "TCP", Host: "192.0.2.30", Port: NewPort(5060), Params: NewParams().Add("branch", String{Str: "z9hG4bK-owner"})}).Build(), nil)
+	request.SetConnection(ownerConnection)
+	request.SetSource(ownerConnection.RemoteAddr())
+	request.SetDestination(ownerConnection.LocalAddr())
+	owner := server.mustTX(request)
+
+	malformed := request.Clone().(*Request)
+	malformed.AppendHeader(&CSeq{SeqNo: 8, MethodName: MethodOptions})
+	malformed.SetConnection(malformedConnection)
+	malformed.SetSource(malformedConnection.RemoteAddr())
+	malformed.SetDestination(malformedConnection.LocalAddr())
+	go server.handlerRequest(malformed)
+	if err := malformedPeer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	status, err := bufio.NewReader(malformedPeer).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "SIP/2.0 400") {
+		t.Fatalf("malformed response status = %q", status)
+	}
+	if owner.connection() != ownerConnection {
+		t.Fatal("malformed request replaced existing transaction connection")
+	}
+	if server.getTX(getTXKey(request)) != owner {
+		t.Fatal("malformed request replaced existing transaction")
 	}
 }
 

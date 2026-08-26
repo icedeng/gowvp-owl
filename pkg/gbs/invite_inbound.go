@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"math"
 	"net"
@@ -27,13 +28,22 @@ type inboundInviteDialog struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	LocalCSeq    uint32
-	Request      *sip.Request
-	Response     *sip.Response
-	Broadcast    *broadcastSession
-	Cascade      *cascadeMediaSession
-	InviteTx     *sip.Transaction
-	Cancelled    bool
-	mu           sync.Mutex
+	// InitialRemoteCSeq 为远端 INVITE 序号；RemoteCSeq 为远端最近一次已接纳的对话内请求序号。
+	InitialRemoteCSeq    uint32
+	InitialRemoteCSeqSet bool
+	RemoteCSeq           uint32
+	RemoteCSeqSet        bool
+	RemoteMethod         string
+	RemoteFingerprint    [sha256.Size]byte
+	RemoteResponse       *sip.Response
+	Request              *sip.Request
+	Response             *sip.Response
+	Broadcast            *broadcastSession
+	Cascade              *cascadeMediaSession
+	InviteTx             *sip.Transaction
+	Cancelled            bool
+	remoteMu             sync.Mutex
+	mu                   sync.Mutex
 }
 
 const pendingInviteDialogTTL = 10 * time.Minute
@@ -84,7 +94,7 @@ func (g *GB28181API) sipCancelGeneric(ctx *sip.Context) {
 		ctx.String(http.StatusForbidden, "cascade dialog source mismatch")
 		return
 	}
-	if !inboundDialogTagsMatch(dialog, ctx.Request, false) {
+	if !inboundInviteTransactionMatches(dialog, ctx.Request) {
 		ctx.String(481, "Call/Transaction Does Not Exist")
 		return
 	}
@@ -164,7 +174,7 @@ func (g *GB28181API) sipInviteBroadcast(ctx *sip.Context, callID string, session
 	}
 	if existing, ok := g.inviteDialogs.Load(callID); ok {
 		if dialog, ok := existing.(*inboundInviteDialog); ok && dialog != nil && dialog.Broadcast == session {
-			if !inboundDialogTagsMatch(dialog, ctx.Request, false) {
+			if !inboundInviteTransactionMatches(dialog, ctx.Request) {
 				ctx.String(491, "Call-ID already in use")
 				return
 			}
@@ -207,9 +217,12 @@ func (g *GB28181API) sipInviteBroadcast(ctx *sip.Context, callID string, session
 		session.inviteBusy = false
 		session.mu.Unlock()
 	}()
+	remoteCSeq, remoteCSeqSet := sipRequestCSeq(ctx.Request, sip.MethodInvite)
 	dialog := &inboundInviteDialog{
 		CallID: callID, DeviceID: strings.TrimSpace(ctx.DeviceID), RemoteTag: sipRequestFromTag(ctx.Request), InitialToTag: sipRequestToTag(ctx.Request), TagsBound: true, CreatedAt: time.Now(), UpdatedAt: time.Now(),
-		LocalCSeq: 1, Request: ctx.Request, Broadcast: session, InviteTx: ctx.Tx,
+		LocalCSeq: 1, InitialRemoteCSeq: remoteCSeq, InitialRemoteCSeqSet: remoteCSeqSet,
+		RemoteCSeq: remoteCSeq, RemoteCSeqSet: remoteCSeqSet, RemoteMethod: sip.MethodInvite,
+		Request: ctx.Request, Broadcast: session, InviteTx: ctx.Tx,
 	}
 	if _, loaded := g.inviteDialogs.LoadOrStore(callID, dialog); loaded {
 		ctx.String(491, "Call-ID already in use")
@@ -374,7 +387,24 @@ func (g *GB28181API) sipByeGeneric(ctx *sip.Context) {
 		ctx.String(481, "Call/Transaction Does Not Exist")
 		return
 	}
-	ctx.String(200, "OK")
+	d.remoteMu.Lock()
+	defer d.remoteMu.Unlock()
+	response, duplicate, accepted := acceptInboundDialogRequest(d, ctx.Request)
+	if duplicate {
+		if response != nil {
+			_ = ctx.Tx.Respond(response)
+		} else {
+			respondInboundDialogCSeqError(ctx)
+		}
+		return
+	}
+	if !accepted {
+		respondInboundDialogCSeqError(ctx)
+		return
+	}
+	response = sip.NewResponseFromRequest("", ctx.Request, http.StatusOK, "OK", nil)
+	cacheInboundDialogResponse(d, response)
+	_ = ctx.Tx.Respond(response)
 	g.inviteDialogs.Delete(callID)
 	if d.Broadcast != nil {
 		_ = g.stopBroadcastSession(d.Broadcast, false)
@@ -450,6 +480,9 @@ func (g *GB28181API) sipAckGeneric(ctx *sip.Context) {
 	if !inboundDialogTagsMatch(d, ctx.Request, true) {
 		return
 	}
+	if !inboundInviteCSeqMatches(d, ctx.Request, sip.MethodACK) {
+		return
+	}
 	d.mu.Lock()
 	d.Established = true
 	d.UpdatedAt = time.Now()
@@ -493,14 +526,27 @@ func (g *GB28181API) sipInfoGeneric(ctx *sip.Context) {
 		ctx.String(481, "history dialog is not established")
 		return
 	}
+	dialog.remoteMu.Lock()
+	defer dialog.remoteMu.Unlock()
+	if response, duplicate, accepted := acceptInboundDialogRequest(dialog, ctx.Request); duplicate {
+		if response != nil {
+			_ = ctx.Tx.Respond(response)
+		} else {
+			respondInboundDialogCSeqError(ctx)
+		}
+		return
+	} else if !accepted {
+		respondInboundDialogCSeqError(ctx)
+		return
+	}
 	contentType := strings.ToLower(strings.TrimSpace(ctx.GetHeader("Content-Type")))
 	if contentType != "application/mansrtsp" && !strings.HasPrefix(contentType, "application/mansrtsp;") {
-		ctx.String(http.StatusUnsupportedMediaType, "Content-Type must be Application/MANSRTSP")
+		respondAndCacheInboundDialog(dialog, ctx, http.StatusUnsupportedMediaType, "Content-Type must be Application/MANSRTSP")
 		return
 	}
 	command, err := parseCascadeMANSRTSP(ctx.Request.Body())
 	if err != nil {
-		ctx.String(http.StatusBadRequest, err.Error())
+		respondAndCacheInboundDialog(dialog, ctx, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -520,13 +566,148 @@ func (g *GB28181API) sipInfoGeneric(ctx *sip.Context) {
 	})
 	source.controlMu.Unlock()
 	if err != nil {
-		ctx.String(http.StatusBadGateway, err.Error())
+		response := sip.NewResponseFromRequest("", ctx.Request, http.StatusBadGateway, err.Error(), nil)
+		cacheInboundDialogResponse(dialog, response)
+		_ = ctx.Tx.Respond(response)
 		return
 	}
 
 	responseBody := []byte(fmt.Sprintf("%s 200 OK\r\nCSeq: %d\r\n\r\n", command.version, command.cseq))
 	response := sip.NewResponseFromRequest("", ctx.Request, http.StatusOK, "OK", responseBody)
 	response.AppendHeader(&sip.GenericHeader{HeaderName: "Content-Type", Contents: "Application/MANSRTSP"})
+	cacheInboundDialogResponse(dialog, response)
+	_ = ctx.Tx.Respond(response)
+}
+
+func sipRequestCSeq(request *sip.Request, method string) (uint32, bool) {
+	if request == nil {
+		return 0, false
+	}
+	cseq, ok := request.CSeq()
+	if !ok || cseq == nil || !strings.EqualFold(strings.TrimSpace(cseq.MethodName), strings.TrimSpace(method)) {
+		return 0, false
+	}
+	return cseq.SeqNo, true
+}
+
+func inboundInviteCSeqMatches(dialog *inboundInviteDialog, request *sip.Request, method string) bool {
+	incoming, ok := sipRequestCSeq(request, method)
+	if !ok || dialog == nil {
+		return false
+	}
+	dialog.mu.Lock()
+	initial := dialog.InitialRemoteCSeq
+	initialSet := dialog.InitialRemoteCSeqSet
+	dialogRequest := dialog.Request
+	dialog.mu.Unlock()
+	if initialSet {
+		return incoming == initial
+	}
+	if cseq, found := sipRequestCSeq(dialogRequest, sip.MethodInvite); found {
+		return incoming == cseq
+	}
+	// 兼容内部旧测试/清理状态；协议入口创建的会话始终记录初始 CSeq。
+	return dialogRequest == nil
+}
+
+func inboundInviteTransactionMatches(dialog *inboundInviteDialog, request *sip.Request) bool {
+	if !inboundDialogTagsMatch(dialog, request, false) || !inboundInviteCSeqMatches(dialog, request, request.Method()) || dialog == nil || request == nil {
+		return false
+	}
+	dialog.mu.Lock()
+	initial := dialog.Request
+	dialog.mu.Unlock()
+	if initial == nil {
+		// 兼容内部旧测试/清理状态；协议入口创建的会话始终保存初始 INVITE。
+		return true
+	}
+	if initial.Recipient() == nil || request.Recipient() == nil || initial.Recipient().String() != request.Recipient().String() {
+		return false
+	}
+	initialVia, initialOK := initial.ViaHop()
+	requestVia, requestOK := request.ViaHop()
+	if !initialOK || !requestOK || initialVia == nil || requestVia == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(initialVia.ProtocolName), strings.TrimSpace(requestVia.ProtocolName)) &&
+		strings.EqualFold(strings.TrimSpace(initialVia.ProtocolVersion), strings.TrimSpace(requestVia.ProtocolVersion)) &&
+		strings.EqualFold(strings.TrimSpace(initialVia.Transport), strings.TrimSpace(requestVia.Transport)) &&
+		strings.EqualFold(strings.TrimSpace(initialVia.SentBy()), strings.TrimSpace(requestVia.SentBy())) &&
+		sipViaBranch(initialVia) != "" && sipViaBranch(initialVia) == sipViaBranch(requestVia)
+}
+
+func sipViaBranch(via *sip.ViaHop) string {
+	if via == nil || via.Params == nil {
+		return ""
+	}
+	branch, ok := via.Params.Get("branch")
+	if !ok || branch == nil {
+		return ""
+	}
+	return strings.TrimSpace(branch.String())
+}
+
+func acceptInboundDialogRequest(dialog *inboundInviteDialog, request *sip.Request) (*sip.Response, bool, bool) {
+	incoming, ok := sipRequestCSeq(request, request.Method())
+	if !ok || dialog == nil {
+		return nil, false, false
+	}
+	dialog.mu.Lock()
+	defer dialog.mu.Unlock()
+	last := dialog.RemoteCSeq
+	lastSet := dialog.RemoteCSeqSet
+	if !lastSet {
+		last = dialog.InitialRemoteCSeq
+		lastSet = dialog.InitialRemoteCSeqSet
+		if !lastSet {
+			if initial, found := sipRequestCSeq(dialog.Request, sip.MethodInvite); found {
+				last = initial
+				lastSet = true
+			}
+		}
+	}
+	fingerprint := sha256.Sum256([]byte(request.String()))
+	if lastSet && incoming == last && strings.EqualFold(dialog.RemoteMethod, request.Method()) {
+		if dialog.RemoteFingerprint == fingerprint {
+			return dialog.RemoteResponse, true, false
+		}
+		return nil, false, false
+	}
+	if lastSet && incoming <= last {
+		return nil, false, false
+	}
+	dialog.RemoteCSeq = incoming
+	dialog.RemoteCSeqSet = true
+	dialog.RemoteMethod = request.Method()
+	dialog.RemoteFingerprint = fingerprint
+	dialog.RemoteResponse = nil
+	return nil, false, true
+}
+
+func cacheInboundDialogResponse(dialog *inboundInviteDialog, response *sip.Response) {
+	if dialog == nil {
+		return
+	}
+	dialog.mu.Lock()
+	dialog.RemoteResponse = response
+	dialog.mu.Unlock()
+}
+
+func respondAndCacheInboundDialog(dialog *inboundInviteDialog, ctx *sip.Context, status int, reason string) {
+	if ctx == nil || ctx.Request == nil || ctx.Tx == nil {
+		return
+	}
+	response := sip.NewResponseFromRequest("", ctx.Request, status, reason, nil)
+	cacheInboundDialogResponse(dialog, response)
+	_ = ctx.Tx.Respond(response)
+}
+
+func respondInboundDialogCSeqError(ctx *sip.Context) {
+	if ctx == nil || ctx.Request == nil || ctx.Tx == nil {
+		return
+	}
+	response := sip.NewResponseFromRequest("", ctx.Request, http.StatusInternalServerError, "CSeq out of order", nil)
+	response.AppendHeader(&sip.GenericHeader{HeaderName: "Retry-After", Contents: "0"})
 	_ = ctx.Tx.Respond(response)
 }
 

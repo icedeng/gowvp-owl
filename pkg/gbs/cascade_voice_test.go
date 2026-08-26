@@ -228,10 +228,21 @@ func applyInboundDialogTags(t *testing.T, request *sip.Request, dialog *inboundI
 	dialog.mu.Lock()
 	remoteTag := dialog.RemoteTag
 	toTag := dialog.InitialToTag
+	initialCSeq := dialog.InitialRemoteCSeq
+	initialCSeqSet := dialog.InitialRemoteCSeqSet
+	remoteCSeq := dialog.RemoteCSeq
+	remoteCSeqSet := dialog.RemoteCSeqSet
+	dialogRequest := dialog.Request
 	if established {
 		toTag = dialog.LocalTag
 	}
 	dialog.mu.Unlock()
+	if !initialCSeqSet {
+		if cseq, ok := dialogRequest.CSeq(); ok && cseq != nil {
+			initialCSeq = cseq.SeqNo
+			initialCSeqSet = true
+		}
+	}
 	from, ok := request.From()
 	if !ok || from == nil || from.Address == nil {
 		t.Fatal("dialog request From is unavailable")
@@ -252,6 +263,15 @@ func applyInboundDialogTags(t *testing.T, request *sip.Request, dialog *inboundI
 	request.AppendHeader(&sip.FromHeader{DisplayName: fromAddress.DisplayName, Address: fromAddress.URI, Params: fromAddress.Params})
 	request.RemoveHeader("To")
 	request.AppendHeader(&sip.ToHeader{DisplayName: toAddress.DisplayName, Address: toAddress.URI, Params: toAddress.Params})
+	if cseq, ok := request.CSeq(); ok && cseq != nil && initialCSeqSet {
+		if request.IsAck() || request.IsCancel() {
+			cseq.SeqNo = initialCSeq
+		} else if remoteCSeqSet {
+			cseq.SeqNo = remoteCSeq + 1
+		} else {
+			cseq.SeqNo = initialCSeq + 1
+		}
+	}
 }
 
 func applyOutboundDialogTags(t *testing.T, request *sip.Request, response *sip.Response) {
@@ -400,6 +420,13 @@ func TestCascadeBroadcastReceiverCancelStopsBothLegs(t *testing.T) {
 	cancel.RemoveHeader("From")
 	if from, ok := invite.From(); ok {
 		cancel.AppendHeader(from.Clone())
+	}
+	cancel.RemoveHeader("Via")
+	sip.CopyHeaders("Via", invite, cancel)
+	if inviteCSeq, ok := invite.CSeq(); ok && inviteCSeq != nil {
+		if cancelCSeq, ok := cancel.CSeq(); ok && cancelCSeq != nil {
+			cancelCSeq.SeqNo = inviteCSeq.SeqNo
+		}
 	}
 	api.sipCancelGeneric(&sip.Context{
 		Request: cancel, Tx: sip.NewTransaction("cascade-voice-cancel", connection),

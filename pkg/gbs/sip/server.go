@@ -699,21 +699,49 @@ func (s *Server) handlerListen(msgs <-chan Message) {
 }
 
 func (s *Server) handlerRequest(msg *Request) {
+	if err := validateInboundRequestHeaders(msg); err != nil {
+		// ACK 没有对应响应事务，畸形 ACK 只丢弃，不能进入业务状态机。
+		if msg == nil || msg.IsAck() {
+			return
+		}
+		// 畸形报文不能复用由 Call-ID/CSeq 派生的正式事务键，否则可能覆盖合法事务的连接或安全器。
+		tx := NewTransaction(RandString(16), msg.GetConnection())
+		defer tx.Close()
+		var responseSecurity MessageSecurity
+		if malformedRequestCanBeSigned(msg) {
+			if resolver := s.requestSecurityResolver(); resolver != nil {
+				if security, resolveErr := resolver(msg); resolveErr == nil {
+					responseSecurity = security
+				}
+			}
+		}
+		response := NewResponseFromRequest("", msg, http.StatusBadRequest, err.Error(), nil)
+		if responseSecurity != nil {
+			if signErr := responseSecurity.Sign(response); signErr != nil {
+				// 核心字段虽不歧义但仍无法签名时，退化为全新无签名 400，避免发送部分签名头。
+				response = NewResponseFromRequest("", msg, http.StatusBadRequest, err.Error(), nil)
+			}
+		}
+		_ = tx.Respond(response)
+		return
+	}
 	tx := s.mustTX(msg)
+	var security MessageSecurity
 	if resolver := s.requestSecurityResolver(); resolver != nil {
-		security, err := resolver(msg)
+		resolved, err := resolver(msg)
 		if err != nil {
 			slog.Warn("resolve SIP request security failed", "method", msg.Method(), "err", err)
 			_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusForbidden, "request security unavailable", nil))
 			return
 		}
-		tx.SetMessageSecurity(security)
-		if security != nil {
-			if err := security.Verify(msg); err != nil {
-				slog.Warn("reject SIP request with invalid security proof", "method", msg.Method(), "err", err)
-				_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusForbidden, "invalid request security", nil))
-				return
-			}
+		security = resolved
+		tx.SetMessageSecurity(resolved)
+	}
+	if security != nil {
+		if err := security.Verify(msg); err != nil {
+			slog.Warn("reject SIP request with invalid security proof", "method", msg.Method(), "err", err)
+			_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusForbidden, "invalid request security", nil))
+			return
 		}
 	}
 	// logrus.Traceln("receive request from:", msg.Source(), ",method:", msg.Method(), "txKey:", tx.key, "message: \n", msg.String())
@@ -745,6 +773,63 @@ func (s *Server) handlerRequest(msg *Request) {
 	ctx.From = s.from
 	ctx.svr = s
 	s.startRequestContext(ctx)
+}
+
+func malformedRequestCanBeSigned(msg *Request) bool {
+	if msg == nil || len(msg.GetHeaders("From")) != 1 || len(msg.GetHeaders("To")) != 1 ||
+		len(msg.GetHeaders("Call-ID")) != 1 || len(msg.GetHeaders("CSeq")) != 1 {
+		return false
+	}
+	from, fromOK := msg.From()
+	to, toOK := msg.To()
+	callID, callIDOK := msg.CallID()
+	cseq, cseqOK := msg.CSeq()
+	return fromOK && from != nil && from.Address != nil && toOK && to != nil && to.Address != nil &&
+		callIDOK && callID != nil && strings.TrimSpace(string(*callID)) != "" &&
+		cseqOK && cseq != nil && strings.TrimSpace(cseq.MethodName) != ""
+}
+
+func validateInboundRequestHeaders(msg *Request) error {
+	if msg == nil {
+		return fmt.Errorf("request is nil")
+	}
+	if headers := msg.GetHeaders("From"); len(headers) != 1 {
+		return fmt.Errorf("request must contain exactly one From header")
+	}
+	from, ok := msg.From()
+	if !ok || from == nil || from.Address == nil {
+		return fmt.Errorf("request From header is invalid")
+	}
+	if headers := msg.GetHeaders("To"); len(headers) != 1 {
+		return fmt.Errorf("request must contain exactly one To header")
+	}
+	to, ok := msg.To()
+	if !ok || to == nil || to.Address == nil {
+		return fmt.Errorf("request To header is invalid")
+	}
+	if headers := msg.GetHeaders("Call-ID"); len(headers) != 1 {
+		return fmt.Errorf("request must contain exactly one Call-ID header")
+	}
+	callID, ok := msg.CallID()
+	if !ok || callID == nil || strings.TrimSpace(string(*callID)) == "" {
+		return fmt.Errorf("request Call-ID header is invalid")
+	}
+	if headers := msg.GetHeaders("CSeq"); len(headers) != 1 {
+		return fmt.Errorf("request must contain exactly one CSeq header")
+	}
+	cseq, ok := msg.CSeq()
+	if !ok || cseq == nil || strings.TrimSpace(cseq.MethodName) == "" {
+		return fmt.Errorf("request CSeq header is invalid")
+	}
+	if !strings.EqualFold(strings.TrimSpace(cseq.MethodName), strings.TrimSpace(msg.Method())) {
+		return fmt.Errorf("request method does not match CSeq method")
+	}
+	via, ok := msg.ViaHop()
+	if !ok || via == nil || strings.TrimSpace(via.ProtocolName) == "" || strings.TrimSpace(via.ProtocolVersion) == "" ||
+		strings.TrimSpace(via.Transport) == "" || strings.TrimSpace(via.Host) == "" {
+		return fmt.Errorf("request Via header is invalid")
+	}
+	return nil
 }
 
 func (s *Server) startRequestContext(ctx *Context) {

@@ -23,7 +23,7 @@ go test ./... -count=1
 覆盖内容包括：
 
 - 四版本 REGISTER、SIP/XML/SDP 夹具；
-- SIP/TCP 大小写不敏感 `Content-Length`、紧凑头 `l`、同连接连续报文分帧；对话路由集反转 `Record-Route` 及响应 CSeq 不变性；
+- SIP/TCP 大小写不敏感 `Content-Length`、紧凑头 `l`、同连接连续报文分帧；入向请求的 From/To/Call-ID/CSeq 单值有效性、有效顶层 Via，以及 Request-Line/CSeq 方法一致性；畸形请求使用独立临时事务，不能替换相同 Call-ID/CSeq 的合法事务连接；对话路由集反转 `Record-Route` 及响应 CSeq 不变性；
 - SIP UDP/TCP/TLS 监听器、活动连接、parser/handler、请求处理器和事务 watcher 在关闭时全部等待退出；关闭后拒绝新连接、新 handler 和出向请求。GB 全局生命周期门禁还会拒绝停服起点后的 REGISTER/MESSAGE/NOTIFY/SUBSCRIBE/INVITE 等新业务，并等待此前已接纳请求；两阶段关闭先取消业务，再关闭 SIP 解除事务等待，最后清理 GB 会话，避免清理后状态复写和关闭互锁。GB 离线检查、订阅、INVITE 对话与运行状态 cleaner 同样随服务生命周期停止；
 - REGISTER 同时携带 Contact `expires` 与全局 `Expires` 时，以 Contact 绑定参数为准，包括 `expires=0` 注销语义；
 - 版本解析、协商、持久化、手动覆盖和下行版本；
@@ -90,6 +90,7 @@ go test ./... -count=1
 - DeviceConfig 非法版本、根、命令、SN 或目标不得写状态、附录 A.4 或解除等待；
 - Catalog 非法根、命令、SN、非 20 位顶层目标或负 SumNum 不得进入多响应聚合或解除查询等待；
 - 四版本历史级联 `INVITE→ACK→INFO→BYE` 完整对话、媒体启动/释放和 MANSRTSP/RTSP 转换；
+- 入向媒体对话 ACK 必须复用原 INVITE CSeq；CANCEL 必须匹配原 INVITE 的双向 tag、CSeq、Request-URI、顶层 Via 协议/传输/Sent-by/branch；INFO/BYE 的远端 CSeq 必须严格递增，合法 INFO 重传复用缓存响应且只执行一次下游控制，同 CSeq 改报文或跨方法回放不得产生媒体副作用；
 - 无持久化通道记录的 `cascade-*` 指定路径/语音级联媒体流注册、注销及断流会话释放；
 - 两个已注册上级之间的级联对话所有权隔离，非会话所属上级的 ACK/CANCEL/BYE 不得改变或终止会话；
 - 同一已注册上级或设备复用 Call-ID 但改变远端 From tag 或本地 To tag 时，ACK/CANCEL/BYE/INFO 不得改变或终止原级联/广播对话；
