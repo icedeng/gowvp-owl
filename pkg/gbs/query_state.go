@@ -3,8 +3,10 @@ package gbs
 import (
 	"context"
 	"encoding/xml"
+	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -678,7 +680,9 @@ func decodeDeviceStatusData(body []byte) *DeviceStatusData {
 }
 
 type presetQueryXML struct {
-	PresetList struct {
+	SumNum     *int `xml:"SumNum"`
+	PresetList *struct {
+		Num   *int `xml:"Num,attr"`
 		Items []struct {
 			PresetID   string `xml:"PresetID"`
 			PresetName string `xml:"PresetName"`
@@ -689,6 +693,9 @@ type presetQueryXML struct {
 func decodePresetQueryData(body []byte) []PresetItemData {
 	var msg presetQueryXML
 	if err := sip.XMLDecode(body, &msg); err != nil {
+		return nil
+	}
+	if msg.PresetList == nil {
 		return nil
 	}
 	out := make([]PresetItemData, 0, len(msg.PresetList.Items))
@@ -722,10 +729,14 @@ func decodeHomePositionData(body []byte) *HomePositionData {
 }
 
 type cruiseTrackListQueryXML struct {
-	Items []struct {
-		Number int    `xml:"Number"`
-		Name   string `xml:"Name"`
-	} `xml:"CruiseTrackList>CruiseTrack"`
+	SumNum          *int `xml:"SumNum"`
+	CruiseTrackList *struct {
+		Num   *int `xml:"Num,attr"`
+		Items []struct {
+			Number *int   `xml:"Number"`
+			Name   string `xml:"Name"`
+		} `xml:"CruiseTrack"`
+	} `xml:"CruiseTrackList"`
 }
 
 func decodeCruiseTrackListData(body []byte) []CruiseTrackData {
@@ -733,21 +744,31 @@ func decodeCruiseTrackListData(body []byte) []CruiseTrackData {
 	if err := sip.XMLDecode(body, &msg); err != nil {
 		return nil
 	}
-	out := make([]CruiseTrackData, 0, len(msg.Items))
-	for _, item := range msg.Items {
-		out = append(out, CruiseTrackData{Number: item.Number, Name: strings.TrimSpace(item.Name)})
+	if msg.CruiseTrackList == nil {
+		return []CruiseTrackData{}
+	}
+	out := make([]CruiseTrackData, 0, len(msg.CruiseTrackList.Items))
+	for _, item := range msg.CruiseTrackList.Items {
+		if item.Number == nil {
+			return nil
+		}
+		out = append(out, CruiseTrackData{Number: *item.Number, Name: strings.TrimSpace(item.Name)})
 	}
 	return out
 }
 
 type cruiseTrackQueryXML struct {
-	Number int    `xml:"Number"`
-	Name   string `xml:"Name"`
-	Points []struct {
-		PresetIndex int `xml:"PresetIndex"`
-		StayTime    int `xml:"StayTime"`
-		Speed       int `xml:"Speed"`
-	} `xml:"CruisePointList>CruisePoint"`
+	Number          *int   `xml:"Number"`
+	Name            string `xml:"Name"`
+	SumNum          *int   `xml:"SumNum"`
+	CruisePointList *struct {
+		Num    *int `xml:"Num,attr"`
+		Points []struct {
+			PresetIndex *int `xml:"PresetIndex"`
+			StayTime    *int `xml:"StayTime"`
+			Speed       *int `xml:"Speed"`
+		} `xml:"CruisePoint"`
+	} `xml:"CruisePointList"`
 }
 
 func decodeCruiseTrackData(body []byte) *CruiseTrackData {
@@ -755,12 +776,21 @@ func decodeCruiseTrackData(body []byte) *CruiseTrackData {
 	if err := sip.XMLDecode(body, &msg); err != nil {
 		return nil
 	}
-	out := &CruiseTrackData{Number: msg.Number, Name: strings.TrimSpace(msg.Name)}
-	for _, point := range msg.Points {
+	if msg.Number == nil {
+		return nil
+	}
+	out := &CruiseTrackData{Number: *msg.Number, Name: strings.TrimSpace(msg.Name)}
+	if msg.CruisePointList == nil {
+		return out
+	}
+	for _, point := range msg.CruisePointList.Points {
+		if point.PresetIndex == nil || point.StayTime == nil || point.Speed == nil {
+			return nil
+		}
 		out.Points = append(out.Points, CruisePointData{
-			PresetIndex: point.PresetIndex,
-			StayTime:    point.StayTime,
-			Speed:       point.Speed,
+			PresetIndex: *point.PresetIndex,
+			StayTime:    *point.StayTime,
+			Speed:       *point.Speed,
 		})
 	}
 	return out
@@ -794,14 +824,18 @@ func decodePTZPositionData(body []byte) *PTZPositionData {
 }
 
 type sdCardStatusXML struct {
-	Items []struct {
-		ID             int    `xml:"ID"`
-		HddName        string `xml:"HddName"`
-		Status         string `xml:"Status"`
-		FormatProgress *int   `xml:"FormatProgress"`
-		Capacity       *int   `xml:"Capacity"`
-		FreeSpace      *int   `xml:"FreeSpace"`
-	} `xml:"SDCardStatusInfo>Item"`
+	SumNum           *int `xml:"SumNum"`
+	SDCardStatusInfo *struct {
+		Num   *int `xml:"Num,attr"`
+		Items []struct {
+			ID             *int   `xml:"ID"`
+			HddName        string `xml:"HddName"`
+			Status         string `xml:"Status"`
+			FormatProgress *int   `xml:"FormatProgress"`
+			Capacity       *int   `xml:"Capacity"`
+			FreeSpace      *int   `xml:"FreeSpace"`
+		} `xml:"Item"`
+	} `xml:"SDCardStatusInfo"`
 }
 
 func decodeSDCardStatusData(body []byte) []SDCardItemData {
@@ -809,10 +843,16 @@ func decodeSDCardStatusData(body []byte) []SDCardItemData {
 	if err := sip.XMLDecode(body, &msg); err != nil {
 		return nil
 	}
-	out := make([]SDCardItemData, 0, len(msg.Items))
-	for _, item := range msg.Items {
+	if msg.SDCardStatusInfo == nil {
+		return []SDCardItemData{}
+	}
+	out := make([]SDCardItemData, 0, len(msg.SDCardStatusInfo.Items))
+	for _, item := range msg.SDCardStatusInfo.Items {
+		if item.ID == nil {
+			return nil
+		}
 		out = append(out, SDCardItemData{
-			ID:             item.ID,
+			ID:             *item.ID,
 			HddName:        strings.TrimSpace(item.HddName),
 			Status:         strings.TrimSpace(item.Status),
 			FormatProgress: item.FormatProgress,
@@ -821,6 +861,156 @@ func decodeSDCardStatusData(body []byte) []SDCardItemData {
 		})
 	}
 	return out
+}
+
+func validateGenericQueryPayload(version GBProtocolVersion, cmdType string, body []byte) error {
+	switch cmdType {
+	case "PresetQuery":
+		var msg presetQueryXML
+		if err := sip.XMLDecode(body, &msg); err != nil {
+			return ErrXMLDecode
+		}
+		if msg.PresetList == nil || msg.PresetList.Num == nil {
+			return fmt.Errorf("PresetQuery requires PresetList Num")
+		}
+		if version.AtLeast(GBVersion30) && msg.SumNum == nil {
+			return fmt.Errorf("PresetQuery requires SumNum")
+		}
+		if msg.SumNum != nil && (*msg.SumNum < 0 || *msg.SumNum != *msg.PresetList.Num) {
+			return fmt.Errorf("PresetQuery count mismatch")
+		}
+		if *msg.PresetList.Num < 0 || *msg.PresetList.Num != len(msg.PresetList.Items) {
+			return fmt.Errorf("PresetQuery count mismatch")
+		}
+		for _, item := range msg.PresetList.Items {
+			if strings.TrimSpace(item.PresetID) == "" || strings.TrimSpace(item.PresetName) == "" {
+				return fmt.Errorf("PresetQuery item requires PresetID and PresetName")
+			}
+		}
+	case "HomePositionQuery":
+		var msg homePositionQueryXML
+		if err := sip.XMLDecode(body, &msg); err != nil {
+			return ErrXMLDecode
+		}
+		if msg.HomePosition == nil {
+			return nil
+		}
+		if msg.HomePosition.Enabled == nil || (*msg.HomePosition.Enabled != 0 && *msg.HomePosition.Enabled != 1) {
+			return fmt.Errorf("HomePositionQuery Enabled must be 0 or 1")
+		}
+		if msg.HomePosition.ResetTime != nil && *msg.HomePosition.ResetTime < 0 {
+			return fmt.Errorf("HomePositionQuery ResetTime must not be negative")
+		}
+		if msg.HomePosition.PresetIndex != nil && (*msg.HomePosition.PresetIndex < 0 || *msg.HomePosition.PresetIndex > 255) {
+			return fmt.Errorf("HomePositionQuery PresetIndex must be in [0,255]")
+		}
+	case "CruiseTrackListQuery":
+		var msg cruiseTrackListQueryXML
+		if err := sip.XMLDecode(body, &msg); err != nil {
+			return ErrXMLDecode
+		}
+		if msg.SumNum == nil || *msg.SumNum < 0 {
+			return fmt.Errorf("CruiseTrackListQuery requires non-negative SumNum")
+		}
+		if msg.CruiseTrackList == nil {
+			if *msg.SumNum != 0 {
+				return fmt.Errorf("CruiseTrackListQuery count mismatch")
+			}
+			return nil
+		}
+		if msg.CruiseTrackList.Num == nil || *msg.CruiseTrackList.Num < 0 || *msg.SumNum != *msg.CruiseTrackList.Num || *msg.CruiseTrackList.Num != len(msg.CruiseTrackList.Items) {
+			return fmt.Errorf("CruiseTrackListQuery count mismatch")
+		}
+		for _, item := range msg.CruiseTrackList.Items {
+			if item.Number == nil || (*item.Number != 0 && *item.Number != 1) {
+				return fmt.Errorf("CruiseTrackListQuery Number must be 0 or 1")
+			}
+			if len([]byte(item.Name)) > 32 {
+				return fmt.Errorf("CruiseTrackListQuery Name exceeds 32 bytes")
+			}
+		}
+	case "CruiseTrackQuery":
+		var msg cruiseTrackQueryXML
+		if err := sip.XMLDecode(body, &msg); err != nil {
+			return ErrXMLDecode
+		}
+		if msg.Number == nil || (*msg.Number != 0 && *msg.Number != 1) {
+			return fmt.Errorf("CruiseTrackQuery Number must be 0 or 1")
+		}
+		if len([]byte(msg.Name)) > 32 {
+			return fmt.Errorf("CruiseTrackQuery Name exceeds 32 bytes")
+		}
+		if msg.SumNum == nil || *msg.SumNum < 0 {
+			return fmt.Errorf("CruiseTrackQuery requires non-negative SumNum")
+		}
+		if msg.CruisePointList == nil {
+			if *msg.SumNum != 0 {
+				return fmt.Errorf("CruiseTrackQuery count mismatch")
+			}
+			return nil
+		}
+		if msg.CruisePointList.Num == nil || *msg.CruisePointList.Num < 0 || *msg.SumNum != *msg.CruisePointList.Num || *msg.CruisePointList.Num != len(msg.CruisePointList.Points) {
+			return fmt.Errorf("CruiseTrackQuery count mismatch")
+		}
+		for _, point := range msg.CruisePointList.Points {
+			if point.PresetIndex == nil || point.StayTime == nil || point.Speed == nil {
+				return fmt.Errorf("CruiseTrackQuery point requires PresetIndex, StayTime and Speed")
+			}
+			if *point.PresetIndex < 0 || *point.StayTime < 0 || *point.Speed < 1 || *point.Speed > 15 {
+				return fmt.Errorf("CruiseTrackQuery point values are invalid")
+			}
+		}
+	case "PTZPosition":
+		var msg ptzPositionQueryXML
+		if err := sip.XMLDecode(body, &msg); err != nil {
+			return ErrXMLDecode
+		}
+		values := []*float64{msg.Pan, msg.Tilt, msg.Zoom, msg.HorizontalFieldAngle, msg.VerticalFieldAngle, msg.MaxViewDistance}
+		provided := false
+		for _, value := range values {
+			if value == nil {
+				continue
+			}
+			provided = true
+			if math.IsNaN(*value) || math.IsInf(*value, 0) {
+				return fmt.Errorf("PTZPosition values must be finite")
+			}
+		}
+		if !provided {
+			return fmt.Errorf("PTZPosition requires at least one position value")
+		}
+	case "SDCardStatus":
+		var msg sdCardStatusXML
+		if err := sip.XMLDecode(body, &msg); err != nil {
+			return ErrXMLDecode
+		}
+		if msg.SumNum == nil || *msg.SumNum < 0 {
+			return fmt.Errorf("SDCardStatus requires non-negative SumNum")
+		}
+		if msg.SDCardStatusInfo == nil {
+			if *msg.SumNum != 0 {
+				return fmt.Errorf("SDCardStatus count mismatch")
+			}
+			return nil
+		}
+		items := msg.SDCardStatusInfo.Items
+		if msg.SDCardStatusInfo.Num == nil || *msg.SDCardStatusInfo.Num < 0 || *msg.SumNum != *msg.SDCardStatusInfo.Num || *msg.SDCardStatusInfo.Num != len(items) || len(items) > 8 {
+			return fmt.Errorf("SDCardStatus count mismatch")
+		}
+		for _, item := range items {
+			status := strings.ToLower(strings.TrimSpace(item.Status))
+			if item.ID == nil || strings.TrimSpace(item.HddName) == "" || !equalFoldAny(status, "ok", "formatting", "unformatted", "idle", "error") || item.Capacity == nil || item.FreeSpace == nil {
+				return fmt.Errorf("SDCardStatus item requires valid ID, HddName, Status, Capacity and FreeSpace")
+			}
+			if item.FormatProgress != nil && (*item.FormatProgress < 0 || *item.FormatProgress > 100) {
+				return fmt.Errorf("SDCardStatus FormatProgress must be in [0,100]")
+			}
+			if *item.Capacity < 0 || *item.FreeSpace < 0 || *item.FreeSpace > *item.Capacity {
+				return fmt.Errorf("SDCardStatus capacity values are invalid")
+			}
+		}
+	}
+	return nil
 }
 
 type mobilePositionXML struct {

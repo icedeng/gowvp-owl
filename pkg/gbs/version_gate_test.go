@@ -51,7 +51,7 @@ func TestPresetQuery11AcceptsSupplementSpelling(t *testing.T) {
 	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}
 	api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "PresetQuery", 71), pending)
 	conn := newFlowConnection()
-	body := []byte(`<Response><CmdType>PersetQuery</CmdType><SN>71</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><PresetList Num="0"></PresetList></Response>`)
+	body := []byte(`<Response><CmdType>PersetQuery</CmdType><SN>71</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><SumNum>0</SumNum><PresetList Num="0"></PresetList></Response>`)
 	response := runFlowHandler(t, conn, api, sip.MethodMessage, "preset-spelling", body, api.sipMessageQueryGeneric)
 	assertFlowOK(t, response)
 	select {
