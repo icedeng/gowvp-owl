@@ -58,7 +58,7 @@ func TestBuildCascadeCatalogItemsUsesMappingAndVersionProfile(t *testing.T) {
 	}
 
 	supplement := buildCascadeCatalogItems([]*ipc.Channel{channel}, platform, GBVersion11)
-	if len(supplement) != 1 || supplement[0].Info == nil || supplement[0].Info.PTZType != 3 || supplement[0].Info.Resolution != "1920x1080" {
+	if len(supplement) != 1 || supplement[0].Info == nil || supplement[0].Info.PTZType != "3" || supplement[0].Info.Resolution != "1920x1080" {
 		t.Fatalf("2014 catalog item = %+v", supplement)
 	}
 
@@ -73,6 +73,44 @@ func TestBuildCascadeCatalogItemsUsesMappingAndVersionProfile(t *testing.T) {
 	for _, expected := range []string{`<Response>`, `<SumNum>1</SumNum>`, `<DeviceList Num="1">`, `<DeviceID>` + testExposedChannelID + `</DeviceID>`, `<Info>`} {
 		if !strings.Contains(xmlText, expected) {
 			t.Fatalf("catalog XML missing %q: %s", expected, xmlText)
+		}
+	}
+	for _, forbidden := range []string{"<PositionType>0</PositionType>", "<RoomType>0</RoomType>", "<UseType>0</UseType>", "<SupplyLightType>0</SupplyLightType>", "<DirectionType>0</DirectionType>"} {
+		if strings.Contains(xmlText, forbidden) {
+			t.Fatalf("2014 catalog XML contains unset Info field %q: %s", forbidden, xmlText)
+		}
+	}
+
+	channel.Ext.GBCatalog.PTZTypeList = "1/2"
+	channel.Ext.GBCatalog.BusinessGroupID = "34020000002150000001"
+	channel.Ext.GBCatalog.SecurityLevelCode = "B"
+	channel.Ext.GBCatalog.PhotoelectricImagingType = "1/9"
+	channel.Ext.GBCatalog.StreamNumberList = "0/2"
+	channel.Ext.GBCatalog.FunctionType = "01/99"
+	channel.Ext.GBCatalog.RecordSaveDays = 30
+	modern := buildCascadeCatalogItems([]*ipc.Channel{channel}, platform, GBVersion30)
+	if len(modern) != 1 || modern[0].Info == nil || modern[0].Info.PTZType != "1/2" || modern[0].SecurityLevelCode != "B" || modern[0].BusinessGroupID != "34020000002150000001" || modern[0].Info.StreamNumberList != "0/2" || modern[0].Info.FunctionType != "01/99" || modern[0].Info.RecordSaveDays != 30 {
+		t.Fatalf("2022 catalog item = %+v", modern)
+	}
+	modernBody, err := sip.XMLEncode(cascadeCatalogResponse{
+		CmdType: "Catalog", SN: 8, DeviceID: gb10DeviceID, SumNum: 1,
+		DeviceList: &cascadeCatalogDeviceList{Num: 1, Items: modern},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modernXML := string(modernBody)
+	for _, expected := range []string{"<SecurityLevelCode>B</SecurityLevelCode>", "<BusinessGroupID>34020000002150000001</BusinessGroupID>", "<PTZType>1/2</PTZType>", "<StreamNumberList>0/2</StreamNumberList>", "<RecordSaveDays>30</RecordSaveDays>"} {
+		if !strings.Contains(modernXML, expected) {
+			t.Fatalf("2022 catalog XML missing %q: %s", expected, modernXML)
+		}
+	}
+	if strings.Contains(modernXML, "<Info><BusinessGroupID>") {
+		t.Fatalf("2022 catalog kept BusinessGroupID in Info: %s", modernXML)
+	}
+	for _, removed := range []string{"<Owner>", "<PositionType>", "<UseType>", "<SafetyWay>", "<CertNum>", "<Certifiable>", "<ErrCode>", "<EndTime>"} {
+		if strings.Contains(modernXML, removed) {
+			t.Fatalf("2022 catalog contains removed field %q: %s", removed, modernXML)
 		}
 	}
 }
@@ -622,7 +660,7 @@ func TestCascadeExtendedQueryUsesDownstreamSNAndRewritesResponse(t *testing.T) {
 	}
 	body := string(request.Body())
 	for _, expected := range []string{
-		"<CmdType>PresetQuery</CmdType>", "<SN>97</SN>",
+		"<CmdType>PersetQuery</CmdType>", "<SN>97</SN>",
 		"<DeviceID>" + testExposedChannelID + "</DeviceID>",
 		"<ParentID>" + gb10DeviceID + "</ParentID>", "<VendorField>retained</VendorField>",
 	} {
@@ -634,6 +672,26 @@ func TestCascadeExtendedQueryUsesDownstreamSNAndRewritesResponse(t *testing.T) {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("rewritten cascade response leaked %q: %s", forbidden, body)
 		}
+	}
+}
+
+func TestCascadePresetQueryErrorUsesUpstreamVersionSpelling(t *testing.T) {
+	worker := newCascadeWorker(nil, testSharedCascadePlatform(t))
+	worker.mu.Lock()
+	worker.effective = GBVersion11
+	worker.mu.Unlock()
+	var request *sip.Request
+	worker.exchange = func(_ context.Context, in *sip.Request) (*sip.Response, error) {
+		request = in
+		return sip.NewResponseFromRequest("", in, http.StatusOK, "OK", nil), nil
+	}
+	if err := sendCascadeQueryError(t.Context(), worker, cascadeQueryEnvelope{
+		CmdType: "PresetQuery", SN: 98, DeviceID: testExposedChannelID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if request == nil || !strings.Contains(string(request.Body()), "<CmdType>PersetQuery</CmdType>") {
+		t.Fatalf("2014 PresetQuery error response = %v", request)
 	}
 }
 
@@ -686,7 +744,7 @@ func TestRewriteCascadeQueryResponseRejectsUnknownAppendixA4ID(t *testing.T) {
 	platform := testSharedCascadePlatform(t)
 	channel := &ipc.Channel{DeviceID: gb10DeviceID, ChannelID: testCascadeChannelID}
 	body := []byte(`<Response><CmdType>DeviceStatus</CmdType><SN>6</SN><DeviceID>` + testCascadeChannelID + `</DeviceID><Info><doorType><DoorID>34020000001320000099</DoorID></doorType></Info></Response>`)
-	if _, err := rewriteCascadeQueryResponse(body, cascadeQueryEnvelope{CmdType: "DeviceStatus", SN: 81, DeviceID: testExposedChannelID}, platform, channel); err == nil {
+	if _, err := rewriteCascadeQueryResponse(body, cascadeQueryEnvelope{CmdType: "DeviceStatus", SN: 81, DeviceID: testExposedChannelID}, platform, GBVersion30, channel); err == nil {
 		t.Fatal("query response with unshared A.4 ID was forwarded")
 	}
 }

@@ -42,7 +42,7 @@ go test ./... -count=1
 - MediaStatus/121 幂等收敛；
 - Catalog/RecordInfo 多响应乱序、重复、总数冲突、超时部分结果和同设备并发；
 - RecordInfo 响应包络、列表计数、条目非空名称、显式 `Secrecy=0/1`、可选 dateTime 起止时间、版本化 Type/FileSize/RecordLocation/StreamNumber、目标所有权和在途通道绑定；级联响应按上级版本裁剪新字段并映射 RecorderID/RecordLocation，非法分包不得进入聚合器，NVR 顶层父设备编码别名仍可映射到原查询通道；
-- Catalog 缺失/零值 SumNum、DeviceList Num、本包与通知总数、条目编码、已鉴权来源及父设备聚合目标；目录项的状态、0/1 属性、安全/注册方式、错误码、端口、有限坐标、证书时间和 2014+ 摄像机属性枚举在聚合前校验，2011 不接受 2014 新增的 `Info/BusinessGroupID`；通用查询相同 SN 的兄弟通道响应不得抢占等待；
+- Catalog 缺失/零值 SumNum、DeviceList Num、本包与通知总数、条目编码、已鉴权来源及父设备聚合目标；目录项的状态、0/1 属性、安全/注册方式、错误码、端口、有限坐标、证书时间和版本化摄像机属性枚举在聚合前校验，2011 不接受 2014 新增的 `Info/BusinessGroupID`；2014 未设置的 Info 字段不得输出零值，2022 多值 `PTZType`、`SupplyLightType=1/2/3/4/5/9`、新增 Info 字段及外层 `SecurityLevelCode/BusinessGroupID` 需正确持久化和级联，旧上级不得收到 2022 字段，2022 上级不得收到已删除的 2014 字段；通用查询相同 SN 的兄弟通道响应不得抢占等待；
 - MobilePosition 的 2011/2014 版本门禁、2016 单点坐标及 2022 批量 `DeviceList` 解码；非法时间、坐标、方向、计数或目标不得写状态和转发；
 - 2022 升级、抓拍完成和实时视音频回传通知的固定 Notify 根、20 位目标及抓拍列表/文件标识完整性；
 - terminated NOTIFY 的设备、Call-ID 和双向 tag 对话绑定，以及伪造终止不得删除或重建下级订阅；
@@ -69,7 +69,7 @@ go test ./... -count=1
 - 2022 上级 REGISTER 301/302 重定向，校验 Contact 的 ServerID、SIPS/transport，重定向后重新 Digest 注册，后续心跳、通知、媒体请求和入向身份校验绑定新地址；
 - 共享通道 DeviceInfo、DeviceStatus 和 RecordInfo 查询，录像响应分包并映射为上级可见编码；NVR 代表已知子通道返回 DeviceInfo 时只更新子通道元数据，Channel/MaxCamera/MaxAlarm 计数须非负，2014 新增 DeviceName 不得向 2011 透传；
 - 上级 Query 请求的固定根、正 SN、20 位目标、命令白名单及专属载荷校验；RecordInfo 缺失/倒置时间、MobilePosition 负间隔和 CruiseTrackQuery 缺失/越界 Number 必须在启动下级任务前拒绝；
-- 共享通道 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 PTZPosition/SDCardStatus 查询转发；上下级 SN 转换、DeviceID/ParentID 安全映射、未知编码拒绝、下级失败业务应答及多上级响应隔离；
+- 共享通道 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 PTZPosition/SDCardStatus 查询转发；2014 设备查询和级联响应必须发 `PersetQuery`，2016/2022 必须发 `PresetQuery`，入站兼容两种拼写；上下级 SN 转换、DeviceID/ParentID 安全映射、未知编码拒绝、下级失败业务应答及多上级响应隔离；
 - 3.0 附录 A.4 扩展对象按 Catalog ExtraInfo、Alarm/MobilePosition 嵌套对象和 DeviceStatus 响应的真实承载路径级联；共享对象递归编码映射，未知 20 位对象编码整条拒绝，且 1.0/1.1/2.0 不输出 3.0 ExtraInfo；
 - 3.0 PTZ 精准位置变化事件订阅/通知及级联；1.0/1.1/2.0 版本门禁，通知通道编码映射和非共享通道隔离；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅自动建立下级订阅并覆盖续订、退订、引用计数、过期和上级移除清理；Catalog 会订阅承载共享通道的下级 NVR，并在目录快照变化后为新增或迁移通道补订阅；
 - 3.0 CruiseTrackListQuery/CruiseTrackQuery 的请求、结构化响应、轨迹编号参数和安全级联；

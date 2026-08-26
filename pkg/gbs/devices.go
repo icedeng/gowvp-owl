@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -508,26 +509,29 @@ type Channels struct {
 	CivilCode    string `xml:"CivilCode" json:"civilcode"  gorm:"column:civilcode"`
 	Block        string `xml:"Block" json:"block"`
 	// Address ip地址
-	Address     string `xml:"Address"  json:"address"  gorm:"column:address"`
-	Parental    int    `xml:"Parental"  json:"parental"  gorm:"column:parental"`
-	ParentID    string `xml:"ParentID" json:"parent_id"`
-	SafetyWay   int    `xml:"SafetyWay"  json:"safetyway"  gorm:"column:safetyway"`
-	RegisterWay int    `xml:"RegisterWay"  json:"registerway"  gorm:"column:registerway"`
-	CertNum     string `xml:"CertNum" json:"cert_num"`
-	Certifiable int    `xml:"Certifiable" json:"certifiable"`
-	ErrCode     int    `xml:"ErrCode" json:"err_code"`
-	EndTime     string `xml:"EndTime" json:"end_time"`
-	Secrecy     int    `xml:"Secrecy" json:"secrecy"  gorm:"column:secrecy"`
-	IPAddress   string `xml:"IPAddress" json:"ip_address"`
-	Port        int    `xml:"Port" json:"port"`
-	Password    string `xml:"Password" json:"-"`
+	Address           string `xml:"Address"  json:"address"  gorm:"column:address"`
+	Parental          int    `xml:"Parental"  json:"parental"  gorm:"column:parental"`
+	ParentID          string `xml:"ParentID" json:"parent_id"`
+	SafetyWay         int    `xml:"SafetyWay"  json:"safetyway"  gorm:"column:safetyway"`
+	RegisterWay       int    `xml:"RegisterWay"  json:"registerway"  gorm:"column:registerway"`
+	CertNum           string `xml:"CertNum" json:"cert_num"`
+	Certifiable       int    `xml:"Certifiable" json:"certifiable"`
+	ErrCode           int    `xml:"ErrCode" json:"err_code"`
+	EndTime           string `xml:"EndTime" json:"end_time"`
+	SecurityLevelCode string `xml:"SecurityLevelCode" json:"security_level_code,omitempty"`
+	Secrecy           int    `xml:"Secrecy" json:"secrecy"  gorm:"column:secrecy"`
+	IPAddress         string `xml:"IPAddress" json:"ip_address"`
+	Port              int    `xml:"Port" json:"port"`
+	Password          string `xml:"Password" json:"-"`
 	// Status 状态  on 在线
-	Status    string          `xml:"Status"  json:"status"  gorm:"column:status"`
-	Event     string          `xml:"Event" json:"event,omitempty" gorm:"-"`
-	Longitude float64         `xml:"Longitude" json:"longitude"`
-	Latitude  float64         `xml:"Latitude" json:"latitude"`
-	Info      CatalogItemInfo `xml:"Info" json:"info"`
-	RawXML    string          `xml:",innerxml" json:"-"`
+	Status    string  `xml:"Status"  json:"status"  gorm:"column:status"`
+	Event     string  `xml:"Event" json:"event,omitempty" gorm:"-"`
+	Longitude float64 `xml:"Longitude" json:"longitude"`
+	Latitude  float64 `xml:"Latitude" json:"latitude"`
+	// BusinessGroupID 在 2022 版从 Info 移到目录项外层。
+	BusinessGroupID string          `xml:"BusinessGroupID" json:"business_group_id,omitempty"`
+	Info            CatalogItemInfo `xml:"Info" json:"info"`
+	RawXML          string          `xml:",innerxml" json:"-"`
 	// Active 最后活跃时间
 	Active int64  `json:"active"  gorm:"column:active"`
 	URIStr string ` json:"uri"  gorm:"column:uri"`
@@ -550,16 +554,122 @@ type Channels struct {
 
 // CatalogItemInfo 是 2014 修改补充文件新增的目录项摄像机属性。
 type CatalogItemInfo struct {
-	XMLName         xml.Name `xml:"Info" json:"-"`
-	PTZType         int      `xml:"PTZType" json:"ptz_type"`
-	PositionType    int      `xml:"PositionType" json:"position_type"`
-	RoomType        int      `xml:"RoomType" json:"room_type"`
-	UseType         int      `xml:"UseType" json:"use_type"`
-	SupplyLightType int      `xml:"SupplyLightType" json:"supply_light_type"`
-	DirectionType   int      `xml:"DirectionType" json:"direction_type"`
-	Resolution      string   `xml:"Resolution" json:"resolution"`
-	BusinessGroupID string   `xml:"BusinessGroupID" json:"business_group_id"`
-	RawXML          string   `xml:",innerxml" json:"-"`
+	XMLName                  xml.Name `xml:"Info" json:"-"`
+	PTZType                  int      `xml:"PTZType" json:"ptz_type"`
+	PTZTypeList              string   `xml:"-" json:"ptz_type_list,omitempty"`
+	PhotoelectricImagingType string   `xml:"PhotoelectricImagingType" json:"photoelectric_imaging_type,omitempty"`
+	CapturePositionType      string   `xml:"CapturePositionType" json:"capture_position_type,omitempty"`
+	PositionType             int      `xml:"PositionType" json:"position_type"`
+	RoomType                 int      `xml:"RoomType" json:"room_type"`
+	UseType                  int      `xml:"UseType" json:"use_type"`
+	SupplyLightType          int      `xml:"SupplyLightType" json:"supply_light_type"`
+	DirectionType            int      `xml:"DirectionType" json:"direction_type"`
+	Resolution               string   `xml:"Resolution" json:"resolution"`
+	StreamNumberList         string   `xml:"StreamNumberList" json:"stream_number_list,omitempty"`
+	DownloadSpeed            string   `xml:"DownloadSpeed" json:"download_speed,omitempty"`
+	SVCSpaceSupportMode      int      `xml:"SVCSpaceSupportMode" json:"svc_space_support_mode,omitempty"`
+	SVCTimeSupportMode       int      `xml:"SVCTimeSupportMode" json:"svc_time_support_mode,omitempty"`
+	SSVCRatioSupportList     string   `xml:"SSVCRatioSupportList" json:"ssvc_ratio_support_list,omitempty"`
+	MobileDeviceType         int      `xml:"MobileDeviceType" json:"mobile_device_type,omitempty"`
+	HorizontalFieldAngle     float64  `xml:"HorizontalFieldAngle" json:"horizontal_field_angle,omitempty"`
+	VerticalFieldAngle       float64  `xml:"VerticalFieldAngle" json:"vertical_field_angle,omitempty"`
+	MaxViewDistance          float64  `xml:"MaxViewDistance" json:"max_view_distance,omitempty"`
+	GrassrootsCode           string   `xml:"GrassrootsCode" json:"grassroots_code,omitempty"`
+	PointType                int      `xml:"PointType" json:"point_type,omitempty"`
+	PointCommonName          string   `xml:"PointCommonName" json:"point_common_name,omitempty"`
+	MAC                      string   `xml:"MAC" json:"mac,omitempty"`
+	FunctionType             string   `xml:"FunctionType" json:"function_type,omitempty"`
+	EncodeType               string   `xml:"EncodeType" json:"encode_type,omitempty"`
+	InstallTime              string   `xml:"InstallTime" json:"install_time,omitempty"`
+	ManagementUnit           string   `xml:"ManagementUnit" json:"management_unit,omitempty"`
+	ContactInfo              string   `xml:"ContactInfo" json:"contact_info,omitempty"`
+	RecordSaveDays           int      `xml:"RecordSaveDays" json:"record_save_days,omitempty"`
+	IndustrialClassification string   `xml:"IndustrialClassification" json:"industrial_classification,omitempty"`
+	BusinessGroupID          string   `xml:"BusinessGroupID" json:"business_group_id"`
+	RawXML                   string   `xml:",innerxml" json:"-"`
+}
+
+func (i *CatalogItemInfo) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
+	var value struct {
+		PTZType                  string  `xml:"PTZType"`
+		PhotoelectricImagingType string  `xml:"PhotoelectricImagingType"`
+		CapturePositionType      string  `xml:"CapturePositionType"`
+		PositionType             int     `xml:"PositionType"`
+		RoomType                 int     `xml:"RoomType"`
+		UseType                  int     `xml:"UseType"`
+		SupplyLightType          int     `xml:"SupplyLightType"`
+		DirectionType            int     `xml:"DirectionType"`
+		Resolution               string  `xml:"Resolution"`
+		StreamNumberList         string  `xml:"StreamNumberList"`
+		DownloadSpeed            string  `xml:"DownloadSpeed"`
+		SVCSpaceSupportMode      int     `xml:"SVCSpaceSupportMode"`
+		SVCTimeSupportMode       int     `xml:"SVCTimeSupportMode"`
+		SSVCRatioSupportList     string  `xml:"SSVCRatioSupportList"`
+		MobileDeviceType         int     `xml:"MobileDeviceType"`
+		HorizontalFieldAngle     float64 `xml:"HorizontalFieldAngle"`
+		VerticalFieldAngle       float64 `xml:"VerticalFieldAngle"`
+		MaxViewDistance          float64 `xml:"MaxViewDistance"`
+		GrassrootsCode           string  `xml:"GrassrootsCode"`
+		PointType                int     `xml:"PointType"`
+		PointCommonName          string  `xml:"PointCommonName"`
+		MAC                      string  `xml:"MAC"`
+		FunctionType             string  `xml:"FunctionType"`
+		EncodeType               string  `xml:"EncodeType"`
+		InstallTime              string  `xml:"InstallTime"`
+		ManagementUnit           string  `xml:"ManagementUnit"`
+		ContactInfo              string  `xml:"ContactInfo"`
+		RecordSaveDays           int     `xml:"RecordSaveDays"`
+		IndustrialClassification string  `xml:"IndustrialClassification"`
+		BusinessGroupID          string  `xml:"BusinessGroupID"`
+		RawXML                   string  `xml:",innerxml"`
+	}
+	if err := decoder.DecodeElement(&value, &start); err != nil {
+		return err
+	}
+	*i = CatalogItemInfo{
+		XMLName:                  start.Name,
+		PTZTypeList:              strings.TrimSpace(value.PTZType),
+		PhotoelectricImagingType: strings.TrimSpace(value.PhotoelectricImagingType),
+		CapturePositionType:      strings.TrimSpace(value.CapturePositionType),
+		PositionType:             value.PositionType,
+		RoomType:                 value.RoomType,
+		UseType:                  value.UseType,
+		SupplyLightType:          value.SupplyLightType,
+		DirectionType:            value.DirectionType,
+		Resolution:               value.Resolution,
+		StreamNumberList:         strings.TrimSpace(value.StreamNumberList),
+		DownloadSpeed:            strings.TrimSpace(value.DownloadSpeed),
+		SVCSpaceSupportMode:      value.SVCSpaceSupportMode,
+		SVCTimeSupportMode:       value.SVCTimeSupportMode,
+		SSVCRatioSupportList:     strings.TrimSpace(value.SSVCRatioSupportList),
+		MobileDeviceType:         value.MobileDeviceType,
+		HorizontalFieldAngle:     value.HorizontalFieldAngle,
+		VerticalFieldAngle:       value.VerticalFieldAngle,
+		MaxViewDistance:          value.MaxViewDistance,
+		GrassrootsCode:           strings.TrimSpace(value.GrassrootsCode),
+		PointType:                value.PointType,
+		PointCommonName:          strings.TrimSpace(value.PointCommonName),
+		MAC:                      strings.TrimSpace(value.MAC),
+		FunctionType:             strings.TrimSpace(value.FunctionType),
+		EncodeType:               strings.TrimSpace(value.EncodeType),
+		InstallTime:              strings.TrimSpace(value.InstallTime),
+		ManagementUnit:           strings.TrimSpace(value.ManagementUnit),
+		ContactInfo:              strings.TrimSpace(value.ContactInfo),
+		RecordSaveDays:           value.RecordSaveDays,
+		IndustrialClassification: strings.TrimSpace(value.IndustrialClassification),
+		BusinessGroupID:          value.BusinessGroupID,
+		RawXML:                   value.RawXML,
+	}
+	if i.PTZTypeList == "" {
+		return nil
+	}
+	first, _, _ := strings.Cut(i.PTZTypeList, "/")
+	ptzType, err := strconv.Atoi(strings.TrimSpace(first))
+	if err != nil {
+		return fmt.Errorf("invalid Catalog PTZType: %w", err)
+	}
+	i.PTZType = ptzType
+	return nil
 }
 
 // 同步摄像头编码格式

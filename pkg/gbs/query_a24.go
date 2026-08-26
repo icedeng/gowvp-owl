@@ -151,7 +151,7 @@ func (g *GB28181API) DeviceQuery(ctx context.Context, in *DeviceQueryInput) (*De
 
 	sn := g.nextQuerySN()
 	req := genericDeviceQueryRequest{
-		CmdType:  cmdType,
+		CmdType:  gbQueryCmdTypeForVersion(cmdType, g.getDeviceGBProtocolVersion(deviceID)),
 		SN:       sn,
 		DeviceID: targetID,
 	}
@@ -441,6 +441,14 @@ func canonicalGBQueryCmdType(value string) string {
 	value = strings.TrimSpace(value)
 	if strings.EqualFold(value, "PersetQuery") {
 		return "PresetQuery"
+	}
+	return value
+}
+
+func gbQueryCmdTypeForVersion(value string, version GBProtocolVersion) string {
+	value = canonicalGBQueryCmdType(value)
+	if value == "PresetQuery" && version == GBVersion11 {
+		return "PersetQuery"
 	}
 	return value
 }

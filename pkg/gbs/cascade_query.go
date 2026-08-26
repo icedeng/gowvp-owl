@@ -67,42 +67,66 @@ type cascadeCatalogDeviceList struct {
 }
 
 type cascadeCatalogItem struct {
-	DeviceID     string              `xml:"DeviceID"`
-	Name         string              `xml:"Name"`
-	Manufacturer string              `xml:"Manufacturer"`
-	Model        string              `xml:"Model"`
-	Owner        string              `xml:"Owner"`
-	CivilCode    string              `xml:"CivilCode"`
-	Block        string              `xml:"Block"`
-	Address      string              `xml:"Address"`
-	Parental     int                 `xml:"Parental"`
-	ParentID     string              `xml:"ParentID"`
-	SafetyWay    int                 `xml:"SafetyWay"`
-	RegisterWay  int                 `xml:"RegisterWay"`
-	CertNum      string              `xml:"CertNum"`
-	Certifiable  int                 `xml:"Certifiable"`
-	ErrCode      int                 `xml:"ErrCode"`
-	EndTime      string              `xml:"EndTime"`
-	Secrecy      int                 `xml:"Secrecy"`
-	IPAddress    string              `xml:"IPAddress"`
-	Port         int                 `xml:"Port"`
-	Status       string              `xml:"Status"`
-	Event        string              `xml:"Event,omitempty"`
-	Longitude    float64             `xml:"Longitude"`
-	Latitude     float64             `xml:"Latitude"`
-	Info         *cascadeCatalogInfo `xml:"Info,omitempty"`
-	ExtraInfo    []string            `xml:"ExtraInfo,omitempty"`
+	DeviceID          string              `xml:"DeviceID"`
+	Name              string              `xml:"Name"`
+	Manufacturer      string              `xml:"Manufacturer"`
+	Model             string              `xml:"Model"`
+	Owner             string              `xml:"Owner,omitempty"`
+	CivilCode         string              `xml:"CivilCode"`
+	Block             string              `xml:"Block"`
+	Address           string              `xml:"Address"`
+	Parental          int                 `xml:"Parental"`
+	ParentID          string              `xml:"ParentID"`
+	SafetyWay         int                 `xml:"SafetyWay,omitempty"`
+	RegisterWay       int                 `xml:"RegisterWay"`
+	CertNum           string              `xml:"CertNum,omitempty"`
+	Certifiable       int                 `xml:"Certifiable,omitempty"`
+	ErrCode           int                 `xml:"ErrCode,omitempty"`
+	EndTime           string              `xml:"EndTime,omitempty"`
+	SecurityLevelCode string              `xml:"SecurityLevelCode,omitempty"`
+	Secrecy           int                 `xml:"Secrecy"`
+	IPAddress         string              `xml:"IPAddress"`
+	Port              int                 `xml:"Port"`
+	Status            string              `xml:"Status"`
+	Event             string              `xml:"Event,omitempty"`
+	Longitude         float64             `xml:"Longitude"`
+	Latitude          float64             `xml:"Latitude"`
+	BusinessGroupID   string              `xml:"BusinessGroupID,omitempty"`
+	Info              *cascadeCatalogInfo `xml:"Info,omitempty"`
+	ExtraInfo         []string            `xml:"ExtraInfo,omitempty"`
 }
 
 type cascadeCatalogInfo struct {
-	PTZType         int    `xml:"PTZType"`
-	PositionType    int    `xml:"PositionType"`
-	RoomType        int    `xml:"RoomType"`
-	UseType         int    `xml:"UseType"`
-	SupplyLightType int    `xml:"SupplyLightType"`
-	DirectionType   int    `xml:"DirectionType"`
-	Resolution      string `xml:"Resolution,omitempty"`
-	BusinessGroupID string `xml:"BusinessGroupID,omitempty"`
+	PTZType                  string  `xml:"PTZType,omitempty"`
+	PhotoelectricImagingType string  `xml:"PhotoelectricImagingType,omitempty"`
+	CapturePositionType      string  `xml:"CapturePositionType,omitempty"`
+	PositionType             int     `xml:"PositionType,omitempty"`
+	RoomType                 int     `xml:"RoomType,omitempty"`
+	UseType                  int     `xml:"UseType,omitempty"`
+	SupplyLightType          int     `xml:"SupplyLightType,omitempty"`
+	DirectionType            int     `xml:"DirectionType,omitempty"`
+	Resolution               string  `xml:"Resolution,omitempty"`
+	StreamNumberList         string  `xml:"StreamNumberList,omitempty"`
+	DownloadSpeed            string  `xml:"DownloadSpeed,omitempty"`
+	SVCSpaceSupportMode      int     `xml:"SVCSpaceSupportMode,omitempty"`
+	SVCTimeSupportMode       int     `xml:"SVCTimeSupportMode,omitempty"`
+	SSVCRatioSupportList     string  `xml:"SSVCRatioSupportList,omitempty"`
+	MobileDeviceType         int     `xml:"MobileDeviceType,omitempty"`
+	HorizontalFieldAngle     float64 `xml:"HorizontalFieldAngle,omitempty"`
+	VerticalFieldAngle       float64 `xml:"VerticalFieldAngle,omitempty"`
+	MaxViewDistance          float64 `xml:"MaxViewDistance,omitempty"`
+	GrassrootsCode           string  `xml:"GrassrootsCode,omitempty"`
+	PointType                int     `xml:"PointType,omitempty"`
+	PointCommonName          string  `xml:"PointCommonName,omitempty"`
+	MAC                      string  `xml:"MAC,omitempty"`
+	FunctionType             string  `xml:"FunctionType,omitempty"`
+	EncodeType               string  `xml:"EncodeType,omitempty"`
+	InstallTime              string  `xml:"InstallTime,omitempty"`
+	ManagementUnit           string  `xml:"ManagementUnit,omitempty"`
+	ContactInfo              string  `xml:"ContactInfo,omitempty"`
+	RecordSaveDays           int     `xml:"RecordSaveDays,omitempty"`
+	IndustrialClassification string  `xml:"IndustrialClassification,omitempty"`
+	BusinessGroupID          string  `xml:"BusinessGroupID,omitempty"`
 }
 
 type cascadeDeviceInfoResponse struct {
@@ -437,7 +461,7 @@ func (g *GB28181API) respondCascadeForwardedQuery(ctx context.Context, worker *c
 		responses = []string{out.XML}
 	}
 	for _, response := range responses {
-		body, rewriteErr := rewriteCascadeQueryResponse([]byte(response), query, worker.platform, channel)
+		body, rewriteErr := rewriteCascadeQueryResponse([]byte(response), query, worker.platform, worker.protocolVersion(), channel)
 		if rewriteErr != nil {
 			slog.Warn("rewrite cascade query response failed", "upstream", worker.platform.name, "cmd_type", query.CmdType, "channel", query.DeviceID, "err", rewriteErr)
 			return sendCascadeQueryError(ctx, worker, query)
@@ -462,11 +486,11 @@ func sendCascadeQueryError(ctx context.Context, worker *cascadeWorker, query cas
 		deviceID = worker.platform.localID
 	}
 	return sendCascadeXML(ctx, worker, cascadeQueryErrorResponse{
-		CmdType: query.CmdType, SN: query.SN, DeviceID: deviceID, Result: "ERROR",
+		CmdType: gbQueryCmdTypeForVersion(query.CmdType, worker.protocolVersion()), SN: query.SN, DeviceID: deviceID, Result: "ERROR",
 	})
 }
 
-func rewriteCascadeQueryResponse(body []byte, query cascadeQueryEnvelope, platform cascadePlatform, channel *ipc.Channel) ([]byte, error) {
+func rewriteCascadeQueryResponse(body []byte, query cascadeQueryEnvelope, platform cascadePlatform, version GBProtocolVersion, channel *ipc.Channel) ([]byte, error) {
 	if len(body) == 0 || channel == nil {
 		return nil, fmt.Errorf("empty cascade query response")
 	}
@@ -522,7 +546,7 @@ func rewriteCascadeQueryResponse(body []byte, query cascadeQueryEnvelope, platfo
 				rewritten := original
 				switch name {
 				case "CmdType":
-					rewritten = query.CmdType
+					rewritten = gbQueryCmdTypeForVersion(query.CmdType, version)
 				case "SN":
 					rewritten = strconv.Itoa(query.SN)
 				case "ParentID":
@@ -908,18 +932,24 @@ func buildCascadeCatalogItems(channels []*ipc.Channel, platform cascadePlatform,
 			item.Status = "ON"
 		}
 		if ext != nil {
-			item.Owner = ext.Owner
+			if version != GBVersion30 {
+				item.Owner = ext.Owner
+			}
 			item.CivilCode = firstNonEmpty(ext.CivilCode, item.CivilCode)
 			item.Block = ext.Block
 			item.Address = ext.Address
-			item.SafetyWay = ext.SafetyWay
+			if version != GBVersion30 {
+				item.SafetyWay = ext.SafetyWay
+				item.CertNum = ext.CertNum
+				item.Certifiable = ext.Certifiable
+				item.ErrCode = ext.ErrCode
+				item.EndTime = ext.EndTime
+			} else {
+				item.SecurityLevelCode = ext.SecurityLevelCode
+			}
 			if ext.RegisterWay > 0 {
 				item.RegisterWay = ext.RegisterWay
 			}
-			item.CertNum = ext.CertNum
-			item.Certifiable = ext.Certifiable
-			item.ErrCode = ext.ErrCode
-			item.EndTime = ext.EndTime
 			item.Secrecy = ext.Secrecy
 			item.IPAddress = ext.IPAddress
 			item.Port = ext.Port
@@ -927,15 +957,51 @@ func buildCascadeCatalogItems(channels []*ipc.Channel, platform cascadePlatform,
 			item.Latitude = ext.Latitude
 		}
 		if version.AtLeast(GBVersion11) {
-			item.Info = &cascadeCatalogInfo{PTZType: channel.PTZType}
+			item.Info = &cascadeCatalogInfo{}
+			if channel.PTZType > 0 {
+				item.Info.PTZType = strconv.Itoa(channel.PTZType)
+			}
 			if ext != nil {
-				item.Info.PositionType = ext.PositionType
+				if version == GBVersion30 && strings.TrimSpace(ext.PTZTypeList) != "" {
+					item.Info.PTZType = strings.TrimSpace(ext.PTZTypeList)
+				}
+				if version != GBVersion30 {
+					item.Info.PositionType = ext.PositionType
+					item.Info.UseType = ext.UseType
+				}
 				item.Info.RoomType = ext.RoomType
-				item.Info.UseType = ext.UseType
 				item.Info.SupplyLightType = ext.SupplyLightType
 				item.Info.DirectionType = ext.DirectionType
 				item.Info.Resolution = ext.Resolution
-				item.Info.BusinessGroupID = ext.BusinessGroupID
+				if version == GBVersion30 {
+					item.BusinessGroupID = ext.BusinessGroupID
+				} else {
+					item.Info.BusinessGroupID = ext.BusinessGroupID
+				}
+				if version == GBVersion30 {
+					item.Info.PhotoelectricImagingType = ext.PhotoelectricImagingType
+					item.Info.CapturePositionType = ext.CapturePositionType
+					item.Info.StreamNumberList = ext.StreamNumberList
+					item.Info.DownloadSpeed = ext.DownloadSpeed
+					item.Info.SVCSpaceSupportMode = ext.SVCSpaceSupportMode
+					item.Info.SVCTimeSupportMode = ext.SVCTimeSupportMode
+					item.Info.SSVCRatioSupportList = ext.SSVCRatioSupportList
+					item.Info.MobileDeviceType = ext.MobileDeviceType
+					item.Info.HorizontalFieldAngle = ext.HorizontalFieldAngle
+					item.Info.VerticalFieldAngle = ext.VerticalFieldAngle
+					item.Info.MaxViewDistance = ext.MaxViewDistance
+					item.Info.GrassrootsCode = ext.GrassrootsCode
+					item.Info.PointType = ext.PointType
+					item.Info.PointCommonName = ext.PointCommonName
+					item.Info.MAC = ext.MAC
+					item.Info.FunctionType = ext.FunctionType
+					item.Info.EncodeType = ext.EncodeType
+					item.Info.InstallTime = ext.InstallTime
+					item.Info.ManagementUnit = ext.ManagementUnit
+					item.Info.ContactInfo = ext.ContactInfo
+					item.Info.RecordSaveDays = ext.RecordSaveDays
+					item.Info.IndustrialClassification = ext.IndustrialClassification
+				}
 			}
 		}
 		if version.AtLeast(GBVersion30) && ext != nil {

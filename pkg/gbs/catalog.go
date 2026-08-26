@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,36 +108,60 @@ func catalogChannelExt(item Channels) ipc.DeviceExt {
 		Manufacturer: item.Manufacturer,
 		Model:        item.Model,
 		GBCatalog: &ipc.GBCatalogExt{
-			Kind:            classifyGBCatalogItem(item.ChannelID),
-			Owner:           item.Owner,
-			CivilCode:       item.CivilCode,
-			Block:           item.Block,
-			Address:         item.Address,
-			Parental:        item.Parental,
-			ParentID:        item.ParentID,
-			SafetyWay:       item.SafetyWay,
-			RegisterWay:     item.RegisterWay,
-			CertNum:         item.CertNum,
-			Certifiable:     item.Certifiable,
-			ErrCode:         item.ErrCode,
-			EndTime:         item.EndTime,
-			Secrecy:         item.Secrecy,
-			IPAddress:       item.IPAddress,
-			Port:            item.Port,
-			Password:        item.Password,
-			Status:          item.Status,
-			Longitude:       item.Longitude,
-			Latitude:        item.Latitude,
-			PTZType:         item.Info.PTZType,
-			PositionType:    item.Info.PositionType,
-			RoomType:        item.Info.RoomType,
-			UseType:         item.Info.UseType,
-			SupplyLightType: item.Info.SupplyLightType,
-			DirectionType:   item.Info.DirectionType,
-			Resolution:      item.Info.Resolution,
-			BusinessGroupID: item.Info.BusinessGroupID,
-			RawXML:          "<Item>" + item.RawXML + "</Item>",
-			InfoRawXML:      item.Info.RawXML,
+			Kind:                     classifyGBCatalogItem(item.ChannelID),
+			Owner:                    item.Owner,
+			CivilCode:                item.CivilCode,
+			Block:                    item.Block,
+			Address:                  item.Address,
+			Parental:                 item.Parental,
+			ParentID:                 item.ParentID,
+			SafetyWay:                item.SafetyWay,
+			RegisterWay:              item.RegisterWay,
+			CertNum:                  item.CertNum,
+			Certifiable:              item.Certifiable,
+			ErrCode:                  item.ErrCode,
+			EndTime:                  item.EndTime,
+			SecurityLevelCode:        item.SecurityLevelCode,
+			Secrecy:                  item.Secrecy,
+			IPAddress:                item.IPAddress,
+			Port:                     item.Port,
+			Password:                 item.Password,
+			Status:                   item.Status,
+			Longitude:                item.Longitude,
+			Latitude:                 item.Latitude,
+			PTZType:                  item.Info.PTZType,
+			PTZTypeList:              item.Info.PTZTypeList,
+			PhotoelectricImagingType: item.Info.PhotoelectricImagingType,
+			CapturePositionType:      item.Info.CapturePositionType,
+			PositionType:             item.Info.PositionType,
+			RoomType:                 item.Info.RoomType,
+			UseType:                  item.Info.UseType,
+			SupplyLightType:          item.Info.SupplyLightType,
+			DirectionType:            item.Info.DirectionType,
+			Resolution:               item.Info.Resolution,
+			StreamNumberList:         item.Info.StreamNumberList,
+			DownloadSpeed:            item.Info.DownloadSpeed,
+			SVCSpaceSupportMode:      item.Info.SVCSpaceSupportMode,
+			SVCTimeSupportMode:       item.Info.SVCTimeSupportMode,
+			SSVCRatioSupportList:     item.Info.SSVCRatioSupportList,
+			MobileDeviceType:         item.Info.MobileDeviceType,
+			HorizontalFieldAngle:     item.Info.HorizontalFieldAngle,
+			VerticalFieldAngle:       item.Info.VerticalFieldAngle,
+			MaxViewDistance:          item.Info.MaxViewDistance,
+			GrassrootsCode:           item.Info.GrassrootsCode,
+			PointType:                item.Info.PointType,
+			PointCommonName:          item.Info.PointCommonName,
+			MAC:                      item.Info.MAC,
+			FunctionType:             item.Info.FunctionType,
+			EncodeType:               item.Info.EncodeType,
+			InstallTime:              item.Info.InstallTime,
+			ManagementUnit:           item.Info.ManagementUnit,
+			ContactInfo:              item.Info.ContactInfo,
+			RecordSaveDays:           item.Info.RecordSaveDays,
+			IndustrialClassification: item.Info.IndustrialClassification,
+			BusinessGroupID:          firstNonEmpty(strings.TrimSpace(item.BusinessGroupID), strings.TrimSpace(item.Info.BusinessGroupID)),
+			RawXML:                   "<Item>" + item.RawXML + "</Item>",
+			InfoRawXML:               item.Info.RawXML,
 		},
 	}
 }
@@ -249,16 +274,196 @@ func validateCatalogItemValues(item Channels, version GBProtocolVersion) error {
 	if endTime := strings.TrimSpace(item.EndTime); endTime != "" && !validGBDateTime(endTime) {
 		return fmt.Errorf("Catalog item EndTime must be dateTime")
 	}
+	securityLevelCode := strings.ToUpper(strings.TrimSpace(item.SecurityLevelCode))
+	if version != GBVersion30 && securityLevelCode != "" {
+		return fmt.Errorf("Catalog item SecurityLevelCode requires protocol 3.0")
+	}
+	if version == GBVersion30 && securityLevelCode != "" && securityLevelCode != "A" && securityLevelCode != "B" && securityLevelCode != "C" {
+		return fmt.Errorf("invalid Catalog item SecurityLevelCode")
+	}
 	info := item.Info
-	if !version.AtLeast(GBVersion11) && (info.XMLName.Local != "" || strings.TrimSpace(info.RawXML) != "" || info.PTZType != 0 || info.PositionType != 0 || info.RoomType != 0 || info.UseType != 0 || info.SupplyLightType != 0 || info.DirectionType != 0 || strings.TrimSpace(info.Resolution) != "" || strings.TrimSpace(info.BusinessGroupID) != "") {
+	businessGroupID := firstNonEmpty(strings.TrimSpace(item.BusinessGroupID), strings.TrimSpace(info.BusinessGroupID))
+	if version == GBVersion10 && businessGroupID != "" {
+		return fmt.Errorf("Catalog item BusinessGroupID requires protocol 1.1")
+	}
+	if !version.AtLeast(GBVersion11) && (info.XMLName.Local != "" || strings.TrimSpace(info.RawXML) != "" || info.PTZType != 0 || strings.TrimSpace(info.PTZTypeList) != "" || info.PositionType != 0 || info.RoomType != 0 || info.UseType != 0 || info.SupplyLightType != 0 || info.DirectionType != 0 || strings.TrimSpace(info.Resolution) != "" || strings.TrimSpace(info.BusinessGroupID) != "") {
 		return fmt.Errorf("Catalog item Info requires protocol 1.1")
 	}
-	if info.PTZType < 0 || info.PTZType > 4 || info.PositionType < 0 || info.PositionType > 10 || info.RoomType < 0 || info.RoomType > 2 || info.UseType < 0 || info.UseType > 3 || info.SupplyLightType < 0 || info.SupplyLightType > 3 || info.DirectionType < 0 || info.DirectionType > 8 {
+	if err := validateCatalogPTZType(info, version); err != nil {
+		return err
+	}
+	if version != GBVersion30 && hasCatalog30Info(info) {
+		return fmt.Errorf("Catalog item Info extension requires protocol 3.0")
+	}
+	if info.PositionType < 0 || info.PositionType > 10 || info.RoomType < 0 || info.RoomType > 2 || info.UseType < 0 || info.UseType > 3 || !validCatalogSupplyLightType(info.SupplyLightType, version) || info.DirectionType < 0 || info.DirectionType > 8 {
 		return fmt.Errorf("invalid Catalog item Info value")
 	}
-	if businessGroupID := strings.TrimSpace(info.BusinessGroupID); businessGroupID != "" {
+	if version == GBVersion30 {
+		if err := validateCatalog30Info(info); err != nil {
+			return err
+		}
+	}
+	if businessGroupID != "" {
 		if !version.AtLeast(GBVersion11) || !isGBDeviceIdentifier(businessGroupID) {
 			return fmt.Errorf("invalid Catalog item BusinessGroupID")
+		}
+	}
+	return nil
+}
+
+func validateCatalog30Info(info CatalogItemInfo) error {
+	if !validSlashSeparatedIntegers(info.PhotoelectricImagingType, 1, map[int]struct{}{1: {}, 2: {}, 3: {}, 4: {}, 5: {}, 9: {}}) {
+		return fmt.Errorf("invalid Catalog item PhotoelectricImagingType")
+	}
+	if !validSlashSeparatedIntegers(info.StreamNumberList, 0, map[int]struct{}{0: {}, 1: {}, 2: {}}) || !validSlashSeparatedIntegers(info.DownloadSpeed, 1, nil) {
+		return fmt.Errorf("invalid Catalog item stream or download list")
+	}
+	if info.SVCSpaceSupportMode < 0 || info.SVCSpaceSupportMode > 3 || info.SVCTimeSupportMode < 0 || info.SVCTimeSupportMode > 3 {
+		return fmt.Errorf("invalid Catalog item SVC support mode")
+	}
+	if !validCatalogRatioList(info.SSVCRatioSupportList) {
+		return fmt.Errorf("invalid Catalog item SSVCRatioSupportList")
+	}
+	if !validCatalogMobileDeviceType(info.MobileDeviceType) || info.PointType != 0 && info.PointType != 1 && info.PointType != 2 && info.PointType != 3 && info.PointType != 9 {
+		return fmt.Errorf("invalid Catalog item device or point type")
+	}
+	if !validOptionalPositiveAngle(info.HorizontalFieldAngle) || !validOptionalPositiveAngle(info.VerticalFieldAngle) || math.IsNaN(info.MaxViewDistance) || math.IsInf(info.MaxViewDistance, 0) || info.MaxViewDistance < 0 {
+		return fmt.Errorf("invalid Catalog item field angle or view distance")
+	}
+	if mac := strings.TrimSpace(info.MAC); mac != "" && !validCatalogMAC(mac) {
+		return fmt.Errorf("invalid Catalog item MAC")
+	}
+	if !validSlashSeparatedStrings(info.FunctionType, map[string]struct{}{"01": {}, "02": {}, "03": {}, "04": {}, "05": {}, "99": {}}) {
+		return fmt.Errorf("invalid Catalog item FunctionType")
+	}
+	if installTime := strings.TrimSpace(info.InstallTime); installTime != "" && !validGBDateTime(installTime) {
+		return fmt.Errorf("Catalog item InstallTime must be dateTime")
+	}
+	if info.RecordSaveDays < 0 {
+		return fmt.Errorf("invalid Catalog item RecordSaveDays")
+	}
+	return nil
+}
+
+func validCatalogMobileDeviceType(value int) bool {
+	return value == 0 || value >= 1 && value <= 5 || value == 9
+}
+
+func validSlashSeparatedIntegers(value string, minimum int, allowed map[int]struct{}) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	for _, part := range strings.Split(value, "/") {
+		item, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || item < minimum {
+			return false
+		}
+		if allowed != nil {
+			if _, ok := allowed[item]; !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validSlashSeparatedStrings(value string, allowed map[string]struct{}) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	for _, part := range strings.Split(value, "/") {
+		if _, ok := allowed[strings.TrimSpace(part)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func validCatalogRatioList(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	for _, ratio := range strings.Split(value, "/") {
+		parts := strings.Split(strings.TrimSpace(ratio), ":")
+		if len(parts) != 2 {
+			return false
+		}
+		for _, part := range parts {
+			item, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil || item <= 0 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validOptionalPositiveAngle(value float64) bool {
+	return value == 0 || !math.IsNaN(value) && !math.IsInf(value, 0) && value > 0 && value <= 360
+}
+
+func validCatalogMAC(value string) bool {
+	if len(value) != 17 {
+		return false
+	}
+	for index, char := range value {
+		if index%3 == 2 {
+			if char != '-' {
+				return false
+			}
+			continue
+		}
+		if !strings.ContainsRune("0123456789abcdefABCDEF", char) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasCatalog30Info(info CatalogItemInfo) bool {
+	return strings.TrimSpace(info.PhotoelectricImagingType) != "" || strings.TrimSpace(info.CapturePositionType) != "" ||
+		strings.TrimSpace(info.StreamNumberList) != "" || strings.TrimSpace(info.DownloadSpeed) != "" ||
+		info.SVCSpaceSupportMode != 0 || info.SVCTimeSupportMode != 0 || strings.TrimSpace(info.SSVCRatioSupportList) != "" ||
+		info.MobileDeviceType != 0 || info.HorizontalFieldAngle != 0 || info.VerticalFieldAngle != 0 || info.MaxViewDistance != 0 ||
+		strings.TrimSpace(info.GrassrootsCode) != "" || info.PointType != 0 || strings.TrimSpace(info.PointCommonName) != "" ||
+		strings.TrimSpace(info.MAC) != "" || strings.TrimSpace(info.FunctionType) != "" || strings.TrimSpace(info.EncodeType) != "" ||
+		strings.TrimSpace(info.InstallTime) != "" || strings.TrimSpace(info.ManagementUnit) != "" || strings.TrimSpace(info.ContactInfo) != "" ||
+		info.RecordSaveDays != 0 || strings.TrimSpace(info.IndustrialClassification) != ""
+}
+
+func validCatalogSupplyLightType(value int, version GBProtocolVersion) bool {
+	if value == 0 {
+		return true
+	}
+	if version == GBVersion30 {
+		return value >= 1 && value <= 5 || value == 9
+	}
+	return value >= 1 && value <= 3
+}
+
+func validateCatalogPTZType(info CatalogItemInfo, version GBProtocolVersion) error {
+	value := strings.TrimSpace(info.PTZTypeList)
+	if value == "" {
+		if info.PTZType == 0 {
+			return nil
+		}
+		value = strconv.Itoa(info.PTZType)
+	}
+	parts := strings.Split(value, "/")
+	if version != GBVersion30 && len(parts) != 1 {
+		return fmt.Errorf("Catalog PTZType list requires protocol 3.0")
+	}
+	maximum := 4
+	if version == GBVersion30 {
+		maximum = 6
+	}
+	for _, part := range parts {
+		item, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || item < 1 || item > maximum {
+			return fmt.Errorf("invalid Catalog item PTZType")
 		}
 	}
 	return nil

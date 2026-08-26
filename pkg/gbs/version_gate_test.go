@@ -1,7 +1,11 @@
 package gbs
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs/sip"
@@ -61,6 +65,68 @@ func TestPresetQuery11AcceptsSupplementSpelling(t *testing.T) {
 		}
 	default:
 		t.Fatal("PersetQuery response did not resolve PresetQuery wait")
+	}
+}
+
+func TestPresetQueryWireSpellingByVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		version GBProtocolVersion
+		want    string
+	}{
+		{name: "2011", version: GBVersion10, want: "PresetQuery"},
+		{name: "2014 supplement", version: GBVersion11, want: "PersetQuery"},
+		{name: "2016", version: GBVersion20, want: "PresetQuery"},
+		{name: "2022", version: GBVersion30, want: "PresetQuery"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := gbQueryCmdTypeForVersion("PresetQuery", test.version); got != test.want {
+				t.Fatalf("wire command = %q, want %q", got, test.want)
+			}
+			if got := gbQueryCmdTypeForVersion("PersetQuery", test.version); got != test.want {
+				t.Fatalf("legacy wire command = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestDeviceQuery11WritesSupplementPresetSpelling(t *testing.T) {
+	api, memory := newVersionGateAPI(GBVersion11)
+	flow := newFlowConnection()
+	connection := &tcpFlowConnection{flowConnection: flow}
+	local := mustFlowAddress(t, "sip:"+gb10PlatformID+"@192.0.2.20:5060")
+	remote := mustFlowAddress(t, "sip:"+gb10DeviceID+"@192.0.2.10:5060")
+	sipServer := sip.NewServer(local)
+	server := &Server{Server: sipServer, gb: api, memoryStorer: memory, fromAddress: *local}
+	api.svr = server
+	memory.device.UpdateRuntime(func(device *Device) {
+		device.IsOnline = true
+		device.conn = connection
+		device.source = flow.remote
+		device.to = remote
+	})
+	t.Cleanup(sipServer.Close)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := api.DeviceQuery(ctx, &DeviceQueryInput{DeviceID: gb10DeviceID, Action: deviceQueryActionPresetQuery})
+		done <- err
+	}()
+
+	select {
+	case payload := <-flow.writes:
+		if body := string(payload); !strings.Contains(body, "<CmdType>PersetQuery</CmdType>") {
+			t.Fatalf("2014 DeviceQuery body = %s", body)
+		}
+		cancel()
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("2014 DeviceQuery was not written")
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled DeviceQuery error = %v", err)
 	}
 }
 

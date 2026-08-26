@@ -32,7 +32,7 @@ func TestCatalog11ExtensionMapping(t *testing.T) {
 	if item.ParentID != gb10DeviceID || item.IPAddress != "192.0.2.11" || item.Port != 5060 {
 		t.Fatalf("Catalog network fields not decoded: %+v", item)
 	}
-	if item.Info.PTZType != 1 || item.Info.BusinessGroupID != "34020000002150000001" || item.Info.Resolution != "5/6" {
+	if item.Info.PTZType != 1 || item.Info.PTZTypeList != "1" || item.Info.BusinessGroupID != "34020000002150000001" || item.Info.Resolution != "5/6" {
 		t.Fatalf("Catalog Info not decoded: %+v", item.Info)
 	}
 	if !strings.Contains(item.RawXML, "<VendorExtension>fixture-value</VendorExtension>") ||
@@ -54,6 +54,42 @@ func TestCatalog11ExtensionMapping(t *testing.T) {
 	}
 	if restored.GBCatalog == nil || !strings.Contains(restored.GBCatalog.RawXML, "VendorExtension") {
 		t.Fatalf("Catalog extension JSON round trip lost raw XML: %s", encoded)
+	}
+}
+
+func TestCatalog30AcceptsMultiValuePTZType(t *testing.T) {
+	body := []byte(`<Response><CmdType>Catalog</CmdType><SN>30</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>1</SumNum><DeviceList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><SecurityLevelCode>B</SecurityLevelCode><BusinessGroupID>34020000002150000001</BusinessGroupID><Info><PTZType>1/2</PTZType><PhotoelectricImagingType>1/9</PhotoelectricImagingType><CapturePositionType>01</CapturePositionType><SupplyLightType>9</SupplyLightType><StreamNumberList>0/1/2</StreamNumberList><DownloadSpeed>1/2/4</DownloadSpeed><SVCSpaceSupportMode>3</SVCSpaceSupportMode><SVCTimeSupportMode>2</SVCTimeSupportMode><SSVCRatioSupportList>4:3/2:1</SSVCRatioSupportList><MobileDeviceType>5</MobileDeviceType><HorizontalFieldAngle>120</HorizontalFieldAngle><VerticalFieldAngle>90</VerticalFieldAngle><MaxViewDistance>500</MaxViewDistance><GrassrootsCode>340200</GrassrootsCode><PointType>2</PointType><PointCommonName>North Gate</PointCommonName><MAC>AA-BB-CC-DD-EE-FF</MAC><FunctionType>01/99</FunctionType><EncodeType>H.265</EncodeType><InstallTime>2026-08-25T10:00:00+08:00</InstallTime><ManagementUnit>Unit A</ManagementUnit><ContactInfo>0571-12345678</ContactInfo><RecordSaveDays>30</RecordSaveDays><IndustrialClassification>A01</IndustrialClassification><VendorCapability>enabled</VendorCapability></Info></Item></DeviceList></Response>`)
+	var response MessageDeviceListResponse
+	if err := sip.XMLDecode(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Item) != 1 || response.Item[0].Info.PTZType != 1 || response.Item[0].Info.PTZTypeList != "1/2" || response.Item[0].BusinessGroupID != "34020000002150000001" {
+		t.Fatalf("2022 Catalog PTZType = %+v", response.Item)
+	}
+	if response.Item[0].Info.StreamNumberList != "0/1/2" || response.Item[0].Info.FunctionType != "01/99" || !strings.Contains(response.Item[0].Info.RawXML, "VendorCapability") {
+		t.Fatalf("2022 Catalog Info fields = %+v, raw=%q", response.Item[0].Info, response.Item[0].Info.RawXML)
+	}
+	if err := validateCatalogItemValues(response.Item[0], GBVersion30); err != nil {
+		t.Fatalf("valid 2022 Catalog Info rejected: %v", err)
+	}
+	if err := validateCatalogItemValues(response.Item[0], GBVersion20); err == nil {
+		t.Fatal("2016 accepted 2022 multi-value PTZType")
+	}
+	ext := catalogChannelExt(response.Item[0])
+	if ext.GBCatalog == nil || ext.GBCatalog.PTZType != 1 || ext.GBCatalog.PTZTypeList != "1/2" || ext.GBCatalog.SecurityLevelCode != "B" || ext.GBCatalog.BusinessGroupID != response.Item[0].BusinessGroupID || ext.GBCatalog.StreamNumberList != "0/1/2" || ext.GBCatalog.RecordSaveDays != 30 {
+		t.Fatalf("2022 Catalog extension = %+v", ext.GBCatalog)
+	}
+	for _, invalid := range []int{6, 7, 8} {
+		item := response.Item[0]
+		item.Info.SupplyLightType = invalid
+		if err := validateCatalogItemValues(item, GBVersion30); err == nil {
+			t.Fatalf("2022 accepted invalid SupplyLightType %d", invalid)
+		}
+	}
+	invalidInfo := response.Item[0]
+	invalidInfo.Info.FunctionType = "06"
+	if err := validateCatalogItemValues(invalidInfo, GBVersion30); err == nil {
+		t.Fatal("2022 accepted invalid FunctionType")
 	}
 }
 
