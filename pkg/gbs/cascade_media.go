@@ -61,15 +61,18 @@ type cascadeSourceRef struct {
 }
 
 type cascadeMediaSession struct {
-	worker   *cascadeWorker
-	source   *cascadeSourceRef
-	server   *sms.MediaServer
-	ssrc     string
-	vhost    string
-	app      string
-	stream   string
-	cancel   context.CancelFunc
-	stopOnce sync.Once
+	worker               *cascadeWorker
+	source               *cascadeSourceRef
+	server               *sms.MediaServer
+	ssrc                 string
+	vhost                string
+	app                  string
+	stream               string
+	identityCtx          context.Context
+	cancel               context.CancelFunc
+	mediaStatusMu        sync.Mutex
+	mediaStatusForwarded bool
+	stopOnce             sync.Once
 }
 
 func (p cascadePlatform) allowsMediaDestination(ip net.IP) bool {
@@ -289,7 +292,10 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 	}
 
 	sessionCtx, cancel := context.WithCancel(monitorUserIdentityContext(ctx))
-	session := &cascadeMediaSession{worker: worker, ssrc: offer.SSRC, vhost: cascadeSourceVHost, app: cascadeSourceApp, cancel: cancel}
+	session := &cascadeMediaSession{
+		worker: worker, ssrc: offer.SSRC, vhost: cascadeSourceVHost, app: cascadeSourceApp,
+		identityCtx: sessionCtx, cancel: cancel,
+	}
 	remoteCSeq, remoteCSeqSet := sipRequestCSeq(ctx.Request, sip.MethodInvite)
 	dialog := &inboundInviteDialog{
 		CallID: callID, DeviceID: ctx.DeviceID, RemoteTag: sipRequestFromTag(ctx.Request), InitialToTag: sipRequestToTag(ctx.Request), TagsBound: true, CreatedAt: time.Now(), UpdatedAt: time.Now(),

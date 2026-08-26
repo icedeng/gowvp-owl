@@ -3,6 +3,7 @@ package gbs
 import (
 	"context"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,5 +172,120 @@ func TestMediaStatusCannotStopAnotherDevicesHistorySession(t *testing.T) {
 	}
 	if current, ok := streams.Load(key); !ok || current != stream || stream.Stop {
 		t.Fatal("cross-device MediaStatus stopped another device's history session")
+	}
+}
+
+func TestMediaStatusForwardsCascadeHistoryDialog(t *testing.T) {
+	streams := &conc.Map[string, *Streams]{}
+	key := historyKey(historyModePlayback, gb10DeviceID, gb10ChannelID) + ":cascade:test"
+	stream := &Streams{DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, CallID: "downstream-history", sessionKey: key}
+	streams.Store(key, stream)
+	server := &Server{}
+	api := &GB28181API{streams: streams, svr: server}
+	server.gb = api
+	worker, dialog := newMediaStatusCascadeDialog(t, server, stream, "upstream-history", testExposedChannelID)
+	api.inviteDialogs.Store(dialog.CallID, dialog)
+	var forwarded *sip.Request
+	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+		forwarded = request
+		return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+	}
+
+	conn := newFlowConnection()
+	body := []byte(`<?xml version="1.0"?><Notify><CmdType>MediaStatus</CmdType><SN>41</SN><DeviceID>` + gb10ChannelID + `</DeviceID><NotifyType>121</NotifyType></Notify>`)
+	response := runFlowHandler(t, conn, api, sip.MethodMessage, "downstream-history", body, api.sipMessageMediaStatus)
+	assertFlowOK(t, response)
+	if forwarded == nil || forwarded.Method() != sip.MethodMessage {
+		t.Fatalf("forwarded MediaStatus request = %v", forwarded)
+	}
+	callID, _ := forwarded.CallID()
+	cseq, _ := forwarded.CSeq()
+	if callID == nil || normalizeCallID(callID) != dialog.CallID || cseq == nil || cseq.SeqNo != 2 || cseq.MethodName != sip.MethodMessage {
+		t.Fatalf("forwarded MediaStatus dialog = call-id %v, cseq %+v", callID, cseq)
+	}
+	var got MediaStatusNotify
+	if err := sip.XMLDecode(forwarded.Body(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.CmdType != "MediaStatus" || got.SN <= 0 || got.SN == 41 || got.DeviceID != testExposedChannelID || got.NotifyType != mediaStatusHistoryFinished {
+		t.Fatalf("forwarded MediaStatus body = %+v", got)
+	}
+	if _, ok := streams.Load(key); ok || !stream.Stop || stream.EndReason != "media_status" {
+		t.Fatalf("cascade MediaStatus stream state = present %v, stop %v, reason %q", ok, stream.Stop, stream.EndReason)
+	}
+}
+
+func TestMediaStatusRetriesOnlyFailedCascadeDialogs(t *testing.T) {
+	streams := &conc.Map[string, *Streams]{}
+	key := historyKey(historyModeDownload, gb10DeviceID, gb10ChannelID) + ":cascade:shared"
+	stream := &Streams{DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, CallID: "downstream-shared", sessionKey: key}
+	streams.Store(key, stream)
+	server := &Server{}
+	api := &GB28181API{streams: streams, svr: server}
+	server.gb = api
+	firstWorker, firstDialog := newMediaStatusCascadeDialog(t, server, stream, "upstream-first", testExposedChannelID)
+	secondWorker, secondDialog := newMediaStatusCascadeDialog(t, server, stream, "upstream-second", "44010000001320000911")
+	api.inviteDialogs.Store(firstDialog.CallID, firstDialog)
+	api.inviteDialogs.Store(secondDialog.CallID, secondDialog)
+	firstCalls, secondCalls := 0, 0
+	firstWorker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+		firstCalls++
+		return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+	}
+	secondWorker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+		secondCalls++
+		status := http.StatusServiceUnavailable
+		if secondCalls > 1 {
+			status = http.StatusOK
+		}
+		return sip.NewResponseFromRequest("", request, status, http.StatusText(status), nil), nil
+	}
+	body := []byte(`<Notify><CmdType>MediaStatus</CmdType><SN>42</SN><DeviceID>` + gb10ChannelID + `</DeviceID><NotifyType>121</NotifyType></Notify>`)
+
+	firstResponse := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "downstream-shared", body, api.sipMessageMediaStatus)
+	if !strings.Contains(firstResponse, "SIP/2.0 503") {
+		t.Fatalf("first cascade MediaStatus response = %s", firstResponse)
+	}
+	if _, ok := streams.Load(key); !ok || stream.Stop || firstCalls != 1 || secondCalls != 1 {
+		t.Fatalf("failed cascade MediaStatus state = present %v, stop %v, calls %d/%d", ok, stream.Stop, firstCalls, secondCalls)
+	}
+
+	secondResponse := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "downstream-shared", body, api.sipMessageMediaStatus)
+	assertFlowOK(t, secondResponse)
+	if _, ok := streams.Load(key); ok || !stream.Stop || firstCalls != 1 || secondCalls != 2 {
+		t.Fatalf("retried cascade MediaStatus state = present %v, stop %v, calls %d/%d", ok, stream.Stop, firstCalls, secondCalls)
+	}
+}
+
+func newMediaStatusCascadeDialog(t *testing.T, server *Server, stream *Streams, callID, exposedID string) (*cascadeWorker, *inboundInviteDialog) {
+	t.Helper()
+	platform := testSharedCascadePlatform(t)
+	platform.channelIDMap[stream.ChannelID] = exposedID
+	platform.exposedChannelMap[exposedID] = stream.ChannelID
+	worker := newCascadeWorker(server, platform)
+	worker.mu.Lock()
+	worker.effective = GBVersion11
+	worker.mu.Unlock()
+	remote := mustFlowAddress(t, "sip:"+worker.platform.serverID+"@remote.example")
+	local := mustFlowAddress(t, "sip:"+exposedID+"@local.example")
+	contact := mustFlowAddress(t, "sip:"+worker.platform.serverID+"@192.0.2.30:5060")
+	remote.Params.Add("tag", sip.String{Str: "remote-" + callID})
+	requestCallID := sip.CallID(callID)
+	request := sip.NewRequest("", sip.MethodInvite, local.URI, sip.DefaultSipVersion, sip.NewHeaderBuilder().
+		SetFrom(remote).SetTo(local).SetContact(contact).SetMethod(sip.MethodInvite).SetSeqNo(1).SetCallID(&requestCallID).
+		AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Transport: "UDP", Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
+	request.SetSource(&net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060})
+	request.SetDestination(&net.UDPAddr{IP: net.ParseIP("192.0.2.20"), Port: 5060})
+	response := sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil)
+	mode := historyModePlayback
+	if strings.Contains(stream.sessionKey, "history:"+historyModeDownload+":") {
+		mode = historyModeDownload
+	}
+	session := &cascadeMediaSession{
+		worker: worker, source: &cascadeSourceRef{stream: stream, mode: mode}, identityCtx: context.Background(),
+	}
+	return worker, &inboundInviteDialog{
+		CallID: callID, DeviceID: worker.platform.serverID, LocalCSeq: 1, Request: request, Response: response,
+		Established: true, Cascade: session,
 	}
 }
