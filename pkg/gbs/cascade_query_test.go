@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"net"
@@ -581,7 +582,7 @@ func TestCascadeCruiseTrackQueryForwardsNumberAndRewritesResponse(t *testing.T) 
 	}
 
 	api.respondCascadeQuery(worker, cascadeQueryEnvelope{
-		CmdType: "CruiseTrackQuery", SN: 98, DeviceID: testExposedChannelID, Number: 1,
+		CmdType: "CruiseTrackQuery", SN: 98, DeviceID: testExposedChannelID, Number: intPointer(1),
 	})
 	if downstream == nil || downstream.Action != deviceQueryActionCruiseTrack || downstream.Number != 1 || downstream.TargetID != channel.ChannelID {
 		t.Fatalf("downstream cruise query = %+v", downstream)
@@ -844,6 +845,73 @@ func TestCascadeQueryTargetAllowsSupportedSharedQueries(t *testing.T) {
 	}
 	if cascadeQueryTargetAllowed(platform, "RecordInfo", "34020000001320000099") {
 		t.Fatal("unshared RecordInfo query was accepted")
+	}
+}
+
+func TestCascadeQueryRequestRejectsInvalidRequiredPayload(t *testing.T) {
+	validRecord := cascadeQueryEnvelope{
+		XMLName: xml.Name{Local: "Query"}, CmdType: "RecordInfo", SN: 1, DeviceID: testExposedChannelID,
+		StartTime: "2026-08-26T08:00:00", EndTime: "2026-08-26T09:00:00",
+	}
+	tests := []struct {
+		name  string
+		query cascadeQueryEnvelope
+	}{
+		{name: "invalid device id", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "DeviceStatus", SN: 1, DeviceID: "device"}},
+		{name: "missing cruise number", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "CruiseTrackQuery", SN: 1, DeviceID: testExposedChannelID}},
+		{name: "invalid cruise number", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "CruiseTrackQuery", SN: 1, DeviceID: testExposedChannelID, Number: intPointer(2)}},
+		{name: "negative mobile interval", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "MobilePosition", SN: 1, DeviceID: testExposedChannelID, Interval: -1}},
+		{name: "missing record time", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "RecordInfo", SN: 1, DeviceID: testExposedChannelID}},
+		{name: "reversed record time", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "RecordInfo", SN: 1, DeviceID: testExposedChannelID, StartTime: validRecord.EndTime, EndTime: validRecord.StartTime}},
+		{name: "unsupported command", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "Unknown", SN: 1, DeviceID: testExposedChannelID}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateCascadeQueryRequest(test.query); err == nil {
+				t.Fatal("invalid cascade query was accepted")
+			}
+		})
+	}
+	if err := validateCascadeQueryRequest(validRecord); err != nil {
+		t.Fatalf("valid RecordInfo rejected: %v", err)
+	}
+	validCruise := cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "CruiseTrackQuery", SN: 1, DeviceID: testExposedChannelID, Number: intPointer(0)}
+	if err := validateCascadeQueryRequest(validCruise); err != nil {
+		t.Fatalf("valid CruiseTrackQuery number 0 rejected: %v", err)
+	}
+}
+
+func TestCascadeMiddlewareRejectsMissingCruiseNumberBeforeForwarding(t *testing.T) {
+	platform := testSharedCascadePlatform(t)
+	worker := newCascadeWorker(nil, platform)
+	worker.mu.Lock()
+	worker.effective = GBVersion30
+	worker.mu.Unlock()
+	api := &GB28181API{}
+	forwarded := false
+	api.cascadeDeviceQuery = func(context.Context, *DeviceQueryInput) (*DeviceQueryOutput, error) {
+		forwarded = true
+		return nil, nil
+	}
+	connection := newFlowConnection()
+	body := []byte(`<Query><CmdType>CruiseTrackQuery</CmdType><SN>8</SN><DeviceID>` + testExposedChannelID + `</DeviceID></Query>`)
+	request := newFlowRequest(t, connection, sip.MethodMessage, "cascade-missing-cruise-number", body)
+	ctx := &sip.Context{
+		Request: request, Tx: sip.NewTransaction("cascade-missing-cruise-number", connection),
+		DeviceID: platform.serverID, Source: connection.remote,
+	}
+	ctx.Set(cascadeWorkerContextKey, worker)
+	api.sipCascadeMessageMiddleware(ctx)
+	select {
+	case response := <-connection.writes:
+		if !strings.Contains(string(response), "SIP/2.0 400") {
+			t.Fatalf("missing CruiseTrackQuery Number response = %s", response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing CruiseTrackQuery Number response timeout")
+	}
+	if forwarded {
+		t.Fatal("invalid CruiseTrackQuery was forwarded downstream")
 	}
 }
 

@@ -178,7 +178,8 @@ type DeviceConfigInput struct {
 }
 
 type pendingDeviceConfig struct {
-	wait chan *DeviceConfigResponse
+	wait     chan *DeviceConfigResponse
+	targetID string
 }
 
 const CMDTypeConfigDownload = "ConfigDownload"
@@ -223,7 +224,8 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 	}
 	msg.CmdType = strings.TrimSpace(msg.CmdType)
 	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
-	if !strings.EqualFold(msg.CmdType, "DeviceConfig") {
+	msg.Result = strings.TrimSpace(msg.Result)
+	if msg.XMLName.Local != "Response" || !strings.EqualFold(msg.CmdType, "DeviceConfig") || !isGBResultValue(msg.Result) {
 		ctx.String(400, "invalid DeviceConfig response")
 		return
 	}
@@ -232,6 +234,20 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 	}); err != nil {
 		ctx.String(400, err.Error())
 		return
+	}
+	waitKey := buildPendingDeviceConfigKey(ctx.DeviceID, msg.SN)
+	var pending *pendingDeviceConfig
+	if value, ok := g.pendingDeviceConfig.Load(waitKey); ok {
+		var pendingOK bool
+		pending, pendingOK = value.(*pendingDeviceConfig)
+		if !pendingOK || pending == nil {
+			ctx.String(400, "invalid DeviceConfig pending state")
+			return
+		}
+		if expected := strings.TrimSpace(pending.targetID); expected != "" && expected != msg.DeviceID {
+			ctx.String(400, "DeviceConfig response target mismatch")
+			return
+		}
 	}
 	msg.RawXML = string(ctx.Request.Body())
 
@@ -249,10 +265,9 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 		g.storeAppendixA4State(ctx.DeviceID, ext)
 	}
 
-	waitKey := buildPendingDeviceConfigKey(ctx.DeviceID, msg.SN)
-	if v, ok := g.pendingDeviceConfig.Load(waitKey); ok {
+	if pending != nil {
 		select {
-		case v.(*pendingDeviceConfig).wait <- &msg:
+		case pending.wait <- &msg:
 		default:
 		}
 	}
@@ -323,7 +338,7 @@ func (g *GB28181API) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput)
 		return nil, err
 	}
 	waitKey := buildPendingDeviceConfigKey(deviceID, int(sn))
-	pending := &pendingDeviceConfig{wait: make(chan *DeviceConfigResponse, 1)}
+	pending := &pendingDeviceConfig{wait: make(chan *DeviceConfigResponse, 1), targetID: targetID}
 	g.pendingDeviceConfig.Store(waitKey, pending)
 	defer g.pendingDeviceConfig.Delete(waitKey)
 
@@ -347,7 +362,7 @@ func (g *GB28181API) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput)
 			SnapShot: response.SnapShotConfig,
 			RawXML:   response.RawXML,
 		}
-		if state.Result != "" && !strings.EqualFold(state.Result, "OK") {
+		if !strings.EqualFold(state.Result, "OK") {
 			return state, fmt.Errorf("DeviceConfig failed: %s", state.Result)
 		}
 		return state, nil
@@ -596,6 +611,7 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 	}
 	msg.CmdType = strings.TrimSpace(msg.CmdType)
 	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	msg.Result = strings.TrimSpace(msg.Result)
 	if !strings.EqualFold(msg.CmdType, CMDTypeConfigDownload) {
 		ctx.String(400, "invalid ConfigDownload response")
 		return
@@ -606,8 +622,12 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 		ctx.String(400, err.Error())
 		return
 	}
+	if !isGBResultValue(msg.Result) {
+		ctx.String(400, "invalid ConfigDownload result")
+		return
+	}
 
-	resultOK := strings.TrimSpace(msg.Result) == "" || strings.EqualFold(strings.TrimSpace(msg.Result), "OK")
+	resultOK := strings.EqualFold(msg.Result, "OK")
 	if msg.BasicParam != nil && msg.DeviceID == strings.TrimSpace(ctx.DeviceID) && resultOK {
 		ipc, ok := g.svr.memoryStorer.Load(ctx.DeviceID)
 		if !ok {

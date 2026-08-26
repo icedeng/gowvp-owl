@@ -34,7 +34,7 @@ type cascadeQueryEnvelope struct {
 	StartTime string `xml:"StartTime"`
 	EndTime   string `xml:"EndTime"`
 	Interval  int    `xml:"Interval"`
-	Number    int    `xml:"Number"`
+	Number    *int   `xml:"Number"`
 }
 
 type cascadeCatalogResponse struct {
@@ -223,6 +223,10 @@ func (g *GB28181API) sipCascadeMessageMiddleware(ctx *sip.Context) {
 		ctx.AbortString(400, "invalid cascade query")
 		return
 	}
+	if err := validateCascadeQueryRequest(query); err != nil {
+		ctx.AbortString(400, err.Error())
+		return
+	}
 	if !cascadeQueryTargetAllowed(worker.platform, query.CmdType, query.DeviceID) {
 		ctx.AbortString(404, "cascade target not found")
 		return
@@ -234,6 +238,35 @@ func (g *GB28181API) sipCascadeMessageMiddleware(ctx *sip.Context) {
 	g.startLifecycleTask(identityCtx, func(taskCtx context.Context) {
 		g.respondCascadeQuery(worker, query, taskCtx)
 	})
+}
+
+func validateCascadeQueryRequest(query cascadeQueryEnvelope) error {
+	if query.XMLName.Local != "Query" || query.SN <= 0 || !isGBDeviceIdentifier(strings.TrimSpace(query.DeviceID)) {
+		return fmt.Errorf("invalid cascade query envelope")
+	}
+	switch query.CmdType {
+	case "Catalog", "DeviceInfo", "DeviceStatus", "PresetQuery", "HomePositionQuery", "CruiseTrackListQuery", "PTZPosition", "SDCardStatus":
+		return nil
+	case "MobilePosition":
+		if query.Interval < 0 {
+			return fmt.Errorf("MobilePosition Interval must not be negative")
+		}
+		return nil
+	case "CruiseTrackQuery":
+		if query.Number == nil || (*query.Number != 0 && *query.Number != 1) {
+			return fmt.Errorf("CruiseTrackQuery Number must be 0 or 1")
+		}
+		return nil
+	case "RecordInfo":
+		startAt, startErr := sip.ParseGBTime("2006-01-02T15:04:05", strings.TrimSpace(query.StartTime))
+		endAt, endErr := sip.ParseGBTime("2006-01-02T15:04:05", strings.TrimSpace(query.EndTime))
+		if startErr != nil || endErr != nil || !endAt.After(startAt) {
+			return fmt.Errorf("RecordInfo requires valid StartTime and EndTime")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported cascade query command: %s", query.CmdType)
+	}
 }
 
 func (g *GB28181API) respondCascadeQuery(worker *cascadeWorker, query cascadeQueryEnvelope, parents ...context.Context) {
@@ -321,7 +354,7 @@ func (g *GB28181API) respondCascadeForwardedQuery(ctx context.Context, worker *c
 	}
 	out, err := queryDevice(ctx, &DeviceQueryInput{
 		DeviceID: channel.DeviceID, TargetID: channel.ChannelID, Action: action,
-		Timeout: 25 * time.Second, Interval: query.Interval, Number: query.Number,
+		Timeout: 25 * time.Second, Interval: query.Interval, Number: cascadeQueryNumber(query),
 	})
 	if err != nil || out == nil || strings.TrimSpace(out.XML) == "" ||
 		!strings.EqualFold(canonicalGBQueryCmdType(out.CmdType), query.CmdType) {
@@ -336,6 +369,13 @@ func (g *GB28181API) respondCascadeForwardedQuery(ctx context.Context, worker *c
 		return sendCascadeQueryError(ctx, worker, query)
 	}
 	return worker.sendMessage(ctx, body)
+}
+
+func cascadeQueryNumber(query cascadeQueryEnvelope) int {
+	if query.Number == nil {
+		return 0
+	}
+	return *query.Number
 }
 
 func sendCascadeQueryError(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope) error {

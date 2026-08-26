@@ -95,7 +95,10 @@ func TestDeviceConfigResponseRejectsInvalidEnvelopeBeforeStateAndWait(t *testing
 	}{
 		{name: "unsupported version", body: `<Response><CmdType>DeviceConfig</CmdType><SN>31</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
 		{name: "wrong command", body: `<Response><CmdType>DeviceStatus</CmdType><SN>31</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
+		{name: "wrong root", body: `<Notify><CmdType>DeviceConfig</CmdType><SN>31</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Notify>`},
 		{name: "non-positive SN", body: `<Response><CmdType>DeviceConfig</CmdType><SN>0</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
+		{name: "missing result", body: `<Response><CmdType>DeviceConfig</CmdType><SN>31</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Response>`},
+		{name: "invalid result", body: `<Response><CmdType>DeviceConfig</CmdType><SN>31</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>SUCCESS</Result></Response>`},
 		{name: "unknown target", body: `<Response><CmdType>DeviceConfig</CmdType><SN>31</SN><DeviceID>34020000001320000009</DeviceID><Result>OK</Result></Response>`},
 	}
 	for index, test := range tests {
@@ -116,6 +119,31 @@ func TestDeviceConfigResponseRejectsInvalidEnvelopeBeforeStateAndWait(t *testing
 	}
 	if state, ok := api.GetQueryState(gb10DeviceID); ok && state.DeviceConfig != nil {
 		t.Fatalf("invalid DeviceConfig changed state: %+v", state.DeviceConfig)
+	}
+}
+
+func TestDeviceConfigResponseRejectsSiblingPendingTargetBeforeState(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion30)
+	firstChannelID := gb10ChannelID
+	secondChannelID := "34020000001320000003"
+	memory.runtime.Channels.Store(firstChannelID, &Channel{ChannelID: firstChannelID, device: memory.runtime})
+	memory.runtime.Channels.Store(secondChannelID, &Channel{ChannelID: secondChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	pending := &pendingDeviceConfig{wait: make(chan *DeviceConfigResponse, 1), targetID: firstChannelID}
+	api.pendingDeviceConfig.Store(buildPendingDeviceConfigKey(gb10DeviceID, 32), pending)
+	body := []byte(`<Response><CmdType>DeviceConfig</CmdType><SN>32</SN><DeviceID>` + secondChannelID + `</DeviceID><Result>OK</Result></Response>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "device-config-sibling-target", body, api.handleDeviceConfig)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("sibling DeviceConfig response = %s", response)
+	}
+	select {
+	case output := <-pending.wait:
+		t.Fatalf("sibling DeviceConfig resolved pending wait: %+v", output)
+	default:
+	}
+	if state, ok := api.GetQueryState(gb10DeviceID); ok && state.DeviceConfig != nil {
+		t.Fatalf("sibling DeviceConfig changed state: %+v", state.DeviceConfig)
 	}
 }
 
@@ -266,6 +294,8 @@ func TestConfigDownloadResponseValidatesBeforeRuntimeUpdate(t *testing.T) {
 	}{
 		{name: "wrong command", body: `<Response><CmdType>DeviceStatus</CmdType><SN>1</SN><DeviceID>device</DeviceID><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
 		{name: "non-positive SN", body: `<Response><CmdType>ConfigDownload</CmdType><SN>0</SN><DeviceID>device</DeviceID><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
+		{name: "missing result", body: `<Response><CmdType>ConfigDownload</CmdType><SN>1</SN><DeviceID>device</DeviceID><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
+		{name: "invalid result", body: `<Response><CmdType>ConfigDownload</CmdType><SN>1</SN><DeviceID>device</DeviceID><Result>SUCCESS</Result><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
 		{name: "unknown target", body: `<Response><CmdType>ConfigDownload</CmdType><SN>1</SN><DeviceID>34020000001320000009</DeviceID><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
 	}
 	for _, test := range tests {

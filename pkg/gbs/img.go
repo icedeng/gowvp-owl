@@ -98,7 +98,7 @@ func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetI
 	}).Marshal()
 
 	waitKey := buildPendingDeviceConfigKey(deviceID, int(sn))
-	pending := &pendingDeviceConfig{wait: make(chan *DeviceConfigResponse, 1)}
+	pending := &pendingDeviceConfig{wait: make(chan *DeviceConfigResponse, 1), targetID: targetID}
 	g.pendingDeviceConfig.Store(waitKey, pending)
 	defer g.pendingDeviceConfig.Delete(waitKey)
 
@@ -116,7 +116,7 @@ func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetI
 	defer timer.Stop()
 	select {
 	case resp := <-pending.wait:
-		if strings.ToUpper(strings.TrimSpace(resp.Result)) == "OK" || strings.TrimSpace(resp.Result) == "" {
+		if strings.EqualFold(strings.TrimSpace(resp.Result), "OK") {
 			state, exists := g.transitionSnapshotState(deviceID, sessionID, "accepted")
 			if !exists {
 				return nil, fmt.Errorf("snapshot session disappeared before acceptance")

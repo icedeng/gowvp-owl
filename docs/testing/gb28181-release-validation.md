@@ -60,6 +60,7 @@ go test ./... -count=1
 - 上级级联信令可配置 UDP/TCP/TLS；TCP/TLS 同一连接完成 REGISTER Digest 与 Keepalive，断线后同一 Call-ID 事务切换新连接，301/302 可切换到 TCP/TLS 或 `sips:` 目标，且 SIPS 不允许降级到明文传输；
 - 2022 上级 REGISTER 301/302 重定向，校验 Contact 的 ServerID、SIPS/transport，重定向后重新 Digest 注册，后续心跳、通知、媒体请求和入向身份校验绑定新地址；
 - 共享通道 DeviceInfo、DeviceStatus 和 RecordInfo 查询，录像响应分包并映射为上级可见编码；NVR 代表已知子通道返回 DeviceInfo 时只更新子通道元数据；
+- 上级 Query 请求的固定根、正 SN、20 位目标、命令白名单及专属载荷校验；RecordInfo 缺失/倒置时间、MobilePosition 负间隔和 CruiseTrackQuery 缺失/越界 Number 必须在启动下级任务前拒绝；
 - 共享通道 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 PTZPosition/SDCardStatus 查询转发；上下级 SN 转换、DeviceID/ParentID 安全映射、未知编码拒绝、下级失败业务应答及多上级响应隔离；
 - 3.0 附录 A.4 扩展对象按 Catalog ExtraInfo、Alarm/MobilePosition 嵌套对象和 DeviceStatus 响应的真实承载路径级联；共享对象递归编码映射，未知 20 位对象编码整条拒绝，且 1.0/1.1/2.0 不输出 3.0 ExtraInfo；
 - 3.0 PTZ 精准位置变化事件订阅/通知及级联；1.0/1.1/2.0 版本门禁，通知通道编码映射和非共享通道隔离；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅自动建立下级订阅并覆盖续订、退订、引用计数、过期和上级移除清理；Catalog 会订阅承载共享通道的下级 NVR，并在目录快照变化后为新增或迁移通道补订阅；
@@ -80,6 +81,7 @@ go test ./... -count=1
 - Alarm 非法根、命令、SN、目标、级别、方式、时间或非有限经纬度不得写附录 A.4、触发业务回调或向订阅方转发；
 - MediaStatus 非法根、命令、SN、设备、空通知类型或活动会话目标不匹配不得结束任务；未知类型及已清理会话重复 121 应保持 200 幂等确认；
 - ConfigDownload 失败响应和子通道 BasicParam 不得改写父设备心跳运行态；
+- DeviceConfig/ConfigDownload 缺失或非法 `Result` 不得写状态、改运行态或解除等待；DeviceConfig 响应必须匹配原目标通道，兄弟通道复用 SN 不得抢占配置或抓拍等待；
 - DeviceConfig 非法版本、根、命令、SN 或目标不得写状态、附录 A.4 或解除等待；
 - Catalog 非法根、命令、SN、非 20 位顶层目标或负 SumNum 不得进入多响应聚合或解除查询等待；
 - 四版本历史级联 `INVITE→ACK→INFO→BYE` 完整对话、媒体启动/释放和 MANSRTSP/RTSP 转换；
