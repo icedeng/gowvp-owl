@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"strings"
@@ -36,12 +37,17 @@ func TestValidateCascadeDeviceControlVersionAndScope(t *testing.T) {
 	}
 	drag := base
 	drag.PTZCmd = ""
-	drag.DragZoomIn = &deviceControlA23DragZoom{Length: 100, Width: 100}
+	drag.DragZoomIn = &deviceControlA23DragZoom{Length: 100, Width: 100, MidPointX: 50, MidPointY: 50, LengthX: 20, LengthY: 20}
 	if err := validateCascadeDeviceControl(&drag, GBVersion10, GBVersion11); err == nil {
 		t.Fatal("1.0 upstream accepted 1.1 DragZoom")
 	}
 	if err := validateCascadeDeviceControl(&drag, GBVersion11, GBVersion11); err != nil {
 		t.Fatalf("1.1 DragZoom rejected: %v", err)
+	}
+	invalidDrag := drag
+	invalidDrag.DragZoomIn = &deviceControlA23DragZoom{Length: 100, Width: 100, MidPointX: 101, MidPointY: 50, LengthX: 20, LengthY: 20}
+	if err := validateCascadeDeviceControl(&invalidDrag, GBVersion11, GBVersion11); err == nil {
+		t.Fatal("invalid DragZoom coordinates were accepted")
 	}
 	precise := base
 	precise.PTZCmd = ""
@@ -52,6 +58,31 @@ func TestValidateCascadeDeviceControlVersionAndScope(t *testing.T) {
 	}
 	if err := validateCascadeDeviceControl(&precise, GBVersion30, GBVersion30); err != nil {
 		t.Fatalf("3.0 precise PTZ rejected: %v", err)
+	}
+	invalidPan := math.NaN()
+	precise.PTZPreciseCtrl = &deviceControlA23PTZPrecise{Pan: &invalidPan}
+	if err := validateCascadeDeviceControl(&precise, GBVersion30, GBVersion30); err == nil {
+		t.Fatal("non-finite precise PTZ was accepted")
+	}
+	home := base
+	home.PTZCmd = ""
+	enabled := 1
+	negativeReset := -1
+	home.HomePosition = &deviceControlA23HomePosition{Enabled: &enabled, ResetTime: &negativeReset}
+	if err := validateCascadeDeviceControl(&home, GBVersion20, GBVersion20); err == nil {
+		t.Fatal("negative HomePosition reset time was accepted")
+	}
+	upgrade := base
+	upgrade.PTZCmd = ""
+	upgrade.DeviceUpgrade = &deviceUpgradeConfig{
+		Firmware: "V3", FileURL: "https://example.invalid/firmware.bin", Manufacturer: "Vendor",
+		SessionID: "upgrade-session-0000000000000104",
+	}
+	if err := validateCascadeDeviceControl(&upgrade, GBVersion20, GBVersion30); err == nil {
+		t.Fatal("2.0 upstream accepted 3.0 DeviceUpgrade")
+	}
+	if err := validateCascadeDeviceControl(&upgrade, GBVersion30, GBVersion30); err != nil {
+		t.Fatalf("3.0 DeviceUpgrade rejected: %v", err)
 	}
 	track := base
 	track.PTZCmd = ""

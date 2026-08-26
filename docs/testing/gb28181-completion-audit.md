@@ -4,9 +4,9 @@
 
 ## 1. 审计结论
 
-代码建设、自动化测试和本地协议模拟器已完成到开发计划的 AI-502；AI-403 的 2014 附录 O 裸 TCP 下载已经实现，不再是代码阻断项。2022 的设备升级、图像抓拍、目标跟踪、扩展配置写入、注册重定向、AAC/H.265 SDP 和主动视频上传通知已补齐代码闭环，其中升级与抓拍现在同时覆盖受理应答、最终通知和会话状态查询，不再把“命令已受理”误判为“业务已完成”。四版本除 REGISTER 外的 `Date + Note` 信令摘要已经形成请求/响应、时间窗、设备及上级独立 seed 的自动化闭环，但默认关闭，尚未经过真实设备和真实上级平台互通。2016 版 `Capability/Asymmetric` 数字证书 REGISTER 已完成服务端与级联客户端双向闭环：按 J.2 生成两段 Base64 nonce，以 RSA/PKCS#1 v1.5 完成平台证明和设备秘密分发，支持 MD5/SHA-1/SHA-256 协商、设备国标编码到证书的显式绑定、CA/CRL 校验、源地址绑定、限时有界 nonce、幂等重传和强制模式防降级；默认关闭，仍待真实证书体系与平台互通。四版本共同规定的 `Monitor-User-Identity` 已完成本域真实用户档案生成、跨域逐级前置、下行转发、211 类型网关信任链、跳数/环路/重复头校验以及用户 ID、机构、类别、职级白名单访问控制；策略按上级平台隔离、默认关闭，仍待真实安全路由网关和用户目录互通。REGISTER、RecordInfo、报警和级联协议时间统一使用北京时间，不受容器本地时区影响；查询/控制 SN 保持正整数单调序列，自动 ConfigDownload 遵循设备能力关闭项。RecordInfo 无业务响应不再伪装成空录像，重叠及午夜边界录像段会正确合并、分日。SIP URI/地址解析已补齐短输入、纯空白、缺失闭合符、空主机及括号 IPv6 的边界处理；畸形报文返回解析错误，不再触发切片越界。SSRC 生成会校验 10 位数字域编码，并将配置错误显式返回给直播、回放、下载、广播、对讲和级联媒体调用链。SIP 配置加载和 API 更新现在统一校验平台 ID、有效域、监听端口、TLS、证书 REGISTER、历史范围、信令摘要和上级身份策略；配置先原子写盘再提交运行时快照，失败不再污染内存。监听地址、平台身份、TLS、入向证书 REGISTER 信任锚和报文日志等不能安全热更新的字段会明确要求重启，不再返回“成功”但继续使用旧运行态；运行中的 SIP 请求通过受锁快照读取配置，避免更新时发生数据竞争。
+设备接入和视频监控平台级联的代码建设、自动化测试和本地协议模拟器已完成到开发计划的 AI-502；AI-403 的 2014 附录 O 裸 TCP 下载已经实现，不再是代码阻断项。2022 的设备升级、图像抓拍、目标跟踪、扩展配置写入、注册重定向、AAC/H.265 SDP 和主动视频上传通知已补齐设备侧及级联侧代码闭环，其中升级与抓拍同时覆盖受理应答、最终通知和会话状态查询，不再把“命令已受理”误判为“业务已完成”。但这不能证明“四版完整标准均已实现”：2011/2014/2016 规范性附录 G 的外部综合接处警/卡口接口整体未实现，详见第 6 节范围边界。四版本除 REGISTER 外的 `Date + Note` 信令摘要已经形成请求/响应、时间窗、设备及上级独立 seed 的自动化闭环，但默认关闭，尚未经过真实设备和真实上级平台互通。2016 版 `Capability/Asymmetric` 数字证书 REGISTER 已完成服务端与级联客户端双向闭环：按 J.2 生成两段 Base64 nonce，以 RSA/PKCS#1 v1.5 完成平台证明和设备秘密分发，支持 MD5/SHA-1/SHA-256 协商、设备国标编码到证书的显式绑定、CA/CRL 校验、源地址绑定、限时有界 nonce、幂等重传和强制模式防降级；默认关闭，仍待真实证书体系与平台互通。四版本共同规定的 `Monitor-User-Identity` 已完成本域真实用户档案生成、跨域逐级前置、下行转发、211 类型网关信任链、跳数/环路/重复头校验以及用户 ID、机构、类别、职级白名单访问控制；策略按上级平台隔离、默认关闭，仍待真实安全路由网关和用户目录互通。
 
-目标尚不能标记为生产完成，原因是 AI-503 真实设备矩阵和 AI-602 部署灰度/回滚必须在外部设备及目标环境执行。上下级平台级联的 UDP/TCP/TLS 注册、查询（含 2014+ ConfigDownload 多响应）、配置写入（2014+ DeviceConfig）、目录、事件订阅、直播、回放、下载和语音广播/对讲代码链路已经补齐；2022 附录 H 指定路径级联已完成自动化闭环；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅现在会自动建立、续订、复用和取消下级订阅，但仍需要真实上级平台及真实设备共同验证。
+目标尚不能标记为生产完成：AI-503 真实设备矩阵和 AI-602 部署灰度/回滚必须在外部设备及目标环境执行；若目标包含前三版完整标准覆盖，附录 G 还必须另行设计和实现。视频上下级平台级联的 UDP/TCP/TLS 注册、查询、配置、目录、事件订阅、直播、回放、下载、语音、2022 升级/抓拍和主动上传通知代码链路已经补齐，但仍需要真实上级平台及真实设备共同验证。
 
 ## 2. 任务逐项证据
 
@@ -51,7 +51,7 @@
 | 实时点播 | 完成（自动化） | 1.0/1.1 UDP，2.0/3.0 UDP/TCP；ZLM 转发、ACK/BYE/CANCEL 和引用计数；3.0 指定路径使用独立媒体源与 RTP 流并按同一路径会话释放；对话内请求绑定发起该会话的已注册上级，其他上级不能确认或终止会话；缓存 INVITE 响应只向 CSeq、Request-URI 和顶层 Via 均匹配的原事务重传复用，相同 Call-ID/tag 的另一事务返回 491；响应生成克隆 To 头后添加服务端 tag，不修改原 INVITE 事务证据。事务发送也在克隆响应上附加信令摘要/身份安全头，缓存响应在并发重传中保持不可变。INVITE 清理器只回收 10 分钟未建立的半开对话，已建立且媒体正常的长时会话不会因 SIP 静默被误切断；`cascade_media_test.go`、`sip/panic_fix_test.go`、`sip/signal_digest_test.go`、`server_lifecycle_test.go` |
 | 历史回放/下载 | 完成（自动化） | 独立时间段及指定路径媒体源、Playback/Download SDP、下载倍速/文件大小；四版本 `INVITE→ACK→INFO→BYE` 串联回归，3.0 下载覆盖指定路径转发与响应确认；下级会话内 `MediaStatus/121` 按各上级独立 Call-ID、递增 CSeq 和暴露编码逐一转发，收到上级成功应答后才确认下级并收敛媒体，多上级共享源的重传只补失败项；MANSRTSP/RTSP 版本转换；普通和级联控制 CSeq 原子递增；资源关闭；`cascade_media_test.go`、`media_status_test.go`、`history_control_test.go` |
 | 语音广播/对讲级联 | 完成（自动化） | 按附录 Q/9.12 转发上级 Broadcast 通知，主动建立上游语音源 INVITE（支持 Digest）与 ZLM 接收流，再通知真实下级并处理接收方主动 INVITE；1.1 上游/下游使用 PS/90000，2.0/3.0 使用 PCMA/8000，跨版本由 ZLM 解封装/重封装；上下游 SN、SourceID/TargetID 隔离，多通道按 Subject 接收者定位；ACK/CANCEL/双侧 BYE、媒体注销和关闭均幂等释放。语音对讲按 2016 的“实时视音频点播上行 + 语音广播下行”组合实现；`cascade_voice_test.go`、`cascade_version_matrix_test.go` |
-| 2022 扩展级联 | 完成（自动化） | 附录 H `X-PreferredPath` 按首跳消费并向下转发剩余路径，`X-RoutePath` 前置本平台编码返回；路径平台编码严格校验为 20 位数字及类型码 `200`，拒绝重复、错误首跳、响应不匹配和路由环；指定路径媒体源按路径隔离，未使用路径时兼容历史非 `200` 本地编码。CruiseTrackListQuery、CruiseTrackQuery、PTZPosition、SDCardStatus 按 3.0 门禁安全转发并重写 SN/DeviceID/ParentID；TargetTrack 只在上下游均为 3.0 且目标是当前共享通道时转发；3.0 PTZ 精准位置变化事件支持自动下级订阅和安全通知级联；ConfigDownload 使用标准 `SnapShotConfig`，同时接收旧厂商 `SnapShot` 别名；A.4 是扩展应用数据对象类型定义而非独立查询命令，已按真实承载路径支持 3.0 Catalog ExtraInfo、Alarm/MobilePosition 嵌套对象和 3.0 DeviceStatus 下级响应。共享对象编码递归映射、ParentID/下级父设备映射为本级平台编码，字符串及数值型 20 位对象编码均保留精度并执行映射，未知编码拒绝整条响应/通知；JSON 数字和数组不丢值；补正标准 `behavioralEventType` 并兼容旧厂商别名；`cascade_path.go`、`cascade_a4.go`、`cascade_path_test.go`、`cascade_query_test.go`、`cascade_subscribe_test.go`、`cascade_control_test.go` |
+| 2022 扩展级联 | 完成（自动化） | 附录 H 指定路径、巡航/PTZ/存储卡查询、TargetTrack 和 PTZPosition 订阅均按 3.0 门禁；升级/抓拍为每个上级映射独立下级 SessionID，最终通知只返回发起上级，并重写目标、会话及抓拍文件 ID；并发重复最终通知只向上级发送一次，转发失败保留路由供设备重传。抓拍按 9.14 保持上级 `UploadURL`，由目标设备直接上传图片，Owl 不代理图片内容。VideoUploadNotify 只发往 3.0、已注册且共享目标的上级。级联 DeviceControl 与本地路径统一校验拉框、看守位、码流、I 帧和有限 PTZ 参数。任务路由具有 TTL、设备删除和停服清理；`cascade_path.go`、`cascade_a4.go`、`cascade_tasks.go`、`cascade_tasks_test.go`、`cascade_control_test.go` |
 | 真实平台互通 | 待外部执行 | 需要 1.0/1.1/2.0/3.0 上级平台分别验证注册、目录、直播、回放、下载和订阅；3.0 还需使用至少三层平台验证附录 H 指定路径 |
 
 四版本级联自动化矩阵由 `cascade_version_matrix_test.go` 固化，统一检查 REGISTER 版本、Catalog 字段、UDP/TCP 媒体、下载倍速、语音载荷、MANSRTSP/RTSP 控制和订阅能力。`cascade_media_test.go` 进一步使用四版本完整历史对话验证媒体启动、控制、终止和资源回收，并验证两个已注册上级之间的对话所有权隔离；`cascade_voice_test.go` 验证广播的上下游完整 B2BUA、Digest、编码映射、会话所有权及双侧清理。SIP 配置 Swagger 已包含上级平台完整字段；配置 API 的 Duration 同时接受历史纳秒整数和 `60s` 形式字符串。
@@ -69,22 +69,22 @@
 
 ## 5. 最近验证
 
-通过：
+2026-08-26 最终工作树已执行并通过：
 
 ```bash
-go test ./...
-go test -race -vet=off ./... -count=1
-go vet ./...
-cd admin-ui && pnpm build
-go test ./pkg/gbs/sip -run '^$' -fuzz FuzzParseSIPAddressesDoNotPanic -fuzztime=5s
-go test ./pkg/gbs/sip -run '^$' -fuzz FuzzParseSIPHeaderDoesNotPanic -fuzztime=8s
+env GOCACHE=/private/tmp/owl-go-cache go test ./... -count=1
+env GOCACHE=/private/tmp/owl-go-cache go vet ./...
+env GOCACHE=/private/tmp/owl-go-cache go test -race -vet=off ./pkg/gbs/... -count=1
 git diff --check
 ```
+
+历史执行记录还包含全仓 race、管理端构建和 SIP 地址/头模糊测试；它们未在本轮最终工作树重跑，因此不作为本轮新增代码的验证声明。
 
 ## 6. 已知边界与剩余问题
 
 | 项目 | 当前状态 | 处理结论 |
 |---|---|---|
+| 2011/2014/2016 附录 G 外部系统接口 | 未实现 | 当前没有 `MPAlarm`、`ECSAlarm`、`TGSAlarm`、`ConfigDefence`、`MPAlarmRecordList`、`ECSAlarmRecordList`、`TGSAlarmRecordList` 路由，也没有综合接处警/卡口系统身份配置、报警记录存储、布控状态和外部权限模型。2022 明确删除该附录。若业务需要前三版完整标准覆盖，应独立建设领域模块/项目工作包并通过适配接口集成，不能将其宣称为普通设备/视频平台级联已完成。 |
 | SIP REGISTER 口令摘要认证 | 已加固并有自动化证据 | 验签在计算前保存客户端原始 `response`，避免计算函数覆盖字段后形成自比较；错误口令摘要已有拒绝回归。nonce 由服务端使用密码学安全随机源签发，绑定设备与源 IP、5 分钟失效且有界保存；首次成功后只允许完整 REGISTER 序列化内容一致的 UDP 幂等重传，修改 Expires、Contact、认证头或任一其他字段都会按重放拒绝，另拒绝跨请求重放、任意 nonce、错误 realm/username/URI 和算法混淆；显式 SIP 域为空时，挑战、验签及缺失 Contact 的回放响应统一使用平台 ID 前 10 位派生域，不再出现配置展示与实际 realm/URI 不一致；修改设备口令后的离线/运行态同步失败会返回调用方，不再误报编辑成功。服务端保持 MD5 设备兼容，级联客户端支持 MD5/SHA-1/SHA-256 并明确拒绝未知算法；`register_version_test.go`、`sip/auth_test.go`、`cascade_test.go`、`ipccache/cache_test.go` |
 | MESSAGE/NOTIFY RFC Digest 兼容鉴权 | 已加固并有自动化证据，仍为兼容开关 | `RequireMessageAuth` 挑战使用与 REGISTER 一致的有效域；验签先保存客户端原始 `response`，明确绑定 realm、username、请求 URI、方法、设备及源 IP。nonce 由服务端签发、5 分钟失效且有界保存；`qop=auth` 按递增 `nc` 防重放并允许同 Call-ID/CSeq/摘要幂等重传，旧式无 qop 摘要仅允许原请求重传；过期或失败响应返回新挑战。该开关与 `Date + Note` 标准信令摘要相互独立；`access_control_test.go` |
 | 畸形 SIP 地址与 SSRC 配置 | 已加固并有自动化证据 | `ParseSipURI`、`ParseAddressValue(s)` 对空串、短 scheme、纯空白、空用户/主机、缺失引号或 `>` 返回错误；裸 `addr-spec` 和括号 IPv6 正常解析；模糊测试覆盖任意字符串不 panic。SSRC 仅接受 0/1 流类型和 10 位数字域编码，错误沿媒体调用链返回，不再直接切片；`parser_robustness_test.go`、`stream_test.go` |

@@ -363,6 +363,10 @@ func (g *GB28181API) sipMessageSnapshotFinished(ctx *sip.Context) {
 	}
 	g.storeSnapshotStateLocked(state)
 	g.snapshotStateMu.Unlock()
+	if forwarded, err := g.forwardCascadeTaskNotification(context.Background(), cascadeTaskSnapshot, ctx.DeviceID, msg.DeviceID, msg.SessionID, ctx.Request.Body()); forwarded && err != nil {
+		ctx.String(502, "forward UploadSnapShotFinished failed")
+		return
+	}
 	ctx.String(200, "OK")
 }
 

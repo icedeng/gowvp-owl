@@ -36,7 +36,20 @@ func (g *GB28181API) forwardCascadeDeviceConfig(worker *cascadeWorker, body []by
 		if g.cascadeDeviceConfig != nil {
 			configure = g.cascadeDeviceConfig
 		}
-		result, err = configure(ctx, channel, &request)
+		var route *cascadeTaskRoute
+		var created bool
+		if request.SnapShotConfig != nil {
+			route, created, err = g.registerCascadeTaskRoute(ctx, cascadeTaskSnapshot, worker, channel, request.DeviceID, request.SnapShotConfig.SessionID)
+			if err == nil {
+				request.SnapShotConfig.SessionID = route.downstreamSessionID
+			}
+		}
+		if err == nil {
+			result, err = configure(ctx, channel, &request)
+		}
+		if err != nil || !strings.EqualFold(strings.TrimSpace(result), "OK") {
+			g.removeCascadeTaskRoute(route, created)
+		}
 	}
 	if err != nil {
 		slog.Warn("forward cascade DeviceConfig failed", "upstream", worker.platform.name, "device_id", request.DeviceID, "sn", request.SN, "err", err)

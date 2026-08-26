@@ -1085,6 +1085,13 @@ func (g *GB28181API) sipMessageVideoUploadNotify(ctx *sip.Context) {
 	ctx.String(200, "OK")
 	g.persistDecodedQuery(ctx.DeviceID, msg.CmdType, decoded)
 	g.publishEventNotify(msg.CmdType, ctx.DeviceID, ctx.Request.Body())
+	body := append([]byte(nil), ctx.Request.Body()...)
+	deviceID := ctx.DeviceID
+	g.startLifecycleTask(context.Background(), func(taskCtx context.Context) {
+		if err := g.forwardCascadeVideoUploadNotify(taskCtx, deviceID, body); err != nil {
+			slog.Warn("forward cascade VideoUploadNotify failed", "device_id", deviceID, "err", err)
+		}
+	})
 }
 
 func decodeConfigDownloadState(body []byte) *ConfigDownloadState {

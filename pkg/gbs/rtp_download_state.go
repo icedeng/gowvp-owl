@@ -218,6 +218,7 @@ func (g *GB28181API) cleanupRuntimeStates(now time.Time) {
 	g.cleanupQueryStates(now)
 	g.cleanupUpgradeStates(now)
 	g.cleanupSnapshotStates(now)
+	g.cleanupCascadeTaskRoutes(now)
 }
 
 func runtimeStateExpired(updatedAt, now time.Time, ttl time.Duration) bool {

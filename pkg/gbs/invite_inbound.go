@@ -1089,6 +1089,7 @@ func (g *GB28181API) close() {
 		g.pendingDeviceQuery.Clear()
 		g.pendingDeviceConfig.Clear()
 		g.pendingBroadcast.Clear()
+		g.cascadeTaskRoutes.Clear()
 		g.recordResponseAliases.Clear()
 		g.eventSubscribers.Clear()
 		g.outgoingSubscriptions.Clear()

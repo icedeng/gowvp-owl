@@ -140,6 +140,15 @@ type deviceControlA23Request struct {
 	TargetTrack string                    `xml:"TargetTrack,omitempty"`
 	DeviceID2   string                    `xml:"DeviceID2,omitempty"`
 	TargetArea  *deviceControlA23DragZoom `xml:"TargetArea,omitempty"`
+
+	DeviceUpgrade *deviceUpgradeConfig `xml:"DeviceUpgrade,omitempty"`
+}
+
+type deviceUpgradeConfig struct {
+	Firmware     string `xml:"Firmware"`
+	FileURL      string `xml:"FileURL"`
+	Manufacturer string `xml:"Manufacturer"`
+	SessionID    string `xml:"SessionID,omitempty"`
 }
 
 type deviceControlA23Info struct {
@@ -379,6 +388,9 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		if in.DragZoom == nil {
 			return fmt.Errorf("drag_zoom_in requires drag_zoom params")
 		}
+		if err := validateDeviceControlDragZoom(in.DragZoom); err != nil {
+			return fmt.Errorf("drag_zoom_in: %w", err)
+		}
 		req.DragZoomIn = &deviceControlA23DragZoom{
 			Length:    in.DragZoom.Length,
 			Width:     in.DragZoom.Width,
@@ -395,6 +407,9 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		}
 		if in.DragZoom == nil {
 			return fmt.Errorf("drag_zoom_out requires drag_zoom params")
+		}
+		if err := validateDeviceControlDragZoom(in.DragZoom); err != nil {
+			return fmt.Errorf("drag_zoom_out: %w", err)
 		}
 		req.DragZoomOut = &deviceControlA23DragZoom{
 			Length:    in.DragZoom.Length,
@@ -421,6 +436,9 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		home.Enabled = &enabled
 		if in.HomePosition != nil && in.HomePosition.ResetTime != nil {
 			v := *in.HomePosition.ResetTime
+			if v < 0 {
+				return fmt.Errorf("home_position reset_time must be >= 0")
+			}
 			home.ResetTime = &v
 		}
 		if in.HomePosition != nil && in.HomePosition.PresetIndex != nil {
@@ -518,6 +536,26 @@ func validFiniteRange(value, minimum, maximum float64) bool {
 
 func validFinite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func validateDeviceControlDragZoom(value *DragZoomParam) error {
+	if value == nil || value.Length <= 0 || value.Width <= 0 || value.LengthX <= 0 || value.LengthY <= 0 {
+		return fmt.Errorf("dimensions must be positive")
+	}
+	if value.MidPointX < 0 || value.MidPointX > value.Length || value.MidPointY < 0 || value.MidPointY > value.Width {
+		return fmt.Errorf("midpoint must be within the playback window")
+	}
+	return nil
+}
+
+func validateCascadeDragZoom(value *deviceControlA23DragZoom) error {
+	if value == nil {
+		return fmt.Errorf("DragZoom parameters are required")
+	}
+	return validateDeviceControlDragZoom(&DragZoomParam{
+		Length: value.Length, Width: value.Width, MidPointX: value.MidPointX, MidPointY: value.MidPointY,
+		LengthX: value.LengthX, LengthY: value.LengthY,
+	})
 }
 
 func validateAlarmResetInfo(method, alarmType string) error {

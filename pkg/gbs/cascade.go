@@ -1268,6 +1268,7 @@ func (m *CascadeManager) Apply(local conf.SIP, configs []conf.SIPUpstream) error
 	for _, worker := range previous {
 		if m.server != nil && m.server.gb != nil {
 			m.server.gb.removeCascadeEventSubscriptions(worker)
+			m.server.gb.removeCascadeTaskRoutes(worker)
 		}
 		worker.stop()
 	}
@@ -1291,6 +1292,7 @@ func (m *CascadeManager) Close() {
 	for _, worker := range items {
 		if m.server != nil && m.server.gb != nil {
 			m.server.gb.removeCascadeEventSubscriptions(worker)
+			m.server.gb.removeCascadeTaskRoutes(worker)
 		}
 		worker.stop()
 	}
@@ -1312,6 +1314,21 @@ func (m *CascadeManager) Statuses() []CascadePlatformStatus {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func (m *CascadeManager) registeredWorkers(minimum GBProtocolVersion) []*cascadeWorker {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	items := make([]*cascadeWorker, 0, len(m.items))
+	for _, worker := range m.items {
+		if worker != nil && worker.snapshot().Registered && worker.protocolVersion().AtLeast(minimum) {
+			items = append(items, worker)
+		}
+	}
+	m.mu.RUnlock()
+	return items
 }
 
 func (m *CascadeManager) matchRegistered(serverID string, source net.Addr, connections ...sip.Connection) (*cascadeWorker, bool) {

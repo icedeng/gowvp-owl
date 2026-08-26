@@ -41,7 +41,20 @@ func (g *GB28181API) forwardCascadeDeviceControl(worker *cascadeWorker, body []b
 			if g.cascadeDeviceControl != nil {
 				control = g.cascadeDeviceControl
 			}
-			result, err = control(ctx, channel, &request)
+			var route *cascadeTaskRoute
+			var created bool
+			if request.DeviceUpgrade != nil {
+				route, created, err = g.registerCascadeTaskRoute(ctx, cascadeTaskUpgrade, worker, channel, request.DeviceID, request.DeviceUpgrade.SessionID)
+				if err == nil {
+					request.DeviceUpgrade.SessionID = route.downstreamSessionID
+				}
+			}
+			if err == nil {
+				result, err = control(ctx, channel, &request)
+			}
+			if err != nil || !strings.EqualFold(strings.TrimSpace(result), ptzResultOK) {
+				g.removeCascadeTaskRoute(route, created)
+			}
 		}
 	}
 	if err != nil {
@@ -148,14 +161,22 @@ func validateCascadeDeviceControl(request *deviceControlA23Request, upstream, do
 		if command != "record" && command != "stoprecord" {
 			return fmt.Errorf("unsupported cascade RecordCmd")
 		}
-		if request.StreamNumber != nil && (!upstream.AtLeast(GBVersion20) || !downstream.AtLeast(GBVersion20)) {
-			return fmt.Errorf("StreamNumber requires protocol 2.0")
+		if request.StreamNumber != nil {
+			if !upstream.AtLeast(GBVersion20) || !downstream.AtLeast(GBVersion20) {
+				return fmt.Errorf("StreamNumber requires protocol 2.0")
+			}
+			if *request.StreamNumber < 0 || *request.StreamNumber > 2 {
+				return fmt.Errorf("StreamNumber must be in [0,2]")
+			}
 		}
 	}
 	if strings.TrimSpace(request.IFrameCmd) != "" {
 		actions++
 		if !upstream.Capabilities().IFrameControl || !downstream.Capabilities().IFrameControl {
 			return fmt.Errorf("IFrameCmd is not supported by negotiated protocol")
+		}
+		if !strings.EqualFold(strings.TrimSpace(request.IFrameCmd), "Send") {
+			return fmt.Errorf("unsupported cascade IFrameCmd")
 		}
 	}
 	if request.DragZoomIn != nil || request.DragZoomOut != nil {
@@ -166,17 +187,46 @@ func validateCascadeDeviceControl(request *deviceControlA23Request, upstream, do
 		if !upstream.Capabilities().DragZoomControl || !downstream.Capabilities().DragZoomControl {
 			return fmt.Errorf("DragZoom is not supported by negotiated protocol")
 		}
+		zoom := request.DragZoomIn
+		if zoom == nil {
+			zoom = request.DragZoomOut
+		}
+		if err := validateCascadeDragZoom(zoom); err != nil {
+			return fmt.Errorf("invalid cascade DragZoom: %w", err)
+		}
 	}
 	if request.HomePosition != nil {
 		actions++
 		if !upstream.Capabilities().HomePosition || !downstream.Capabilities().HomePosition {
 			return fmt.Errorf("HomePosition is not supported by negotiated protocol")
 		}
+		if request.HomePosition.Enabled == nil || (*request.HomePosition.Enabled != 0 && *request.HomePosition.Enabled != 1) {
+			return fmt.Errorf("HomePosition Enabled must be 0 or 1")
+		}
+		if request.HomePosition.ResetTime != nil && *request.HomePosition.ResetTime < 0 {
+			return fmt.Errorf("HomePosition ResetTime must not be negative")
+		}
+		if request.HomePosition.PresetIndex != nil && (*request.HomePosition.PresetIndex < 0 || *request.HomePosition.PresetIndex > 255) {
+			return fmt.Errorf("HomePosition PresetIndex must be in [0,255]")
+		}
 	}
 	if request.PTZPreciseCtrl != nil {
 		actions++
 		if !upstream.AtLeast(GBVersion30) || !downstream.AtLeast(GBVersion30) {
 			return fmt.Errorf("PTZPreciseCtrl requires protocol 3.0")
+		}
+		precise := request.PTZPreciseCtrl
+		if precise.Pan == nil && precise.Tilt == nil && precise.Zoom == nil {
+			return fmt.Errorf("PTZPreciseCtrl requires at least one of Pan, Tilt or Zoom")
+		}
+		if precise.Pan != nil && !validFiniteRange(*precise.Pan, 0, 360) {
+			return fmt.Errorf("PTZPreciseCtrl Pan must be in [0,360]")
+		}
+		if precise.Tilt != nil && !validFinite(*precise.Tilt) {
+			return fmt.Errorf("PTZPreciseCtrl Tilt must be finite")
+		}
+		if precise.Zoom != nil && !validFinite(*precise.Zoom) {
+			return fmt.Errorf("PTZPreciseCtrl Zoom must be finite")
 		}
 	}
 	if strings.TrimSpace(request.TargetTrack) != "" {
@@ -198,11 +248,30 @@ func validateCascadeDeviceControl(request *deviceControlA23Request, upstream, do
 			return fmt.Errorf("invalid TargetTrack TargetArea")
 		}
 	}
+	if request.DeviceUpgrade != nil {
+		actions++
+		if !upstream.Capabilities().Upgrade || !downstream.Capabilities().Upgrade {
+			return fmt.Errorf("DeviceUpgrade requires protocol 3.0")
+		}
+		if err := validateDeviceUpgradeConfig(request.DeviceUpgrade); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(request.TeleBoot) != "" || strings.TrimSpace(request.GuardCmd) != "" || strings.TrimSpace(request.AlarmCmd) != "" || request.FormatSDCard != nil {
 		return fmt.Errorf("device-scoped cascade control is not allowed for a shared channel")
 	}
 	if actions != 1 {
 		return fmt.Errorf("cascade DeviceControl must contain exactly one channel action")
+	}
+	return nil
+}
+
+func validateDeviceUpgradeConfig(value *deviceUpgradeConfig) error {
+	if value == nil || strings.TrimSpace(value.Firmware) == "" || strings.TrimSpace(value.FileURL) == "" || strings.TrimSpace(value.Manufacturer) == "" {
+		return fmt.Errorf("DeviceUpgrade requires Firmware, FileURL and Manufacturer")
+	}
+	if err := validateGBSessionID(strings.TrimSpace(value.SessionID)); err != nil {
+		return fmt.Errorf("DeviceUpgrade: %w", err)
 	}
 	return nil
 }

@@ -59,19 +59,6 @@ type deviceUpgradeResultNotify struct {
 	FailedReason string   `xml:"UpgradeFailedReason"`
 }
 
-type deviceControlUpgradeRequest struct {
-	XMLName    xml.Name `xml:"Control"`
-	CmdType    string   `xml:"CmdType"`
-	SN         int      `xml:"SN"`
-	DeviceID   string   `xml:"DeviceID"`
-	DeviceInfo struct {
-		Firmware     string `xml:"Firmware"`
-		FileURL      string `xml:"FileURL"`
-		Manufacturer string `xml:"Manufacturer"`
-		SessionID    string `xml:"SessionID,omitempty"`
-	} `xml:"DeviceUpgrade"`
-}
-
 // Upgrade 执行设备软件升级（GB/T 28181-2022 9.13，A.2.3.1.12）。
 func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOutput, error) {
 	if ctx == nil {
@@ -112,15 +99,13 @@ func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOut
 	}
 
 	sn := g.nextControlSN()
-	req := deviceControlUpgradeRequest{
-		CmdType:  ptzCmdTypeDeviceControl,
-		SN:       sn,
-		DeviceID: in.ChannelID,
+	req := deviceControlA23Request{
+		CmdType: ptzCmdTypeDeviceControl, SN: sn, DeviceID: in.ChannelID,
+		DeviceUpgrade: &deviceUpgradeConfig{
+			Firmware: strings.TrimSpace(in.Firmware), FileURL: strings.TrimSpace(in.FileURL),
+			Manufacturer: strings.TrimSpace(in.Manufacturer), SessionID: sessionID,
+		},
 	}
-	req.DeviceInfo.Firmware = strings.TrimSpace(in.Firmware)
-	req.DeviceInfo.FileURL = strings.TrimSpace(in.FileURL)
-	req.DeviceInfo.Manufacturer = strings.TrimSpace(in.Manufacturer)
-	req.DeviceInfo.SessionID = sessionID
 
 	body, err := sip.XMLEncode(req)
 	if err != nil {
@@ -311,6 +296,10 @@ func (g *GB28181API) sipMessageDeviceUpgradeResult(ctx *sip.Context) {
 		state.Status = "failed"
 	}
 	g.storeUpgradeState(state)
+	if forwarded, err := g.forwardCascadeTaskNotification(context.Background(), cascadeTaskUpgrade, ctx.DeviceID, msg.DeviceID, msg.SessionID, ctx.Request.Body()); forwarded && err != nil {
+		ctx.String(502, "forward DeviceUpgradeResult failed")
+		return
+	}
 	ctx.String(200, "OK")
 }
 
