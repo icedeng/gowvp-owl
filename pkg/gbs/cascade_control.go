@@ -44,16 +44,28 @@ func (g *GB28181API) forwardCascadeDeviceControl(worker *cascadeWorker, body []b
 			var route *cascadeTaskRoute
 			var created bool
 			if request.DeviceUpgrade != nil {
-				route, created, err = g.registerCascadeTaskRoute(ctx, cascadeTaskUpgrade, worker, channel, request.DeviceID, request.DeviceUpgrade.SessionID)
+				fingerprint := cascadeUpgradeFingerprint(request.DeviceUpgrade)
+				route, created, err = g.registerCascadeTaskRoute(ctx, cascadeTaskUpgrade, worker, channel, request.DeviceID, request.DeviceUpgrade.SessionID, fingerprint)
 				if err == nil {
 					request.DeviceUpgrade.SessionID = route.downstreamSessionID
 				}
 			}
 			if err == nil {
-				result, err = control(ctx, channel, &request)
+				switch {
+				case route == nil:
+					result, err = control(ctx, channel, &request)
+				case created:
+					result, err = control(ctx, channel, &request)
+				default:
+					result, err = route.waitStart(ctx)
+				}
 			}
-			if err != nil || !strings.EqualFold(strings.TrimSpace(result), ptzResultOK) {
-				g.removeCascadeTaskRoute(route, created)
+			if route != nil {
+				if created {
+					result, err = route.finishStart(result, err)
+				} else if route.isCompleted() {
+					result, err = ptzResultOK, nil
+				}
 			}
 		}
 	}
@@ -71,6 +83,14 @@ func (g *GB28181API) forwardCascadeDeviceControl(worker *cascadeWorker, body []b
 	}); err != nil {
 		slog.Warn("send cascade DeviceControl response failed", "upstream", worker.platform.name, "device_id", request.DeviceID, "sn", request.SN, "err", err)
 	}
+}
+
+func cascadeUpgradeFingerprint(config *deviceUpgradeConfig) string {
+	if config == nil {
+		return ""
+	}
+	return cascadeTaskFingerprint([]byte(fmt.Sprintf("upgrade:%q:%q:%q:%q", strings.TrimSpace(config.Firmware), strings.TrimSpace(config.FileURL),
+		strings.TrimSpace(config.Manufacturer), strings.TrimSpace(config.SessionID))))
 }
 
 func (g *GB28181API) validateCascadeDeviceControlOverrides(deviceID string, request *deviceControlA23Request) error {
@@ -244,8 +264,10 @@ func validateCascadeDeviceControl(request *deviceControlA23Request, upstream, do
 		if mode == "manual" && request.TargetArea == nil {
 			return fmt.Errorf("manual TargetTrack requires TargetArea")
 		}
-		if request.TargetArea != nil && (request.TargetArea.Length <= 0 || request.TargetArea.Width <= 0 || request.TargetArea.LengthX <= 0 || request.TargetArea.LengthY <= 0) {
-			return fmt.Errorf("invalid TargetTrack TargetArea")
+		if request.TargetArea != nil {
+			if err := validateCascadeDragZoom(request.TargetArea); err != nil {
+				return fmt.Errorf("invalid TargetTrack TargetArea: %w", err)
+			}
 		}
 	}
 	if request.DeviceUpgrade != nil {

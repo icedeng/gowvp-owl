@@ -460,11 +460,8 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 			return nil, err
 		}
 		config := *in.SnapShotConfig
-		if config.SnapNum < 1 || config.SnapNum > 10 || config.Interval < 1 || strings.TrimSpace(config.UploadURL) == "" {
-			return nil, fmt.Errorf("SnapShotConfig requires snap_num 1~10, interval >= 1 and upload_url")
-		}
-		if err := validateGBSessionID(strings.TrimSpace(config.SessionID)); err != nil {
-			return nil, fmt.Errorf("SnapShotConfig: %w", err)
+		if err := validateSnapshotConfig(&config); err != nil {
+			return nil, err
 		}
 		config.UploadURL = strings.TrimSpace(config.UploadURL)
 		config.SessionID = strings.TrimSpace(config.SessionID)
@@ -475,6 +472,16 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 		return nil, fmt.Errorf("DeviceConfig requires at least one configuration section")
 	}
 	return request, nil
+}
+
+func validateSnapshotConfig(config *SnapShot) error {
+	if config == nil || config.SnapNum < 1 || config.SnapNum > 10 || config.Interval < 1 || strings.TrimSpace(config.UploadURL) == "" {
+		return fmt.Errorf("SnapShotConfig requires snap_num 1~10, interval >= 1 and upload_url")
+	}
+	if err := validateGBSessionID(strings.TrimSpace(config.SessionID)); err != nil {
+		return fmt.Errorf("SnapShotConfig: %w", err)
+	}
+	return nil
 }
 
 func innerXML(value any) string {

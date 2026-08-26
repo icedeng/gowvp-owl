@@ -431,3 +431,25 @@ func TestCompleteBasicParam11IncludesRequiredServerFields(t *testing.T) {
 		t.Fatalf("BasicParam password leaked to JSON: %s", encoded)
 	}
 }
+
+func TestSnapshotConfigUploadPathCompatibility(t *testing.T) {
+	sessionID := "snapshot-session-0000000000000200"
+	for _, test := range []struct {
+		name      string
+		uploadURL string
+		wantErr   bool
+	}{
+		{name: "http", uploadURL: "http://images.example.invalid/upload"},
+		{name: "https", uploadURL: "https://images.example.invalid/upload"},
+		{name: "relative", uploadURL: "/upload"},
+		{name: "ftp", uploadURL: "ftp://images.example.invalid/upload"},
+		{name: "blank", uploadURL: "  ", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateSnapshotConfig(&SnapShot{SnapNum: 1, Interval: 1, UploadURL: test.uploadURL, SessionID: sessionID})
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateSnapshotConfig(%q) error = %v, wantErr %v", test.uploadURL, err, test.wantErr)
+			}
+		})
+	}
+}

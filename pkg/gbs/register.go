@@ -132,7 +132,8 @@ type GB28181API struct {
 	cascadeDeviceConfig    func(context.Context, *ipc.Channel, *DeviceConfigRequest) (string, error)
 	cascadeBroadcastNotify func(context.Context, *Channel, *VoiceInput) error
 	// 2022 升级/抓拍的级联发起会话，key=kind:downstreamDeviceID:sessionID。
-	cascadeTaskRoutes sync.Map
+	cascadeTaskRouteMu sync.Mutex
+	cascadeTaskRoutes  sync.Map
 	// 设备控制命令全局序列号，避免 PTZ 与 DeviceControl 并发冲突。
 	controlSN atomic.Uint32
 	// 设备查询命令全局序列号，避免随机 SN 碰撞。

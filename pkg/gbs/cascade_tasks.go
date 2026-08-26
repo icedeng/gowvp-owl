@@ -3,6 +3,7 @@ package gbs
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -16,14 +17,19 @@ import (
 )
 
 const (
-	cascadeTaskUpgrade  = "upgrade"
-	cascadeTaskSnapshot = "snapshot"
-	cascadeTaskRouteTTL = 7 * 24 * time.Hour
+	cascadeTaskUpgrade   = "upgrade"
+	cascadeTaskSnapshot  = "snapshot"
+	cascadeTaskRouteTTL  = 7 * 24 * time.Hour
+	maxCascadeTaskRoutes = 1024
 )
 
 type cascadeTaskRoute struct {
-	mu                  sync.Mutex
+	notifyMu            sync.Mutex
 	completed           bool
+	startOnce           sync.Once
+	startDone           chan struct{}
+	startResult         string
+	startErr            error
 	kind                string
 	worker              *cascadeWorker
 	downstreamDeviceID  string
@@ -31,6 +37,7 @@ type cascadeTaskRoute struct {
 	exposedID           string
 	upstreamSessionID   string
 	downstreamSessionID string
+	requestFingerprint  string
 	identity            *monitorUserIdentity
 	localGatewayID      string
 	createdAt           time.Time
@@ -48,7 +55,12 @@ func cascadeTaskUpstreamRouteKey(kind string, worker *cascadeWorker, exposedID, 
 	return "upstream:" + strings.TrimSpace(kind) + ":" + strings.TrimSpace(name) + ":" + strings.TrimSpace(exposedID) + ":" + strings.TrimSpace(sessionID)
 }
 
-func (g *GB28181API) registerCascadeTaskRoute(ctx context.Context, kind string, worker *cascadeWorker, channel *ipc.Channel, exposedID, sessionID string) (*cascadeTaskRoute, bool, error) {
+func cascadeTaskFingerprint(value []byte) string {
+	digest := sha256.Sum256(value)
+	return fmt.Sprintf("%x", digest[:])
+}
+
+func (g *GB28181API) registerCascadeTaskRoute(ctx context.Context, kind string, worker *cascadeWorker, channel *ipc.Channel, exposedID, sessionID, fingerprint string) (*cascadeTaskRoute, bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -57,24 +69,33 @@ func (g *GB28181API) registerCascadeTaskRoute(ctx context.Context, kind string, 
 	}
 	exposedID = strings.TrimSpace(exposedID)
 	sessionID = strings.TrimSpace(sessionID)
+	fingerprint = strings.TrimSpace(fingerprint)
 	if !isGBDeviceIdentifier(exposedID) || validateGBSessionID(sessionID) != nil ||
-		worker.platform.channelIDMap[strings.TrimSpace(channel.ChannelID)] != exposedID {
+		fingerprint == "" || worker.platform.channelIDMap[strings.TrimSpace(channel.ChannelID)] != exposedID {
 		return nil, false, fmt.Errorf("invalid cascade task route")
 	}
+	g.cascadeTaskRouteMu.Lock()
+	defer g.cascadeTaskRouteMu.Unlock()
+	g.cleanupCascadeTaskRoutesLocked(time.Now())
 	upstreamKey := cascadeTaskUpstreamRouteKey(kind, worker, exposedID, sessionID)
 	if actual, loaded := g.cascadeTaskRoutes.Load(upstreamKey); loaded {
 		existing, ok := actual.(*cascadeTaskRoute)
-		if !ok || existing == nil || existing.worker != worker || existing.downstreamTargetID != strings.TrimSpace(channel.ChannelID) {
+		if !ok || existing == nil || existing.worker != worker || existing.downstreamTargetID != strings.TrimSpace(channel.ChannelID) ||
+			existing.requestFingerprint != fingerprint {
 			return nil, false, fmt.Errorf("cascade task session is already owned by another route")
 		}
 		return existing, false, nil
+	}
+	if g.cascadeTaskRouteCountLocked() >= maxCascadeTaskRoutes {
+		return nil, false, fmt.Errorf("cascade task route capacity exceeded")
 	}
 	downstreamSessionID := sip.RandString(32)
 	localGatewayID, _ := ctx.Value(monitorUserIdentityGatewayContextKey{}).(string)
 	route := &cascadeTaskRoute{
 		kind: kind, worker: worker, downstreamDeviceID: strings.TrimSpace(channel.DeviceID),
 		downstreamTargetID: strings.TrimSpace(channel.ChannelID), exposedID: exposedID,
-		upstreamSessionID: sessionID, downstreamSessionID: downstreamSessionID, createdAt: time.Now(),
+		upstreamSessionID: sessionID, downstreamSessionID: downstreamSessionID, requestFingerprint: fingerprint,
+		startDone: make(chan struct{}), createdAt: time.Now(),
 		identity: monitorUserIdentityFromContext(ctx), localGatewayID: strings.TrimSpace(localGatewayID),
 	}
 	downstreamKey := cascadeTaskRouteKey(kind, route.downstreamDeviceID, downstreamSessionID)
@@ -83,7 +104,8 @@ func (g *GB28181API) registerCascadeTaskRoute(ctx context.Context, kind string, 
 	if loaded {
 		g.cascadeTaskRoutes.CompareAndDelete(downstreamKey, route)
 		existing, ok := actual.(*cascadeTaskRoute)
-		if !ok || existing == nil || existing.worker != worker || existing.downstreamTargetID != route.downstreamTargetID {
+		if !ok || existing == nil || existing.worker != worker || existing.downstreamTargetID != route.downstreamTargetID ||
+			existing.requestFingerprint != fingerprint {
 			return nil, false, fmt.Errorf("cascade task session is already owned by another route")
 		}
 		return existing, false, nil
@@ -91,17 +113,84 @@ func (g *GB28181API) registerCascadeTaskRoute(ctx context.Context, kind string, 
 	return route, true, nil
 }
 
-func (g *GB28181API) removeCascadeTaskRoute(route *cascadeTaskRoute, created bool) {
-	if g == nil || route == nil || !created {
-		return
+func (g *GB28181API) cascadeTaskRouteCount() int {
+	if g == nil {
+		return 0
 	}
-	g.deleteCascadeTaskRoute(route)
+	g.cascadeTaskRouteMu.Lock()
+	defer g.cascadeTaskRouteMu.Unlock()
+	return g.cascadeTaskRouteCountLocked()
+}
+
+func (g *GB28181API) cascadeTaskRouteCountLocked() int {
+	unique := make(map[*cascadeTaskRoute]struct{})
+	g.cascadeTaskRoutes.Range(func(_, value any) bool {
+		if route, ok := value.(*cascadeTaskRoute); ok && route != nil {
+			unique[route] = struct{}{}
+		}
+		return len(unique) < maxCascadeTaskRoutes
+	})
+	return len(unique)
+}
+
+func (route *cascadeTaskRoute) finishStart(result string, err error) (string, error) {
+	if route == nil {
+		return result, err
+	}
+	route.notifyMu.Lock()
+	defer route.notifyMu.Unlock()
+	if route.completed {
+		result, err = "OK", nil
+	}
+	route.startOnce.Do(func() {
+		route.startResult = result
+		route.startErr = err
+		close(route.startDone)
+	})
+	return route.startResult, route.startErr
+}
+
+func (route *cascadeTaskRoute) waitStart(ctx context.Context) (string, error) {
+	if route == nil || route.startDone == nil {
+		return "ERROR", fmt.Errorf("cascade task route is unavailable")
+	}
+	if route.isCompleted() {
+		return "OK", nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-route.startDone:
+		if route.isCompleted() {
+			return "OK", nil
+		}
+		return route.startResult, route.startErr
+	case <-ctx.Done():
+		return "ERROR", ctx.Err()
+	}
+}
+
+func (route *cascadeTaskRoute) isCompleted() bool {
+	if route == nil {
+		return false
+	}
+	route.notifyMu.Lock()
+	completed := route.completed
+	route.notifyMu.Unlock()
+	return completed
 }
 
 func (g *GB28181API) deleteCascadeTaskRoute(route *cascadeTaskRoute) {
 	if g == nil || route == nil {
 		return
 	}
+	g.cascadeTaskRouteMu.Lock()
+	defer g.cascadeTaskRouteMu.Unlock()
+	g.deleteCascadeTaskRouteLocked(route)
+}
+
+func (g *GB28181API) deleteCascadeTaskRouteLocked(route *cascadeTaskRoute) {
 	g.cascadeTaskRoutes.CompareAndDelete(cascadeTaskRouteKey(route.kind, route.downstreamDeviceID, route.downstreamSessionID), route)
 	g.cascadeTaskRoutes.CompareAndDelete(cascadeTaskUpstreamRouteKey(route.kind, route.worker, route.exposedID, route.upstreamSessionID), route)
 }
@@ -117,11 +206,13 @@ func (g *GB28181API) forwardCascadeTaskNotification(ctx context.Context, kind, d
 	}
 	route, ok := value.(*cascadeTaskRoute)
 	if !ok || route == nil {
-		g.cascadeTaskRoutes.Delete(key)
+		g.cascadeTaskRouteMu.Lock()
+		g.cascadeTaskRoutes.CompareAndDelete(key, value)
+		g.cascadeTaskRouteMu.Unlock()
 		return false, nil
 	}
-	route.mu.Lock()
-	defer route.mu.Unlock()
+	route.notifyMu.Lock()
+	defer route.notifyMu.Unlock()
 	if route.completed {
 		return true, nil
 	}
@@ -144,7 +235,9 @@ func (g *GB28181API) forwardCascadeTaskNotification(ctx context.Context, kind, d
 		return true, err
 	}
 	route.completed = true
-	g.deleteCascadeTaskRoute(route)
+	g.cascadeTaskRouteMu.Lock()
+	g.cascadeTaskRoutes.CompareAndDelete(cascadeTaskRouteKey(route.kind, route.downstreamDeviceID, route.downstreamSessionID), route)
+	g.cascadeTaskRouteMu.Unlock()
 	return true, nil
 }
 
@@ -201,6 +294,12 @@ func (g *GB28181API) cleanupCascadeTaskRoutes(now time.Time) {
 	if g == nil {
 		return
 	}
+	g.cascadeTaskRouteMu.Lock()
+	defer g.cascadeTaskRouteMu.Unlock()
+	g.cleanupCascadeTaskRoutesLocked(now)
+}
+
+func (g *GB28181API) cleanupCascadeTaskRoutesLocked(now time.Time) {
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -210,7 +309,7 @@ func (g *GB28181API) cleanupCascadeTaskRoutes(now time.Time) {
 			if route == nil {
 				g.cascadeTaskRoutes.CompareAndDelete(key, value)
 			} else {
-				g.deleteCascadeTaskRoute(route)
+				g.deleteCascadeTaskRouteLocked(route)
 			}
 		}
 		return true
@@ -221,10 +320,31 @@ func (g *GB28181API) removeCascadeTaskRoutes(worker *cascadeWorker) {
 	if g == nil || worker == nil {
 		return
 	}
+	g.cascadeTaskRouteMu.Lock()
+	defer g.cascadeTaskRouteMu.Unlock()
 	g.cascadeTaskRoutes.Range(func(_, value any) bool {
 		route, _ := value.(*cascadeTaskRoute)
 		if route != nil && route.worker == worker {
-			g.deleteCascadeTaskRoute(route)
+			g.deleteCascadeTaskRouteLocked(route)
+		}
+		return true
+	})
+}
+
+func (g *GB28181API) removeCascadeTaskRoutesForDevice(deviceID string) {
+	if g == nil {
+		return
+	}
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return
+	}
+	g.cascadeTaskRouteMu.Lock()
+	defer g.cascadeTaskRouteMu.Unlock()
+	g.cascadeTaskRoutes.Range(func(_, value any) bool {
+		route, _ := value.(*cascadeTaskRoute)
+		if route != nil && route.downstreamDeviceID == deviceID {
+			g.deleteCascadeTaskRouteLocked(route)
 		}
 		return true
 	})

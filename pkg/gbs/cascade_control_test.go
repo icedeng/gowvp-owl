@@ -95,6 +95,11 @@ func TestValidateCascadeDeviceControlVersionAndScope(t *testing.T) {
 	if err := validateCascadeDeviceControl(&track, GBVersion30, GBVersion30); err != nil {
 		t.Fatalf("3.0 TargetTrack rejected: %v", err)
 	}
+	invalidTrackArea := track
+	invalidTrackArea.TargetArea = &deviceControlA23DragZoom{Length: 1920, Width: 1080, MidPointX: -1, MidPointY: 540, LengthX: 300, LengthY: 200}
+	if err := validateCascadeDeviceControl(&invalidTrackArea, GBVersion30, GBVersion30); err == nil {
+		t.Fatal("TargetTrack accepted a midpoint outside the playback window")
+	}
 	crossChannelTrack := track
 	crossChannelTrack.DeviceID2 = gb10ChannelID
 	if err := validateCascadeDeviceControl(&crossChannelTrack, GBVersion30, GBVersion30); err == nil {

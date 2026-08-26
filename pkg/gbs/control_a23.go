@@ -516,8 +516,8 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		}
 		if in.TargetTrack.TargetArea != nil {
 			area := in.TargetTrack.TargetArea
-			if area.Length <= 0 || area.Width <= 0 || area.LengthX <= 0 || area.LengthY <= 0 {
-				return fmt.Errorf("target_area dimensions must be positive")
+			if err := validateDeviceControlDragZoom(area); err != nil {
+				return fmt.Errorf("invalid target_area: %w", err)
 			}
 			req.TargetArea = &deviceControlA23DragZoom{
 				Length: area.Length, Width: area.Width, MidPointX: area.MidPointX, MidPointY: area.MidPointY,

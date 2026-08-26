@@ -148,6 +148,12 @@ func TestGB20And30FeatureRegression(t *testing.T) {
 		trackRequest.TargetTrack != "Manual" || trackRequest.TargetArea == nil {
 		t.Fatalf("3.0 target track request = %+v, err = %v", trackRequest, err)
 	}
+	invalidTrack := &DeviceControlInput{TargetTrack: &TargetTrackParam{Mode: "Manual", TargetArea: &DragZoomParam{
+		Length: 1920, Width: 1080, MidPointX: 1921, MidPointY: 540, LengthX: 300, LengthY: 200,
+	}}}
+	if err := api.fillDeviceControlRequest("device", deviceControlActionTargetTrack, invalidTrack, &deviceControlA23Request{}); err == nil {
+		t.Fatal("3.0 target track accepted a midpoint outside the playback window")
+	}
 	for action, want := range map[string]string{
 		deviceQueryActionPTZPosition:     "PTZPosition",
 		deviceQueryActionSDCardStatus:    "SDCardStatus",

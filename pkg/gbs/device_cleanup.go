@@ -110,13 +110,7 @@ func (g *GB28181API) cleanupDevice(ctx context.Context, deviceID string) error {
 		}
 	}
 	g.snapshotStateMu.Unlock()
-	g.cascadeTaskRoutes.Range(func(key, value any) bool {
-		route, _ := value.(*cascadeTaskRoute)
-		if route != nil && route.downstreamDeviceID == deviceID {
-			g.deleteCascadeTaskRoute(route)
-		}
-		return true
-	})
+	g.removeCascadeTaskRoutesForDevice(deviceID)
 	g.registerNonceMu.Lock()
 	for nonce, state := range g.registerNonces {
 		if state.DeviceID == deviceID {

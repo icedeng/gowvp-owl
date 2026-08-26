@@ -39,16 +39,32 @@ func (g *GB28181API) forwardCascadeDeviceConfig(worker *cascadeWorker, body []by
 		var route *cascadeTaskRoute
 		var created bool
 		if request.SnapShotConfig != nil {
-			route, created, err = g.registerCascadeTaskRoute(ctx, cascadeTaskSnapshot, worker, channel, request.DeviceID, request.SnapShotConfig.SessionID)
+			fingerprint, fingerprintErr := cascadeDeviceConfigFingerprint(&request)
+			if fingerprintErr != nil {
+				err = fingerprintErr
+			} else {
+				route, created, err = g.registerCascadeTaskRoute(ctx, cascadeTaskSnapshot, worker, channel, request.DeviceID, request.SnapShotConfig.SessionID, fingerprint)
+			}
 			if err == nil {
 				request.SnapShotConfig.SessionID = route.downstreamSessionID
 			}
 		}
 		if err == nil {
-			result, err = configure(ctx, channel, &request)
+			switch {
+			case route == nil:
+				result, err = configure(ctx, channel, &request)
+			case created:
+				result, err = configure(ctx, channel, &request)
+			default:
+				result, err = route.waitStart(ctx)
+			}
 		}
-		if err != nil || !strings.EqualFold(strings.TrimSpace(result), "OK") {
-			g.removeCascadeTaskRoute(route, created)
+		if route != nil {
+			if created {
+				result, err = route.finishStart(result, err)
+			} else if route.isCompleted() {
+				result, err = "OK", nil
+			}
 		}
 	}
 	if err != nil {
@@ -65,6 +81,19 @@ func (g *GB28181API) forwardCascadeDeviceConfig(worker *cascadeWorker, body []by
 	}); err != nil {
 		slog.Warn("send cascade DeviceConfig response failed", "upstream", worker.platform.name, "device_id", request.DeviceID, "sn", request.SN, "err", err)
 	}
+}
+
+func cascadeDeviceConfigFingerprint(request *DeviceConfigRequest) (string, error) {
+	if request == nil || request.SnapShotConfig == nil {
+		return "", fmt.Errorf("cascade snapshot request is unavailable")
+	}
+	clone := *request
+	clone.SN = 0
+	body, err := sip.XMLEncode(clone)
+	if err != nil {
+		return "", fmt.Errorf("encode cascade snapshot fingerprint: %w", err)
+	}
+	return cascadeTaskFingerprint(body), nil
 }
 
 func (g *GB28181API) sendCascadeDeviceConfigDownstream(ctx context.Context, channel *ipc.Channel, request *DeviceConfigRequest) (string, error) {
@@ -165,12 +194,8 @@ func validateCascadeDeviceConfigPayload(request *DeviceConfigRequest) error {
 		}
 	}
 	if request.SnapShotConfig != nil {
-		config := request.SnapShotConfig
-		if config.SnapNum < 1 || config.SnapNum > 10 || config.Interval < 1 || strings.TrimSpace(config.UploadURL) == "" {
-			return fmt.Errorf("SnapShotConfig requires snap_num 1~10, interval >= 1 and upload_url")
-		}
-		if err := validateGBSessionID(strings.TrimSpace(config.SessionID)); err != nil {
-			return fmt.Errorf("SnapShotConfig: %w", err)
+		if err := validateSnapshotConfig(request.SnapShotConfig); err != nil {
+			return err
 		}
 	}
 	return nil
