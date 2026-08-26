@@ -374,10 +374,12 @@ func TestTerminatedNotifyClearsOutgoingSubscription(t *testing.T) {
 	connection := newFlowConnection()
 	subscribe := newFlowRequest(t, connection, sip.MethodSubscribe, "terminated-subscription", []byte("query"))
 	dialog := &outgoingSubscriptionDialog{response: sip.NewResponseFromRequest("", subscribe, 200, "OK", nil), deviceID: gb10DeviceID}
+	prepareOutgoingNotifyDialog(t, dialog, "presence", "Alarm", gb10DeviceID)
 	api.outgoingSubscriptions.Store("catalog-key", dialog)
 
 	request := newFlowRequest(t, connection, sip.MethodNotify, "terminated-subscription", nil)
 	applyTerminatedNotifyDialog(t, request, dialog.response)
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "presence"})
 	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: "terminated;reason=timeout"})
 	ctx := &sip.Context{
 		Request: request, Tx: sip.NewTransaction("terminated-notify", connection),
@@ -395,6 +397,7 @@ func TestTerminatedNotifyRenewsReferencedCascadeSubscription(t *testing.T) {
 	connection := newFlowConnection()
 	subscribe := newFlowRequest(t, connection, sip.MethodSubscribe, "terminated-cascade-subscription", []byte("query"))
 	dialog := &outgoingSubscriptionDialog{response: sip.NewResponseFromRequest("", subscribe, 200, "OK", nil), deviceID: gb10DeviceID}
+	prepareOutgoingNotifyDialog(t, dialog, "presence", "Alarm", gb10DeviceID)
 	key := "cascade-catalog-key"
 	api.outgoingSubscriptions.Store(key, dialog)
 	input := SubscribeInput{DeviceID: gb10DeviceID, TargetID: gb10DeviceID, Event: "Catalog", Expires: 60}
@@ -407,6 +410,7 @@ func TestTerminatedNotifyRenewsReferencedCascadeSubscription(t *testing.T) {
 
 	request := newFlowRequest(t, connection, sip.MethodNotify, "terminated-cascade-subscription", nil)
 	applyTerminatedNotifyDialog(t, request, dialog.response)
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "presence"})
 	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: "terminated;reason=timeout"})
 	ctx := &sip.Context{
 		Request: request, Tx: sip.NewTransaction("terminated-cascade-notify", connection),
@@ -438,6 +442,7 @@ func TestTerminatedNotifyRejectsForeignSourceAndDialogTags(t *testing.T) {
 			connection := newFlowConnection()
 			subscribe := newFlowRequest(t, connection, sip.MethodSubscribe, "terminated-protected", []byte("query"))
 			dialog := &outgoingSubscriptionDialog{response: sip.NewResponseFromRequest("", subscribe, 200, "OK", nil), deviceID: gb10DeviceID}
+			prepareOutgoingNotifyDialog(t, dialog, "presence", "Alarm", gb10DeviceID)
 			api.outgoingSubscriptions.Store("protected-key", dialog)
 			request := newFlowRequest(t, connection, sip.MethodNotify, "terminated-protected", nil)
 			applyTerminatedNotifyDialog(t, request, dialog.response)
@@ -445,14 +450,140 @@ func TestTerminatedNotifyRejectsForeignSourceAndDialogTags(t *testing.T) {
 				from, _ := request.From()
 				from.Params.Add("tag", sip.String{Str: "foreign-tag"})
 			}
+			request.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "presence"})
 			request.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: "terminated;reason=timeout"})
 			ctx := &sip.Context{Request: request, Tx: sip.NewTransaction("terminated-protected", connection), DeviceID: test.deviceID, Source: connection.remote}
 			api.sipNotifySubscriptionState(ctx)
-			assertFlowOK(t, <-flowResponse(t, connection))
+			if response := <-flowResponse(t, connection); !strings.Contains(response, "SIP/2.0 481") {
+				t.Fatalf("foreign terminated NOTIFY response = %s", response)
+			}
 			if _, exists := api.outgoingSubscriptions.Load("protected-key"); !exists {
 				t.Fatal("foreign terminated NOTIFY removed subscription dialog")
 			}
 		})
+	}
+}
+
+func prepareOutgoingNotifyDialog(t *testing.T, dialog *outgoingSubscriptionDialog, event, cmdType, targetID string) {
+	t.Helper()
+	if dialog == nil || dialog.response == nil {
+		t.Fatal("subscription dialog response is unavailable")
+	}
+	callID, ok := dialog.response.CallID()
+	if !ok || callID == nil {
+		t.Fatal("subscription response missing Call-ID")
+	}
+	dialog.notify = outgoingSubscriptionNotifyDialog{
+		callID:    normalizeCallID(callID),
+		localTag:  sipResponseFromTag(dialog.response),
+		remoteTag: sipResponseToTag(dialog.response),
+		event:     event,
+		cmdType:   cmdType,
+		deviceID:  gb10DeviceID,
+		targetID:  targetID,
+		expiresAt: time.Now().Add(time.Minute),
+	}
+}
+
+func TestActiveNotifyRequiresMatchingOutgoingSubscriptionDialog(t *testing.T) {
+	connection := newFlowConnection()
+	subscribe := newFlowRequest(t, connection, sip.MethodSubscribe, "active-subscription", []byte("query"))
+	dialog := &outgoingSubscriptionDialog{response: sip.NewResponseFromRequest("", subscribe, 200, "OK", nil), deviceID: gb10DeviceID}
+	prepareOutgoingNotifyDialog(t, dialog, "presence", "Alarm", gb10DeviceID)
+	api := &GB28181API{}
+	api.outgoingSubscriptions.Store("alarm-key", dialog)
+	body := []byte(`<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Notify>`)
+
+	valid := newFlowRequest(t, connection, sip.MethodNotify, "active-subscription", body)
+	applyTerminatedNotifyDialog(t, valid, dialog.response)
+	valid.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "presence"})
+	valid.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: "active;expires=60"})
+	if _, err := api.validateOutgoingSubscriptionNotify(gb10DeviceID, valid, "Alarm", gb10DeviceID); err != nil {
+		t.Fatalf("valid active NOTIFY rejected: %v", err)
+	}
+	if _, err := api.validateOutgoingSubscriptionNotify(gb10DeviceID, valid, "Alarm", gb10DeviceID); err == nil {
+		t.Fatal("replayed NOTIFY CSeq accepted")
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*sip.Request)
+	}{
+		{name: "missing Event", mutate: func(request *sip.Request) { request.RemoveHeader("Event") }},
+		{name: "missing Subscription-State", mutate: func(request *sip.Request) { request.RemoveHeader("Subscription-State") }},
+		{name: "wrong Event", mutate: func(request *sip.Request) {
+			request.RemoveHeader("Event")
+			request.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "Catalog"})
+		}},
+		{name: "wrong Call-ID", mutate: func(request *sip.Request) {
+			request.RemoveHeader("Call-ID")
+			callID := sip.CallID("foreign-call-id")
+			request.AppendHeader(&callID)
+		}},
+		{name: "wrong From tag", mutate: func(request *sip.Request) {
+			from, _ := request.From()
+			from.Params.Add("tag", sip.String{Str: "foreign-tag"})
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := newFlowRequest(t, connection, sip.MethodNotify, "active-subscription", body)
+			applyTerminatedNotifyDialog(t, request, dialog.response)
+			request.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "presence"})
+			request.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: "active;expires=60"})
+			cseq, _ := request.CSeq()
+			cseq.SeqNo = 2
+			test.mutate(request)
+			if _, err := api.validateOutgoingSubscriptionNotify(gb10DeviceID, request, "Alarm", gb10DeviceID); err == nil {
+				t.Fatal("forged active NOTIFY accepted")
+			}
+		})
+	}
+}
+
+func TestActiveNotifyMiddlewareRejectsMissingDialog(t *testing.T) {
+	connection := newFlowConnection()
+	body := []byte(`<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Notify>`)
+	request := newFlowRequest(t, connection, sip.MethodNotify, "missing-active-subscription", body)
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "presence"})
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: "active;expires=60"})
+	api := &GB28181API{}
+	ctx := &sip.Context{
+		Request: request, Tx: sip.NewTransaction("missing-active-subscription", connection),
+		DeviceID: gb10DeviceID, Source: connection.remote,
+	}
+	api.sipNotifySubscriptionState(ctx)
+	if response := <-flowResponse(t, connection); !strings.Contains(response, "SIP/2.0 481") {
+		t.Fatalf("unsolicited active NOTIFY response = %s", response)
+	}
+}
+
+func TestPendingNotifyBindsRemoteTagBeforeSubscribeResponse(t *testing.T) {
+	connection := newFlowConnection()
+	request := newFlowRequest(t, connection, sip.MethodSubscribe, "pending-subscription", []byte("query"))
+	dialog := &outgoingSubscriptionDialog{eventValue: "Catalog;id=" + gb10DeviceID}
+	dialog.setPendingNotifyDialog(request, "Catalog", gb10DeviceID, gb10DeviceID, 60)
+	api := &GB28181API{}
+	api.outgoingSubscriptions.Store("pending-key", dialog)
+
+	notify := newFlowRequest(t, connection, sip.MethodNotify, "pending-subscription", []byte(`<Notify><CmdType>Catalog</CmdType><SN>1</SN><DeviceID>`+gb10DeviceID+`</DeviceID></Notify>`))
+	notify.RemoveHeader("To")
+	local, _ := request.From()
+	notify.AppendHeader(&sip.ToHeader{Address: local.Address.Clone(), Params: local.Params.Clone()})
+	notify.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "Catalog;id=" + gb10DeviceID})
+	notify.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: "pending;expires=60"})
+	if _, err := api.validateOutgoingSubscriptionNotify(gb10DeviceID, notify, "Catalog", gb10DeviceID); err != nil {
+		t.Fatalf("early pending NOTIFY rejected: %v", err)
+	}
+
+	foreign := newFlowRequest(t, connection, sip.MethodNotify, "pending-subscription", notify.Body())
+	foreign.RemoveHeader("To")
+	foreign.AppendHeader(&sip.ToHeader{Address: local.Address.Clone(), Params: local.Params.Clone()})
+	foreign.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "Catalog;id=" + gb10DeviceID})
+	foreign.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: "active;expires=60"})
+	cseq, _ := foreign.CSeq()
+	cseq.SeqNo = 2
+	if _, err := api.validateOutgoingSubscriptionNotify(gb10DeviceID, foreign, "Catalog", gb10DeviceID); err == nil {
+		t.Fatal("second remote tag replaced early NOTIFY dialog binding")
 	}
 }
 

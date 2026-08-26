@@ -134,14 +134,16 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 		dialog.response = nil
 		dialog.remoteTarget = nil
 		dialog.eventValue = ""
+		dialog.clearPendingNotifyDialog()
 	}
 	if in.Cancel && dialog.response == nil {
-		g.outgoingSubscriptions.Delete(key)
+		g.outgoingSubscriptions.CompareAndDelete(key, dialog)
 		return fmt.Errorf("subscription does not exist: %s", cmdType)
 	}
 	if dialog.eventValue == "" {
 		dialog.eventValue = buildSubscriptionEventValueForVersion(version, cmdType, targetID)
 	}
+	previousNotify := dialog.snapshotNotifyDialog()
 
 	var request *sip.Request
 	tx, err := g.svr.wrapRequestContext(ctx, target, sip.MethodSubscribe, &sip.ContentTypeXML, body, func(r *sip.Request) {
@@ -151,26 +153,38 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 		}
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: dialog.eventValue})
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: fmt.Sprintf("%d", expires)})
+		if !in.Cancel {
+			dialog.setPendingNotifyDialog(r, cmdType, deviceID, targetID, expires)
+		}
 	})
 	if err != nil {
+		dialog.restoreNotifyDialog(previousNotify)
 		if dialog.response == nil {
-			g.outgoingSubscriptions.Delete(key)
+			g.outgoingSubscriptions.CompareAndDelete(key, dialog)
 		}
 		return err
 	}
 	response, err := sipResponseContext(ctx, tx)
 	if err != nil {
+		dialog.restoreNotifyDialog(previousNotify)
 		if dialog.response == nil {
-			g.outgoingSubscriptions.Delete(key)
+			g.outgoingSubscriptions.CompareAndDelete(key, dialog)
 		}
 		return err
 	}
 	if in.Cancel {
-		g.outgoingSubscriptions.Delete(key)
+		g.outgoingSubscriptions.CompareAndDelete(key, dialog)
 		return nil
+	}
+	if current, loaded := g.outgoingSubscriptions.Load(key); !loaded || current != dialog {
+		return fmt.Errorf("subscription dialog ended before final response")
 	}
 	dialog.response = response
 	dialog.expiresAt = time.Now().Add(time.Duration(expires) * time.Second)
+	if err := dialog.confirmNotifyDialog(response, expires); err != nil {
+		g.outgoingSubscriptions.CompareAndDelete(key, dialog)
+		return err
+	}
 	if contact, ok := response.Contact(); ok && contact != nil && contact.Address != nil {
 		dialog.remoteTarget = contact.Address.Clone()
 	} else if request != nil && request.Recipient() != nil {

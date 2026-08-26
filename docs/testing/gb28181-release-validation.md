@@ -41,6 +41,7 @@ go test ./... -count=1
 - MobilePosition 的 2011/2014 版本门禁、2016 单点坐标及 2022 批量 `DeviceList` 解码；非法时间、坐标、方向、计数或目标不得写状态和转发；
 - 2022 升级、抓拍完成和实时视音频回传通知的固定 Notify 根、20 位目标及抓拍列表/文件标识完整性；
 - terminated NOTIFY 的设备、Call-ID 和双向 tag 对话绑定，以及伪造终止不得删除或重建下级订阅；
+- active/pending/terminated 标准事件 NOTIFY 的 Event、Subscription-State、设备/目标、Call-ID、双向 tag、递增 CSeq、有效期和真实出向订阅绑定；无订阅及错误/重复对话返回 481 且不得产生状态、回调或级联副作用；首个 NOTIFY 早于 SUBSCRIBE 最终响应的合法时序可完成一次远端 tag 绑定；
 - `Event: Catalog;id=...` 初始订阅、续订、取消；
 - 入向订阅只接受 2011+ Alarm/Catalog、2016+ MobilePosition、2022 PTZPosition；创建、续订和取消均要求 Query 根、正 SN、20 位 DeviceID、必填且匹配的 Event，空目标不得扩大为通配订阅；旧版本取消既有高版本事件对话仍可完成清理；
 - Broadcast 通知与业务应答、接收者主动 INVITE、版本化 SDP、ZLM RTP 启停和 ACK/BYE 清理；

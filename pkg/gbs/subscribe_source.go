@@ -101,6 +101,113 @@ type outgoingSubscriptionDialog struct {
 	deviceID     string
 	targetID     string
 	expiresAt    time.Time
+
+	// notifyMu 保护 NOTIFY 对话快照。它与 mu 分离，避免设备在 SUBSCRIBE 最终响应前
+	// 先发送首个 NOTIFY 时，因 Subscribe 正在等待响应而形成互锁。
+	notifyMu sync.Mutex
+	notify   outgoingSubscriptionNotifyDialog
+}
+
+type outgoingSubscriptionNotifyDialog struct {
+	callID    string
+	localTag  string
+	remoteTag string
+	event     string
+	cmdType   string
+	deviceID  string
+	targetID  string
+	expiresAt time.Time
+	cseq      uint32
+}
+
+func (d *outgoingSubscriptionDialog) snapshotNotifyDialog() outgoingSubscriptionNotifyDialog {
+	if d == nil {
+		return outgoingSubscriptionNotifyDialog{}
+	}
+	d.notifyMu.Lock()
+	defer d.notifyMu.Unlock()
+	return d.notify
+}
+
+func (d *outgoingSubscriptionDialog) restoreNotifyDialog(snapshot outgoingSubscriptionNotifyDialog) {
+	if d == nil {
+		return
+	}
+	d.notifyMu.Lock()
+	if d.notify.callID == snapshot.callID && d.notify.localTag == snapshot.localTag {
+		if snapshot.remoteTag == "" {
+			snapshot.remoteTag = d.notify.remoteTag
+		}
+		if d.notify.cseq > snapshot.cseq {
+			snapshot.cseq = d.notify.cseq
+		}
+	}
+	d.notify = snapshot
+	d.notifyMu.Unlock()
+}
+
+func (d *outgoingSubscriptionDialog) clearPendingNotifyDialog() {
+	if d == nil {
+		return
+	}
+	d.notifyMu.Lock()
+	d.notify = outgoingSubscriptionNotifyDialog{}
+	d.notifyMu.Unlock()
+}
+
+func (d *outgoingSubscriptionDialog) setPendingNotifyDialog(request *sip.Request, cmdType, deviceID, targetID string, expires int) {
+	if d == nil || request == nil {
+		return
+	}
+	callID, ok := request.CallID()
+	if !ok || callID == nil {
+		return
+	}
+	d.notifyMu.Lock()
+	remoteTag := ""
+	var cseq uint32
+	if d.notify.callID == normalizeCallID(callID) && d.notify.localTag == sipRequestFromTag(request) {
+		remoteTag = d.notify.remoteTag
+		cseq = d.notify.cseq
+	}
+	d.notify = outgoingSubscriptionNotifyDialog{
+		callID:    normalizeCallID(callID),
+		localTag:  sipRequestFromTag(request),
+		remoteTag: remoteTag,
+		event:     strings.TrimSpace(d.eventValue),
+		cmdType:   strings.TrimSpace(cmdType),
+		deviceID:  strings.TrimSpace(deviceID),
+		targetID:  strings.TrimSpace(targetID),
+		expiresAt: time.Now().Add(time.Duration(expires) * time.Second),
+		cseq:      cseq,
+	}
+	d.notifyMu.Unlock()
+}
+
+func (d *outgoingSubscriptionDialog) confirmNotifyDialog(response *sip.Response, expires int) error {
+	if d == nil || response == nil {
+		return fmt.Errorf("invalid subscription response dialog")
+	}
+	callID, ok := response.CallID()
+	if !ok || callID == nil {
+		return fmt.Errorf("subscription response missing Call-ID")
+	}
+	remoteTag := sipResponseToTag(response)
+	localTag := sipResponseFromTag(response)
+	if remoteTag == "" || localTag == "" {
+		return fmt.Errorf("subscription response missing dialog tag")
+	}
+	d.notifyMu.Lock()
+	defer d.notifyMu.Unlock()
+	if d.notify.callID == "" || d.notify.callID != normalizeCallID(callID) || d.notify.localTag != localTag {
+		return fmt.Errorf("subscription response dialog mismatch")
+	}
+	if d.notify.remoteTag != "" && d.notify.remoteTag != remoteTag {
+		return fmt.Errorf("subscription response remote tag mismatch")
+	}
+	d.notify.remoteTag = remoteTag
+	d.notify.expiresAt = time.Now().Add(time.Duration(expires) * time.Second)
+	return nil
 }
 
 // subscriptionTarget 适配 wrapRequest 的 Targeter。
@@ -358,81 +465,172 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 	}
 }
 
-// sipNotifySubscriptionState 处理 RFC 3265 主动终止订阅。
+// sipNotifySubscriptionState 校验 RFC 3265/6665 订阅对话。
 // GB/T 28181-2016 附录 P 允许 terminated NOTIFY 消息体为空，此时仍应返回 200 OK。
 func (g *GB28181API) sipNotifySubscriptionState(ctx *sip.Context) {
-	state := strings.TrimSpace(ctx.GetHeader("Subscription-State"))
-	state, _, _ = strings.Cut(state, ";")
-	terminated := strings.EqualFold(strings.TrimSpace(state), "terminated")
-	if terminated {
-		g.removeOutgoingSubscriptionDialog(ctx.DeviceID, ctx.Request)
-		if len(ctx.Request.Body()) == 0 {
-			ctx.String(200, "OK")
+	if len(ctx.Request.Body()) == 0 {
+		if !strings.EqualFold(subscriptionStateName(ctx.GetHeader("Subscription-State")), "terminated") {
+			ctx.String(400, "empty notify body")
 			ctx.Abort()
 			return
 		}
+		if _, err := g.validateOutgoingSubscriptionNotify(ctx.DeviceID, ctx.Request, ""); err != nil {
+			ctx.String(481, "subscription dialog does not exist")
+			ctx.Abort()
+			return
+		}
+		ctx.String(200, "OK")
+		ctx.Abort()
+		return
 	}
-	if len(ctx.Request.Body()) == 0 {
-		ctx.String(400, "empty notify body")
+	var envelope struct {
+		CmdType  string `xml:"CmdType"`
+		DeviceID string `xml:"DeviceID"`
+	}
+	if err := sip.XMLDecode(ctx.Request.Body(), &envelope); err != nil {
+		ctx.String(400, ErrXMLDecode.Error())
+		ctx.Abort()
+		return
+	}
+	cmdType, ok := normalizeSubscribeCmdType(envelope.CmdType)
+	if !ok {
+		// 独立业务 NOTIFY 不属于 SUBSCRIBE/NOTIFY 对话，继续交给专用 handler。
+		ctx.Next()
+		return
+	}
+	if _, err := g.validateOutgoingSubscriptionNotify(ctx.DeviceID, ctx.Request, cmdType, envelope.DeviceID); err != nil {
+		ctx.String(481, "subscription dialog does not exist")
 		ctx.Abort()
 		return
 	}
 	ctx.Next()
 }
 
-func (g *GB28181API) removeOutgoingSubscriptionDialog(deviceID string, request *sip.Request) {
+func subscriptionStateName(value string) string {
+	state, _, _ := strings.Cut(strings.TrimSpace(value), ";")
+	return strings.ToLower(strings.TrimSpace(state))
+}
+
+func (g *GB28181API) validateOutgoingSubscriptionNotify(deviceID string, request *sip.Request, cmdType string, targetIDs ...string) (any, error) {
 	if g == nil || request == nil {
-		return
+		return nil, fmt.Errorf("subscription dialog is unavailable")
+	}
+	state := subscriptionStateName(firstSingleHeaderValue(request, "Subscription-State"))
+	if state != "active" && state != "pending" && state != "terminated" {
+		return nil, fmt.Errorf("invalid Subscription-State")
+	}
+	eventValue := firstSingleHeaderValue(request, "Event")
+	if strings.TrimSpace(eventValue) == "" {
+		return nil, fmt.Errorf("missing Event")
 	}
 	callID, ok := request.CallID()
 	if !ok || callID == nil {
-		return
+		return nil, fmt.Errorf("missing Call-ID")
 	}
-	wanted := normalizeCallID(callID)
+	wantedCallID := normalizeCallID(callID)
+	wantedFromTag := sipRequestFromTag(request)
+	wantedToTag := sipRequestToTag(request)
+	if wantedCallID == "" || wantedFromTag == "" || wantedToTag == "" {
+		return nil, fmt.Errorf("invalid NOTIFY dialog")
+	}
+	cseq, ok := request.CSeq()
+	if !ok || cseq == nil || cseq.MethodName != sip.MethodNotify || cseq.SeqNo == 0 {
+		return nil, fmt.Errorf("invalid NOTIFY CSeq")
+	}
+	now := time.Now()
+	targetID := ""
+	if len(targetIDs) > 0 {
+		targetID = strings.TrimSpace(targetIDs[0])
+	}
+	var matchedKey any
+	var matchedDialog *outgoingSubscriptionDialog
 	g.outgoingSubscriptions.Range(func(key, value any) bool {
 		dialog, ok := value.(*outgoingSubscriptionDialog)
 		if !ok || dialog == nil {
 			return true
 		}
-		dialog.mu.Lock()
-		response := dialog.response
-		matches := false
-		if response != nil {
-			if existing, exists := response.CallID(); exists && existing != nil {
-				matches = normalizeCallID(existing) == wanted && outgoingSubscriptionNotifyMatches(deviceID, request, key, dialog, response)
-			}
+		dialog.notifyMu.Lock()
+		snapshot := dialog.notify
+		matches := snapshot.callID == wantedCallID && snapshot.localTag == wantedToTag &&
+			(snapshot.remoteTag == "" || snapshot.remoteTag == wantedFromTag) &&
+			strings.EqualFold(snapshot.deviceID, strings.TrimSpace(deviceID)) &&
+			subscriptionEventHeadersMatch(snapshot.event, eventValue) &&
+			(cmdType == "" || strings.EqualFold(snapshot.cmdType, cmdType)) &&
+			subscriptionNotifyTargetMatches(snapshot, targetID) &&
+			cseq.SeqNo > snapshot.cseq &&
+			(now.Before(snapshot.expiresAt) || state == "terminated")
+		if matches && snapshot.remoteTag == "" {
+			// RFC 6665 允许首个 NOTIFY 先于 SUBSCRIBE 最终响应，首个合法请求绑定远端 tag。
+			dialog.notify.remoteTag = wantedFromTag
 		}
-		dialog.mu.Unlock()
 		if matches {
-			g.outgoingSubscriptions.Delete(key)
-			g.startLifecycleTask(context.Background(), func(taskCtx context.Context) {
-				g.renewTerminatedCascadeSubscription(key, taskCtx)
-			})
+			dialog.notify.cseq = cseq.SeqNo
+		}
+		dialog.notifyMu.Unlock()
+		if matches {
+			matchedKey = key
+			matchedDialog = dialog
+			return false
 		}
 		return true
 	})
-}
-
-func outgoingSubscriptionNotifyMatches(deviceID string, request *sip.Request, key any, dialog *outgoingSubscriptionDialog, response *sip.Response) bool {
-	if request == nil || dialog == nil || response == nil {
-		return false
+	if matchedKey == nil || matchedDialog == nil {
+		return nil, fmt.Errorf("subscription dialog does not exist")
 	}
-	expectedDeviceID := strings.TrimSpace(dialog.deviceID)
-	if expectedDeviceID == "" {
-		if keyString, ok := key.(string); ok {
-			expectedDeviceID, _, _ = strings.Cut(keyString, "|")
-			expectedDeviceID = strings.TrimSpace(expectedDeviceID)
+	current, loaded := g.outgoingSubscriptions.Load(matchedKey)
+	if !loaded || current != matchedDialog {
+		return nil, fmt.Errorf("subscription dialog changed")
+	}
+	if state == "terminated" {
+		if !g.outgoingSubscriptions.CompareAndDelete(matchedKey, matchedDialog) {
+			return nil, fmt.Errorf("subscription dialog changed")
+		}
+		if !g.startLifecycleTask(context.Background(), func(taskCtx context.Context) {
+			g.renewTerminatedCascadeSubscription(matchedKey, matchedDialog, taskCtx)
+		}) {
+			return nil, ErrServiceStopped
 		}
 	}
-	if expectedDeviceID != "" && expectedDeviceID != strings.TrimSpace(deviceID) {
-		return false
-	}
-	remoteTag := sipResponseToTag(response)
-	localTag := sipResponseFromTag(response)
-	return remoteTag != "" && localTag != "" && sipRequestFromTag(request) == remoteTag && sipRequestToTag(request) == localTag
+	return matchedKey, nil
 }
 
-func (g *GB28181API) renewTerminatedCascadeSubscription(key any, parents ...context.Context) {
+func subscriptionNotifyTargetMatches(dialog outgoingSubscriptionNotifyDialog, targetID string) bool {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return true
+	}
+	// 订阅父设备时允许其已知子通道上报，具体所有权仍由业务包络校验；
+	// 订阅指定子通道时必须精确匹配，防止同一 NVR 的兄弟通道串话。
+	return strings.EqualFold(dialog.targetID, dialog.deviceID) || strings.EqualFold(dialog.targetID, targetID)
+}
+
+func subscriptionEventHeadersMatch(expected, actual string) bool {
+	expectedValue, expectedID, expectedErr := parseSubscriptionEvent(expected)
+	actualValue, actualID, actualErr := parseSubscriptionEvent(actual)
+	if expectedErr != nil || actualErr != nil || expectedValue == "" || actualValue == "" {
+		return false
+	}
+	expectedName, _, _ := strings.Cut(expectedValue, ";")
+	actualName, _, _ := strings.Cut(actualValue, ";")
+	return strings.EqualFold(strings.TrimSpace(expectedName), strings.TrimSpace(actualName)) && strings.EqualFold(expectedID, actualID)
+}
+
+func firstSingleHeaderValue(request *sip.Request, name string) string {
+	if request == nil {
+		return ""
+	}
+	headers := request.GetHeaders(name)
+	if len(headers) != 1 {
+		return ""
+	}
+	value := headers[0].String()
+	if _, after, ok := strings.Cut(value, ":"); ok {
+		value = after
+	}
+	return strings.TrimSpace(value)
+}
+
+func (g *GB28181API) renewTerminatedCascadeSubscription(key any, terminated *outgoingSubscriptionDialog, parents ...context.Context) {
 	if g == nil {
 		return
 	}
@@ -461,6 +659,9 @@ func (g *GB28181API) renewTerminatedCascadeSubscription(key any, parents ...cont
 	identity := state.Identity.clone()
 	localGatewayID := state.LocalGatewayID
 	g.cascadeSubscriptionMu.Unlock()
+	if current, loaded := g.outgoingSubscriptions.Load(keyString); loaded && current != terminated {
+		return
+	}
 	ctx = withMonitorUserIdentityRoute(ctx, identity, localGatewayID)
 	if err := g.invokeCascadeSubscribe(ctx, &input); err != nil {
 		slog.Warn("renew terminated cascade subscription failed", "event", input.Event, "device_id", input.DeviceID, "target_id", input.TargetID, "err", err)
