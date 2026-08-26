@@ -1358,9 +1358,12 @@ type ptzProbeOutput struct {
 }
 
 type queryRecordsInput struct {
-	StartAt int64 `json:"start_at" example:"1710864000"` // 查询开始时间，Unix 秒
-	EndAt   int64 `json:"end_at" example:"1710950400"`   // 查询结束时间，Unix 秒
-	Timeout int   `json:"timeout" example:"10"`          // 等待设备应答超时时间，单位秒
+	StartAt      int64  `json:"start_at" example:"1710864000"` // 查询开始时间，Unix 秒
+	EndAt        int64  `json:"end_at" example:"1710950400"`   // 查询结束时间，Unix 秒
+	Timeout      int    `json:"timeout" example:"10"`          // 等待设备应答超时时间，单位秒
+	StreamNumber *int   `json:"stream_number" example:"0"`     // 2022 码流编号：0 主码流，1/2/... 子码流
+	AlarmMethod  string `json:"alarm_method" example:"5"`      // 2022 报警方式过滤条件
+	AlarmType    string `json:"alarm_type" example:"2"`        // 2022 报警类型过滤条件
 }
 
 type upgradeDeviceInput struct {
@@ -1519,14 +1522,17 @@ type gbDeviceControlInput struct {
 }
 
 type gbDeviceQueryInput struct {
-	TargetID   string `json:"target_id" example:"34020000001320000001"` // 目标设备或通道编码
-	Action     string `json:"action" example:"device_status"`           // 统一查询动作
-	Timeout    int    `json:"timeout" example:"5"`                      // 超时时间，秒
-	ConfigType string `json:"config_type" example:"basic_param"`        // 配置查询类型
-	Interval   int    `json:"interval" example:"60"`                    // 间隔秒数
-	Number     int    `json:"number" example:"0"`                       // 巡航轨迹编号（0 或 1）
-	Start      int64  `json:"start" example:"1710864000"`               // 开始时间，Unix 秒
-	End        int64  `json:"end" example:"1710950400"`                 // 结束时间，Unix 秒
+	TargetID     string `json:"target_id" example:"34020000001320000001"` // 目标设备或通道编码
+	Action       string `json:"action" example:"device_status"`           // 统一查询动作
+	Timeout      int    `json:"timeout" example:"5"`                      // 超时时间，秒
+	ConfigType   string `json:"config_type" example:"basic_param"`        // 配置查询类型
+	Interval     int    `json:"interval" example:"60"`                    // 间隔秒数
+	Number       int    `json:"number" example:"0"`                       // 巡航轨迹编号（0 或 1）
+	Start        int64  `json:"start" example:"1710864000"`               // 开始时间，Unix 秒
+	End          int64  `json:"end" example:"1710950400"`                 // 结束时间，Unix 秒
+	StreamNumber *int   `json:"stream_number" example:"0"`                // 2022 码流编号：0 主码流，1/2/... 子码流
+	AlarmMethod  string `json:"alarm_method" example:"5"`                 // 2022 报警方式过滤条件
+	AlarmType    string `json:"alarm_type" example:"2"`                   // 2022 报警类型过滤条件
 }
 
 // gbAppendixA4SnapshotInput 为附录 A.4 快照查询参数。
@@ -1589,9 +1595,12 @@ func (a IPCAPI) queryRecords(c *gin.Context, in *queryRecordsInput) (any, error)
 		return nil, err
 	}
 	out, err := a.ipc.QueryRecords(c.Request.Context(), channelID, &ipc.RecordQueryInput{
-		StartAt: in.StartAt,
-		EndAt:   in.EndAt,
-		Timeout: in.Timeout,
+		StartAt:      in.StartAt,
+		EndAt:        in.EndAt,
+		Timeout:      in.Timeout,
+		StreamNumber: in.StreamNumber,
+		AlarmMethod:  in.AlarmMethod,
+		AlarmType:    in.AlarmType,
 	})
 	if err != nil {
 		return nil, ErrDevice.SetMsg(err.Error())
@@ -2115,14 +2124,17 @@ func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, erro
 		return nil, err
 	}
 	out, err := a.ipc.GBDeviceQuery(c.Request.Context(), deviceID, &ipc.GBDeviceQueryInput{
-		TargetID:   in.TargetID,
-		Action:     in.Action,
-		Timeout:    in.Timeout,
-		ConfigType: in.ConfigType,
-		Interval:   in.Interval,
-		Number:     in.Number,
-		Start:      in.Start,
-		End:        in.End,
+		TargetID:     in.TargetID,
+		Action:       in.Action,
+		Timeout:      in.Timeout,
+		ConfigType:   in.ConfigType,
+		Interval:     in.Interval,
+		Number:       in.Number,
+		Start:        in.Start,
+		End:          in.End,
+		StreamNumber: in.StreamNumber,
+		AlarmMethod:  in.AlarmMethod,
+		AlarmType:    in.AlarmType,
 	})
 	if err != nil {
 		return nil, ErrDevice.SetMsg(err.Error())

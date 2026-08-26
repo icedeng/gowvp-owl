@@ -1,6 +1,7 @@
 package sip
 
 import (
+	"encoding/xml"
 	"fmt"
 	"strings"
 	"time"
@@ -119,7 +120,54 @@ func GetCatalogXML(id string) []byte {
 
 // GetRecordInfoXML 获取录像文件列表指令
 func GetRecordInfoXML(id string, sceqNo int, start, end int64) []byte {
-	return fmt.Appendf(nil, RecordInfoXML, sceqNo, id, FormatGBTime(time.Unix(start, 0), "2006-01-02T15:04:05"), FormatGBTime(time.Unix(end, 0), "2006-01-02T15:04:05"))
+	return GetRecordInfoXMLWithFilters(id, sceqNo, start, end, RecordInfoQueryFilters{})
+}
+
+// RecordInfoQueryFilters 对应 GB/T 28181-2022 文件目录检索新增过滤条件。
+type RecordInfoQueryFilters struct {
+	StreamNumber *int
+	AlarmMethod  string
+	AlarmType    string
+}
+
+// GetRecordInfoXMLWithFilters 获取带 2022 扩展过滤条件的录像文件列表指令。
+func GetRecordInfoXMLWithFilters(id string, sceqNo int, start, end int64, filters RecordInfoQueryFilters) []byte {
+	body := fmt.Appendf(nil, RecordInfoXML, sceqNo, id, FormatGBTime(time.Unix(start, 0), "2006-01-02T15:04:05"), FormatGBTime(time.Unix(end, 0), "2006-01-02T15:04:05"))
+	closing := []byte("</Query>")
+	index := strings.LastIndex(string(body), string(closing))
+	if index < 0 {
+		return body
+	}
+
+	var extra strings.Builder
+	appendFilter := func(name, value string) {
+		extra.WriteByte('\t')
+		extra.WriteByte('<')
+		extra.WriteString(name)
+		extra.WriteByte('>')
+		_ = xml.EscapeText(&extra, []byte(value))
+		extra.WriteString("</")
+		extra.WriteString(name)
+		extra.WriteString(">\n")
+	}
+	if filters.StreamNumber != nil {
+		appendFilter("StreamNumber", fmt.Sprintf("%d", *filters.StreamNumber))
+	}
+	if value := strings.TrimSpace(filters.AlarmMethod); value != "" {
+		appendFilter("AlarmMethod", value)
+	}
+	if value := strings.TrimSpace(filters.AlarmType); value != "" {
+		appendFilter("AlarmType", value)
+	}
+	if extra.Len() == 0 {
+		return body
+	}
+
+	result := make([]byte, 0, len(body)+extra.Len())
+	result = append(result, body[:index]...)
+	result = append(result, extra.String()...)
+	result = append(result, body[index:]...)
+	return result
 }
 
 // RFC3261BranchMagicCookie RFC3261BranchMagicCookie

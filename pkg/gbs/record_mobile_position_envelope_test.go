@@ -52,6 +52,33 @@ func TestRecordInfoRejectsInvalidEnvelopeBeforeCollector(t *testing.T) {
 	}
 }
 
+func TestRecordQueryFiltersByVersion(t *testing.T) {
+	stream0, stream3, streamNegative := 0, 3, -1
+	tests := []struct {
+		name    string
+		version GBProtocolVersion
+		input   RecordQueryInput
+		wantErr bool
+	}{
+		{name: "legacy query unchanged", version: GBVersion10},
+		{name: "2016 rejects stream filter", version: GBVersion20, input: RecordQueryInput{StreamNumber: &stream0}, wantErr: true},
+		{name: "2022 stream boundary", version: GBVersion30, input: RecordQueryInput{StreamNumber: &stream0}},
+		{name: "2022 additional substream", version: GBVersion30, input: RecordQueryInput{StreamNumber: &stream3}},
+		{name: "2022 rejects negative stream", version: GBVersion30, input: RecordQueryInput{StreamNumber: &streamNegative}, wantErr: true},
+		{name: "2022 alarm filter", version: GBVersion30, input: RecordQueryInput{AlarmMethod: "5", AlarmType: "13"}},
+		{name: "2022 rejects type without method", version: GBVersion30, input: RecordQueryInput{AlarmType: "1"}, wantErr: true},
+		{name: "2022 rejects invalid type for method", version: GBVersion30, input: RecordQueryInput{AlarmMethod: "6", AlarmType: "3"}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateRecordQueryFilters(test.version, &test.input)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateRecordQueryFilters() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestRecordInfoParentAliasPreservesChannelTarget(t *testing.T) {
 	memory := newFlowMemory(gb10DeviceID)
 	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
@@ -114,7 +141,8 @@ func TestRecordInfoValidatesOptionalItemFieldsByVersion(t *testing.T) {
 		{name: "valid 2022 storage fields", version: GBVersion30, body: strings.Replace(valid, "</Item>", "<RecordLocation>"+gb10DeviceID+"</RecordLocation><StreamNumber>2</StreamNumber></Item>", 1), wantOK: true},
 		{name: "empty 2022 record location", version: GBVersion30, body: strings.Replace(valid, "</Item>", "<RecordLocation></RecordLocation></Item>", 1)},
 		{name: "invalid 2022 record location", version: GBVersion30, body: strings.Replace(valid, "</Item>", "<RecordLocation>bad</RecordLocation></Item>", 1)},
-		{name: "invalid 2022 stream number", version: GBVersion30, body: strings.Replace(valid, "</Item>", "<StreamNumber>3</StreamNumber></Item>", 1)},
+		{name: "additional 2022 substream", version: GBVersion30, body: strings.Replace(valid, "</Item>", "<StreamNumber>3</StreamNumber></Item>", 1), wantOK: true},
+		{name: "invalid 2022 stream number", version: GBVersion30, body: strings.Replace(valid, "</Item>", "<StreamNumber>-1</StreamNumber></Item>", 1)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

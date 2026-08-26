@@ -46,8 +46,11 @@ type DeviceQueryInput struct {
 	// CruiseTrackQuery 轨迹编号；标准当前定义 0、1 两条轨迹。
 	Number int
 	// RecordInfo 查询参数（unix 秒）。
-	Start int64
-	End   int64
+	Start        int64
+	End          int64
+	StreamNumber *int
+	AlarmMethod  string
+	AlarmType    string
 }
 
 // DeviceQueryOutput 是统一查询返回。
@@ -133,11 +136,14 @@ func (g *GB28181API) DeviceQuery(ctx context.Context, in *DeviceQueryInput) (*De
 			return nil, fmt.Errorf("record_info requires valid start/end")
 		}
 		records, err := g.QueryRecordList(ctx, &RecordQueryInput{
-			DeviceID:  deviceID,
-			ChannelID: targetID,
-			Start:     in.Start,
-			End:       in.End,
-			Timeout:   in.Timeout,
+			DeviceID:     deviceID,
+			ChannelID:    targetID,
+			Start:        in.Start,
+			End:          in.End,
+			Timeout:      in.Timeout,
+			StreamNumber: in.StreamNumber,
+			AlarmMethod:  in.AlarmMethod,
+			AlarmType:    in.AlarmType,
 		})
 		if err != nil {
 			return nil, err

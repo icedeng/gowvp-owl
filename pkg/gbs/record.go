@@ -13,11 +13,14 @@ import (
 )
 
 type RecordQueryInput struct {
-	DeviceID  string
-	ChannelID string
-	Start     int64 // 查询起始时间（unix 秒）
-	End       int64 // 查询结束时间（unix 秒）
-	Timeout   time.Duration
+	DeviceID     string
+	ChannelID    string
+	Start        int64 // 查询起始时间（unix 秒）
+	End          int64 // 查询结束时间（unix 秒）
+	Timeout      time.Duration
+	StreamNumber *int
+	AlarmMethod  string
+	AlarmType    string
 }
 
 // QueryRecordList 查询设备录像目录（RecordInfo）
@@ -52,6 +55,9 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 	if !ok {
 		return nil, ErrChannelNotExist
 	}
+	if err := validateRecordQueryFilters(g.getDeviceGBProtocolVersion(in.DeviceID), in); err != nil {
+		return nil, err
+	}
 
 	if in.Timeout <= 0 {
 		in.Timeout = 10 * time.Second
@@ -65,7 +71,11 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 	defer g.recordResponseAliases.Delete(aliasKey)
 
 	// 按 GB28181 A.2.4.9 发送 RecordInfo 查询命令。
-	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodMessage, &sip.ContentTypeXML, sip.GetRecordInfoXML(in.ChannelID, sn, in.Start, in.End))
+	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodMessage, &sip.ContentTypeXML, sip.GetRecordInfoXMLWithFilters(in.ChannelID, sn, in.Start, in.End, sip.RecordInfoQueryFilters{
+		StreamNumber: in.StreamNumber,
+		AlarmMethod:  in.AlarmMethod,
+		AlarmType:    in.AlarmType,
+	}))
 	if err != nil {
 		g.recordResponses.Cancel(recordKey)
 		return nil, err
@@ -84,6 +94,30 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 		return nil, ctx.Err()
 	}
 	return recordQueryItemsResult(result)
+}
+
+func validateRecordQueryFilters(version GBProtocolVersion, in *RecordQueryInput) error {
+	if in == nil {
+		return errors.New("invalid record query input")
+	}
+	method := strings.TrimSpace(in.AlarmMethod)
+	alarmType := strings.TrimSpace(in.AlarmType)
+	if in.StreamNumber == nil && method == "" && alarmType == "" {
+		return nil
+	}
+	if !version.AtLeast(GBVersion30) {
+		return fmt.Errorf("record query filters require GB/T 28181-2022")
+	}
+	if in.StreamNumber != nil && *in.StreamNumber < 0 {
+		return fmt.Errorf("record query stream_number must not be negative")
+	}
+	if method == "" && alarmType == "" {
+		return nil
+	}
+	if err := validateAlarmResetInfo(method, alarmType); err != nil {
+		return fmt.Errorf("invalid record query alarm filter: %w", err)
+	}
+	return nil
 }
 
 func recordQueryItemsResult(result multiResponseResult[RecordItem]) ([]RecordItem, error) {
@@ -308,7 +342,7 @@ func (g *GB28181API) validateRecordInfoEnvelope(ctx *sip.Context, message *Messa
 			if item.HasRecordLocation && !isGBDeviceIdentifier(item.RecordLocation) {
 				return fmt.Errorf("invalid RecordInfo storage location")
 			}
-			if item.StreamNumber != nil && (*item.StreamNumber < 0 || *item.StreamNumber > 2) {
+			if item.StreamNumber != nil && *item.StreamNumber < 0 {
 				return fmt.Errorf("invalid RecordInfo stream number")
 			}
 		}

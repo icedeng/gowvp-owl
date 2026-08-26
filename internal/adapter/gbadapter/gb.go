@@ -126,11 +126,14 @@ func (a *Adapter) PTZControl(ctx context.Context, device *ipc.Device, channel *i
 // QueryRecords 通过 GB28181 RecordInfo 查询录像目录，并转换为 IPC 统一返回结构。
 func (a *Adapter) QueryRecords(ctx context.Context, device *ipc.Device, channel *ipc.Channel, in *ipc.RecordQueryInput) (*ipc.RecordQueryOutput, error) {
 	out, err := a.gbs.QueryRecordList(ctx, &gbs.RecordQueryInput{
-		DeviceID:  device.DeviceID,
-		ChannelID: channel.ChannelID,
-		Start:     in.StartAt,
-		End:       in.EndAt,
-		Timeout:   time.Duration(in.Timeout) * time.Second,
+		DeviceID:     device.DeviceID,
+		ChannelID:    channel.ChannelID,
+		Start:        in.StartAt,
+		End:          in.EndAt,
+		Timeout:      time.Duration(in.Timeout) * time.Second,
+		StreamNumber: in.StreamNumber,
+		AlarmMethod:  in.AlarmMethod,
+		AlarmType:    in.AlarmType,
 	})
 	if err != nil {
 		return nil, err
@@ -328,15 +331,18 @@ func toGBTargetTrack(in *ipc.GBTargetTrackInput) *gbs.TargetTrackParam {
 
 func (a *Adapter) DeviceQuery(ctx context.Context, device *ipc.Device, in *ipc.GBDeviceQueryInput) (*ipc.GBDeviceQueryOutput, error) {
 	out, err := a.gbs.DeviceQuery(ctx, &gbs.DeviceQueryInput{
-		DeviceID:   device.DeviceID,
-		TargetID:   in.TargetID,
-		Action:     in.Action,
-		Timeout:    time.Duration(in.Timeout) * time.Second,
-		ConfigType: in.ConfigType,
-		Interval:   in.Interval,
-		Number:     in.Number,
-		Start:      in.Start,
-		End:        in.End,
+		DeviceID:     device.DeviceID,
+		TargetID:     in.TargetID,
+		Action:       in.Action,
+		Timeout:      time.Duration(in.Timeout) * time.Second,
+		ConfigType:   in.ConfigType,
+		Interval:     in.Interval,
+		Number:       in.Number,
+		Start:        in.Start,
+		End:          in.End,
+		StreamNumber: in.StreamNumber,
+		AlarmMethod:  in.AlarmMethod,
+		AlarmType:    in.AlarmType,
 	})
 	if err != nil {
 		return nil, err

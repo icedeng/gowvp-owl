@@ -25,17 +25,20 @@ import (
 const cascadeCatalogChunkSize = 20
 
 type cascadeQueryEnvelope struct {
-	XMLName    xml.Name
-	CmdType    string `xml:"CmdType"`
-	SN         int    `xml:"SN"`
-	DeviceID   string `xml:"DeviceID"`
-	SourceID   string `xml:"SourceID"`
-	TargetID   string `xml:"TargetID"`
-	StartTime  string `xml:"StartTime"`
-	EndTime    string `xml:"EndTime"`
-	Interval   int    `xml:"Interval"`
-	Number     *int   `xml:"Number"`
-	ConfigType string `xml:"ConfigType"`
+	XMLName      xml.Name
+	CmdType      string `xml:"CmdType"`
+	SN           int    `xml:"SN"`
+	DeviceID     string `xml:"DeviceID"`
+	SourceID     string `xml:"SourceID"`
+	TargetID     string `xml:"TargetID"`
+	StartTime    string `xml:"StartTime"`
+	EndTime      string `xml:"EndTime"`
+	StreamNumber *int   `xml:"StreamNumber"`
+	AlarmMethod  string `xml:"AlarmMethod"`
+	AlarmType    string `xml:"AlarmType"`
+	Interval     int    `xml:"Interval"`
+	Number       *int   `xml:"Number"`
+	ConfigType   string `xml:"ConfigType"`
 }
 
 type cascadeCatalogResponse struct {
@@ -1018,14 +1021,19 @@ func (g *GB28181API) respondCascadeRecordInfo(ctx context.Context, worker *casca
 	if startErr != nil || endErr != nil || !endAt.After(startAt) {
 		return g.sendCascadeRecordItems(ctx, worker, query, nil, channel.Name)
 	}
+	recordQuery := &RecordQueryInput{
+		DeviceID: channel.DeviceID, ChannelID: localChannelID,
+		Start: startAt.Unix(), End: endAt.Unix(), Timeout: 25 * time.Second,
+		StreamNumber: query.StreamNumber, AlarmMethod: query.AlarmMethod, AlarmType: query.AlarmType,
+	}
+	if err := validateRecordQueryFilters(worker.protocolVersion(), recordQuery); err != nil {
+		return sendCascadeQueryError(ctx, worker, query)
+	}
 	queryRecords := g.queryRecordItems
 	if g.cascadeQueryRecords != nil {
 		queryRecords = g.cascadeQueryRecords
 	}
-	items, err := queryRecords(ctx, &RecordQueryInput{
-		DeviceID: channel.DeviceID, ChannelID: localChannelID,
-		Start: startAt.Unix(), End: endAt.Unix(), Timeout: 25 * time.Second,
-	})
+	items, err := queryRecords(ctx, recordQuery)
 	if err != nil {
 		slog.Warn("query cascade RecordInfo failed", "upstream", worker.platform.name, "channel", localChannelID, "err", err)
 		items = nil

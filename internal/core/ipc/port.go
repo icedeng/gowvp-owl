@@ -145,11 +145,14 @@ type GBDeviceQueryInput struct {
 	Action   string
 	Timeout  int // seconds
 
-	ConfigType string
-	Interval   int
-	Number     int   // cruise_track 轨迹编号（0 或 1）
-	Start      int64 // record_info start unix seconds
-	End        int64 // record_info end unix seconds
+	ConfigType   string
+	Interval     int
+	Number       int   // cruise_track 轨迹编号（0 或 1）
+	Start        int64 // record_info start unix seconds
+	End          int64 // record_info end unix seconds
+	StreamNumber *int
+	AlarmMethod  string
+	AlarmType    string
 }
 
 type GBDeviceQueryOutput struct {
@@ -257,9 +260,12 @@ type GBAppendixA4SnapshotOutput struct {
 
 // RecordQueryInput 录像目录查询参数。
 type RecordQueryInput struct {
-	StartAt int64 // unix seconds
-	EndAt   int64 // unix seconds
-	Timeout int   // seconds
+	StartAt      int64 // unix seconds
+	EndAt        int64 // unix seconds
+	Timeout      int   // seconds
+	StreamNumber *int
+	AlarmMethod  string
+	AlarmType    string
 }
 
 // RecordSegment 单段录像时间范围。

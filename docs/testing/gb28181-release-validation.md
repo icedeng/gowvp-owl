@@ -32,6 +32,7 @@ go test ./... -count=1
 - 1.0 功能门禁、直播/回放/下载 SDP golden；
 - 1.0 REGISTER、Keepalive、Catalog、RecordInfo、Alarm 模拟流程，以及平台主动点播使用的 UDP SDP golden；
 - RecordInfo 四版本响应字段和值域：2011/2014 文件项允许 `all`，2016/2022 文件项仅允许 `time/alarm/manual`，非法版本字段不得进入多响应聚合；
+- 2022 RecordInfo 检索请求的非负 `StreamNumber`（0 主码流、1/2/... 子码流）、`AlarmMethod` 和按方式限定的 `AlarmType` 能下发并通过级联保留；2011/2014/2016 及非法值在发送下级查询前拒绝；
 - 已注册上级的入向 INVITE 进入级联 B2BUA；其他未知非广播入向 INVITE 明确返回 501；
 - 设备级 `gb_disabled_capabilities` 会同步影响持久化能力快照、诊断输出和发送前能力门禁；
 - 1.1 Keepalive、Catalog、DeviceConfig、MediaStatus/121、Broadcast Response 串联模拟流程；

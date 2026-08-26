@@ -885,11 +885,13 @@ func TestCascadeRecordInfoQueriesSharedChannelAndMapsResponse(t *testing.T) {
 	query := cascadeQueryEnvelope{
 		CmdType: "RecordInfo", SN: 88, DeviceID: testExposedChannelID,
 		StartTime: "2024-04-01T00:00:00", EndTime: "2024-04-01T01:00:00",
+		StreamNumber: intPointer(2), AlarmMethod: "5", AlarmType: "13",
 	}
 	if err := api.respondCascadeRecordInfo(t.Context(), worker, query); err != nil {
 		t.Fatal(err)
 	}
-	if downstream == nil || downstream.DeviceID != channel.DeviceID || downstream.ChannelID != channel.ChannelID || downstream.End <= downstream.Start {
+	if downstream == nil || downstream.DeviceID != channel.DeviceID || downstream.ChannelID != channel.ChannelID || downstream.End <= downstream.Start ||
+		downstream.StreamNumber == nil || *downstream.StreamNumber != 2 || downstream.AlarmMethod != "5" || downstream.AlarmType != "13" {
 		t.Fatalf("downstream RecordInfo query = %+v", downstream)
 	}
 	if len(requests) != 2 {
@@ -922,6 +924,36 @@ func TestCascadeRecordInfoQueriesSharedChannelAndMapsResponse(t *testing.T) {
 		if strings.Contains(body, channel.DeviceID) {
 			t.Fatalf("RecordInfo chunk %d leaked local storage ID: %s", index, body)
 		}
+	}
+}
+
+func TestCascadeRecordInfoRejects2022FiltersFromLegacyUpstream(t *testing.T) {
+	adapter, _, _ := newCascadeMediaCore(t)
+	server := &Server{}
+	api := &GB28181API{core: adapter, svr: server}
+	server.gb = api
+	platform := testSharedCascadePlatform(t)
+	platform.version = GBVersion20
+	worker := newCascadeWorker(server, platform)
+	var response *sip.Request
+	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+		response = request
+		return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+	}
+	called := false
+	api.cascadeQueryRecords = func(_ context.Context, _ *RecordQueryInput) ([]RecordItem, error) {
+		called = true
+		return nil, nil
+	}
+	api.respondCascadeQuery(worker, cascadeQueryEnvelope{
+		CmdType: "RecordInfo", SN: 89, DeviceID: testExposedChannelID,
+		StartTime: "2024-04-01T00:00:00", EndTime: "2024-04-01T01:00:00", StreamNumber: intPointer(0),
+	})
+	if called {
+		t.Fatal("legacy upstream RecordInfo filter reached downstream query")
+	}
+	if response == nil || !strings.Contains(string(response.Body()), "<Result>ERROR</Result>") {
+		t.Fatalf("legacy upstream RecordInfo filter response = %v", response)
 	}
 }
 
