@@ -1240,7 +1240,7 @@ func TestCascadePTZPositionSubscriptionRequires30(t *testing.T) {
 	}{
 		{name: "2.0 rejects create", version: GBVersion20, expires: "60", status: "SIP/2.0 400"},
 		{name: "3.0 accepts create", version: GBVersion30, expires: "60", status: "SIP/2.0 200"},
-		{name: "2.0 accepts cancel", version: GBVersion20, expires: "0", status: "SIP/2.0 200"},
+		{name: "2.0 rejects missing-dialog cancel", version: GBVersion20, expires: "0", status: "SIP/2.0 481"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			platform := testSharedCascadePlatform(t)
@@ -1284,6 +1284,67 @@ func TestCascadePTZPositionSubscriptionRequires30(t *testing.T) {
 				t.Fatal("PTZPosition SUBSCRIBE response timeout")
 			}
 		})
+	}
+}
+
+func TestCascadePTZPositionSubscriptionAllowsOlderVersionCancel(t *testing.T) {
+	platform := testSharedCascadePlatform(t)
+	local := mustFlowAddress(t, "sip:"+platform.localID+"@local.example")
+	remote := mustFlowAddress(t, "sip:"+platform.serverID+"@remote.example")
+	server := &Server{Server: sip.NewServer(local)}
+	api := &GB28181API{svr: server}
+	server.gb = api
+	worker := newCascadeWorker(server, platform)
+	worker.mu.Lock()
+	worker.effective = GBVersion30
+	worker.mu.Unlock()
+
+	connection := newFlowConnection()
+	connection.remote = platform.remote
+	callID := sip.CallID("cascade-ptz-version-downgrade-cancel")
+	from := remote.Clone()
+	from.Params.Add("tag", sip.String{Str: "upstream-tag"})
+	body, err := sip.XMLEncode(subscribeEventRequest{CmdType: "PTZPosition", SN: 20, DeviceID: testExposedChannelID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeRequest := func(expires string, localTag string, cseq uint32) *sip.Request {
+		request := sip.NewRequest("", sip.MethodSubscribe, local.URI, sip.DefaultSipVersion,
+			sip.NewHeaderBuilder().SetFrom(from).SetTo(local).SetMethod(sip.MethodSubscribe).SetCallID(&callID).
+				AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), body)
+		request.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "presence"})
+		request.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: expires})
+		request.SetConnection(connection)
+		request.SetSource(connection.remote)
+		request.SetDestination(connection.local)
+		applyInboundSubscribeDialog(t, request, localTag, cseq)
+		return request
+	}
+	invoke := func(request *sip.Request, version GBProtocolVersion, txID string) string {
+		ctx := &sip.Context{
+			Request: request, Tx: sip.NewTransaction(txID, connection), DeviceID: platform.serverID,
+			Source: connection.remote, To: remote, XGBVer: string(version),
+		}
+		ctx.Set(cascadeWorkerContextKey, worker)
+		api.sipSubscribeEvent(ctx)
+		return <-flowResponse(t, connection)
+	}
+
+	assertFlowOK(t, invoke(makeRequest("60", "", 1), GBVersion30, "cascade-ptz-create"))
+	var subscription *eventSubscription
+	api.eventSubscribers.Range(func(_, value any) bool {
+		subscription, _ = value.(*eventSubscription)
+		return false
+	})
+	if subscription == nil || subscription.LocalTag == "" {
+		t.Fatal("PTZPosition subscription dialog was not stored")
+	}
+	worker.mu.Lock()
+	worker.effective = GBVersion20
+	worker.mu.Unlock()
+	assertFlowOK(t, invoke(makeRequest("0", subscription.LocalTag, 2), GBVersion20, "cascade-ptz-cancel"))
+	if _, exists := api.eventSubscribers.Load(subscription.Key); exists {
+		t.Fatal("older negotiated version did not cancel existing PTZPosition subscription")
 	}
 }
 

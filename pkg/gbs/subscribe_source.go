@@ -81,6 +81,10 @@ type eventSubscription struct {
 	Event          string
 	Response       *sip.Response
 	Contact        *sip.Address
+	DialogCallID   string
+	RemoteTag      string
+	LocalTag       string
+	RemoteCSeq     uint32
 	CSeq           uint32
 	Cascade        *cascadeWorker
 	Identity       *monitorUserIdentity
@@ -345,8 +349,12 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 		return
 	}
 
-	dialogID, fromTag := parseSubscribeDialog(ctx)
-	key := buildEventSubscriptionKey(subscriptionOwnerKey(ctx, cascade), dialogID, fromTag, cmdType, deviceID)
+	dialog, err := parseSubscribeDialog(ctx)
+	if err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
+	key := buildEventSubscriptionKey(subscriptionOwnerKey(ctx, cascade), dialog.callID, dialog.fromTag, cmdType, deviceID)
 	identityCtx := monitorUserIdentityContext(ctx)
 	unlockSubscription, err := g.lockEventSubscriptionOperation(identityCtx, key)
 	if err != nil {
@@ -354,27 +362,40 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 		return
 	}
 	defer unlockSubscription()
+	var existing *eventSubscription
+	if value, loaded := g.eventSubscribers.Load(key); loaded {
+		existing, _ = value.(*eventSubscription)
+		if existing == nil {
+			g.eventSubscribers.Delete(key)
+		}
+	}
+	if err := validateInboundSubscribeDialog(existing, dialog); err != nil {
+		ctx.String(481, err.Error())
+		return
+	}
 	if expires == 0 {
 		// Expires=0 为退订。
-		if value, loaded := g.eventSubscribers.LoadAndDelete(key); loaded {
-			if existing, ok := value.(*eventSubscription); ok && existing != nil {
-				existing.mu.Lock()
-				existing.ExpiresAt = time.Now()
-				downstreamKeys := append([]string(nil), existing.DownstreamKeys...)
-				existing.mu.Unlock()
-				g.releaseCascadeDownstreamSubscriptions(context.Background(), downstreamKeys)
-			}
+		if existing == nil {
+			ctx.String(481, "subscription dialog does not exist")
+			return
 		}
+		if !g.eventSubscribers.CompareAndDelete(key, existing) {
+			ctx.String(481, "subscription dialog changed")
+			return
+		}
+		existing.mu.Lock()
+		existing.ExpiresAt = time.Now()
+		downstreamKeys := append([]string(nil), existing.DownstreamKeys...)
+		existing.mu.Unlock()
+		g.releaseCascadeDownstreamSubscriptions(context.Background(), downstreamKeys)
 		g.respondSubscribeOK(ctx, req, eventValue, expires, cascade, subscriptionVersion)
 		return
 	}
 	var previousKeys []string
-	if value, loaded := g.eventSubscribers.Load(key); loaded {
-		if existing, ok := value.(*eventSubscription); ok && existing != nil {
-			existing.mu.Lock()
-			previousKeys = append(previousKeys, existing.DownstreamKeys...)
-			existing.mu.Unlock()
-		}
+	if existing != nil {
+		existing.mu.Lock()
+		previousKeys = append(previousKeys, existing.DownstreamKeys...)
+		existing.mu.Unlock()
 	}
 	desired, err := g.desiredCascadeDownstreamSubscriptions(identityCtx, cascade, req, cmdType, deviceID, expires)
 	if err != nil {
@@ -412,6 +433,10 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 	response, contact := g.respondSubscribeOK(ctx, req, eventValue, expires, cascade, subscriptionVersion)
 	sub.Response = response
 	sub.Contact = contact
+	sub.DialogCallID = dialog.callID
+	sub.RemoteTag = dialog.fromTag
+	sub.LocalTag = sipResponseToTag(response)
+	sub.RemoteCSeq = dialog.remoteCSeq
 	initial := true
 	if actual, loaded := g.eventSubscribers.LoadOrStore(key, sub); loaded {
 		if existing, ok := actual.(*eventSubscription); ok && existing != nil {
@@ -426,6 +451,10 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 			existing.Event = sub.Event
 			existing.Response = sub.Response
 			existing.Contact = sub.Contact
+			existing.DialogCallID = sub.DialogCallID
+			existing.RemoteTag = sub.RemoteTag
+			existing.LocalTag = sub.LocalTag
+			existing.RemoteCSeq = sub.RemoteCSeq
 			existing.Cascade = sub.Cascade
 			existing.Identity = sub.Identity.clone()
 			existing.LocalGatewayID = sub.LocalGatewayID
@@ -838,20 +867,61 @@ func buildEventSubscriptionKey(owner, dialogID, fromTag, cmdType, deviceID strin
 	return key.String()
 }
 
-func parseSubscribeDialog(ctx *sip.Context) (dialogID, fromTag string) {
-	if callID, ok := ctx.Request.CallID(); ok && callID != nil {
-		dialogID = strings.TrimSpace(string(*callID))
+type inboundSubscribeDialog struct {
+	callID     string
+	fromTag    string
+	toTag      string
+	remoteCSeq uint32
+}
+
+func parseSubscribeDialog(ctx *sip.Context) (inboundSubscribeDialog, error) {
+	if ctx == nil || ctx.Request == nil {
+		return inboundSubscribeDialog{}, fmt.Errorf("invalid SUBSCRIBE dialog")
 	}
-	if from, ok := ctx.Request.From(); ok && from != nil && from.Params != nil {
-		if tag, ok := from.Params.Get("tag"); ok && tag != nil {
-			fromTag = strings.TrimSpace(tag.String())
+	callID, ok := ctx.Request.CallID()
+	if !ok || callID == nil || normalizeCallID(callID) == "" {
+		return inboundSubscribeDialog{}, fmt.Errorf("missing SUBSCRIBE Call-ID")
+	}
+	fromTag := sipRequestFromTag(ctx.Request)
+	if fromTag == "" {
+		return inboundSubscribeDialog{}, fmt.Errorf("missing SUBSCRIBE From tag")
+	}
+	cseq, ok := ctx.Request.CSeq()
+	if !ok || cseq == nil || !strings.EqualFold(cseq.MethodName, sip.MethodSubscribe) {
+		return inboundSubscribeDialog{}, fmt.Errorf("invalid SUBSCRIBE CSeq")
+	}
+	return inboundSubscribeDialog{
+		callID: normalizeCallID(callID), fromTag: fromTag,
+		toTag: sipRequestToTag(ctx.Request), remoteCSeq: cseq.SeqNo,
+	}, nil
+}
+
+func validateInboundSubscribeDialog(existing *eventSubscription, incoming inboundSubscribeDialog) error {
+	if incoming.callID == "" || incoming.fromTag == "" || incoming.remoteCSeq == 0 {
+		return fmt.Errorf("invalid SUBSCRIBE dialog")
+	}
+	if existing == nil {
+		if incoming.toTag != "" {
+			return fmt.Errorf("subscription dialog does not exist")
 		}
+		return nil
 	}
-	if dialogID == "" && ctx.To != nil && ctx.To.URI != nil {
-		// 兜底：缺少 Call-ID 的异常请求，退化为目标 URI 维度。
-		dialogID = strings.TrimSpace(ctx.To.URI.String())
+	existing.mu.Lock()
+	callID := existing.DialogCallID
+	remoteTag := existing.RemoteTag
+	localTag := existing.LocalTag
+	remoteCSeq := existing.RemoteCSeq
+	existing.mu.Unlock()
+	if callID == "" || remoteTag == "" || localTag == "" || remoteCSeq == 0 {
+		return fmt.Errorf("subscription dialog is incomplete")
 	}
-	return dialogID, fromTag
+	if incoming.callID != callID || incoming.fromTag != remoteTag || incoming.toTag != localTag {
+		return fmt.Errorf("subscription dialog does not match")
+	}
+	if incoming.remoteCSeq <= remoteCSeq {
+		return fmt.Errorf("SUBSCRIBE CSeq is not increasing")
+	}
+	return nil
 }
 
 // publishEventNotify 向匹配订阅方发送 NOTIFY。

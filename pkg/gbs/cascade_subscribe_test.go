@@ -334,7 +334,7 @@ func TestCascadeAlarmSubscriptionBridgesRenewalAndCancel(t *testing.T) {
 	callID := sip.CallID("cascade-alarm-bridge")
 	from := remote.Clone()
 	from.Params.Add("tag", sip.String{Str: "upstream-tag"})
-	makeRequest := func(expires string) *sip.Request {
+	makeRequest := func(expires string, cseq uint32, localTag string) *sip.Request {
 		request := sip.NewRequest("", sip.MethodSubscribe, local.URI, sip.DefaultSipVersion,
 			sip.NewHeaderBuilder().SetFrom(from).SetTo(local).SetMethod(sip.MethodSubscribe).SetCallID(&callID).
 				AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), body)
@@ -342,11 +342,13 @@ func TestCascadeAlarmSubscriptionBridgesRenewalAndCancel(t *testing.T) {
 		request.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: expires})
 		request.SetConnection(connection)
 		request.SetSource(connection.remote)
+		applyInboundSubscribeDialog(t, request, localTag, cseq)
 		return request
 	}
-	invoke := func(expires string) {
+	localTag := ""
+	invoke := func(expires string, cseq uint32) {
 		ctx := &sip.Context{
-			Request: makeRequest(expires), Tx: sip.NewTransaction("cascade-alarm-bridge-"+expires, connection),
+			Request: makeRequest(expires, cseq, localTag), Tx: sip.NewTransaction("cascade-alarm-bridge-"+expires, connection),
 			DeviceID: platform.serverID, Source: connection.remote, To: remote, XGBVer: string(GBVersion30),
 		}
 		ctx.Set(cascadeWorkerContextKey, worker)
@@ -359,11 +361,22 @@ func TestCascadeAlarmSubscriptionBridgesRenewalAndCancel(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatalf("SUBSCRIBE %s response timeout", expires)
 		}
+		if localTag == "" {
+			api.eventSubscribers.Range(func(_, value any) bool {
+				if subscription, ok := value.(*eventSubscription); ok && subscription != nil {
+					localTag = subscription.LocalTag
+				}
+				return false
+			})
+			if localTag == "" {
+				t.Fatal("initial subscription missing local dialog tag")
+			}
+		}
 	}
 
-	invoke("120")
-	invoke("240")
-	invoke("0")
+	invoke("120", 1)
+	invoke("240", 2)
+	invoke("0", 3)
 	if len(calls) != 3 {
 		t.Fatalf("downstream subscription calls = %d; want 3", len(calls))
 	}
@@ -719,7 +732,8 @@ func TestCascadeSubscriptionRenewalWinsConcurrentCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	makeContext := func(expires, txID string) *sip.Context {
+	localTag := ""
+	makeContext := func(expires, txID string, cseq uint32) *sip.Context {
 		request := sip.NewRequest("", sip.MethodSubscribe, local.URI, sip.DefaultSipVersion,
 			sip.NewHeaderBuilder().SetFrom(from).SetTo(local).SetMethod(sip.MethodSubscribe).SetCallID(&callID).
 				AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), body)
@@ -727,6 +741,7 @@ func TestCascadeSubscriptionRenewalWinsConcurrentCleanup(t *testing.T) {
 		request.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: expires})
 		request.SetConnection(connection)
 		request.SetSource(connection.remote)
+		applyInboundSubscribeDialog(t, request, localTag, cseq)
 		ctx := &sip.Context{
 			Request: request, Tx: sip.NewTransaction(txID, connection), DeviceID: platform.serverID,
 			Source: connection.remote, To: remote, XGBVer: string(GBVersion11),
@@ -735,7 +750,7 @@ func TestCascadeSubscriptionRenewalWinsConcurrentCleanup(t *testing.T) {
 		return ctx
 	}
 	api.cascadeSubscribe = func(context.Context, *SubscribeInput) error { return nil }
-	api.sipSubscribeEvent(makeContext("60", "catalog-initial"))
+	api.sipSubscribeEvent(makeContext("60", "catalog-initial", 1))
 	assertFlowOK(t, <-flowResponse(t, connection))
 	var subscription *eventSubscription
 	api.eventSubscribers.Range(func(_, value any) bool {
@@ -745,6 +760,7 @@ func TestCascadeSubscriptionRenewalWinsConcurrentCleanup(t *testing.T) {
 	if subscription == nil {
 		t.Fatal("initial Catalog subscription missing")
 	}
+	localTag = subscription.LocalTag
 	subscription.mu.Lock()
 	subscription.ExpiresAt = time.Now().Add(-time.Second)
 	subscription.mu.Unlock()
@@ -758,7 +774,7 @@ func TestCascadeSubscriptionRenewalWinsConcurrentCleanup(t *testing.T) {
 	}
 	renewDone := make(chan struct{})
 	go func() {
-		api.sipSubscribeEvent(makeContext("120", "catalog-renew"))
+		api.sipSubscribeEvent(makeContext("120", "catalog-renew", 2))
 		close(renewDone)
 	}()
 	select {

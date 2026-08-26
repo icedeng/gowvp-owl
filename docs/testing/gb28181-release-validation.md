@@ -44,6 +44,7 @@ go test ./... -count=1
 - active/pending/terminated 标准事件 NOTIFY 的 Event、Subscription-State、设备/目标、Call-ID、双向 tag、递增 CSeq、有效期和真实出向订阅绑定；无订阅及错误/重复对话返回 481 且不得产生状态、回调或级联副作用；首个 NOTIFY 早于 SUBSCRIBE 最终响应的合法时序可完成一次远端 tag 绑定；
 - `Event: Catalog;id=...` 初始订阅、续订、取消；
 - 入向订阅只接受 2011+ Alarm/Catalog、2016+ MobilePosition、2022 PTZPosition；创建、续订和取消均要求 Query 根、正 SN、20 位 DeviceID、必填且匹配的 Event，空目标不得扩大为通配订阅；旧版本取消既有高版本事件对话仍可完成清理；
+- 入向 SUBSCRIBE 创建必须无 `To tag`；续订和取消必须匹配原 Call-ID、双向 tag、事件、目标和订阅方，并使用严格递增的 SUBSCRIBE CSeq。缺失/错误 tag、相同或更小 CSeq、取消不存在的对话均应返回 481，且不得改变 Expires、过滤条件、下游引用或删除原订阅；
 - Broadcast 通知与业务应答、接收者主动 INVITE、版本化 SDP、ZLM RTP 启停和 ACK/BYE 清理；
 - 2016/2022 对讲在设备音频流建立后复用 RTP 连接反向发送 G.711 A-law 音频；
 - 媒体注册、注销、RTP 超时状态竞争；

@@ -3,6 +3,7 @@ package gbs
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -603,6 +604,28 @@ func applyTerminatedNotifyDialog(t *testing.T, request *sip.Request, response *s
 	request.AppendHeader(&sip.ToHeader{Address: local.Address.Clone(), Params: local.Params.Clone()})
 }
 
+func applyInboundSubscribeDialog(t *testing.T, request *sip.Request, localTag string, cseq uint32) {
+	t.Helper()
+	to, ok := request.To()
+	if !ok || to == nil || to.Address == nil {
+		t.Fatal("SUBSCRIBE request missing To header")
+	}
+	params := sip.NewParams()
+	if to.Params != nil {
+		params = to.Params.Clone()
+	}
+	if strings.TrimSpace(localTag) != "" {
+		params.Add("tag", sip.String{Str: localTag})
+	}
+	request.RemoveHeader("To")
+	request.AppendHeader(&sip.ToHeader{DisplayName: to.DisplayName, Address: to.Address.Clone(), Params: params})
+	current, ok := request.CSeq()
+	if !ok || current == nil {
+		t.Fatal("SUBSCRIBE request missing CSeq")
+	}
+	current.SeqNo = cseq
+}
+
 func TestCatalogSubscriptionInitialRenewCancel11(t *testing.T) {
 	api := &GB28181API{}
 	conn := newFlowConnection()
@@ -649,6 +672,7 @@ func TestCatalogSubscriptionInitialRenewCancel11(t *testing.T) {
 	req = newFlowRequest(t, conn, sip.MethodSubscribe, "subscribe-1", body)
 	req.RemoveHeader("From")
 	req.AppendHeader(initialFrom.Clone())
+	applyInboundSubscribeDialog(t, req, firstSubscription.LocalTag, 2)
 	req.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "Catalog;id=" + gb10DeviceID})
 	req.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "120"})
 	ctx.Request = req
@@ -667,6 +691,7 @@ func TestCatalogSubscriptionInitialRenewCancel11(t *testing.T) {
 	req = newFlowRequest(t, conn, sip.MethodSubscribe, "subscribe-1", body)
 	req.RemoveHeader("From")
 	req.AppendHeader(initialFrom.Clone())
+	applyInboundSubscribeDialog(t, req, firstSubscription.LocalTag, 3)
 	req.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "Catalog;id=" + gb10DeviceID})
 	req.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "0"})
 	ctx.Request = req
@@ -675,6 +700,88 @@ func TestCatalogSubscriptionInitialRenewCancel11(t *testing.T) {
 	assertFlowOK(t, <-flowResponse(t, conn))
 	if _, ok := api.eventSubscribers.Load(key); ok {
 		t.Fatal("subscription cancel did not remove state")
+	}
+}
+
+func TestInboundSubscribeRejectsInvalidDialogWithoutSideEffects(t *testing.T) {
+	api := &GB28181API{}
+	conn := newFlowConnection()
+	body := []byte(`<?xml version="1.0"?><Query><CmdType>Catalog</CmdType><SN>58</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Query>`)
+	const callID = "subscribe-dialog-security"
+
+	initial := newFlowRequest(t, conn, sip.MethodSubscribe, callID, body)
+	initialFrom, _ := initial.From()
+	initial.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "Catalog;id=" + gb10DeviceID})
+	initial.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "60"})
+	ctx := &sip.Context{
+		Request: initial, Tx: sip.NewTransaction("subscribe-dialog-security-initial", conn), DeviceID: gb10PlatformID,
+		Source: conn.remote, To: mustFlowAddress(t, "sip:"+gb10PlatformID+"@3402000000"), XGBVer: string(GBVersion11),
+	}
+	api.sipSubscribeEvent(ctx)
+	assertFlowOK(t, <-flowResponse(t, conn))
+
+	var subscription *eventSubscription
+	api.eventSubscribers.Range(func(_, value any) bool {
+		subscription, _ = value.(*eventSubscription)
+		return false
+	})
+	if subscription == nil || subscription.LocalTag == "" {
+		t.Fatal("initial subscription dialog was not stored")
+	}
+	subscription.mu.Lock()
+	subscription.Filter = eventSubscriptionFilter{AlarmMethod: "5"}
+	subscription.DownstreamKeys = []string{"protected-downstream"}
+	wantExpiry := subscription.ExpiresAt
+	wantFilter := subscription.Filter
+	wantDownstream := append([]string(nil), subscription.DownstreamKeys...)
+	wantCSeq := subscription.RemoteCSeq
+	localTag := subscription.LocalTag
+	subscription.mu.Unlock()
+
+	tests := []struct {
+		name    string
+		request string
+		expires string
+		toTag   string
+		cseq    uint32
+	}{
+		{name: "create with To tag", request: callID + "-new", expires: "60", toTag: localTag, cseq: 1},
+		{name: "refresh without To tag", request: callID, expires: "120", cseq: 2},
+		{name: "refresh with wrong To tag", request: callID, expires: "120", toTag: "wrong-local-tag", cseq: 2},
+		{name: "refresh replays CSeq", request: callID, expires: "120", toTag: localTag, cseq: 1},
+		{name: "cancel without To tag", request: callID, expires: "0", cseq: 2},
+		{name: "cancel with wrong To tag", request: callID, expires: "0", toTag: "wrong-local-tag", cseq: 2},
+		{name: "cancel replays CSeq", request: callID, expires: "0", toTag: localTag, cseq: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := newFlowRequest(t, conn, sip.MethodSubscribe, test.request, body)
+			request.RemoveHeader("From")
+			request.AppendHeader(initialFrom.Clone())
+			applyInboundSubscribeDialog(t, request, test.toTag, test.cseq)
+			request.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "Catalog;id=" + gb10DeviceID})
+			request.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: test.expires})
+			ctx.Request = request
+			ctx.Tx = sip.NewTransaction("subscribe-dialog-security-"+test.name, conn)
+			api.sipSubscribeEvent(ctx)
+			if response := <-flowResponse(t, conn); !strings.Contains(response, "SIP/2.0 481") {
+				t.Fatalf("invalid SUBSCRIBE response = %s", response)
+			}
+
+			value, loaded := api.eventSubscribers.Load(subscription.Key)
+			if !loaded || value != subscription {
+				t.Fatal("invalid SUBSCRIBE replaced or removed the existing dialog")
+			}
+			subscription.mu.Lock()
+			gotExpiry := subscription.ExpiresAt
+			gotFilter := subscription.Filter
+			gotDownstream := append([]string(nil), subscription.DownstreamKeys...)
+			gotCSeq := subscription.RemoteCSeq
+			subscription.mu.Unlock()
+			if !gotExpiry.Equal(wantExpiry) || gotFilter != wantFilter || !slices.Equal(gotDownstream, wantDownstream) || gotCSeq != wantCSeq {
+				t.Fatalf("invalid SUBSCRIBE changed state: expiry=%v filter=%+v downstream=%v CSeq=%d", gotExpiry, gotFilter, gotDownstream, gotCSeq)
+			}
+		})
 	}
 }
 
@@ -701,7 +808,9 @@ func TestCatalogSubscriptionDialogIsolatedBySubscriber(t *testing.T) {
 	api.sipSubscribeEvent(makeContext(gb10PlatformID, "60", "subscriber-a"))
 	assertFlowOK(t, <-flowResponse(t, conn))
 	api.sipSubscribeEvent(makeContext("44010000002000000001", "0", "subscriber-b-cancel"))
-	assertFlowOK(t, <-flowResponse(t, conn))
+	if response := <-flowResponse(t, conn); !strings.Contains(response, "SIP/2.0 481") {
+		t.Fatalf("different subscriber cancel response = %s", response)
+	}
 
 	wantKey := buildEventSubscriptionKey("device:"+gb10PlatformID, callID, fromTag, "Catalog", gb10DeviceID)
 	if _, ok := api.eventSubscribers.Load(wantKey); !ok {
