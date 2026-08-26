@@ -127,9 +127,7 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 	if err != nil {
 		return err
 	}
-	keyInput := *in
-	keyInput.AlarmMethod, _ = normalizeAlarmMethodFilter(in.AlarmMethod)
-	key := buildOutgoingSubscriptionKey(deviceID, targetID, cmdType, &keyInput)
+	key := buildOutgoingSubscriptionKey(deviceID, targetID, cmdType, in)
 	loaded, _ := g.outgoingSubscriptions.LoadOrStore(key, &outgoingSubscriptionDialog{})
 	dialog := loaded.(*outgoingSubscriptionDialog)
 	dialog.mu.Lock()
@@ -204,9 +202,13 @@ func buildOutgoingSubscriptionKey(deviceID, targetID, cmdType string, in *Subscr
 		strings.TrimSpace(deviceID), strings.TrimSpace(targetID), strings.ToUpper(strings.TrimSpace(cmdType)),
 	}
 	if in != nil {
+		alarmMethod, err := normalizeAlarmMethodFilter(in.AlarmMethod)
+		if err != nil {
+			alarmMethod = strings.TrimSpace(in.AlarmMethod)
+		}
 		values = append(values,
 			strings.TrimSpace(in.StartAlarmPriority), strings.TrimSpace(in.EndAlarmPriority),
-			strings.TrimSpace(in.AlarmMethod), strings.TrimSpace(in.AlarmType),
+			alarmMethod, strings.TrimSpace(in.AlarmType),
 			strings.TrimSpace(in.StartAlarmTime), strings.TrimSpace(in.EndAlarmTime),
 			fmt.Sprintf("%d", in.Interval),
 		)

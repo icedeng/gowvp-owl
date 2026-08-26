@@ -368,12 +368,30 @@ func TestAlarmMethodFilterFormatByVersion(t *testing.T) {
 		{version: GBVersion20, input: "1/2", want: "12"},
 		{version: GBVersion30, input: "12", want: "1/2"},
 		{version: GBVersion30, input: "1/2", want: "1/2"},
+		{version: GBVersion10, input: "52", want: "25"},
+		{version: GBVersion30, input: "5/2", want: "2/5"},
 	}
 	for _, test := range tests {
 		got, err := formatAlarmMethodFilter(test.version, test.input)
 		if err != nil || got != test.want {
 			t.Fatalf("formatAlarmMethodFilter(%s, %q) = %q, %v; want %q", test.version, test.input, got, err, test.want)
 		}
+	}
+}
+
+func TestOutgoingSubscriptionKeyCanonicalizesAlarmMethodSet(t *testing.T) {
+	base := SubscribeInput{
+		DeviceID: gb10DeviceID, TargetID: gb10DeviceID, Event: "Alarm",
+		StartAlarmPriority: "1", EndAlarmPriority: "3", AlarmType: "2", Interval: 10,
+	}
+	keys := make(map[string]struct{})
+	for _, method := range []string{"25", "52", "2/5", "5/2"} {
+		input := base
+		input.AlarmMethod = method
+		keys[buildOutgoingSubscriptionKey(input.DeviceID, input.TargetID, input.Event, &input)] = struct{}{}
+	}
+	if len(keys) != 1 {
+		t.Fatalf("equivalent AlarmMethod sets produced %d subscription keys: %v", len(keys), keys)
 	}
 }
 
@@ -790,6 +808,45 @@ func TestCascadeDownstreamSubscriptionReferenceCounting(t *testing.T) {
 	api.releaseCascadeDownstreamSubscriptions(t.Context(), second)
 	if len(calls) != 2 || !calls[1].Cancel || len(api.cascadeSubscriptions) != 0 {
 		t.Fatalf("last release did not cancel downstream: calls %+v, states %+v", calls, api.cascadeSubscriptions)
+	}
+}
+
+func TestCascadeDownstreamSubscriptionReusesEquivalentAlarmMethodOrder(t *testing.T) {
+	api := &GB28181API{cascadeSubscriptions: make(map[string]*cascadeDownstreamSubscription)}
+	calls := make([]SubscribeInput, 0, 2)
+	api.cascadeSubscribe = func(_ context.Context, input *SubscribeInput) error {
+		calls = append(calls, *input)
+		return nil
+	}
+	firstInput := SubscribeInput{
+		DeviceID: gb10DeviceID, TargetID: gb10DeviceID, Event: "Alarm", Expires: 120,
+		AlarmMethod: "25", AlarmType: "2",
+	}
+	secondInput := firstInput
+	secondInput.AlarmMethod = "5/2"
+	firstKey := buildOutgoingSubscriptionKey(firstInput.DeviceID, firstInput.TargetID, firstInput.Event, &firstInput)
+	secondKey := buildOutgoingSubscriptionKey(secondInput.DeviceID, secondInput.TargetID, secondInput.Event, &secondInput)
+	if firstKey != secondKey {
+		t.Fatalf("equivalent AlarmMethod order keys differ: %q != %q", firstKey, secondKey)
+	}
+	first, err := api.syncCascadeDownstreamSubscriptions(t.Context(), nil, map[string]SubscribeInput{firstKey: firstInput})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := api.syncCascadeDownstreamSubscriptions(t.Context(), nil, map[string]SubscribeInput{secondKey: secondInput})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || api.cascadeSubscriptions[firstKey].Refs != 2 {
+		t.Fatalf("equivalent AlarmMethod subscriptions were not reused: calls=%+v state=%+v", calls, api.cascadeSubscriptions[firstKey])
+	}
+	api.releaseCascadeDownstreamSubscriptions(t.Context(), first)
+	if len(calls) != 1 || api.cascadeSubscriptions[firstKey].Refs != 1 {
+		t.Fatalf("first equivalent subscription release cancelled shared state: calls=%+v state=%+v", calls, api.cascadeSubscriptions[firstKey])
+	}
+	api.releaseCascadeDownstreamSubscriptions(t.Context(), second)
+	if len(calls) != 2 || !calls[1].Cancel || len(api.cascadeSubscriptions) != 0 {
+		t.Fatalf("last equivalent subscription release did not cancel: calls=%+v states=%+v", calls, api.cascadeSubscriptions)
 	}
 }
 

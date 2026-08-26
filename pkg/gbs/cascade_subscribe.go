@@ -119,7 +119,13 @@ func normalizeAlarmMethodFilter(value string) (string, error) {
 	if len(compact) > 1 && strings.Contains(compact, "0") {
 		return "", fmt.Errorf("0 cannot be combined with other values")
 	}
-	return compact, nil
+	canonical := make([]byte, 0, len(seen))
+	for method := byte('0'); method <= '7'; method++ {
+		if _, exists := seen[method]; exists {
+			canonical = append(canonical, method)
+		}
+	}
+	return string(canonical), nil
 }
 
 func formatAlarmMethodFilter(version GBProtocolVersion, value string) (string, error) {
