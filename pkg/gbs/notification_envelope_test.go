@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"encoding/xml"
 	"strings"
 	"testing"
 
@@ -75,6 +76,8 @@ func TestAlarmRejectsInvalidEnvelopeBeforeStateAndCallback(t *testing.T) {
 		{name: "invalid method", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>8</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime></Notify>`},
 		{name: "invalid time", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>2</AlarmMethod><AlarmTime>bad</AlarmTime></Notify>`},
 		{name: "invalid coordinate", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>2</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime><Longitude>NaN</Longitude></Notify>`},
+		{name: "longitude out of range", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>2</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime><Longitude>181</Longitude></Notify>`},
+		{name: "latitude out of range", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>2</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime><Latitude>-91</Latitude></Notify>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -91,6 +94,47 @@ func TestAlarmRejectsInvalidEnvelopeBeforeStateAndCallback(t *testing.T) {
 	}
 	if state, ok := api.GetQueryState(gb10DeviceID); ok && len(state.AppendixA4) > 0 {
 		t.Fatalf("invalid Alarm changed Appendix A.4 state: %+v", state.AppendixA4)
+	}
+}
+
+func TestAlarmTypeAndEventTypeRulesByVersion(t *testing.T) {
+	tests := []struct {
+		name      string
+		version   GBProtocolVersion
+		method    string
+		alarmType string
+		eventType *int
+		wantErr   bool
+	}{
+		{name: "2011 ignores later type extension", version: GBVersion10, method: "2", alarmType: "vendor"},
+		{name: "2016 device alarm boundary", version: GBVersion20, method: "2", alarmType: "5"},
+		{name: "2016 invalid device alarm type", version: GBVersion20, method: "2", alarmType: "6", wantErr: true},
+		{name: "2016 video alarm boundary", version: GBVersion20, method: "5", alarmType: "12"},
+		{name: "2016 rejects 2022 video content type", version: GBVersion20, method: "5", alarmType: "13", wantErr: true},
+		{name: "2022 video content type", version: GBVersion30, method: "5", alarmType: "13"},
+		{name: "type requires typed method", version: GBVersion30, method: "1", alarmType: "1", wantErr: true},
+		{name: "intrusion entry event", version: GBVersion20, method: "5", alarmType: "6", eventType: intPointer(1)},
+		{name: "intrusion exit event", version: GBVersion30, method: "5", alarmType: "6", eventType: intPointer(2)},
+		{name: "invalid intrusion event", version: GBVersion30, method: "5", alarmType: "6", eventType: intPointer(3), wantErr: true},
+		{name: "event on non-intrusion alarm", version: GBVersion30, method: "5", alarmType: "5", eventType: intPointer(1), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			memory := newFlowMemory(gb10DeviceID)
+			memory.runtime.setGBVersion(test.version)
+			memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+			api := &GB28181API{svr: &Server{memoryStorer: memory}}
+			msg := &messageAlarm{
+				XMLName: xml.Name{Local: "Notify"}, CmdType: "Alarm", SN: 1, DeviceID: gb10ChannelID,
+				AlarmPriority: "1", AlarmMethod: test.method, AlarmTime: "2026-08-26T01:00:00",
+			}
+			msg.Info.AlarmType = test.alarmType
+			msg.Info.AlarmTypeParam.EventType = test.eventType
+			err := api.validateAlarmEnvelope(&sip.Context{DeviceID: gb10DeviceID}, msg)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateAlarmEnvelope() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
 	}
 }
 

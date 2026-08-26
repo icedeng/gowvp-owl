@@ -366,7 +366,7 @@ func (g *GB28181API) validateBatchMobilePosition(ctx *sip.Context, msg *mobilePo
 		}
 		return nil, nil, fmt.Errorf("missing MobilePosition DeviceList")
 	}
-	if msg.DeviceList.Num == nil || *msg.DeviceList.Num < 0 || *msg.DeviceList.Num != len(msg.DeviceList.Item) || len(msg.DeviceList.Item) > *msg.SumNum {
+	if msg.DeviceList.Num == nil || *msg.DeviceList.Num < 0 || *msg.DeviceList.Num != len(msg.DeviceList.Item) || len(msg.DeviceList.Item) != *msg.SumNum {
 		return nil, nil, fmt.Errorf("invalid MobilePosition DeviceList count")
 	}
 	positions := make([]MobilePositionData, 0, len(msg.DeviceList.Item))

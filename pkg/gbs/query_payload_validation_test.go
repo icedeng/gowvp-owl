@@ -28,7 +28,6 @@ func TestGenericQueryPayloadRejectsInvalidDataBeforeSideEffects(t *testing.T) {
 		{name: "cruise list long name", cmdType: "CruiseTrackListQuery", payload: `<SumNum>1</SumNum><CruiseTrackList Num="1"><CruiseTrack><Number>0</Number><Name>` + strings.Repeat("a", 33) + `</Name></CruiseTrack></CruiseTrackList>`},
 		{name: "cruise missing point speed", cmdType: "CruiseTrackQuery", payload: `<Number>0</Number><SumNum>1</SumNum><CruisePointList Num="1"><CruisePoint><PresetIndex>1</PresetIndex><StayTime>1</StayTime></CruisePoint></CruisePointList>`},
 		{name: "cruise invalid speed", cmdType: "CruiseTrackQuery", payload: `<Number>0</Number><SumNum>1</SumNum><CruisePointList Num="1"><CruisePoint><PresetIndex>1</PresetIndex><StayTime>1</StayTime><Speed>16</Speed></CruisePoint></CruisePointList>`},
-		{name: "ptz empty", cmdType: "PTZPosition"},
 		{name: "ptz non finite", cmdType: "PTZPosition", payload: `<Pan>NaN</Pan>`},
 		{name: "sd missing sum", cmdType: "SDCardStatus", payload: `<SDCardStatusInfo Num="0"/>`},
 		{name: "sd invalid status", cmdType: "SDCardStatus", payload: `<SumNum>1</SumNum><SDCardStatusInfo Num="1"><Item><ID>1</ID><HddName>card</HddName><Status>ready</Status><Capacity>10</Capacity><FreeSpace>5</FreeSpace></Item></SDCardStatusInfo>`},
@@ -68,6 +67,7 @@ func TestGenericQueryPayloadAcceptsValidBoundaryData(t *testing.T) {
 		{cmdType: "CruiseTrackListQuery", payload: `<SumNum>1</SumNum><CruiseTrackList Num="1"><CruiseTrack><Number>1</Number><Name>` + strings.Repeat("a", 32) + `</Name></CruiseTrack></CruiseTrackList>`},
 		{cmdType: "CruiseTrackQuery", payload: `<Number>0</Number><SumNum>1</SumNum><CruisePointList Num="1"><CruisePoint><PresetIndex>0</PresetIndex><StayTime>0</StayTime><Speed>15</Speed></CruisePoint></CruisePointList>`},
 		{cmdType: "PTZPosition", payload: `<Pan>-3.25</Pan>`},
+		{cmdType: "PTZPosition"},
 		{cmdType: "SDCardStatus", payload: `<SumNum>1</SumNum><SDCardStatusInfo Num="1"><Item><ID>0</ID><HddName>card</HddName><Status>formatting</Status><FormatProgress>100</FormatProgress><Capacity>10</Capacity><FreeSpace>0</FreeSpace></Item></SDCardStatusInfo>`},
 	}
 	for _, test := range tests {

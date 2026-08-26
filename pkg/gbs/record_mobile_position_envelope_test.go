@@ -173,3 +173,18 @@ func TestGB30MobilePositionRejectsInvalidBatchCount(t *testing.T) {
 		t.Fatal("invalid batch MobilePosition created state")
 	}
 }
+
+func TestGB30MobilePositionRejectsBatchTotalMismatch(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion30)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	body := `<Notify><CmdType>MobilePosition</CmdType><SN>3</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Time>2026-08-26T12:00:00</Time><SumNum>2</SumNum><DeviceList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><CaptureTime>2026-08-26T11:59:59</CaptureTime><Longitude>120.2</Longitude><Latitude>30.2</Latitude></Item></DeviceList></Notify>`
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodNotify, "mobile-batch-total-mismatch", []byte(body), api.sipNotifyMobilePosition)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("invalid batch total response = %s", response)
+	}
+	if _, ok := api.GetQueryState(gb10DeviceID); ok {
+		t.Fatal("invalid batch total changed MobilePosition state")
+	}
+}

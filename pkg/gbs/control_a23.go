@@ -580,21 +580,8 @@ func validateAlarmResetInfo(method, alarmType string) error {
 	if len(seen) != 1 {
 		return fmt.Errorf("alarm_type requires a single alarm_method of 2, 5, or 6")
 	}
-	maximum := 0
-	switch method {
-	case "2":
-		maximum = 5
-	case "5":
-		maximum = 13
-	case "6":
-		maximum = 2
-	default:
-		return fmt.Errorf("alarm_type requires alarm_method 2, 5, or 6")
+	if err := validateAlarmTypeForMethod(GBVersion30, method, alarmType); err != nil {
+		return fmt.Errorf("alarm_type is invalid for alarm_method %s", method)
 	}
-	for value := 1; value <= maximum; value++ {
-		if alarmType == fmt.Sprintf("%d", value) {
-			return nil
-		}
-	}
-	return fmt.Errorf("alarm_type is invalid for alarm_method %s", method)
+	return nil
 }

@@ -966,18 +966,13 @@ func validateGenericQueryPayload(version GBProtocolVersion, cmdType string, body
 			return ErrXMLDecode
 		}
 		values := []*float64{msg.Pan, msg.Tilt, msg.Zoom, msg.HorizontalFieldAngle, msg.VerticalFieldAngle, msg.MaxViewDistance}
-		provided := false
 		for _, value := range values {
 			if value == nil {
 				continue
 			}
-			provided = true
 			if math.IsNaN(*value) || math.IsInf(*value, 0) {
 				return fmt.Errorf("PTZPosition values must be finite")
 			}
-		}
-		if !provided {
-			return fmt.Errorf("PTZPosition requires at least one position value")
 		}
 	case "SDCardStatus":
 		var msg sdCardStatusXML

@@ -25,8 +25,11 @@ type messageAlarm struct {
 	Latitude         string `xml:"Latitude"`
 	AlarmType        string `xml:"AlarmType"`
 	Info             struct {
-		AlarmType   string `xml:"AlarmType"`
-		AlarmMethod string `xml:"AlarmMethod"`
+		AlarmType      string `xml:"AlarmType"`
+		AlarmMethod    string `xml:"AlarmMethod"`
+		AlarmTypeParam struct {
+			EventType *int `xml:"EventType"`
+		} `xml:"AlarmTypeParam"`
 	} `xml:"Info"`
 }
 
@@ -40,6 +43,7 @@ type AlarmEvent struct {
 	AlarmPriority    string `json:"alarm_priority"`
 	AlarmMethod      string `json:"alarm_method"`
 	AlarmType        string `json:"alarm_type"`
+	EventType        *int   `json:"event_type,omitempty"`
 	AlarmDescription string `json:"alarm_description"`
 	AlarmTime        string `json:"alarm_time"`
 	Longitude        string `json:"longitude"`
@@ -120,6 +124,7 @@ func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 		AlarmPriority:    strings.TrimSpace(msg.AlarmPriority),
 		AlarmMethod:      alarmMethod,
 		AlarmType:        alarmType,
+		EventType:        msg.Info.AlarmTypeParam.EventType,
 		AlarmDescription: strings.TrimSpace(msg.AlarmDescription),
 		AlarmTime:        strings.TrimSpace(msg.AlarmTime),
 		Longitude:        strings.TrimSpace(msg.Longitude),
@@ -171,24 +176,77 @@ func (g *GB28181API) validateAlarmEnvelope(ctx *sip.Context, msg *messageAlarm) 
 		return fmt.Errorf("invalid Alarm priority")
 	}
 	method := strings.TrimSpace(msg.AlarmMethod)
+	infoMethod := strings.TrimSpace(msg.Info.AlarmMethod)
+	if method != "" && infoMethod != "" && method != infoMethod {
+		return fmt.Errorf("conflicting Alarm method")
+	}
 	if method == "" {
-		method = strings.TrimSpace(msg.Info.AlarmMethod)
+		method = infoMethod
 	}
 	if len(method) != 1 || method[0] < '1' || method[0] > '7' {
 		return fmt.Errorf("invalid Alarm method")
 	}
+	alarmType := strings.TrimSpace(msg.AlarmType)
+	infoAlarmType := strings.TrimSpace(msg.Info.AlarmType)
+	if alarmType != "" && infoAlarmType != "" && alarmType != infoAlarmType {
+		return fmt.Errorf("conflicting Alarm type")
+	}
+	if alarmType == "" {
+		alarmType = infoAlarmType
+	}
+	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
+	if err := validateAlarmTypeForMethod(version, method, alarmType); err != nil {
+		return err
+	}
+	if eventType := msg.Info.AlarmTypeParam.EventType; eventType != nil && version.AtLeast(GBVersion20) {
+		if method != "5" || alarmType != "6" || (*eventType != 1 && *eventType != 2) {
+			return fmt.Errorf("invalid Alarm EventType")
+		}
+	}
 	if _, ok := (&AlarmEvent{AlarmTime: msg.AlarmTime}).ParseTime(); !ok {
 		return fmt.Errorf("invalid Alarm time")
 	}
-	for field, value := range map[string]string{"longitude": msg.Longitude, "latitude": msg.Latitude} {
-		value = strings.TrimSpace(value)
+	for field, bounds := range map[string]struct {
+		value            string
+		minimum, maximum float64
+	}{
+		"longitude": {value: msg.Longitude, minimum: -180, maximum: 180},
+		"latitude":  {value: msg.Latitude, minimum: -90, maximum: 90},
+	} {
+		value := strings.TrimSpace(bounds.value)
 		if value == "" {
 			continue
 		}
 		coordinate, err := strconv.ParseFloat(value, 64)
-		if err != nil || !validFinite(coordinate) {
+		if err != nil || !validFiniteRange(coordinate, bounds.minimum, bounds.maximum) {
 			return fmt.Errorf("invalid Alarm %s", field)
 		}
+	}
+	return nil
+}
+
+func validateAlarmTypeForMethod(version GBProtocolVersion, method, alarmType string) error {
+	alarmType = strings.TrimSpace(alarmType)
+	if alarmType == "" || !version.AtLeast(GBVersion20) {
+		return nil
+	}
+	maximum := 0
+	switch strings.TrimSpace(method) {
+	case "2":
+		maximum = 5
+	case "5":
+		maximum = 12
+		if version.AtLeast(GBVersion30) {
+			maximum = 13
+		}
+	case "6":
+		maximum = 2
+	default:
+		return fmt.Errorf("AlarmType requires AlarmMethod 2, 5, or 6")
+	}
+	value, err := strconv.Atoi(alarmType)
+	if err != nil || value < 1 || value > maximum {
+		return fmt.Errorf("invalid AlarmType for AlarmMethod %s", method)
 	}
 	return nil
 }
