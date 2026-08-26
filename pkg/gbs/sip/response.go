@@ -35,14 +35,15 @@ func NewResponseFromRequest(
 	CopyHeaders("Via", req, res)
 	CopyHeaders("From", req, res)
 	to, ok := req.To()
-	if ok {
-		if to.Params == nil {
-			to.Params = NewParams()
+	if ok && to != nil {
+		responseTo, _ := to.Clone().(*ToHeader)
+		if responseTo.Params == nil {
+			responseTo.Params = NewParams()
 		}
-		if _, ok := to.Params.Get("tag"); !ok {
-			to.Params.Add("tag", String{Str: RandString(32)})
+		if _, ok := responseTo.Params.Get("tag"); !ok {
+			responseTo.Params.Add("tag", String{Str: RandString(32)})
 		}
-		res.AppendHeader(to)
+		res.AppendHeader(responseTo)
 	}
 	CopyHeaders("CSeq", req, res)
 	CopyHeaders("Call-ID", req, res)
@@ -131,7 +132,10 @@ func (res *Response) StartLine() string {
 
 // Clone Clone
 func (res *Response) Clone() Message {
-	return NewResponse(
+	if res == nil {
+		return (*Response)(nil)
+	}
+	clone := NewResponse(
 		"",
 		res.SipVersion(),
 		res.StatusCode(),
@@ -139,6 +143,10 @@ func (res *Response) Clone() Message {
 		res.headers.CloneHeaders(),
 		res.Body(),
 	)
+	clone.SetSource(res.Source())
+	clone.SetDestination(res.Destination())
+	clone.SetConnection(res.conn)
+	return clone
 }
 
 // IsAck IsAck

@@ -331,6 +331,51 @@ func TestRequestSecurityResolverRejectsUnsignedRequestWithSignedResponse(t *test
 	}
 }
 
+func TestTransactionRespondDoesNotMutateCachedResponse(t *testing.T) {
+	now := time.Date(2024, 4, 1, 4, 5, 6, 0, time.UTC)
+	security, err := NewSignalDigestSecurity(SignalDigestOptions{
+		Seed: "shared-seed", Required: true, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	connection := NewTCPConnection(&sipTestTCPConn{
+		Conn: client, local: &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 41001},
+		remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060},
+	})
+	request := newSignalDigestTestRequest(t, MethodOptions, nil)
+	request.SetSource(connection.RemoteAddr())
+	request.SetDestination(connection.LocalAddr())
+	response := NewResponseFromRequest("", request, http.StatusOK, "OK", nil)
+	tx := NewTransaction("cached-response", connection)
+	defer tx.Close()
+	tx.SetMessageSecurity(security)
+
+	done := make(chan error, 1)
+	go func() { done <- tx.Respond(response) }()
+	if err := peer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 8192)
+	n, err := peer.Read(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	payload := string(buffer[:n])
+	if !strings.Contains(payload, "Date: 2024-04-01T12:05:06") || !strings.Contains(payload, "Note: Digest nonce=") {
+		t.Fatalf("signed response payload = %s", payload)
+	}
+	if len(response.GetHeaders("Date")) != 0 || len(response.GetHeaders("Note")) != 0 {
+		t.Fatalf("cached response was mutated: %s", response.String())
+	}
+}
+
 func newSignalDigestTestRequest(t *testing.T, method string, body []byte) *Request {
 	t.Helper()
 	fromURI, err := ParseSipURI("sip:34020000002000000001@3402000000")

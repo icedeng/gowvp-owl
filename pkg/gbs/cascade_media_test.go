@@ -563,6 +563,63 @@ func TestCascadeCancelRejectsDifferentInviteTransaction(t *testing.T) {
 	assertRejected("cancel-wrong-via-sent-by", wrongSentBy)
 }
 
+func TestCascadeInviteRetransmissionRequiresSameTransaction(t *testing.T) {
+	connection := newFlowConnection()
+	connection.remote = &net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060}
+	server := &Server{}
+	api := &GB28181API{svr: server}
+	server.gb = api
+	worker := newCascadeWorker(server, testSharedCascadePlatform(t))
+	worker.updateStatus(func(state *CascadePlatformStatus) { state.Registered = true })
+	callID := sip.CallID("cascade-invite-retransmission")
+	remote := mustFlowAddress(t, "sip:"+gb10PlatformID+"@remote.example")
+	remote.Params.Add("tag", sip.String{Str: "invite-remote-tag"})
+	local := mustFlowAddress(t, "sip:"+testExposedChannelID+"@local.example")
+	invite := sip.NewRequest("", sip.MethodInvite, local.URI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodInvite).SetSeqNo(7).SetCallID(&callID).
+			AddVia(&sip.ViaHop{ProtocolName: "SIP", ProtocolVersion: "2.0", Transport: "UDP", Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: "z9hG4bK-owner"})}).Build(), cascadeOfferSDP("RTP/AVP", "192.0.2.30", ""))
+	invite.SetConnection(connection)
+	invite.SetSource(connection.remote)
+	invite.SetDestination(connection.local)
+	response := sip.NewResponseFromRequest("", invite, http.StatusOK, "OK", []byte("owner response"))
+	dialog := &inboundInviteDialog{
+		CallID: string(callID), DeviceID: gb10PlatformID, RemoteTag: "invite-remote-tag", TagsBound: true,
+		InitialRemoteCSeq: 7, InitialRemoteCSeqSet: true, RemoteCSeq: 7, RemoteCSeqSet: true, RemoteMethod: sip.MethodInvite,
+		Request: invite, Response: response, Cascade: &cascadeMediaSession{worker: worker}, UpdatedAt: time.Now(),
+	}
+	api.inviteDialogs.Store(dialog.CallID, dialog)
+
+	assertResponse := func(name string, request *sip.Request, status string, bodyExpected bool) {
+		t.Helper()
+		api.sipInviteCascade(&sip.Context{Request: request, Tx: sip.NewTransaction(name, connection), DeviceID: gb10PlatformID, Source: connection.remote}, dialog.CallID, worker)
+		select {
+		case payload := <-connection.writes:
+			got := string(payload)
+			if !strings.Contains(got, status) || strings.Contains(got, "owner response") != bodyExpected {
+				t.Fatalf("%s response = %s", name, got)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s response timeout", name)
+		}
+	}
+	retransmission := invite.Clone().(*sip.Request)
+	retransmission.SetConnection(connection)
+	retransmission.SetSource(connection.remote)
+	retransmission.SetDestination(connection.local)
+	assertResponse("same-invite", retransmission, "SIP/2.0 200 OK", true)
+
+	wrongCSeq := invite.Clone().(*sip.Request)
+	cseq, ok := wrongCSeq.CSeq()
+	if !ok || cseq == nil {
+		t.Fatal("INVITE missing CSeq")
+	}
+	cseq.SeqNo++
+	wrongCSeq.SetConnection(connection)
+	wrongCSeq.SetSource(connection.remote)
+	wrongCSeq.SetDestination(connection.local)
+	assertResponse("different-invite", wrongCSeq, "SIP/2.0 491 Call-ID already in use", false)
+}
+
 func TestCascadeDialogControlRejectsDifferentUpstream(t *testing.T) {
 	connection := newFlowConnection()
 	connection.remote = &net.UDPAddr{IP: net.ParseIP("192.0.2.31"), Port: 5060}

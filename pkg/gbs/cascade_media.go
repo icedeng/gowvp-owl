@@ -230,7 +230,7 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 	if existing, loaded := g.inviteDialogs.Load(callID); loaded {
 		dialog, _ := existing.(*inboundInviteDialog)
 		if dialog != nil && dialog.Cascade != nil && dialog.Cascade.worker == worker {
-			if !inboundDialogTagsMatch(dialog, ctx.Request, false) {
+			if !inboundInviteTransactionMatches(dialog, ctx.Request) {
 				respondCascadeInviteStatus(ctx, worker, 491, "Call-ID already in use")
 				return
 			}

@@ -43,6 +43,37 @@ func TestCopyHeadersSkipsNilClone(t *testing.T) {
 	}
 }
 
+func TestNewResponseFromRequestDoesNotMutateRequestToTag(t *testing.T) {
+	target, err := ParseURI("sip:34020000001320000001@192.0.2.10:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := NewRequest("", MethodInvite, target, DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodInvite).
+		SetFrom(&Address{URI: target.Clone(), Params: NewParams().Add("tag", String{Str: "remote"})}).
+		SetTo(&Address{URI: target.Clone(), Params: NewParams()}).
+		AddVia(&ViaHop{Host: "192.0.2.20", Port: NewPort(5060), Params: NewParams()}).
+		Build(), nil)
+
+	response := NewResponseFromRequest("", request, 200, "OK", nil)
+	requestTo, ok := request.To()
+	if !ok || requestTo == nil {
+		t.Fatal("request To header is unavailable")
+	}
+	if requestTo.Params != nil {
+		if _, exists := requestTo.Params.Get("tag"); exists {
+			t.Fatal("response construction added To tag to original request")
+		}
+	}
+	responseTo, ok := response.To()
+	if !ok || responseTo == nil {
+		t.Fatal("response To header is unavailable")
+	}
+	if tag, exists := responseTo.Params.Get("tag"); !exists || tag == nil || tag.String() == "" {
+		t.Fatal("response To header is missing generated tag")
+	}
+}
+
 func TestNewRequestFromResponseFallsBackToToWithoutContact(t *testing.T) {
 	toURI, err := ParseURI("sip:34020000001320000001@192.0.2.10:5060")
 	if err != nil {

@@ -611,7 +611,7 @@ func inboundInviteCSeqMatches(dialog *inboundInviteDialog, request *sip.Request,
 }
 
 func inboundInviteTransactionMatches(dialog *inboundInviteDialog, request *sip.Request) bool {
-	if !inboundDialogTagsMatch(dialog, request, false) || !inboundInviteCSeqMatches(dialog, request, request.Method()) || dialog == nil || request == nil {
+	if dialog == nil || request == nil || !inboundDialogTagsMatch(dialog, request, false) || !inboundInviteCSeqMatches(dialog, request, request.Method()) {
 		return false
 	}
 	dialog.mu.Lock()

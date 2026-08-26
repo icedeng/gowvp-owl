@@ -266,19 +266,27 @@ func (tx *Transaction) receiveResponse(msg *Response) {
 
 // Respond Respond
 func (tx *Transaction) Respond(res *Response) error {
-	// logrus.Traceln("send response,to:", res.dest.String(), "txkey:", tx.key, "message: \n", res.String())
+	if res == nil {
+		return NewError(nil, "SIP response is nil")
+	}
+	// 缓存响应可能被多个重传事务复用；发送前克隆，避免签名过程改写共享对象。
+	outbound, _ := res.Clone().(*Response)
+	if outbound == nil {
+		return NewError(nil, "clone SIP response failed")
+	}
+	// logrus.Traceln("send response,to:", outbound.dest.String(), "txkey:", tx.key, "message: \n", outbound.String())
 	conn := tx.connection()
 	if conn == nil {
 		return NewError(nil, "transaction connection is unavailable")
 	}
 	if security := tx.messageSecurity(); security != nil {
-		if err := security.Sign(res); err != nil {
+		if err := security.Sign(outbound); err != nil {
 			return NewError(err, "sign SIP response failed")
 		}
 	}
-	payload := []byte(res.String())
-	logTraffic("out", conn.Network(), conn.LocalAddr(), res.dest, payload)
-	_, err := conn.WriteTo(payload, res.dest)
+	payload := []byte(outbound.String())
+	logTraffic("out", conn.Network(), conn.LocalAddr(), outbound.dest, payload)
+	_, err := conn.WriteTo(payload, outbound.dest)
 	return err
 }
 

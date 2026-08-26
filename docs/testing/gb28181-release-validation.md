@@ -90,6 +90,8 @@ go test ./... -count=1
 - DeviceConfig 非法版本、根、命令、SN 或目标不得写状态、附录 A.4 或解除等待；
 - Catalog 非法根、命令、SN、非 20 位顶层目标或负 SumNum 不得进入多响应聚合或解除查询等待；
 - 四版本历史级联 `INVITE→ACK→INFO→BYE` 完整对话、媒体启动/释放和 MANSRTSP/RTSP 转换；
+- SIP 响应添加 To-tag 时不得修改原请求；级联 INVITE 缓存响应只对 CSeq、Request-URI、顶层 Via 均一致的原事务重传复用，相同 Call-ID/tag 的另一事务返回 491 且不得获得原 200/SDP；
+- 缓存响应经事务发送并附加信令摘要/用户身份头后，原缓存对象仍不含本次发送产生的可变安全头；并发重传须通过 race 验证；
 - 入向媒体对话 ACK 必须复用原 INVITE CSeq；CANCEL 必须匹配原 INVITE 的双向 tag、CSeq、Request-URI、顶层 Via 协议/传输/Sent-by/branch；INFO/BYE 的远端 CSeq 必须严格递增，合法 INFO 重传复用缓存响应且只执行一次下游控制，同 CSeq 改报文或跨方法回放不得产生媒体副作用；
 - 无持久化通道记录的 `cascade-*` 指定路径/语音级联媒体流注册、注销及断流会话释放；
 - 两个已注册上级之间的级联对话所有权隔离，非会话所属上级的 ACK/CANCEL/BYE 不得改变或终止会话；
