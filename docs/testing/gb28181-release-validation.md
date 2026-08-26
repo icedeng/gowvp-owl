@@ -70,6 +70,9 @@ go test ./... -count=1
 - DeviceInfo 非法根、命令、SN 或未知目标不得覆盖父设备/子通道信息或解除等待；
 - DeviceStatus 缺失或非法 Result、Online、Status 枚举不得写状态或解除等待；失败结果及子通道状态不得改写父设备在线运行态；
 - DeviceControl 与 Broadcast 非法根、固定命令、SN、结果枚举、未知目标或不匹配在途请求目标不得解除业务等待；
+- Keepalive 非法根、命令、SN、源设备、状态枚举或故障设备编码不得补载设备、改在线态、写查询状态或触发 Catalog；空 Status 及 ON/OFF 兼容路径须保留；
+- Alarm 非法根、命令、SN、目标、级别、方式、时间或非有限经纬度不得写附录 A.4、触发业务回调或向订阅方转发；
+- MediaStatus 非法根、命令、SN、设备、空通知类型或活动会话目标不匹配不得结束任务；未知类型及已清理会话重复 121 应保持 200 幂等确认；
 - ConfigDownload 失败响应和子通道 BasicParam 不得改写父设备心跳运行态；
 - DeviceConfig 非法版本、根、命令、SN 或目标不得写状态、附录 A.4 或解除等待；
 - Catalog 非法根、命令、SN、非 20 位顶层目标或负 SumNum 不得进入多响应聚合或解除查询等待；

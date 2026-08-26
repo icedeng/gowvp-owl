@@ -34,6 +34,7 @@ func TestGB10CoreSimulationFlow(t *testing.T) {
 	defer sipServer.Close()
 
 	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
 	api := &GB28181API{
 		cfg:              &conf.SIP{ID: gb10PlatformID, Domain: "3402000000"},
 		catalogResponses: newMultiResponseCollector(func(item Channels) string { return item.ChannelID }),

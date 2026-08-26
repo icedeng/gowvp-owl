@@ -84,6 +84,9 @@ func TestAlarmRespondsBeforeSlowSubscriptionNotify(t *testing.T) {
 	sipServer := sip.NewServer(platform)
 	t.Cleanup(sipServer.Close)
 	server := &Server{Server: sipServer, fromAddress: *platform}
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	server.memoryStorer = memory
 	api := &GB28181API{svr: server}
 	server.gb = api
 	api.eventSubscribers.Store("slow-alarm", &eventSubscription{

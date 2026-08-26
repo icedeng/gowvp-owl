@@ -3,6 +3,7 @@ package gbs
 import (
 	"context"
 	"encoding/xml"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 // MessageNotify 心跳包xml结构
 type MessageNotify struct {
+	XMLName  xml.Name
 	CmdType  string `xml:"CmdType"`
 	SN       int    `xml:"SN"`
 	DeviceID string `xml:"DeviceID"`
@@ -29,6 +31,13 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
 		ctx.Log.Error("Message Unmarshal xml err", "err", err)
 		ctx.String(400, ErrXMLDecode.Error())
+		return
+	}
+	msg.CmdType = strings.TrimSpace(msg.CmdType)
+	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	msg.Status = strings.ToUpper(strings.TrimSpace(msg.Status))
+	if err := validateKeepaliveEnvelope(ctx, msg); err != nil {
+		ctx.String(400, err.Error())
 		return
 	}
 
@@ -96,6 +105,29 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		slog.Info("keepalive 触发 Catalog 补载", "device_id", ctx.DeviceID)
 		_ = g.QueryCatalog(ctx.DeviceID)
 	}
+}
+
+func validateKeepaliveEnvelope(ctx *sip.Context, msg MessageNotify) error {
+	if ctx == nil || !isGBDeviceIdentifier(strings.TrimSpace(ctx.DeviceID)) {
+		return fmt.Errorf("Keepalive requires authenticated GB28181 device")
+	}
+	if msg.XMLName.Local != "Notify" || !strings.EqualFold(msg.CmdType, "Keepalive") || msg.SN <= 0 {
+		return fmt.Errorf("invalid Keepalive envelope")
+	}
+	if !isGBDeviceIdentifier(msg.DeviceID) || msg.DeviceID != strings.TrimSpace(ctx.DeviceID) {
+		return fmt.Errorf("Keepalive device id mismatch")
+	}
+	// 空值及 ON/OFF 是已存在的厂商兼容；标准值为 OK/ERROR。
+	if msg.Status != "" && !equalFoldAny(msg.Status, "OK", "ERROR", "ON", "OFF") {
+		return fmt.Errorf("invalid Keepalive status")
+	}
+	for _, deviceID := range msg.Info.DeviceIDs {
+		deviceID = strings.TrimSpace(deviceID)
+		if deviceID != "" && !isGBDeviceIdentifier(deviceID) {
+			return fmt.Errorf("invalid Keepalive fault device id")
+		}
+	}
+	return nil
 }
 
 func normalizeGBIDList(values []string) []string {

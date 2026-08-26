@@ -2,6 +2,9 @@ package gbs
 
 import (
 	"context"
+	"encoding/xml"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +13,7 @@ import (
 
 // messageAlarm 对应 GB28181 报警消息体（MESSAGE/NOTIFY Alarm）。
 type messageAlarm struct {
+	XMLName          xml.Name
 	CmdType          string `xml:"CmdType"`
 	SN               int    `xml:"SN"`
 	DeviceID         string `xml:"DeviceID"`
@@ -87,13 +91,15 @@ func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
+	msg.CmdType = strings.TrimSpace(msg.CmdType)
+	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	if err := g.validateAlarmEnvelope(ctx, &msg); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 
 	deviceID := strings.TrimSpace(ctx.DeviceID)
-	channelID := strings.TrimSpace(msg.DeviceID)
-	if channelID == "" {
-		// 部分设备可能不上报通道ID，回退为设备ID。
-		channelID = deviceID
-	}
+	channelID := msg.DeviceID
 
 	alarmType := strings.TrimSpace(msg.AlarmType)
 	if alarmType == "" {
@@ -141,4 +147,60 @@ func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 	notify(notifyAlarm(event))
 	// 9.11 事件源侧：报警发生后，向订阅方发送 NOTIFY。
 	g.publishEventNotify("Alarm", deviceID, ctx.Request.Body())
+}
+
+func (g *GB28181API) validateAlarmEnvelope(ctx *sip.Context, msg *messageAlarm) error {
+	if msg == nil || msg.XMLName.Local != "Notify" || !strings.EqualFold(msg.CmdType, "Alarm") || msg.SN <= 0 {
+		return fmt.Errorf("invalid Alarm envelope")
+	}
+	targetID := strings.TrimSpace(msg.DeviceID)
+	if len(targetID) == 10 {
+		if !isNumericIdentifier(targetID) || ctx == nil || !strings.HasPrefix(strings.TrimSpace(ctx.DeviceID), targetID) {
+			return fmt.Errorf("Alarm center id mismatch")
+		}
+	} else {
+		if !isGBDeviceIdentifier(targetID) {
+			return fmt.Errorf("invalid Alarm device id")
+		}
+		if err := g.validateAuthenticatedResponseTarget(ctx, targetID); err != nil {
+			return err
+		}
+	}
+	priority := strings.TrimSpace(msg.AlarmPriority)
+	if len(priority) != 1 || priority[0] < '1' || priority[0] > '4' {
+		return fmt.Errorf("invalid Alarm priority")
+	}
+	method := strings.TrimSpace(msg.AlarmMethod)
+	if method == "" {
+		method = strings.TrimSpace(msg.Info.AlarmMethod)
+	}
+	if len(method) != 1 || method[0] < '1' || method[0] > '7' {
+		return fmt.Errorf("invalid Alarm method")
+	}
+	if _, ok := (&AlarmEvent{AlarmTime: msg.AlarmTime}).ParseTime(); !ok {
+		return fmt.Errorf("invalid Alarm time")
+	}
+	for field, value := range map[string]string{"longitude": msg.Longitude, "latitude": msg.Latitude} {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		coordinate, err := strconv.ParseFloat(value, 64)
+		if err != nil || !validFinite(coordinate) {
+			return fmt.Errorf("invalid Alarm %s", field)
+		}
+	}
+	return nil
+}
+
+func isNumericIdentifier(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < '0' || value[index] > '9' {
+			return false
+		}
+	}
+	return true
 }

@@ -220,7 +220,8 @@ func TestAppendixA4HandlersAcknowledgeBeforePersistence(t *testing.T) {
 			name:   "Alarm",
 			method: sip.MethodMessage,
 			body: []byte(`<Notify><CmdType>Alarm</CmdType><SN>92</SN><DeviceID>` + gb10DeviceID +
-				`</DeviceID><Info><doorType><DeviceID>` + gb10DeviceID + `</DeviceID></doorType></Info></Notify>`),
+				`</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>2</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime>` +
+				`<Info><doorType><DeviceID>` + gb10DeviceID + `</DeviceID></doorType></Info></Notify>`),
 			handler: func(api *GB28181API, ctx *sip.Context) {
 				api.sipMessageAlarm(ctx)
 			},

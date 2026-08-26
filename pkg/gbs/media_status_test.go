@@ -137,7 +137,7 @@ func TestMediaStatus11SignalsDirectTCPDownload(t *testing.T) {
 func TestMediaStatus11UnknownNotifyTypeDoesNotStop(t *testing.T) {
 	streams := &conc.Map[string, *Streams]{}
 	key := historyKey(historyModeDownload, gb10DeviceID, gb10ChannelID)
-	streams.Store(key, &Streams{CallID: "media-status-2"})
+	streams.Store(key, &Streams{DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, CallID: "media-status-2"})
 	api := &GB28181API{streams: streams}
 	conn := newFlowConnection()
 	body := []byte(`<?xml version="1.0"?><Notify><CmdType>MediaStatus</CmdType><SN>41</SN><DeviceID>` + gb10ChannelID + `</DeviceID><NotifyType>999</NotifyType></Notify>`)
@@ -163,7 +163,9 @@ func TestMediaStatusCannotStopAnotherDevicesHistorySession(t *testing.T) {
 	})
 	select {
 	case response := <-conn.writes:
-		assertFlowOK(t, string(response))
+		if !strings.Contains(string(response), "SIP/2.0 400") {
+			t.Fatalf("cross-device MediaStatus response = %s", response)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("MediaStatus response timeout")
 	}
