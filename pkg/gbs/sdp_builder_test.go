@@ -176,8 +176,27 @@ func TestBuildGBSDPCanDisableH265ForDeviceFirmware(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(body)
-	if strings.Contains(text, "H265/90000") || strings.Contains(text, " 99") {
+	if strings.Contains(text, "H265/90000") || strings.Contains(text, " 100") {
 		t.Fatalf("disabled H.265 remained in SDP:\n%s", text)
+	}
+}
+
+func TestBuildGBSDP30UsesStandardH265Payload(t *testing.T) {
+	in := gbSDPInput{
+		Version: GBVersion30, SessionName: historyModePlay,
+		ChannelID: gb10DeviceID, IP: "192.0.2.20", Port: 30000, SSRC: "0100000001",
+	}
+	body, err := buildGBSDP(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "m=video 30000 RTP/AVP 96 97 98 100\r\n") ||
+		!strings.Contains(text, "a=rtpmap:100 H265/90000\r\n") {
+		t.Fatalf("3.0 SDP missing H.265 payload 100:\n%s", text)
+	}
+	if strings.Contains(text, "a=rtpmap:99 H265/90000\r\n") {
+		t.Fatalf("3.0 SDP reused the SVAC payload for H.265:\n%s", text)
 	}
 }
 

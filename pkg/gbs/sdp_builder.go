@@ -100,7 +100,7 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 	formats := []string{"96", "97", "98"}
 	h265Enabled := version.Capabilities().H265 && !in.H265Disabled
 	if h265Enabled {
-		formats = append(formats, "99")
+		formats = append(formats, "100")
 	}
 	video := sdp.Media{
 		Description: sdp.MediaDescription{
@@ -128,7 +128,7 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 	video.AddAttribute("rtpmap", "97", "MPEG4/90000")
 	video.AddAttribute("rtpmap", "98", "H264/90000")
 	if h265Enabled {
-		video.AddAttribute("rtpmap", "99", "H265/90000")
+		video.AddAttribute("rtpmap", "100", "H265/90000")
 	}
 
 	message := &sdp.Message{

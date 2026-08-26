@@ -102,7 +102,7 @@ go test ./... -count=1
 - Catalog 查询和订阅均支持平台根或单个共享通道目标；1.0 变化通知使用 `Response` 根，1.1+ 使用 `Notify` 根；目录快照只产生 ADD/DEL/ON/OFF/UPDATE 增量，分包中 `SumNum` 与本包 `DeviceList Num` 一致；同一订阅并发触发不重复发送，任一分包失败时不提交快照并在下次重试；
 - 1.1+ 域间目录初始订阅只通知离线/异常目录，刷新订阅保留 NOTIFY CSeq；续订与过期清理并发时由续订保留有效会话，过期会话释放下级引用；空消息体 terminated NOTIFY 返回 200 并清理/按引用重建下级订阅；未重复携带 X-GB-Ver 的上级 SUBSCRIBE 复用注册协商版本；Alarm/MobilePosition 和 1.0 目录订阅不误发初始 Catalog；Alarm 订阅按级别、方式、类型和时间过滤，兼容 2011 `StartTime/EndTime` 示例别名；
 - 设备与上级事件订阅键包含订阅方身份；复用相同 Call-ID、From tag、事件类型和目标的其他订阅方不能覆盖、续订或取消原会话；
-- 设备级关闭 `download_speed` 或 `h265` 后，运行时分别不再发送下载倍速或 H.265 SDP 声明，能力快照与实际发送门禁一致；
+- 2022 H.265 SDP 按附录 C.2.5 使用动态负载类型 `100`，不与 SVAC 建议使用的 `99` 混用；设备级关闭 `download_speed` 或 `h265` 后，运行时分别不再发送下载倍速或 H.265 SDP 声明，能力快照与实际发送门禁一致；
 - 1.1/2.0/3.0 级联 Broadcast 通知、上游语音源 Digest INVITE、ZLM 音频接收、下游接收方主动 INVITE 和 RTP 转发；1.1 PS/90000 与 2.0/3.0 PCMA/8000 版本矩阵；多通道 Subject 定位、CANCEL、双侧 BYE、错误应答、来源隔离和资源回收；
 
 ### 静态检查
