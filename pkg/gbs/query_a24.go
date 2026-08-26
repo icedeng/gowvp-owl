@@ -48,6 +48,7 @@ type DeviceQueryInput struct {
 	// RecordInfo 查询参数（unix 秒）。
 	Start        int64
 	End          int64
+	Type         string
 	StreamNumber *int
 	AlarmMethod  string
 	AlarmType    string
@@ -135,16 +136,7 @@ func (g *GB28181API) DeviceQuery(ctx context.Context, in *DeviceQueryInput) (*De
 		if in.Start <= 0 || in.End <= in.Start {
 			return nil, fmt.Errorf("record_info requires valid start/end")
 		}
-		records, err := g.QueryRecordList(ctx, &RecordQueryInput{
-			DeviceID:     deviceID,
-			ChannelID:    targetID,
-			Start:        in.Start,
-			End:          in.End,
-			Timeout:      in.Timeout,
-			StreamNumber: in.StreamNumber,
-			AlarmMethod:  in.AlarmMethod,
-			AlarmType:    in.AlarmType,
-		})
+		records, err := g.QueryRecordList(ctx, recordQueryInputFromDeviceQuery(deviceID, targetID, in))
 		if err != nil {
 			return nil, err
 		}
@@ -224,6 +216,20 @@ func (g *GB28181API) DeviceQuery(ctx context.Context, in *DeviceQueryInput) (*De
 		return nil, ctx.Err()
 	case <-timer.C:
 		return nil, fmt.Errorf("wait query response timeout")
+	}
+}
+
+func recordQueryInputFromDeviceQuery(deviceID, targetID string, in *DeviceQueryInput) *RecordQueryInput {
+	return &RecordQueryInput{
+		DeviceID:     deviceID,
+		ChannelID:    targetID,
+		Start:        in.Start,
+		End:          in.End,
+		Timeout:      in.Timeout,
+		Type:         in.Type,
+		StreamNumber: in.StreamNumber,
+		AlarmMethod:  in.AlarmMethod,
+		AlarmType:    in.AlarmType,
 	}
 }
 

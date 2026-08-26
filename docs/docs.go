@@ -4348,6 +4348,16 @@ const docTemplate = `{
                     "type": "string",
                     "example": "device_status"
                 },
+                "alarm_method": {
+                    "description": "2022 报警方式过滤条件",
+                    "type": "string",
+                    "example": "5"
+                },
+                "alarm_type": {
+                    "description": "2022 报警类型过滤条件",
+                    "type": "string",
+                    "example": "2"
+                },
                 "config_type": {
                     "description": "配置查询时的配置类型",
                     "type": "string",
@@ -4373,6 +4383,11 @@ const docTemplate = `{
                     "type": "integer",
                     "example": 1710864000
                 },
+                "stream_number": {
+                    "description": "2022 码流编号：0 主码流，1/2/... 子码流",
+                    "type": "integer",
+                    "example": 0
+                },
                 "target_id": {
                     "description": "目标设备或通道国标编码；为空时默认当前设备",
                     "type": "string",
@@ -4382,6 +4397,11 @@ const docTemplate = `{
                     "description": "等待查询应答超时时间，单位秒",
                     "type": "integer",
                     "example": 5
+                },
+                "type": {
+                    "description": "RecordInfo 录像类型：time、alarm、manual、all；空值默认 time",
+                    "type": "string",
+                    "example": "all"
                 }
             }
         },

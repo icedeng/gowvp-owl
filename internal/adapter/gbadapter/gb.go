@@ -331,20 +331,7 @@ func toGBTargetTrack(in *ipc.GBTargetTrackInput) *gbs.TargetTrackParam {
 }
 
 func (a *Adapter) DeviceQuery(ctx context.Context, device *ipc.Device, in *ipc.GBDeviceQueryInput) (*ipc.GBDeviceQueryOutput, error) {
-	out, err := a.gbs.DeviceQuery(ctx, &gbs.DeviceQueryInput{
-		DeviceID:     device.DeviceID,
-		TargetID:     in.TargetID,
-		Action:       in.Action,
-		Timeout:      time.Duration(in.Timeout) * time.Second,
-		ConfigType:   in.ConfigType,
-		Interval:     in.Interval,
-		Number:       in.Number,
-		Start:        in.Start,
-		End:          in.End,
-		StreamNumber: in.StreamNumber,
-		AlarmMethod:  in.AlarmMethod,
-		AlarmType:    in.AlarmType,
-	})
+	out, err := a.gbs.DeviceQuery(ctx, toGBDeviceQueryInput(device.DeviceID, in))
 	if err != nil {
 		return nil, err
 	}
@@ -357,6 +344,24 @@ func (a *Adapter) DeviceQuery(ctx context.Context, device *ipc.Device, in *ipc.G
 		Data:       out.Data,
 		AppendixA4: toIPCAppendixA4(out.AppendixA4),
 	}, nil
+}
+
+func toGBDeviceQueryInput(deviceID string, in *ipc.GBDeviceQueryInput) *gbs.DeviceQueryInput {
+	return &gbs.DeviceQueryInput{
+		DeviceID:     deviceID,
+		TargetID:     in.TargetID,
+		Action:       in.Action,
+		Timeout:      time.Duration(in.Timeout) * time.Second,
+		ConfigType:   in.ConfigType,
+		Interval:     in.Interval,
+		Number:       in.Number,
+		Start:        in.Start,
+		End:          in.End,
+		Type:         in.Type,
+		StreamNumber: in.StreamNumber,
+		AlarmMethod:  in.AlarmMethod,
+		AlarmType:    in.AlarmType,
+	}
 }
 
 func (a *Adapter) DeviceConfig(ctx context.Context, device *ipc.Device, in *ipc.GBDeviceConfigInput) (*ipc.GBDeviceConfigOutput, error) {

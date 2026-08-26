@@ -150,6 +150,7 @@ type GBDeviceQueryInput struct {
 	Number       int   // cruise_track 轨迹编号（0 或 1）
 	Start        int64 // record_info start unix seconds
 	End          int64 // record_info end unix seconds
+	Type         string
 	StreamNumber *int
 	AlarmMethod  string
 	AlarmType    string

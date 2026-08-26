@@ -66,17 +66,19 @@ func TestGenericQueryPayloadRejectsInvalidDataBeforeSideEffects(t *testing.T) {
 
 func TestDeviceStatusPayloadUsesVersionSpecificAlarmField(t *testing.T) {
 	tests := []struct {
+		name    string
 		version GBProtocolVersion
 		count   string
 		field   string
 	}{
-		{version: GBVersion10, count: "Num", field: "Status"},
-		{version: GBVersion11, count: "Num", field: "StatusDutyStatus"},
-		{version: GBVersion20, count: "num", field: "DutyStatus"},
-		{version: GBVersion30, count: "Num", field: "DutyStatus"},
+		{name: "2011 schema", version: GBVersion10, count: "Num", field: "Status"},
+		{name: "2011 normative sample", version: GBVersion10, count: "Num", field: "DutyStatus"},
+		{name: "2014 supplement", version: GBVersion11, count: "Num", field: "DutyStatus"},
+		{name: "2016", version: GBVersion20, count: "num", field: "DutyStatus"},
+		{name: "2022", version: GBVersion30, count: "Num", field: "DutyStatus"},
 	}
 	for _, test := range tests {
-		t.Run(string(test.version), func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			body := []byte(`<Response><CmdType>DeviceStatus</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID +
 				`</DeviceID><Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Encode>ON</Encode><Record>OFF</Record>` +
 				`<DeviceTime>2026-08-25T10:00:00+08:00</DeviceTime><Alarmstatus ` + test.count + `="1"><Item><DeviceID>` + gb10ChannelID +
@@ -89,11 +91,63 @@ func TestDeviceStatusPayloadUsesVersionSpecificAlarmField(t *testing.T) {
 				len(data.AlarmStatuses) != 1 || data.AlarmStatuses[0].DeviceID != gb10ChannelID || data.AlarmStatuses[0].DutyStatus != "ONDUTY" {
 				t.Fatalf("decoded %s DeviceStatus = %+v", test.version, data)
 			}
-			wrong := strings.Replace(string(body), "<"+test.field+">ONDUTY</"+test.field+">", "<DutyStatus>ONDUTY</DutyStatus>", 1)
-			if test.field != "DutyStatus" && validateGenericQueryPayload(test.version, "DeviceStatus", []byte(wrong)) == nil {
-				t.Fatalf("%s accepted DutyStatus from another protocol profile", test.version)
+		})
+	}
+
+	invalid := []struct {
+		name    string
+		version GBProtocolVersion
+		count   string
+		fields  string
+	}{
+		{name: "2011 rejects duplicate standard spellings", version: GBVersion10, fields: `<Status>ONDUTY</Status><DutyStatus>ONDUTY</DutyStatus>`},
+		{name: "2011 rejects merged supplement text", version: GBVersion10, fields: `<StatusDutyStatus>ONDUTY</StatusDutyStatus>`},
+		{name: "2014 rejects deleted Status", version: GBVersion11, fields: `<Status>ONDUTY</Status>`},
+		{name: "2014 rejects merged supplement text", version: GBVersion11, fields: `<StatusDutyStatus>ONDUTY</StatusDutyStatus>`},
+		{name: "2016 rejects legacy Status", version: GBVersion20, fields: `<Status>ONDUTY</Status>`},
+		{name: "2022 rejects legacy Status", version: GBVersion30, fields: `<Status>ONDUTY</Status>`},
+		{name: "2011 rejects lowercase count", version: GBVersion10, count: "num", fields: `<Status>ONDUTY</Status>`},
+		{name: "2014 rejects lowercase count", version: GBVersion11, count: "num", fields: `<DutyStatus>ONDUTY</DutyStatus>`},
+		{name: "2016 rejects uppercase count", version: GBVersion20, count: "Num", fields: `<DutyStatus>ONDUTY</DutyStatus>`},
+		{name: "2022 rejects lowercase count", version: GBVersion30, count: "num", fields: `<DutyStatus>ONDUTY</DutyStatus>`},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			count := test.count
+			if count == "" && test.version == GBVersion20 {
+				count = "num"
+			}
+			if count == "" {
+				count = "Num"
+			}
+			body := []byte(`<Response><CmdType>DeviceStatus</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID +
+				`</DeviceID><Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Alarmstatus ` + count + `="1"><Item>` +
+				`<DeviceID>` + gb10ChannelID + `</DeviceID>` + test.fields + `</Item></Alarmstatus></Response>`)
+			if err := validateGenericQueryPayload(test.version, "DeviceStatus", body); err == nil {
+				t.Fatal("invalid DeviceStatus alarm field was accepted")
 			}
 		})
+	}
+
+	t.Run("sparse optional item remains compatible", func(t *testing.T) {
+		body := []byte(`<Response><CmdType>DeviceStatus</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID +
+			`</DeviceID><Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Alarmstatus Num="1"><Item/></Alarmstatus></Response>`)
+		if err := validateGenericQueryPayload(GBVersion30, "DeviceStatus", body); err != nil {
+			t.Fatalf("sparse DeviceStatus alarm item rejected: %v", err)
+		}
+	})
+}
+
+func TestRecordQueryInputFromDeviceQueryPreservesFilters(t *testing.T) {
+	streamNumber := 2
+	in := &DeviceQueryInput{
+		Start: 1, End: 2, Timeout: time.Second, Type: "all",
+		StreamNumber: &streamNumber, AlarmMethod: "2/5", AlarmType: "2",
+	}
+	out := recordQueryInputFromDeviceQuery(gb10DeviceID, gb10ChannelID, in)
+	if out.DeviceID != gb10DeviceID || out.ChannelID != gb10ChannelID || out.Start != 1 || out.End != 2 || out.Timeout != time.Second ||
+		out.Type != "all" || out.StreamNumber == nil || *out.StreamNumber != 2 || out.AlarmMethod != "2/5" || out.AlarmType != "2" {
+		t.Fatalf("RecordInfo query input = %+v", out)
 	}
 }
 

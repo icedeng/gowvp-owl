@@ -1086,9 +1086,17 @@ func validateDeviceAlarmStatus(version GBProtocolVersion, alarm *deviceAlarmStat
 	if alarm.Num != nil && alarm.LowerNum != nil {
 		return fmt.Errorf("DeviceStatus Alarmstatus has duplicate Num")
 	}
-	num := alarm.Num
-	if num == nil {
+	var num *int
+	if version == GBVersion20 {
+		if alarm.Num != nil {
+			return fmt.Errorf("DeviceStatus Alarmstatus count field does not match protocol")
+		}
 		num = alarm.LowerNum
+	} else {
+		if alarm.LowerNum != nil {
+			return fmt.Errorf("DeviceStatus Alarmstatus count field does not match protocol")
+		}
+		num = alarm.Num
 	}
 	if num == nil || *num < 0 || *num != len(alarm.Items) {
 		return fmt.Errorf("DeviceStatus Alarmstatus count mismatch")
@@ -1100,14 +1108,14 @@ func validateDeviceAlarmStatus(version GBProtocolVersion, alarm *deviceAlarmStat
 		var status *string
 		switch version {
 		case GBVersion10:
-			status = item.Status
-			if item.StatusDutyStatus != nil || item.DutyStatus != nil {
+			// 2011 的 A.2.6 Schema 使用 Status，但 9.5.3.3.2 正文和 J.11 示例使用 DutyStatus。
+			// 两种标准内写法均兼容，但同一条目不能重复携带。
+			if item.StatusDutyStatus != nil || (item.Status != nil && item.DutyStatus != nil) {
 				return fmt.Errorf("DeviceStatus Alarmstatus field does not match protocol")
 			}
-		case GBVersion11:
-			status = item.StatusDutyStatus
-			if item.Status != nil || item.DutyStatus != nil {
-				return fmt.Errorf("DeviceStatus Alarmstatus field does not match protocol")
+			status = item.DutyStatus
+			if status == nil {
+				status = item.Status
 			}
 		default:
 			status = item.DutyStatus

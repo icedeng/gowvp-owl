@@ -63,3 +63,16 @@ func TestToGBTargetTrackMapsManualArea(t *testing.T) {
 		t.Fatalf("mapped TargetTrack area = %+v", input.TargetArea)
 	}
 }
+
+func TestToGBDeviceQueryInputMapsRecordFilters(t *testing.T) {
+	streamNumber := 2
+	in := toGBDeviceQueryInput("34020000001320000001", &ipc.GBDeviceQueryInput{
+		TargetID: "34020000001320000002", Action: "record_info", Timeout: 9,
+		Start: 1, End: 2, Type: "all", StreamNumber: &streamNumber, AlarmMethod: "2/5", AlarmType: "2",
+	})
+	if in.DeviceID != "34020000001320000001" || in.TargetID != "34020000001320000002" || in.Action != "record_info" ||
+		in.Timeout.Seconds() != 9 || in.Start != 1 || in.End != 2 || in.Type != "all" || in.StreamNumber == nil || *in.StreamNumber != 2 ||
+		in.AlarmMethod != "2/5" || in.AlarmType != "2" {
+		t.Fatalf("mapped DeviceQuery = %+v", in)
+	}
+}

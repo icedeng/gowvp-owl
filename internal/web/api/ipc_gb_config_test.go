@@ -56,3 +56,18 @@ func TestGBDeviceControlInputDecodesTargetTrack(t *testing.T) {
 		t.Fatalf("decoded TargetTrack area = %+v", mapped.TargetArea)
 	}
 }
+
+func TestGBDeviceQueryInputDecodesRecordFilters(t *testing.T) {
+	var input gbDeviceQueryInput
+	body := []byte(`{
+		"action":"record_info","target_id":"34020000001320000002","start":1,"end":2,
+		"type":"all","stream_number":2,"alarm_method":"2/5","alarm_type":"2"
+	}`)
+	if err := json.Unmarshal(body, &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.Action != "record_info" || input.TargetID != "34020000001320000002" || input.Start != 1 || input.End != 2 || input.Type != "all" ||
+		input.StreamNumber == nil || *input.StreamNumber != 2 || input.AlarmMethod != "2/5" || input.AlarmType != "2" {
+		t.Fatalf("decoded DeviceQuery = %+v", input)
+	}
+}

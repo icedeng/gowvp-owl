@@ -376,14 +376,18 @@ type SwaggerGBDeviceControlInput struct {
 
 // SwaggerGBDeviceQueryInput 是 GB 统一查询请求体。
 type SwaggerGBDeviceQueryInput struct {
-	TargetID   string `json:"target_id" example:"34020000001320000001"` // 目标设备或通道国标编码；为空时默认当前设备
-	Action     string `json:"action" example:"device_status"`           // GB 统一查询动作名
-	Timeout    int    `json:"timeout" example:"5"`                      // 等待查询应答超时时间，单位秒
-	ConfigType string `json:"config_type" example:"basic_param"`        // 配置查询时的配置类型
-	Interval   int    `json:"interval" example:"60"`                    // 订阅或统计类查询的时间间隔
-	Number     int    `json:"number" example:"0"`                       // 巡航轨迹编号（0 或 1）
-	Start      int64  `json:"start" example:"1710864000"`               // 起始时间，Unix 秒
-	End        int64  `json:"end" example:"1710950400"`                 // 结束时间，Unix 秒
+	TargetID     string `json:"target_id" example:"34020000001320000001"` // 目标设备或通道国标编码；为空时默认当前设备
+	Action       string `json:"action" example:"device_status"`           // GB 统一查询动作名
+	Timeout      int    `json:"timeout" example:"5"`                      // 等待查询应答超时时间，单位秒
+	ConfigType   string `json:"config_type" example:"basic_param"`        // 配置查询时的配置类型
+	Interval     int    `json:"interval" example:"60"`                    // 订阅或统计类查询的时间间隔
+	Number       int    `json:"number" example:"0"`                       // 巡航轨迹编号（0 或 1）
+	Start        int64  `json:"start" example:"1710864000"`               // 起始时间，Unix 秒
+	End          int64  `json:"end" example:"1710950400"`                 // 结束时间，Unix 秒
+	Type         string `json:"type" example:"all"`                       // RecordInfo 录像类型：time、alarm、manual、all；空值默认 time
+	StreamNumber *int   `json:"stream_number" example:"0"`                // 2022 码流编号：0 主码流，1/2/... 子码流
+	AlarmMethod  string `json:"alarm_method" example:"5"`                 // 2022 报警方式过滤条件
+	AlarmType    string `json:"alarm_type" example:"2"`                   // 2022 报警类型过滤条件
 }
 
 // SwaggerGBAppendixA4Output 是附录 A.4 结构化对象。

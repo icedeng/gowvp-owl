@@ -1531,6 +1531,7 @@ type gbDeviceQueryInput struct {
 	Number       int    `json:"number" example:"0"`                       // 巡航轨迹编号（0 或 1）
 	Start        int64  `json:"start" example:"1710864000"`               // 开始时间，Unix 秒
 	End          int64  `json:"end" example:"1710950400"`                 // 结束时间，Unix 秒
+	Type         string `json:"type" example:"all"`                       // RecordInfo 录像类型：time、alarm、manual、all；空值默认 time
 	StreamNumber *int   `json:"stream_number" example:"0"`                // 2022 码流编号：0 主码流，1/2/... 子码流
 	AlarmMethod  string `json:"alarm_method" example:"5"`                 // 2022 报警方式过滤条件
 	AlarmType    string `json:"alarm_type" example:"2"`                   // 2022 报警类型过滤条件
@@ -2134,6 +2135,7 @@ func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, erro
 		Number:       in.Number,
 		Start:        in.Start,
 		End:          in.End,
+		Type:         in.Type,
 		StreamNumber: in.StreamNumber,
 		AlarmMethod:  in.AlarmMethod,
 		AlarmType:    in.AlarmType,
