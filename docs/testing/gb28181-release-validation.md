@@ -72,7 +72,7 @@ go test ./... -count=1
 - 2.0/3.0 HomePosition 及 3.0 PTZPreciseCtrl 按标准边界拒绝无效参数；PTZCmdParams 仅允许 3.0 且巡航轨迹名称不超过 32 字节；3.0 报警复位校验方式组合和按方式限定的报警类型，升级结果校验正 SN、结果枚举、固件和失败原因，抓拍完成通知校验正 SN、命令类型及最多 10 个文件标识；
 - A.4 ExtraInfo JSON 的整数、零值、数组和 20 位数值型编码保持原始精度；未知数值型对象编码同样拒绝转发；
 - 共享通道 PTZ、录像和版本化通道控制转发；设备级高影响控制不因共享单个通道而被级联放大；
-- 通用查询响应的根节点、正 SN、命令版本和目标所有权校验；未知跨设备响应不能改变状态或解除等待；
+- 通用查询严格校验 `MESSAGE + Response`、订阅事件严格校验 `NOTIFY + Notify`，并校验正 SN、命令版本和目标所有权；NOTIFY 不能解除 MESSAGE 查询等待，2022 独立业务通知走专用包络，未知跨设备报文不能改变状态或解除等待；
 - DeviceInfo 固定 `Response` 根和必填 `OK/ERROR` 结果校验；空结果或 Notify 根不得更新父设备/子通道元数据或解除等待；
 - PresetQuery/HomePositionQuery/CruiseTrackListQuery/CruiseTrackQuery/PTZPosition/SDCardStatus 业务载荷的必填字段、列表计数、枚举、数值范围和有限浮点校验；非法载荷不能写状态、解除等待或转发订阅，2014/2016 PresetQuery 仍兼容无 `SumNum` 应答；
 - DeviceInfo 非法根、命令、SN 或未知目标不得覆盖父设备/子通道信息或解除等待；
@@ -81,7 +81,7 @@ go test ./... -count=1
 - Keepalive 非法根、命令、SN、源设备、状态枚举或故障设备编码不得补载设备、改在线态、写查询状态或触发 Catalog；空 Status 及 ON/OFF 兼容路径须保留；
 - Alarm 非法根、命令、SN、目标、级别、方式、时间或非有限经纬度不得写附录 A.4、触发业务回调或向订阅方转发；
 - MediaStatus 非法根、命令、SN、设备、空通知类型或活动会话目标不匹配不得结束任务；未知类型及已清理会话重复 121 应保持 200 幂等确认；
-- ConfigDownload 失败响应和子通道 BasicParam 不得改写父设备心跳运行态；
+- ConfigDownload 成功 BasicParam 的心跳间隔/次数仅允许 `1..65535`；缺失、非正或溢出值不得被截断、修正或静默忽略，也不得改运行态、写状态或解除等待；失败响应和子通道 BasicParam 不得改写父设备心跳运行态；
 - DeviceConfig/ConfigDownload 缺失或非法 `Result` 不得写状态、改运行态或解除等待；DeviceConfig 响应必须匹配原目标通道，兄弟通道复用 SN 不得抢占配置或抓拍等待；
 - DeviceConfig 非法版本、根、命令、SN 或目标不得写状态、附录 A.4 或解除等待；
 - Catalog 非法根、命令、SN、非 20 位顶层目标或负 SumNum 不得进入多响应聚合或解除查询等待；

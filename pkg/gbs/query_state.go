@@ -1077,8 +1077,14 @@ func (g *GB28181API) sipMessageVideoUploadNotify(ctx *sip.Context) {
 		ctx.String(400, "invalid VideoUploadNotify location")
 		return
 	}
-	// 目标所有权和版本能力由通用查询入口统一校验，避免专用通知与查询响应规则漂移。
-	g.sipMessageQueryGeneric(ctx)
+	if err := g.validateAuthenticatedResponseTarget(ctx, msg.DeviceID); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
+	decoded := g.decodeAndStoreQueryResult(ctx.DeviceID, msg.CmdType, ctx.Request.Body())
+	ctx.String(200, "OK")
+	g.persistDecodedQuery(ctx.DeviceID, msg.CmdType, decoded)
+	g.publishEventNotify(msg.CmdType, ctx.DeviceID, ctx.Request.Body())
 }
 
 func decodeConfigDownloadState(body []byte) *ConfigDownloadState {

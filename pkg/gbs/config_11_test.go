@@ -296,10 +296,16 @@ func TestConfigDownloadResponseValidatesBeforeRuntimeUpdate(t *testing.T) {
 		{name: "non-positive SN", body: `<Response><CmdType>ConfigDownload</CmdType><SN>0</SN><DeviceID>device</DeviceID><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
 		{name: "missing result", body: `<Response><CmdType>ConfigDownload</CmdType><SN>1</SN><DeviceID>device</DeviceID><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
 		{name: "invalid result", body: `<Response><CmdType>ConfigDownload</CmdType><SN>1</SN><DeviceID>device</DeviceID><Result>SUCCESS</Result><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
+		{name: "missing heartbeat interval", body: `<Response><CmdType>ConfigDownload</CmdType><SN>1</SN><DeviceID>device</DeviceID><Result>OK</Result><BasicParam><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
+		{name: "negative heartbeat count", body: `<Response><CmdType>ConfigDownload</CmdType><SN>1</SN><DeviceID>device</DeviceID><Result>OK</Result><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>-1</HeartBeatCount></BasicParam></Response>`},
+		{name: "heartbeat interval overflow", body: `<Response><CmdType>ConfigDownload</CmdType><SN>1</SN><DeviceID>device</DeviceID><Result>OK</Result><BasicParam><HeartBeatInterval>65536</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
 		{name: "unknown target", body: `<Response><CmdType>ConfigDownload</CmdType><SN>1</SN><DeviceID>34020000001320000009</DeviceID><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1), targetID: "device"}
+			api.pendingDeviceQuery.Store(buildPendingQueryKey("device", CMDTypeConfigDownload, 1), pending)
+			defer api.pendingDeviceQuery.Delete(buildPendingQueryKey("device", CMDTypeConfigDownload, 1))
 			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "config-download-invalid-"+test.name, []byte(test.body), api.sipMessageConfigDownload)
 			if !strings.Contains(response, "SIP/2.0 400") {
 				t.Fatalf("invalid ConfigDownload response = %s", response)
@@ -307,6 +313,14 @@ func TestConfigDownloadResponseValidatesBeforeRuntimeUpdate(t *testing.T) {
 			state := memory.device.runtimeSnapshot()
 			if state.KeepaliveInterval != initial.KeepaliveInterval || state.KeepaliveTimeout != initial.KeepaliveTimeout {
 				t.Fatalf("invalid ConfigDownload changed runtime: %+v", state)
+			}
+			select {
+			case output := <-pending.wait:
+				t.Fatalf("invalid ConfigDownload resolved pending query: %+v", output)
+			default:
+			}
+			if state, ok := api.GetQueryState("device"); ok && state.ConfigDownload != nil {
+				t.Fatalf("invalid ConfigDownload changed query state: %+v", state.ConfigDownload)
 			}
 		})
 	}

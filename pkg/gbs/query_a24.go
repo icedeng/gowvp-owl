@@ -589,7 +589,9 @@ func (g *GB28181API) sipMessageQueryGeneric(ctx *sip.Context) {
 	}
 	deviceID := strings.TrimSpace(ctx.DeviceID)
 	decoded := g.decodeAndStoreQueryResult(deviceID, msg.CmdType, ctx.Request.Body())
-	g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
+	if strings.EqualFold(ctx.Request.Method(), sip.MethodMessage) {
+		g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
+	}
 	ctx.String(200, "OK")
 	g.persistDecodedQuery(deviceID, msg.CmdType, decoded)
 	// 9.11 事件源侧：通用查询类事件通知。
@@ -600,8 +602,16 @@ func (g *GB28181API) validateGenericDeviceQueryResponse(ctx *sip.Context, msg ge
 	if ctx == nil || strings.TrimSpace(ctx.DeviceID) == "" {
 		return fmt.Errorf("query response requires authenticated device")
 	}
-	if msg.XMLName.Local != "Response" && msg.XMLName.Local != "Notify" {
-		return fmt.Errorf("query response root must be Response or Notify")
+	if ctx.Request == nil {
+		return fmt.Errorf("query response requires SIP request")
+	}
+	switch {
+	case strings.EqualFold(ctx.Request.Method(), sip.MethodMessage) && msg.XMLName.Local != "Response":
+		return fmt.Errorf("MESSAGE query response root must be Response")
+	case strings.EqualFold(ctx.Request.Method(), sip.MethodNotify) && msg.XMLName.Local != "Notify":
+		return fmt.Errorf("NOTIFY query event root must be Notify")
+	case !strings.EqualFold(ctx.Request.Method(), sip.MethodMessage) && !strings.EqualFold(ctx.Request.Method(), sip.MethodNotify):
+		return fmt.Errorf("query response requires MESSAGE or NOTIFY")
 	}
 	if msg.SN <= 0 || !isGBDeviceIdentifier(msg.DeviceID) {
 		return fmt.Errorf("query response requires positive SN and DeviceID")
@@ -624,7 +634,7 @@ func (g *GB28181API) validateGenericDeviceQueryResponse(ctx *sip.Context, msg ge
 	if err := g.validateAuthenticatedResponseTarget(ctx, msg.DeviceID); err != nil {
 		return err
 	}
-	if ctx.Request != nil && strings.EqualFold(ctx.Request.Method(), sip.MethodMessage) && g.pendingDeviceQueryTargetMismatch(ctx.DeviceID, msg.CmdType, msg.SN, msg.DeviceID) {
+	if strings.EqualFold(ctx.Request.Method(), sip.MethodMessage) && g.pendingDeviceQueryTargetMismatch(ctx.DeviceID, msg.CmdType, msg.SN, msg.DeviceID) {
 		return fmt.Errorf("query response target mismatch")
 	}
 	return nil
@@ -684,7 +694,7 @@ func genericQueryResponseMinimumVersion(cmdType string) (GBProtocolVersion, bool
 		return GBVersion11, true
 	case "HomePositionQuery", "MobilePosition":
 		return GBVersion20, true
-	case "CruiseTrackListQuery", "CruiseTrackQuery", "PTZPosition", "SDCardStatus", "VideoUploadNotify":
+	case "CruiseTrackListQuery", "CruiseTrackQuery", "PTZPosition", "SDCardStatus":
 		return GBVersion30, true
 	default:
 		return "", false

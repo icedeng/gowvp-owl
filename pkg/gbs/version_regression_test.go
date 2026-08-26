@@ -233,6 +233,7 @@ func TestGenericQueryResponseRejectsInvalidEnvelopeVersionAndTarget(t *testing.T
 		body string
 	}{
 		{name: "invalid root", body: `<Query><CmdType>DeviceStatus</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Query>`},
+		{name: "notify root over message", body: `<Notify><CmdType>DeviceStatus</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><Online>ONLINE</Online><Status>OK</Status></Notify>`},
 		{name: "non-positive SN", body: `<Response><CmdType>DeviceStatus</CmdType><SN>0</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Response>`},
 		{name: "missing device", body: `<Response><CmdType>DeviceStatus</CmdType><SN>1</SN></Response>`},
 		{name: "unknown command", body: `<Response><CmdType>Unknown</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Response>`},
@@ -254,6 +255,39 @@ func TestGenericQueryResponseRejectsInvalidEnvelopeVersionAndTarget(t *testing.T
 	}
 	if state, ok := api.GetQueryState(gb10DeviceID); ok && (state.DeviceStatus != nil || state.PTZPosition != nil) {
 		t.Fatalf("invalid generic query response changed state: %+v", state)
+	}
+}
+
+func TestGenericQueryNotifyDoesNotResolveMessagePending(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion30)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1), targetID: gb10ChannelID}
+	api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "PTZPosition", 72), pending)
+	body := []byte(`<Notify><CmdType>PTZPosition</CmdType><SN>72</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Pan>1</Pan></Notify>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodNotify, "ptz-notify-not-query-response", body, api.sipMessageQueryGeneric)
+	assertFlowOK(t, response)
+	select {
+	case output := <-pending.wait:
+		t.Fatalf("PTZPosition NOTIFY resolved MESSAGE query: %+v", output)
+	default:
+	}
+	state, ok := api.GetQueryState(gb10DeviceID)
+	if !ok || state.PTZPosition == nil || state.PTZPosition.Pan == nil || *state.PTZPosition.Pan != 1 {
+		t.Fatalf("valid PTZPosition NOTIFY state = %+v", state)
+	}
+}
+
+func TestGenericQueryNotifyRejectsResponseRoot(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	body := []byte(`<Response><CmdType>PTZPosition</CmdType><SN>72</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Pan>1</Pan></Response>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodNotify, "ptz-notify-response-root", body, api.sipMessageQueryGeneric)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("PTZPosition NOTIFY Response root = %s", response)
+	}
+	if state, ok := api.GetQueryState(gb10DeviceID); ok && state.PTZPosition != nil {
+		t.Fatalf("invalid PTZPosition NOTIFY changed state: %+v", state.PTZPosition)
 	}
 }
 
@@ -337,6 +371,9 @@ func TestDeviceStatusFailureAndChildResponseDoNotChangeParentRuntime(t *testing.
 
 func TestGB30VideoUploadNotifyStoresStructuredState(t *testing.T) {
 	api, memory := newVersionGateAPI(GBVersion30)
+	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1), targetID: gb10DeviceID}
+	api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "VideoUploadNotify", 108), pending)
+	defer api.pendingDeviceQuery.Delete(buildPendingQueryKey(gb10DeviceID, "VideoUploadNotify", 108))
 	body := []byte(`<Notify><CmdType>VideoUploadNotify</CmdType><SN>108</SN><DeviceID>` + gb10DeviceID +
 		`</DeviceID><Time>2026-08-25T08:48:00</Time><Longitude>120.12</Longitude><Latitude>30.28</Latitude></Notify>`)
 	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "video-upload-notify", body, api.sipMessageVideoUploadNotify)
@@ -345,6 +382,11 @@ func TestGB30VideoUploadNotifyStoresStructuredState(t *testing.T) {
 	if !ok || state.VideoUpload == nil || state.VideoUpload.Time != "2026-08-25T08:48:00" ||
 		state.VideoUpload.Longitude == nil || *state.VideoUpload.Longitude != 120.12 {
 		t.Fatalf("VideoUploadNotify state = %+v, %v", state, ok)
+	}
+	select {
+	case output := <-pending.wait:
+		t.Fatalf("VideoUploadNotify resolved query pending: %+v", output)
+	default:
 	}
 	memory.device.setGBVersion(GBVersion20)
 	response = runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "video-upload-old", body, api.sipMessageVideoUploadNotify)

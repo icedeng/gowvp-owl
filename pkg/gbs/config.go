@@ -628,6 +628,13 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 	}
 
 	resultOK := strings.EqualFold(msg.Result, "OK")
+	if resultOK && msg.BasicParam != nil {
+		if msg.BasicParam.HeartBeatInterval <= 0 || msg.BasicParam.HeartBeatInterval > math.MaxUint16 ||
+			msg.BasicParam.HeartBeatCount <= 0 || msg.BasicParam.HeartBeatCount > math.MaxUint16 {
+			ctx.String(400, "ConfigDownload BasicParam heartbeat values are invalid")
+			return
+		}
+	}
 	if msg.BasicParam != nil && msg.DeviceID == strings.TrimSpace(ctx.DeviceID) && resultOK {
 		ipc, ok := g.svr.memoryStorer.Load(ctx.DeviceID)
 		if !ok {
@@ -635,26 +642,14 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 			return
 		}
 
-		// 确保 HeartBeatCount 在合法范围内
-		if msg.BasicParam.HeartBeatCount > math.MaxUint16 {
-			msg.BasicParam.HeartBeatCount = math.MaxUint16
-		}
-		if msg.BasicParam.HeartBeatInterval > math.MaxUint16 {
-			msg.BasicParam.HeartBeatInterval = math.MaxUint16
-		}
-		if msg.BasicParam.HeartBeatCount <= 0 {
-			msg.BasicParam.HeartBeatCount = 1
-		}
 		// 计算设备离线超时时间
-		if msg.BasicParam.HeartBeatInterval*msg.BasicParam.HeartBeatCount > 0 {
-			interval := uint16(msg.BasicParam.HeartBeatInterval) // nolint
-			timeout := uint16(msg.BasicParam.HeartBeatCount)     // nolint
-			ipc.UpdateRuntime(func(device *Device) {
-				device.keepaliveInterval = interval
-				device.keepaliveTimeout = timeout
-			})
-			ctx.Log.Debug("sipMessageConfigDownload update", "deviceID", ctx.DeviceID, "keepaliveInterval", interval, "keepaliveTimeout", timeout)
-		}
+		interval := uint16(msg.BasicParam.HeartBeatInterval) // nolint:gosec -- 上方已限制为 uint16 范围
+		timeout := uint16(msg.BasicParam.HeartBeatCount)     // nolint:gosec -- 上方已限制为 uint16 范围
+		ipc.UpdateRuntime(func(device *Device) {
+			device.keepaliveInterval = interval
+			device.keepaliveTimeout = timeout
+		})
+		ctx.Log.Debug("sipMessageConfigDownload update", "deviceID", ctx.DeviceID, "keepaliveInterval", interval, "keepaliveTimeout", timeout)
 	}
 
 	// 命中通用查询等待队列（A.2.4 ConfigDownload 查询等待）。
