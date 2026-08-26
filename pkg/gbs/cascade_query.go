@@ -1015,15 +1015,24 @@ func (g *GB28181API) respondCascadeRecordInfo(ctx context.Context, worker *casca
 	}
 	for index := range items {
 		items[index].DeviceID = query.DeviceID
-		if exposedRecorderID := worker.platform.channelIDMap[items[index].RecorderID]; exposedRecorderID != "" {
-			items[index].RecorderID = exposedRecorderID
-		} else if items[index].RecorderID == localChannelID || items[index].RecorderID == channel.DeviceID {
-			items[index].RecorderID = query.DeviceID
-		} else {
-			items[index].RecorderID = ""
-		}
+		items[index].RecorderID = cascadeRecordDeviceID(worker.platform, items[index].RecorderID, localChannelID, channel.DeviceID, query.DeviceID)
+		items[index].RecordLocation = cascadeRecordDeviceID(worker.platform, items[index].RecordLocation, localChannelID, channel.DeviceID, query.DeviceID)
 	}
 	return g.sendCascadeRecordItems(ctx, worker, query, items, firstNonEmpty(channel.Name, query.DeviceID))
+}
+
+func cascadeRecordDeviceID(platform cascadePlatform, value, localChannelID, localDeviceID, exposedID string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if mapped := platform.channelIDMap[value]; mapped != "" {
+		return mapped
+	}
+	if value == localChannelID || value == localDeviceID {
+		return exposedID
+	}
+	return ""
 }
 
 func (g *GB28181API) sendCascadeRecordItems(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope, items []RecordItem, name string) error {
@@ -1033,6 +1042,7 @@ func (g *GB28181API) sendCascadeRecordItems(ctx context.Context, worker *cascade
 			CmdType: "RecordInfo", SN: query.SN, DeviceID: query.DeviceID, Name: name,
 		})
 	}
+	items = recordItemsForVersion(items, worker.protocolVersion())
 	for start := 0; start < len(items); start += cascadeCatalogChunkSize {
 		end := min(start+cascadeCatalogChunkSize, len(items))
 		if err := sendCascadeXML(ctx, worker, cascadeRecordInfoResponse{
@@ -1043,6 +1053,27 @@ func (g *GB28181API) sendCascadeRecordItems(ctx context.Context, worker *cascade
 		}
 	}
 	return nil
+}
+
+func recordItemsForVersion(items []RecordItem, version GBProtocolVersion) []RecordItem {
+	out := make([]RecordItem, len(items))
+	copy(out, items)
+	for index := range out {
+		if !version.AtLeast(GBVersion20) {
+			out[index].FileSize = ""
+			out[index].HasFileSize = false
+		}
+		if !version.AtLeast(GBVersion30) {
+			out[index].RecordLocation = ""
+			out[index].HasRecordLocation = false
+			out[index].StreamNumber = nil
+		}
+		if version.AtLeast(GBVersion11) && strings.EqualFold(strings.TrimSpace(out[index].Type), "all") {
+			out[index].Type = ""
+			out[index].hasType = false
+		}
+	}
+	return out
 }
 
 func (g *GB28181API) loadCascadeExposedChannel(ctx context.Context, platform cascadePlatform, exposedID string) (*ipc.Channel, error) {

@@ -860,6 +860,7 @@ func TestCascadeRecordInfoQueriesSharedChannelAndMapsResponse(t *testing.T) {
 	api := &GB28181API{core: adapter, svr: server}
 	server.gb = api
 	platform := testSharedCascadePlatform(t)
+	platform.version = GBVersion30
 	worker := newCascadeWorker(server, platform)
 	requests := make([]*sip.Request, 0, 2)
 	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
@@ -871,10 +872,12 @@ func TestCascadeRecordInfoQueriesSharedChannelAndMapsResponse(t *testing.T) {
 		downstream = input
 		items := make([]RecordItem, 21)
 		for index := range items {
+			streamNumber := 2
 			items[index] = RecordItem{
 				DeviceID: channel.ChannelID, Name: "Front Gate", FilePath: strconv.Itoa(index + 1),
 				StartTime: "2024-04-01T00:00:00", EndTime: "2024-04-01T00:10:00",
 				Secrecy: 0, Type: "time", RecorderID: channel.DeviceID,
+				FileSize: "1024", RecordLocation: channel.DeviceID, StreamNumber: &streamNumber,
 			}
 		}
 		return items, nil
@@ -911,6 +914,52 @@ func TestCascadeRecordInfoQueriesSharedChannelAndMapsResponse(t *testing.T) {
 		if strings.Contains(body, "<DeviceID>"+channel.ChannelID+"</DeviceID>") || strings.Contains(body, "<RecorderID>"+channel.DeviceID+"</RecorderID>") {
 			t.Fatalf("RecordInfo chunk %d leaked local IDs: %s", index, body)
 		}
+		for _, expected := range []string{"<RecorderID>" + testExposedChannelID + "</RecorderID>", "<RecordLocation>" + testExposedChannelID + "</RecordLocation>", "<StreamNumber>2</StreamNumber>"} {
+			if !strings.Contains(body, expected) {
+				t.Fatalf("RecordInfo chunk %d missing mapped 2022 field %q: %s", index, expected, body)
+			}
+		}
+		if strings.Contains(body, channel.DeviceID) {
+			t.Fatalf("RecordInfo chunk %d leaked local storage ID: %s", index, body)
+		}
+	}
+}
+
+func TestCascadeRecordInfoFiltersFieldsByUpstreamVersion(t *testing.T) {
+	streamNumber := 2
+	items := []RecordItem{{
+		DeviceID: testExposedChannelID, Name: "record", Secrecy: 0, Type: "all",
+		FileSize: "1024", RecordLocation: testExposedChannelID, StreamNumber: &streamNumber,
+	}}
+	tests := []struct {
+		version      GBProtocolVersion
+		wantFileSize bool
+		want2022     bool
+		wantAll      bool
+	}{
+		{version: GBVersion10, wantAll: true},
+		{version: GBVersion11},
+		{version: GBVersion20, wantFileSize: true},
+		{version: GBVersion30, wantFileSize: true, want2022: true},
+	}
+	for _, test := range tests {
+		t.Run(string(test.version), func(t *testing.T) {
+			filtered := recordItemsForVersion(items, test.version)
+			body, err := xml.Marshal(filtered[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(body)
+			if strings.Contains(text, "<FileSize>") != test.wantFileSize ||
+				strings.Contains(text, "<RecordLocation>") != test.want2022 ||
+				strings.Contains(text, "<StreamNumber>") != test.want2022 ||
+				strings.Contains(text, "<Type>all</Type>") != test.wantAll {
+				t.Fatalf("version %s RecordInfo item = %s", test.version, text)
+			}
+			if items[0].FileSize != "1024" || items[0].RecordLocation == "" || items[0].StreamNumber == nil || items[0].Type != "all" {
+				t.Fatalf("source RecordInfo item was mutated: %+v", items[0])
+			}
+		})
 	}
 }
 

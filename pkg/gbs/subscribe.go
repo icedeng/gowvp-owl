@@ -410,13 +410,18 @@ func validateMobilePositionData(position *MobilePositionData) error {
 }
 
 func validGBDateTime(value string) bool {
+	_, err := parseGBDateTime(value)
+	return err == nil
+}
+
+func parseGBDateTime(value string) (time.Time, error) {
 	value = strings.TrimSpace(value)
 	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02T15:04:05Z07:00", time.RFC3339} {
-		if _, err := sip.ParseGBTime(layout, value); err == nil {
-			return true
+		if parsed, err := sip.ParseGBTime(layout, value); err == nil {
+			return parsed, nil
 		}
 	}
-	return false
+	return time.Time{}, fmt.Errorf("unsupported GB dateTime")
 }
 
 func (g *GB28181API) storeMobilePositionState(deviceID string, position *MobilePositionData, positions []MobilePositionData) {

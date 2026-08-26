@@ -139,25 +139,38 @@ type RecordItem struct {
 	// DeviceID 设备编号
 	DeviceID string `xml:"DeviceID" bson:"DeviceID" json:"DeviceID"`
 	// Name 设备名称
-	Name       string `xml:"Name" bson:"Name" json:"Name"`
-	HasName    bool   `xml:"-" bson:"-" json:"-"`
-	FilePath   string `xml:"FilePath" bson:"FilePath" json:"FilePath"`
-	Address    string `xml:"Address" bson:"Address" json:"Address"`
-	StartTime  string `xml:"StartTime" bson:"StartTime" json:"StartTime"`
-	EndTime    string `xml:"EndTime" bson:"EndTime" json:"EndTime"`
-	Secrecy    int    `xml:"Secrecy" bson:"Secrecy" json:"Secrecy"`
-	HasSecrecy bool   `xml:"-" bson:"-" json:"-"`
-	Type       string `xml:"Type" bson:"Type" json:"Type"`
-	RecorderID string `xml:"RecorderID" bson:"RecorderID" json:"RecorderID,omitempty"`
-	FileSize   string `xml:"FileSize" bson:"FileSize" json:"FileSize,omitempty"`
+	Name        string `xml:"Name" bson:"Name" json:"Name"`
+	HasName     bool   `xml:"-" bson:"-" json:"-"`
+	FilePath    string `xml:"FilePath,omitempty" bson:"FilePath" json:"FilePath"`
+	Address     string `xml:"Address,omitempty" bson:"Address" json:"Address"`
+	StartTime   string `xml:"StartTime,omitempty" bson:"StartTime" json:"StartTime"`
+	EndTime     string `xml:"EndTime,omitempty" bson:"EndTime" json:"EndTime"`
+	Secrecy     int    `xml:"Secrecy" bson:"Secrecy" json:"Secrecy"`
+	HasSecrecy  bool   `xml:"-" bson:"-" json:"-"`
+	Type        string `xml:"Type,omitempty" bson:"Type" json:"Type"`
+	RecorderID  string `xml:"RecorderID,omitempty" bson:"RecorderID" json:"RecorderID,omitempty"`
+	FileSize    string `xml:"FileSize,omitempty" bson:"FileSize" json:"FileSize,omitempty"`
+	HasFileSize bool   `xml:"-" bson:"-" json:"-"`
+	// RecordLocation 和 StreamNumber 由 2022 A.2.1.10 新增。
+	RecordLocation    string `xml:"RecordLocation,omitempty" bson:"RecordLocation" json:"RecordLocation,omitempty"`
+	HasRecordLocation bool   `xml:"-" bson:"-" json:"-"`
+	StreamNumber      *int   `xml:"StreamNumber,omitempty" bson:"StreamNumber" json:"StreamNumber,omitempty"`
+	hasStartTime      bool
+	hasEndTime        bool
+	hasType           bool
 }
 
 func (item *RecordItem) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
 	type recordItemAlias RecordItem
 	var value struct {
 		recordItemAlias
-		Name    *string `xml:"Name"`
-		Secrecy *int    `xml:"Secrecy"`
+		Name           *string `xml:"Name"`
+		Secrecy        *int    `xml:"Secrecy"`
+		StartTime      *string `xml:"StartTime"`
+		EndTime        *string `xml:"EndTime"`
+		Type           *string `xml:"Type"`
+		FileSize       *string `xml:"FileSize"`
+		RecordLocation *string `xml:"RecordLocation"`
 	}
 	if err := decoder.DecodeElement(&value, &start); err != nil {
 		return err
@@ -168,6 +181,21 @@ func (item *RecordItem) UnmarshalXML(decoder *xml.Decoder, start xml.StartElemen
 	}
 	if value.Secrecy != nil {
 		item.Secrecy, item.HasSecrecy = *value.Secrecy, true
+	}
+	if value.StartTime != nil {
+		item.StartTime, item.hasStartTime = *value.StartTime, true
+	}
+	if value.EndTime != nil {
+		item.EndTime, item.hasEndTime = *value.EndTime, true
+	}
+	if value.Type != nil {
+		item.Type, item.hasType = *value.Type, true
+	}
+	if value.FileSize != nil {
+		item.FileSize, item.HasFileSize = *value.FileSize, true
+	}
+	if value.RecordLocation != nil {
+		item.RecordLocation, item.HasRecordLocation = *value.RecordLocation, true
 	}
 	return nil
 }
@@ -241,25 +269,69 @@ func (g *GB28181API) validateRecordInfoEnvelope(ctx *sip.Context, message *Messa
 	if expectedTarget == "" {
 		expectedTarget = message.DeviceID
 	}
+	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
 	for index := range message.Item {
 		item := &message.Item[index]
 		item.DeviceID = strings.TrimSpace(item.DeviceID)
 		item.Name = strings.TrimSpace(item.Name)
+		item.StartTime = strings.TrimSpace(item.StartTime)
+		item.EndTime = strings.TrimSpace(item.EndTime)
+		item.Type = strings.ToLower(strings.TrimSpace(item.Type))
+		item.RecordLocation = strings.TrimSpace(item.RecordLocation)
 		if item.DeviceID != expectedTarget {
 			return fmt.Errorf("RecordInfo item target mismatch")
 		}
 		if !item.HasName || item.Name == "" || !item.HasSecrecy || item.Secrecy < 0 || item.Secrecy > 1 {
 			return fmt.Errorf("invalid RecordInfo item")
 		}
+		var startTime, endTime time.Time
+		var startErr, endErr error
+		if item.hasStartTime {
+			startTime, startErr = parseGBDateTime(item.StartTime)
+		}
+		if item.hasEndTime {
+			endTime, endErr = parseGBDateTime(item.EndTime)
+		}
+		if startErr != nil || endErr != nil || item.hasStartTime && item.hasEndTime && !endTime.After(startTime) {
+			return fmt.Errorf("invalid RecordInfo item time")
+		}
+		if (item.hasType && item.Type == "") || (item.Type != "" && !validRecordTypeForVersion(item.Type, version)) {
+			return fmt.Errorf("invalid RecordInfo item type")
+		}
+		if item.HasFileSize && !version.AtLeast(GBVersion20) {
+			return fmt.Errorf("RecordInfo file size requires protocol 2.0")
+		}
+		if (item.HasRecordLocation || item.StreamNumber != nil) && !version.AtLeast(GBVersion30) {
+			return fmt.Errorf("RecordInfo storage fields require protocol 3.0")
+		}
+		if version.AtLeast(GBVersion30) {
+			if item.HasRecordLocation && !isGBDeviceIdentifier(item.RecordLocation) {
+				return fmt.Errorf("invalid RecordInfo storage location")
+			}
+			if item.StreamNumber != nil && (*item.StreamNumber < 0 || *item.StreamNumber > 2) {
+				return fmt.Errorf("invalid RecordInfo stream number")
+			}
+		}
 	}
 	return nil
+}
+
+func validRecordTypeForVersion(recordType string, version GBProtocolVersion) bool {
+	switch recordType {
+	case "time", "alarm", "manual":
+		return true
+	case "all":
+		return version == GBVersion10
+	default:
+		return false
+	}
 }
 
 func transRecordItems(items []RecordItem, start, end int64) Records {
 	data := make([][]int64, 0, len(items))
 	for _, item := range items {
-		s, startErr := sip.ParseGBTime("2006-01-02T15:04:05", item.StartTime)
-		e, endErr := sip.ParseGBTime("2006-01-02T15:04:05", item.EndTime)
+		s, startErr := parseGBDateTime(item.StartTime)
+		e, endErr := parseGBDateTime(item.EndTime)
 		if startErr != nil || endErr != nil || !e.After(s) {
 			continue
 		}

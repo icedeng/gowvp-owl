@@ -90,6 +90,48 @@ func TestRecordInfoAcceptsRequiredItemFieldsForAllVersions(t *testing.T) {
 	}
 }
 
+func TestRecordInfoValidatesOptionalItemFieldsByVersion(t *testing.T) {
+	valid := `<Response><CmdType>RecordInfo</CmdType><SN>7</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Name>record</Name><StartTime>2026-08-25T10:00:00</StartTime><EndTime>2026-08-25T10:01:00</EndTime><Secrecy>0</Secrecy><Type>time</Type></Item></RecordList></Response>`
+	tests := []struct {
+		name    string
+		version GBProtocolVersion
+		body    string
+		wantOK  bool
+	}{
+		{name: "2011 all type", version: GBVersion10, body: strings.Replace(valid, "<Type>time</Type>", "<Type>all</Type>", 1), wantOK: true},
+		{name: "2014 all type", version: GBVersion11, body: strings.Replace(valid, "<Type>time</Type>", "<Type>all</Type>", 1)},
+		{name: "uppercase type normalized", version: GBVersion20, body: strings.Replace(valid, "<Type>time</Type>", "<Type>ALARM</Type>", 1), wantOK: true},
+		{name: "unknown type", version: GBVersion30, body: strings.Replace(valid, "<Type>time</Type>", "<Type>other</Type>", 1)},
+		{name: "empty type", version: GBVersion20, body: strings.Replace(valid, "<Type>time</Type>", "<Type></Type>", 1)},
+		{name: "empty optional time", version: GBVersion20, body: strings.Replace(valid, "2026-08-25T10:00:00", "", 1)},
+		{name: "invalid start time", version: GBVersion20, body: strings.Replace(valid, "2026-08-25T10:00:00", "invalid", 1)},
+		{name: "reversed time", version: GBVersion20, body: strings.Replace(valid, "2026-08-25T10:01:00", "2026-08-25T09:59:00", 1)},
+		{name: "fractional timezone", version: GBVersion30, body: strings.Replace(strings.Replace(valid, "2026-08-25T10:00:00", "2026-08-25T10:00:00.123+08:00", 1), "2026-08-25T10:01:00", "2026-08-25T10:01:00.456+08:00", 1), wantOK: true},
+		{name: "2014 file size", version: GBVersion11, body: strings.Replace(valid, "</Item>", "<FileSize>1024</FileSize></Item>", 1)},
+		{name: "2016 file size", version: GBVersion20, body: strings.Replace(valid, "</Item>", "<FileSize>1024</FileSize></Item>", 1), wantOK: true},
+		{name: "2016 record location", version: GBVersion20, body: strings.Replace(valid, "</Item>", "<RecordLocation>"+gb10DeviceID+"</RecordLocation></Item>", 1)},
+		{name: "valid 2022 storage fields", version: GBVersion30, body: strings.Replace(valid, "</Item>", "<RecordLocation>"+gb10DeviceID+"</RecordLocation><StreamNumber>2</StreamNumber></Item>", 1), wantOK: true},
+		{name: "empty 2022 record location", version: GBVersion30, body: strings.Replace(valid, "</Item>", "<RecordLocation></RecordLocation></Item>", 1)},
+		{name: "invalid 2022 record location", version: GBVersion30, body: strings.Replace(valid, "</Item>", "<RecordLocation>bad</RecordLocation></Item>", 1)},
+		{name: "invalid 2022 stream number", version: GBVersion30, body: strings.Replace(valid, "</Item>", "<StreamNumber>3</StreamNumber></Item>", 1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			memory := newFlowMemory(gb10DeviceID)
+			memory.runtime.setGBVersion(test.version)
+			memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+			collector := newMultiResponseCollector(func(item RecordItem) string { return item.DeviceID + item.FilePath })
+			key := buildMultiResponseKey(gb10ChannelID, "RecordInfo", 7)
+			collector.Start(key)
+			api := &GB28181API{svr: &Server{memoryStorer: memory}, recordResponses: collector}
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "record-optional-"+test.name, []byte(test.body), api.sipMessageRecordInfo)
+			if gotOK := strings.Contains(response, "SIP/2.0 200"); gotOK != test.wantOK {
+				t.Fatalf("RecordInfo response = %s, want OK %v", response, test.wantOK)
+			}
+		})
+	}
+}
+
 func TestRecordInfoAcceptsEmptyResultWithoutRecordListForAllVersions(t *testing.T) {
 	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30} {
 		t.Run(string(version), func(t *testing.T) {

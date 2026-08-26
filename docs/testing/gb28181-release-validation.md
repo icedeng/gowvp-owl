@@ -38,7 +38,7 @@ go test ./... -count=1
 - BasicParam、VideoParamConfig、AudioParamConfig、SVACEncodeConfig、SVACDecodeConfig 查询与写入报文、组合下发、SVAC XML 片段安全校验及原始响应保存；
 - MediaStatus/121 幂等收敛；
 - Catalog/RecordInfo 多响应乱序、重复、总数冲突、超时部分结果和同设备并发；
-- RecordInfo 响应包络、列表计数、条目非空名称与显式 `Secrecy=0/1`、目标所有权和在途通道绑定；非法分包不得进入聚合器，NVR 顶层父设备编码别名仍可映射到原查询通道；
+- RecordInfo 响应包络、列表计数、条目非空名称、显式 `Secrecy=0/1`、可选 dateTime 起止时间、版本化 Type/FileSize/RecordLocation/StreamNumber、目标所有权和在途通道绑定；级联响应按上级版本裁剪新字段并映射 RecorderID/RecordLocation，非法分包不得进入聚合器，NVR 顶层父设备编码别名仍可映射到原查询通道；
 - Catalog 缺失/零值 SumNum、DeviceList Num、本包与通知总数、条目编码、已鉴权来源及父设备聚合目标；通用查询相同 SN 的兄弟通道响应不得抢占等待；
 - MobilePosition 的 2011/2014 版本门禁、2016 单点坐标及 2022 批量 `DeviceList` 解码；非法时间、坐标、方向、计数或目标不得写状态和转发；
 - 2022 升级、抓拍完成和实时视音频回传通知的固定 Notify 根、20 位目标及抓拍列表/文件标识完整性；
