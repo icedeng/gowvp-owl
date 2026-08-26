@@ -70,7 +70,7 @@ func TestBuildCascadeCatalogItemsUsesMappingAndVersionProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	xmlText := string(body)
-	for _, expected := range []string{`<Response>`, `<SumNum>1</SumNum>`, `<DeviceList Num="1">`, `<DeviceID>` + testExposedChannelID + `</DeviceID>`, `<Info>`} {
+	for _, expected := range []string{`<Response>`, `<SumNum>1</SumNum>`, `<DeviceList Num="1">`, `<DeviceID>` + testExposedChannelID + `</DeviceID>`, `<Owner></Owner>`, `<SafetyWay>0</SafetyWay>`, `<CertNum></CertNum>`, `<Certifiable>0</Certifiable>`, `<ErrCode>0</ErrCode>`, `<EndTime></EndTime>`, `<Info>`} {
 		if !strings.Contains(xmlText, expected) {
 			t.Fatalf("catalog XML missing %q: %s", expected, xmlText)
 		}
@@ -111,6 +111,27 @@ func TestBuildCascadeCatalogItemsUsesMappingAndVersionProfile(t *testing.T) {
 	for _, removed := range []string{"<Owner>", "<PositionType>", "<UseType>", "<SafetyWay>", "<CertNum>", "<Certifiable>", "<ErrCode>", "<EndTime>"} {
 		if strings.Contains(modernXML, removed) {
 			t.Fatalf("2022 catalog contains removed field %q: %s", removed, modernXML)
+		}
+	}
+}
+
+func TestCascadeCatalogLegacyRequiredFieldsStayPresent(t *testing.T) {
+	platform := testSharedCascadePlatform(t)
+	channel := &ipc.Channel{ChannelID: testCascadeChannelID, Name: "Camera", IsOnline: true}
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20} {
+		items := buildCascadeCatalogItems([]*ipc.Channel{channel}, platform, version)
+		body, err := sip.XMLEncode(cascadeCatalogResponse{
+			CmdType: "Catalog", SN: 9, DeviceID: gb10DeviceID, SumNum: 1,
+			DeviceList: &cascadeCatalogDeviceList{Num: 1, Items: items},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		xmlText := string(body)
+		for _, expected := range []string{"<Owner></Owner>", "<SafetyWay>0</SafetyWay>", "<CertNum></CertNum>", "<Certifiable>0</Certifiable>", "<ErrCode>0</ErrCode>", "<EndTime></EndTime>"} {
+			if !strings.Contains(xmlText, expected) {
+				t.Errorf("version %s Catalog missing required field %q: %s", version, expected, xmlText)
+			}
 		}
 	}
 }

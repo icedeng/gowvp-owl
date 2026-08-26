@@ -71,18 +71,18 @@ type cascadeCatalogItem struct {
 	Name              string              `xml:"Name"`
 	Manufacturer      string              `xml:"Manufacturer"`
 	Model             string              `xml:"Model"`
-	Owner             string              `xml:"Owner,omitempty"`
+	Owner             *string             `xml:"Owner,omitempty"`
 	CivilCode         string              `xml:"CivilCode"`
 	Block             string              `xml:"Block"`
 	Address           string              `xml:"Address"`
 	Parental          int                 `xml:"Parental"`
 	ParentID          string              `xml:"ParentID"`
-	SafetyWay         int                 `xml:"SafetyWay,omitempty"`
+	SafetyWay         *int                `xml:"SafetyWay,omitempty"`
 	RegisterWay       int                 `xml:"RegisterWay"`
-	CertNum           string              `xml:"CertNum,omitempty"`
-	Certifiable       int                 `xml:"Certifiable,omitempty"`
-	ErrCode           int                 `xml:"ErrCode,omitempty"`
-	EndTime           string              `xml:"EndTime,omitempty"`
+	CertNum           *string             `xml:"CertNum,omitempty"`
+	Certifiable       *int                `xml:"Certifiable,omitempty"`
+	ErrCode           *int                `xml:"ErrCode,omitempty"`
+	EndTime           *string             `xml:"EndTime,omitempty"`
 	SecurityLevelCode string              `xml:"SecurityLevelCode,omitempty"`
 	Secrecy           int                 `xml:"Secrecy"`
 	IPAddress         string              `xml:"IPAddress"`
@@ -932,19 +932,10 @@ func buildCascadeCatalogItems(channels []*ipc.Channel, platform cascadePlatform,
 			item.Status = "ON"
 		}
 		if ext != nil {
-			if version != GBVersion30 {
-				item.Owner = ext.Owner
-			}
 			item.CivilCode = firstNonEmpty(ext.CivilCode, item.CivilCode)
 			item.Block = ext.Block
 			item.Address = ext.Address
-			if version != GBVersion30 {
-				item.SafetyWay = ext.SafetyWay
-				item.CertNum = ext.CertNum
-				item.Certifiable = ext.Certifiable
-				item.ErrCode = ext.ErrCode
-				item.EndTime = ext.EndTime
-			} else {
+			if version == GBVersion30 {
 				item.SecurityLevelCode = ext.SecurityLevelCode
 			}
 			if ext.RegisterWay > 0 {
@@ -955,6 +946,15 @@ func buildCascadeCatalogItems(channels []*ipc.Channel, platform cascadePlatform,
 			item.Port = ext.Port
 			item.Longitude = ext.Longitude
 			item.Latitude = ext.Latitude
+		}
+		if version != GBVersion30 {
+			owner, safetyWay, certNum, certifiable, errCode, endTime := "", 0, "", 0, 0, ""
+			if ext != nil {
+				owner, safetyWay, certNum = ext.Owner, ext.SafetyWay, ext.CertNum
+				certifiable, errCode, endTime = ext.Certifiable, ext.ErrCode, ext.EndTime
+			}
+			item.Owner, item.SafetyWay, item.CertNum = &owner, &safetyWay, &certNum
+			item.Certifiable, item.ErrCode, item.EndTime = &certifiable, &errCode, &endTime
 		}
 		if version.AtLeast(GBVersion11) {
 			item.Info = &cascadeCatalogInfo{}
