@@ -29,6 +29,28 @@ func TestStartUDPServerReturnsBindError(t *testing.T) {
 	}
 }
 
+func TestStartUDPServerSupportsIPv6Loopback(t *testing.T) {
+	uri, err := ParseSipURI("sip:34020000002000000001@[::1]:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &uri, Params: NewParams()})
+	defer server.Close()
+	if err := server.StartUDPServer("[::1]:0"); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "address family not supported") {
+			t.Skipf("IPv6 loopback is unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	local, ok := server.UDPConn().LocalAddr().(*net.UDPAddr)
+	if !ok || local.IP.To4() != nil || !local.IP.IsLoopback() || local.Port == 0 {
+		t.Fatalf("IPv6 SIP listener address = %#v", server.UDPConn().LocalAddr())
+	}
+	if server.host != "::1" || server.port == nil || int(*server.port) != local.Port {
+		t.Fatalf("IPv6 SIP advertise endpoint = %q:%v, listener = %v", server.host, server.port, local)
+	}
+}
+
 func TestStartTCPServerReturnsBindError(t *testing.T) {
 	occupied, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {

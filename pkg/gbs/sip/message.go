@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"strings"
 )
 
 // MessageID MessageID
@@ -264,8 +265,8 @@ func (uri *URI) String() string {
 		buffer.WriteString("@")
 	}
 
-	// Compulsory hostname.
-	buffer.WriteString(uri.FHost)
+	// Compulsory hostname. RFC 3261 要求 IPv6 地址在 SIP URI 中使用方括号。
+	buffer.WriteString(formatSIPHost(uri.FHost))
 
 	// Optional port number.
 	if uri.FPort != nil {
@@ -283,6 +284,16 @@ func (uri *URI) String() string {
 	}
 
 	return buffer.String()
+}
+
+func formatSIPHost(host string) string {
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		return host
+	}
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 // Clone the Sip URI.

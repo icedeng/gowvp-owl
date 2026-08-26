@@ -16,6 +16,9 @@ func TestParseSipURIRejectsMalformedInputWithoutPanic(t *testing.T) {
 		"sip::5060",
 		"sip:example.com:",
 		"sip:[2001:db8::1",
+		"sip:[]:5060",
+		"sip:[example.com]:5060",
+		"sip:[fe80::1%en0]:5060",
 		"sip:device@example.com\r\nVia: injected",
 		"sip:device@example.com\x7f",
 	}
@@ -37,7 +40,7 @@ func TestParseSipURIAcceptsValidForms(t *testing.T) {
 	}{
 		{input: "sip:34020000001320000001@3402000000:5060", host: "3402000000"},
 		{input: "sips:34020000001320000001@example.com", host: "example.com", encrypted: true},
-		{input: "sip:[2001:db8::1]:5060", host: "[2001:db8::1]"},
+		{input: "sip:[2001:db8::1]:5060", host: "2001:db8::1"},
 	}
 
 	for _, test := range tests {

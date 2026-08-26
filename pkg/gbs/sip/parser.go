@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -966,7 +967,12 @@ func ParseHostPort(rawText string) (host string, port *Port, err error) {
 			err = fmt.Errorf("IPv6 host is missing closing bracket in %q", rawText)
 			return
 		}
-		host = rawText[:endBracket+1]
+		host = rawText[1:endBracket]
+		ip := net.ParseIP(host)
+		if ip == nil || ip.To4() != nil {
+			err = fmt.Errorf("bracketed host is not a valid IPv6 address in %q", rawText)
+			return
+		}
 		remainder := rawText[endBracket+1:]
 		if remainder == "" {
 			return

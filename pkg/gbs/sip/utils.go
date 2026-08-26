@@ -225,40 +225,55 @@ func Max(a, b int64) int64 {
 
 // ResolveSelfIP ResolveSelfIP
 func ResolveSelfIP() (net.IP, error) {
+	return resolveSelfIPForFamily(0)
+}
+
+func resolveSelfIPForFamily(family int) (net.IP, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil, err
 	}
+	addrs := make([]net.Addr, 0)
 	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 {
-			continue // interface down
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
 		}
-		if iface.Flags&net.FlagLoopback != 0 {
-			continue // loopback interface
-		}
-		addrs, err := iface.Addrs()
+		ifaceAddrs, err := iface.Addrs()
 		if err != nil {
 			return nil, err
 		}
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
+		addrs = append(addrs, ifaceAddrs...)
+	}
+	return selectSelfIP(addrs, family)
+}
+
+func selectSelfIP(addrs []net.Addr, family int) (net.IP, error) {
+	var ipv6 net.IP
+	for _, addr := range addrs {
+		var ip net.IP
+		switch value := addr.(type) {
+		case *net.IPNet:
+			ip = value.IP
+		case *net.IPAddr:
+			ip = value.IP
+		}
+		if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		if ip4 := ip.To4(); ip4 != nil {
+			if family == 0 || family == 4 {
+				return ip4, nil
 			}
-			if ip == nil || ip.IsLoopback() {
-				continue
-			}
-			ip = ip.To4()
-			if ip == nil {
-				continue // not an ipv4 address
-			}
-			return ip, nil
+			continue
+		}
+		if ip.To16() != nil && family != 4 && ipv6 == nil {
+			ipv6 = ip
 		}
 	}
-	return nil, errors.New("server not connected to any network")
+	if ipv6 != nil {
+		return ipv6, nil
+	}
+	return nil, errors.New("server not connected to a usable network")
 }
 
 // GBK 转 UTF-8

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,7 +20,6 @@ import (
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/pkg/gbs/m"
 	"github.com/gowvp/owl/pkg/gbs/sip"
-	"github.com/ixugo/netpulse/ip"
 )
 
 // defaultSIPServer 仅供保留的旧版包级停止接口使用；核心流程均使用 Server 实例。
@@ -93,8 +93,11 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	if !ok || memoryStorer == nil {
 		return nil, nil, fmt.Errorf("GB28181 memory store is unavailable")
 	}
-	iip := ip.InternalIP()
-	uri, err := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s:%d", cfg.Sip.ID, iip, cfg.Sip.Port))
+	advertiseHost, err := resolveSIPAdvertiseHost(cfg.Sip.Host, cfg.Media.SDPIP, sip.ResolveSelfIP)
+	if err != nil {
+		return nil, nil, err
+	}
+	uri, err := sip.ParseSipURI(fmt.Sprintf("sip:%s@%s", cfg.Sip.ID, net.JoinHostPort(advertiseHost, strconv.Itoa(cfg.Sip.Port))))
 	if err != nil {
 		return nil, nil, fmt.Errorf("build GB28181 server URI: %w", err)
 	}
@@ -239,6 +242,30 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 		return nil, nil, fmt.Errorf("initialize GB28181 cascade upstreams: %w", err)
 	}
 	return &c, cleanup, nil
+}
+
+func resolveSIPAdvertiseHost(configured, fallback string, resolver func() (net.IP, error)) (string, error) {
+	host := strings.TrimSpace(configured)
+	if host == "" {
+		if selfIP, err := resolver(); err == nil {
+			host = selfIP.String()
+		} else {
+			host = strings.TrimSpace(fallback)
+			if host == "" {
+				return "", fmt.Errorf("resolve GB28181 SIP advertise address: %w", err)
+			}
+		}
+	}
+	if strings.HasPrefix(host, "[") || strings.HasSuffix(host, "]") {
+		if !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") {
+			return "", fmt.Errorf("GB28181 SIP advertise address has mismatched IPv6 brackets: %s", host)
+		}
+		host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		if ip := net.ParseIP(host); ip == nil || ip.To4() != nil {
+			return "", fmt.Errorf("GB28181 SIP advertise address is not a valid bracketed IPv6 address: %s", host)
+		}
+	}
+	return host, nil
 }
 
 // Close 先收敛 GB28181 业务任务，再注销上级级联并关闭底层 SIP 监听器。

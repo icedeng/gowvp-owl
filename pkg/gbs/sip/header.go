@@ -38,7 +38,6 @@ func NewHeaderBuilder() *HeadersBuilder {
 	return &HeadersBuilder{
 		protocol:        "SIP",
 		protocolVersion: "2.0",
-		host:            "localhost",
 		transport:       "UDP",
 		cseq:            &CSeq{SeqNo: 1},
 		callID:          &callID,
@@ -790,7 +789,7 @@ type ViaHop struct {
 // SentBy SentBy
 func (hop *ViaHop) SentBy() string {
 	var buf bytes.Buffer
-	buf.WriteString(hop.Host)
+	buf.WriteString(formatSIPHost(hop.Host))
 	if hop.Port != nil {
 		buf.WriteString(fmt.Sprintf(":%d", *hop.Port))
 	}
@@ -806,7 +805,7 @@ func (hop *ViaHop) String() string {
 			hop.ProtocolName,
 			hop.ProtocolVersion,
 			hop.Transport,
-			hop.Host,
+			formatSIPHost(hop.Host),
 		),
 	)
 	if hop.Port != nil {

@@ -54,7 +54,7 @@ type Server struct {
 	security    RequestSecurityResolver
 
 	port *Port
-	host net.IP
+	host string
 
 	tcpPort     *Port
 	tcpListener *net.TCPListener
@@ -89,6 +89,12 @@ func NewServer(form *Address) *Server {
 		cancel:      cancel,
 		connections: make(map[Connection]struct{}),
 		from:        form,
+	}
+	if form != nil && form.URI != nil {
+		srv.host = form.URI.Host()
+		if form.URI.FPort != nil {
+			srv.port = form.URI.FPort.Clone()
+		}
 	}
 	return srv
 }
@@ -210,17 +216,44 @@ func (s *Server) bindUDP(addr string) error {
 	if err != nil {
 		return fmt.Errorf("net.ResolveUDPAddr err[%w]", err)
 	}
-	s.port = NewPort(udpaddr.Port)
-	s.host, err = ResolveSelfIP()
-	if err != nil {
-		return fmt.Errorf("resolve SIP UDP self IP: %w", err)
-	}
 	udp, err := net.ListenUDP("udp", udpaddr)
 	if err != nil {
 		return fmt.Errorf("net.ListenUDP err[%w]", err)
 	}
+	localAddr, ok := udp.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		_ = udp.Close()
+		return fmt.Errorf("SIP UDP listener returned unexpected local address %T", udp.LocalAddr())
+	}
+	s.port = NewPort(localAddr.Port)
+	if s.host == "" {
+		s.host, err = listenerAdvertiseHost(localAddr.IP, udpaddr.IP)
+		if err != nil {
+			_ = udp.Close()
+			return fmt.Errorf("resolve SIP UDP self IP: %w", err)
+		}
+	}
 	s.udpConn = NewUDPConnection(udp)
 	return nil
+}
+
+func listenerAdvertiseHost(localIP, requestedIP net.IP) (string, error) {
+	if localIP != nil && !localIP.IsUnspecified() {
+		return localIP.String(), nil
+	}
+	family := 0
+	if requestedIP != nil {
+		if requestedIP.To4() != nil {
+			family = 4
+		} else if requestedIP.To16() != nil {
+			family = 6
+		}
+	}
+	ip, err := resolveSelfIPForFamily(family)
+	if err != nil {
+		return "", err
+	}
+	return ip.String(), nil
 }
 
 func (s *Server) serveUDP(conn Connection) error {
@@ -996,7 +1029,7 @@ func (s *Server) RequestWithSecurity(req *Request, security MessageSecurity) (*T
 		return nil, fmt.Errorf("missing required 'Via' header")
 	}
 	if viaHop.Host == "" {
-		viaHop.Host = s.host.String()
+		viaHop.Host = s.host
 	}
 	if viaHop.Port == nil {
 		viaHop.Port = s.port
