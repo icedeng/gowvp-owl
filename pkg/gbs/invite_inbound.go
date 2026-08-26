@@ -1197,15 +1197,16 @@ func (g *GB28181API) sendStreamBYE(stream *Streams) {
 		return
 	}
 	ch, ok := g.svr.memoryStorer.GetChannel(stream.DeviceID, stream.ChannelID)
-	if !ok || ch == nil || ch.Conn() == nil || ch.Source() == nil {
+	if !ok || ch == nil {
 		return
 	}
 	req, err := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp)
 	if err != nil {
 		return
 	}
-	req.SetDestination(ch.Source())
-	req.SetConnection(ch.Conn())
+	if prepareDialogRequestTransport(req, ch) != nil {
+		return
+	}
 	_, _ = g.svr.Request(req)
 }
 

@@ -268,8 +268,12 @@ func prepareCascadeDialogRequest(worker *cascadeWorker, request *sip.Request) {
 	if worker == nil || request == nil {
 		return
 	}
-	request.SetDestination(worker.remoteDestination())
-	if worker.server != nil && worker.server.Server != nil && worker.server.UDPConn() != nil {
+	remote := worker.remoteDestination()
+	if request.Destination() == nil || (strings.EqualFold(request.Transport(), "TLS") && cascadeTransportForAddr(remote) == "tls") {
+		// TLS 响应源是 net.TCPAddr，会丢失 TLS/serverName 类型信息；此处恢复已验证的上级目标。
+		request.SetDestination(remote)
+	}
+	if request.GetConnection() == nil && worker.server != nil && worker.server.Server != nil && worker.server.UDPConn() != nil {
 		request.SetConnection(worker.server.UDPConn())
 		request.SetSource(worker.server.UDPConn().LocalAddr())
 	}

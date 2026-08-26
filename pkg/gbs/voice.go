@@ -219,9 +219,9 @@ func (g *GB28181API) startTalk(ctx context.Context, ch *Channel, in *VoiceInput)
 		}
 		if stream.Resp != nil {
 			if req, requestErr := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp); requestErr == nil {
-				req.SetDestination(ch.Source())
-				req.SetConnection(ch.Conn())
-				_, _ = g.svr.Request(req)
+				if prepareDialogRequestTransport(req, ch) == nil {
+					_, _ = g.svr.Request(req)
+				}
 			}
 		}
 		_ = g.stopTalkSession(session, err)
@@ -527,9 +527,10 @@ func (g *GB28181API) stopVoiceNoLock(ch *Channel, in *StopVoiceInput) error {
 		if requestErr != nil {
 			result = requestErr
 		} else {
-			req.SetDestination(ch.Source())
-			req.SetConnection(ch.Conn())
-			_, result = g.svr.Request(req)
+			result = prepareDialogRequestTransport(req, ch)
+			if result == nil {
+				_, result = g.svr.Request(req)
+			}
 		}
 	}
 	if value, ok := g.talkSessions.Load(stream.StreamID); ok {

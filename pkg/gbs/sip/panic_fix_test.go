@@ -1,6 +1,10 @@
 package sip
 
-import "testing"
+import (
+	"net"
+	"sync"
+	"testing"
+)
 
 type nilCloneHeader struct {
 	name string
@@ -182,6 +186,219 @@ func TestNewRequestFromResponseReversesRouteSetAndPreservesResponseCSeq(t *testi
 	}
 	if original, _ := response.CSeq(); original.MethodName != MethodInvite || original.SeqNo != 1 {
 		t.Fatalf("response CSeq mutated after BYE: %+v", original)
+	}
+}
+
+func TestNewRequestFromResponseAppliesStrictAndLooseRouting(t *testing.T) {
+	target, _ := ParseURI("sip:34020000001320000001@device.example:5060")
+	request := NewRequest("", MethodInvite, target, DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodInvite).
+		SetFrom(&Address{URI: target.Clone(), Params: NewParams()}).
+		SetTo(&Address{URI: target.Clone(), Params: NewParams()}).
+		AddVia(&ViaHop{Host: "client.example", Port: NewPort(5060), Params: NewParams().Add("branch", String{Str: "z9hG4bK-invite"})}).
+		Build(), nil)
+	response := NewResponseFromRequest("", request, 200, "OK", nil)
+	contact, _ := ParseURI("sip:34020000001320000001@contact.example:5070")
+	response.AppendHeader(&ContactHeader{Address: contact, Params: NewParams()})
+	loose, _ := ParseURI("sip:loose.example;LR")
+	strict, _ := ParseURI("sip:strict.example")
+	response.AppendHeader(&RecordRouteHeader{Addresses: []*URI{loose, strict}})
+
+	ack, err := NewRequestFromResponseChecked(MethodACK, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if length, ok := ack.ContentLength(); !ok || length == nil || *length != 0 {
+		t.Fatalf("ACK Content-Length = %v, present %v", length, ok)
+	}
+	if got := ack.Recipient().Host(); got != "strict.example" {
+		t.Fatalf("strict-route Request-URI host = %q", got)
+	}
+	route, ok := ack.GetHeaders("Route")[0].(*RouteHeader)
+	if !ok || len(route.Addresses) != 2 || route.Addresses[0].Host() != "loose.example" || route.Addresses[1].Host() != "contact.example" {
+		t.Fatalf("strict-route Route = %#v", ack.GetHeaders("Route"))
+	}
+
+	response.RemoveHeader("Record-Route")
+	first, _ := ParseURI("sip:first.example;lr")
+	second, _ := ParseURI("sip:second.example;lr")
+	response.AppendHeader(&RecordRouteHeader{Addresses: []*URI{first, second}})
+	ack, err = NewRequestFromResponseChecked(MethodACK, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ack.Recipient().Host(); got != "contact.example" {
+		t.Fatalf("loose-route Request-URI host = %q", got)
+	}
+	route, ok = ack.GetHeaders("Route")[0].(*RouteHeader)
+	if !ok || len(route.Addresses) != 2 || route.Addresses[0].Host() != "second.example" || route.Addresses[1].Host() != "first.example" {
+		t.Fatalf("loose-route Route = %#v", ack.GetHeaders("Route"))
+	}
+}
+
+func TestNewRequestFromResponseSanitizesViaAndAllocatesDialogCSeq(t *testing.T) {
+	target, _ := ParseURI("sip:34020000001320000001@device.example:5060")
+	request := NewRequest("", MethodInvite, target, DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodInvite).
+		SetSeqNo(41).
+		SetFrom(&Address{URI: target.Clone(), Params: NewParams()}).
+		SetTo(&Address{URI: target.Clone(), Params: NewParams()}).
+		AddVia(&ViaHop{Host: "client.example", Port: NewPort(5060), Params: NewParams().
+			Add("branch", String{Str: "z9hG4bK-invite"}).Add("received", String{Str: "192.0.2.20"}).
+			Add("rport", String{Str: "41000"}).Add("keep", String{Str: "yes"})}).
+		Build(), nil)
+	response := NewResponseFromRequest("", request, 200, "OK", nil)
+	connection, peer := net.Pipe()
+	defer connection.Close()
+	defer peer.Close()
+	wrapped := NewTCPConnection(connection)
+	response.SetConnection(wrapped)
+
+	ack, err := NewRequestFromResponseChecked(MethodACK, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	via, _ := ack.ViaHop()
+	if branch := sipViaBranchValue(via); branch == "" || branch == "z9hG4bK-invite" {
+		t.Fatalf("ACK Via branch = %q", branch)
+	}
+	if _, _, count := sipViaParam(via, "received"); count != 0 {
+		t.Fatal("ACK copied response received parameter")
+	}
+	if _, value, count := sipViaParam(via, "rport"); count != 1 || value != "" {
+		t.Fatalf("ACK rport = count:%d value:%q", count, value)
+	}
+	if value, ok := via.Params.Get("keep"); !ok || value == nil || value.String() != "yes" {
+		t.Fatal("ACK dropped unrelated Via parameter")
+	}
+	if ack.GetConnection() != wrapped {
+		t.Fatal("ACK did not retain response transport connection")
+	}
+
+	info, err := NewRequestFromResponseChecked(MethodInfo, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bye, err := NewRequestFromResponseChecked(MethodBYE, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	infoCSeq, _ := info.CSeq()
+	byeCSeq, _ := bye.CSeq()
+	if infoCSeq.SeqNo != 42 || byeCSeq.SeqNo != 43 {
+		t.Fatalf("dialog CSeq = INFO %d, BYE %d", infoCSeq.SeqNo, byeCSeq.SeqNo)
+	}
+	responseCSeq, _ := response.CSeq()
+	if responseCSeq.SeqNo != 41 || responseCSeq.MethodName != MethodInvite {
+		t.Fatalf("response CSeq mutated: %+v", responseCSeq)
+	}
+}
+
+func TestNewRequestFromResponseAllocatesConcurrentDialogCSeq(t *testing.T) {
+	target, _ := ParseURI("sip:34020000001320000001@device.example:5060")
+	request := NewRequest("", MethodInvite, target, DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodInvite).SetSeqNo(100).
+		SetFrom(&Address{URI: target.Clone(), Params: NewParams()}).
+		SetTo(&Address{URI: target.Clone(), Params: NewParams()}).
+		AddVia(&ViaHop{Host: "client.example", Params: NewParams().Add("branch", String{Str: "z9hG4bK-concurrent"})}).
+		Build(), nil)
+	response := NewResponseFromRequest("", request, 200, "OK", nil)
+	const workers = 32
+	results := make(chan uint32, workers)
+	var wait sync.WaitGroup
+	wait.Add(workers)
+	for range workers {
+		go func() {
+			defer wait.Done()
+			info, err := NewRequestFromResponseChecked(MethodInfo, response)
+			if err != nil {
+				t.Errorf("build concurrent INFO: %v", err)
+				return
+			}
+			cseq, _ := info.CSeq()
+			results <- cseq.SeqNo
+		}()
+	}
+	wait.Wait()
+	close(results)
+	seen := make(map[uint32]struct{}, workers)
+	for cseq := range results {
+		if cseq < 101 || cseq > 100+workers {
+			t.Fatalf("concurrent dialog CSeq = %d", cseq)
+		}
+		if _, exists := seen[cseq]; exists {
+			t.Fatalf("duplicate concurrent dialog CSeq = %d", cseq)
+		}
+		seen[cseq] = struct{}{}
+	}
+	if len(seen) != workers {
+		t.Fatalf("concurrent dialog CSeq count = %d, want %d", len(seen), workers)
+	}
+}
+
+func TestNewCancelRequestFromInvitePreservesTransaction(t *testing.T) {
+	target, _ := ParseURI("sip:34020000001320000001@device.example:5060")
+	from := &Address{URI: target.Clone(), Params: NewParams().Add("tag", String{Str: "from-tag"})}
+	to := &Address{URI: target.Clone(), Params: NewParams()}
+	callID := CallID("cancel-transaction")
+	invite := NewRequest("", MethodInvite, target, DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodInvite).SetSeqNo(17).SetFrom(from).SetTo(to).SetCallID(&callID).
+		AddVia(&ViaHop{Host: "client.example", Port: NewPort(5060), Params: NewParams().Add("branch", String{Str: "z9hG4bK-cancel"})}).
+		Build(), nil)
+	route, _ := ParseURI("sip:proxy.example;lr")
+	invite.AppendHeader(&RouteHeader{Addresses: []*URI{route}})
+	invite.SetSource(&net.UDPAddr{IP: net.ParseIP("192.0.2.20"), Port: 5060})
+	invite.SetDestination(&net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060})
+
+	cancel, err := NewCancelRequestFromInviteChecked(invite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancel.Recipient().String() != invite.Recipient().String() || cancel.Destination().String() != invite.Destination().String() {
+		t.Fatalf("CANCEL target = %s / %v", cancel.Recipient(), cancel.Destination())
+	}
+	inviteVia, _ := invite.ViaHop()
+	cancelVia, _ := cancel.ViaHop()
+	if sipViaBranchValue(cancelVia) != sipViaBranchValue(inviteVia) || cancelVia.SentBy() != inviteVia.SentBy() {
+		t.Fatalf("CANCEL Via = %s, INVITE Via = %s", cancelVia, inviteVia)
+	}
+	cseq, _ := cancel.CSeq()
+	if cseq.SeqNo != 17 || cseq.MethodName != MethodCancel || len(cancel.GetHeaders("Route")) != 1 {
+		t.Fatalf("CANCEL transaction headers = CSeq:%+v Route:%v", cseq, cancel.GetHeaders("Route"))
+	}
+	if request, err := NewRequestFromResponseChecked(MethodCancel, NewResponseFromRequest("", invite, 200, "OK", nil)); err == nil || request != nil {
+		t.Fatal("CANCEL was incorrectly constructed from a response")
+	}
+}
+
+func TestNewAckRequestForNon2xxResponsePreservesInviteTransaction(t *testing.T) {
+	target, _ := ParseURI("sip:34020000001320000001@device.example:5060")
+	from := &Address{URI: target.Clone(), Params: NewParams().Add("tag", String{Str: "from-tag"})}
+	to := &Address{URI: target.Clone(), Params: NewParams()}
+	callID := CallID("non-2xx-ack")
+	invite := NewRequest("", MethodInvite, target, DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodInvite).SetSeqNo(19).SetFrom(from).SetTo(to).SetCallID(&callID).
+		AddVia(&ViaHop{Host: "client.example", Params: NewParams().Add("branch", String{Str: "z9hG4bK-error"})}).
+		Build(), nil)
+	response := NewResponseFromRequest("", invite, 486, "Busy Here", nil)
+	ack, err := NewAckRequestForNon2xxResponseChecked(invite, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ack.Recipient().String() != invite.Recipient().String() {
+		t.Fatalf("non-2xx ACK Request-URI = %s", ack.Recipient())
+	}
+	inviteVia, _ := invite.ViaHop()
+	ackVia, _ := ack.ViaHop()
+	if sipViaBranchValue(ackVia) != sipViaBranchValue(inviteVia) {
+		t.Fatalf("non-2xx ACK Via = %s, INVITE Via = %s", ackVia, inviteVia)
+	}
+	cseq, _ := ack.CSeq()
+	if cseq.SeqNo != 19 || cseq.MethodName != MethodACK {
+		t.Fatalf("non-2xx ACK CSeq = %+v", cseq)
+	}
+	if request, err := NewRequestFromResponseChecked(MethodACK, response); err == nil || request != nil {
+		t.Fatal("dialog ACK constructor accepted non-2xx response")
 	}
 }
 

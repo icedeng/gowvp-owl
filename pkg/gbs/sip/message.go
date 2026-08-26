@@ -81,6 +81,7 @@ type Message interface {
 	Destination() net.Addr
 	SetDestination(dest net.Addr)
 	SetConnection(Connection)
+	GetConnection() Connection
 
 	IsCancel() bool
 	IsAck() bool
@@ -172,6 +173,10 @@ func (msg *message) SetSource(src net.Addr) {
 
 func (msg *message) SetConnection(conn Connection) {
 	msg.conn = conn
+}
+
+func (msg *message) GetConnection() Connection {
+	return msg.conn
 }
 
 // Destination Destination

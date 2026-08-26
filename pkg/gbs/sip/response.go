@@ -3,6 +3,7 @@ package sip
 import (
 	"bytes"
 	"fmt"
+	"sync"
 
 	"github.com/gofrs/uuid"
 )
@@ -10,8 +11,28 @@ import (
 // Response Response
 type Response struct {
 	message
-	statusCode int
-	reason     string
+	statusCode       int
+	reason           string
+	dialogCSeqMu     sync.Mutex
+	dialogCSeq       uint32
+	dialogCSeqLoaded bool
+}
+
+func (res *Response) nextDialogCSeq(initial uint32) (uint32, error) {
+	if res == nil {
+		return 0, fmt.Errorf("response is nil")
+	}
+	res.dialogCSeqMu.Lock()
+	defer res.dialogCSeqMu.Unlock()
+	if !res.dialogCSeqLoaded {
+		res.dialogCSeq = initial
+		res.dialogCSeqLoaded = true
+	}
+	if res.dialogCSeq >= maxCseq {
+		return 0, fmt.Errorf("dialog CSeq exceeds maximum permitted value")
+	}
+	res.dialogCSeq++
+	return res.dialogCSeq, nil
 }
 
 // NewResponseFromRequest NewResponseFromRequest

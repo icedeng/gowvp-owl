@@ -56,14 +56,21 @@ func NewRequestFromResponseChecked(method string, resp *Response) (*Request, err
 	if resp == nil {
 		return nil, fmt.Errorf("cannot build %s request from nil response", method)
 	}
-	var recipient *URI
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method == "" {
+		return nil, fmt.Errorf("cannot build request without method")
+	}
+	if method == MethodCancel {
+		return nil, fmt.Errorf("cannot build CANCEL from a response; use the original INVITE transaction")
+	}
+	var remoteTarget *URI
 	if contact, ok := resp.Contact(); ok && contact != nil && contact.Address != nil {
-		recipient = contact.Address.Clone()
+		remoteTarget = contact.Address.Clone()
 	} else if to, ok := resp.To(); ok && to != nil && to.Address != nil {
 		// 部分老设备的 2xx 响应缺少 Contact，退化为对话 To URI，避免 ACK/BYE 构造崩溃。
-		recipient = to.Address.Clone()
+		remoteTarget = to.Address.Clone()
 	}
-	if recipient == nil {
+	if remoteTarget == nil || strings.TrimSpace(remoteTarget.Host()) == "" {
 		return nil, fmt.Errorf("cannot build %s request: response has no Contact or To target", method)
 	}
 	if from, ok := resp.From(); !ok || from == nil || from.Address == nil {
@@ -79,8 +86,26 @@ func NewRequestFromResponseChecked(method string, resp *Response) (*Request, err
 	if !ok || responseCSeq == nil {
 		return nil, fmt.Errorf("cannot build %s request: response is missing CSeq", method)
 	}
-	if viaHop, ok := resp.ViaHop(); !ok || viaHop == nil || strings.TrimSpace(viaHop.Host) == "" {
+	responseVia, ok := resp.ViaHop()
+	if !ok || responseVia == nil || strings.TrimSpace(responseVia.Host) == "" {
 		return nil, fmt.Errorf("cannot build %s request: response is missing Via", method)
+	}
+	if method == MethodACK && !strings.EqualFold(strings.TrimSpace(responseCSeq.MethodName), MethodInvite) {
+		return nil, fmt.Errorf("cannot build ACK for non-INVITE response")
+	}
+	if method == MethodACK && (resp.StatusCode() < 200 || resp.StatusCode() >= 300) {
+		return nil, fmt.Errorf("cannot build non-2xx ACK without original INVITE transaction")
+	}
+	routeSet, err := dialogRouteSet(resp)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build %s request: %w", method, err)
+	}
+	recipient := remoteTarget.Clone()
+	routes := routeSet
+	if len(routeSet) > 0 && !sipURIHasParam(routeSet[0], "lr") {
+		// RFC 3261 12.2.1.1 严格路由：首个 route 成为 Request-URI，远端 target 追加到 Route 尾部。
+		recipient = routeSet[0].Clone()
+		routes = append(cloneURISlice(routeSet[1:]), remoteTarget.Clone())
 	}
 	ackRequest := NewRequest(
 		resp.MessageID(),
@@ -91,39 +116,9 @@ func NewRequestFromResponseChecked(method string, resp *Response) (*Request, err
 		[]byte{},
 	)
 
-	CopyHeaders("Via", resp, ackRequest)
-	viaHop, ok := ackRequest.ViaHop()
-	if !ok || viaHop == nil {
-		return nil, fmt.Errorf("cannot build %s request: failed to copy Via", method)
-	}
-	if viaHop.Params == nil {
-		viaHop.Params = NewParams()
-	}
-	// update branch, 2xx ACK is separate Tx
-	viaHop.Params.Add("branch", String{Str: GenerateBranch()})
-
-	if len(resp.GetHeaders("Route")) > 0 {
-		CopyHeaders("Route", resp, ackRequest)
-	} else {
-		uris := make([]*URI, 0)
-		for _, h := range resp.GetHeaders("Record-Route") {
-			recordRoute, ok := h.(*RecordRouteHeader)
-			if !ok || recordRoute == nil {
-				continue
-			}
-			for _, u := range recordRoute.Addresses {
-				if u != nil {
-					uris = append(uris, u.Clone())
-				}
-			}
-		}
-		// RFC 3261 12.1.2：UAC 从响应建立的路由集必须按 Record-Route 逆序排列。
-		for left, right := 0, len(uris)-1; left < right; left, right = left+1, right-1 {
-			uris[left], uris[right] = uris[right], uris[left]
-		}
-		if len(uris) > 0 {
-			ackRequest.AppendHeader(&RouteHeader{Addresses: uris})
-		}
+	ackRequest.AppendHeader(ViaHeader{newDialogViaHop(responseVia)})
+	if len(routes) > 0 {
+		ackRequest.AppendHeader(&RouteHeader{Addresses: routes})
 	}
 
 	CopyHeaders("From", resp, ackRequest)
@@ -141,13 +136,153 @@ func NewRequestFromResponseChecked(method string, resp *Response) (*Request, err
 	// the local sequence number is not empty, the value of the local
 	// sequence number MUST be incremented by one, and this value MUST be
 	// placed into the CSeq header field.
-	if !(method == MethodACK || method == MethodCancel) {
-		cseq.SeqNo++
+	if method != MethodACK {
+		cseq.SeqNo, err = resp.nextDialogCSeq(responseCSeq.SeqNo)
+		if err != nil {
+			return nil, fmt.Errorf("cannot build %s request: %w", method, err)
+		}
 	}
 	ackRequest.AppendHeader(&cseq)
 	ackRequest.SetSource(resp.Destination())
 	ackRequest.SetDestination(resp.Source())
+	ackRequest.SetConnection(resp.GetConnection())
+	ackRequest.SetBody(nil, true)
 	return ackRequest, nil
+}
+
+func dialogRouteSet(resp *Response) ([]*URI, error) {
+	var routeSet []*URI
+	for _, header := range resp.GetHeaders("Record-Route") {
+		recordRoute, ok := header.(*RecordRouteHeader)
+		if !ok || recordRoute == nil {
+			return nil, fmt.Errorf("invalid Record-Route header")
+		}
+		for _, uri := range recordRoute.Addresses {
+			if uri == nil || strings.TrimSpace(uri.Host()) == "" {
+				return nil, fmt.Errorf("invalid Record-Route target")
+			}
+			routeSet = append(routeSet, uri.Clone())
+		}
+	}
+	// RFC 3261 12.1.2：UAC 从响应建立的路由集必须按 Record-Route 逆序排列。
+	for left, right := 0, len(routeSet)-1; left < right; left, right = left+1, right-1 {
+		routeSet[left], routeSet[right] = routeSet[right], routeSet[left]
+	}
+	return routeSet, nil
+}
+
+func sipURIHasParam(uri *URI, name string) bool {
+	if uri == nil || uri.FUriParams == nil {
+		return false
+	}
+	for _, key := range uri.FUriParams.Keys() {
+		if strings.EqualFold(strings.TrimSpace(key), name) {
+			return true
+		}
+	}
+	return false
+}
+
+func newDialogViaHop(responseVia *ViaHop) *ViaHop {
+	via := responseVia.Clone()
+	via.Params = NewParams()
+	if responseVia.Params != nil {
+		for _, key := range responseVia.Params.Keys() {
+			switch {
+			case strings.EqualFold(strings.TrimSpace(key), "branch"),
+				strings.EqualFold(strings.TrimSpace(key), "received"),
+				strings.EqualFold(strings.TrimSpace(key), "rport"):
+				continue
+			}
+			value, _ := responseVia.Params.Get(key)
+			via.Params.Add(key, value)
+		}
+	}
+	via.Params.Add("branch", String{Str: GenerateBranch()})
+	via.Params.Add("rport", nil)
+	return via
+}
+
+// NewCancelRequestFromInviteChecked 按 RFC 3261 9.1 从原始 INVITE 客户端事务构造 CANCEL。
+func NewCancelRequestFromInviteChecked(invite *Request) (*Request, error) {
+	if invite == nil || !strings.EqualFold(strings.TrimSpace(invite.Method()), MethodInvite) {
+		return nil, fmt.Errorf("cannot build CANCEL without original INVITE")
+	}
+	if invite.Recipient() == nil || strings.TrimSpace(invite.Recipient().Host()) == "" {
+		return nil, fmt.Errorf("cannot build CANCEL: INVITE target is invalid")
+	}
+	via, ok := invite.ViaHop()
+	if !ok || via == nil {
+		return nil, fmt.Errorf("cannot build CANCEL: INVITE Via is missing")
+	}
+	if _, branch, count := sipViaParam(via, "branch"); count != 1 || branch == "" {
+		return nil, fmt.Errorf("cannot build CANCEL: INVITE Via branch is invalid")
+	}
+	from, fromOK := invite.From()
+	to, toOK := invite.To()
+	callID, callIDOK := invite.CallID()
+	cseq, cseqOK := invite.CSeq()
+	if !fromOK || from == nil || from.Address == nil || !toOK || to == nil || to.Address == nil ||
+		!callIDOK || callID == nil || strings.TrimSpace(string(*callID)) == "" || !cseqOK || cseq == nil {
+		return nil, fmt.Errorf("cannot build CANCEL: INVITE transaction headers are incomplete")
+	}
+	cancel := NewRequest("", MethodCancel, invite.Recipient().Clone(), invite.SipVersion(), nil, nil)
+	cancel.AppendHeader(ViaHeader{via.Clone()})
+	CopyHeaders("Route", invite, cancel)
+	CopyHeaders("From", invite, cancel)
+	CopyHeaders("To", invite, cancel)
+	CopyHeaders("Call-ID", invite, cancel)
+	CopyHeaders("Max-Forwards", invite, cancel)
+	cancel.AppendHeader(&CSeq{SeqNo: cseq.SeqNo, MethodName: MethodCancel})
+	cancel.SetSource(invite.Source())
+	cancel.SetDestination(invite.Destination())
+	cancel.SetConnection(invite.GetConnection())
+	cancel.SetBody(nil, true)
+	return cancel, nil
+}
+
+// NewAckRequestForNon2xxResponseChecked 按 RFC 3261 17.1.1.3 为非 2xx INVITE 最终响应构造事务内 ACK。
+func NewAckRequestForNon2xxResponseChecked(invite *Request, response *Response) (*Request, error) {
+	if invite == nil || response == nil || !strings.EqualFold(strings.TrimSpace(invite.Method()), MethodInvite) ||
+		response.StatusCode() < 300 || response.StatusCode() > 699 {
+		return nil, fmt.Errorf("cannot build non-2xx ACK without INVITE transaction and final response")
+	}
+	if invite.Recipient() == nil || strings.TrimSpace(invite.Recipient().Host()) == "" {
+		return nil, fmt.Errorf("cannot build non-2xx ACK: INVITE target is invalid")
+	}
+	inviteVia, inviteViaOK := invite.ViaHop()
+	responseVia, responseViaOK := response.ViaHop()
+	inviteFrom, inviteFromOK := invite.From()
+	responseTo, responseToOK := response.To()
+	inviteCallID, inviteCallIDOK := invite.CallID()
+	responseCallID, responseCallIDOK := response.CallID()
+	inviteCSeq, inviteCSeqOK := invite.CSeq()
+	responseCSeq, responseCSeqOK := response.CSeq()
+	if !inviteViaOK || inviteVia == nil || !responseViaOK || responseVia == nil ||
+		!inviteFromOK || inviteFrom == nil || inviteFrom.Address == nil ||
+		!responseToOK || responseTo == nil || responseTo.Address == nil ||
+		!inviteCallIDOK || inviteCallID == nil || !responseCallIDOK || responseCallID == nil ||
+		!inviteCSeqOK || inviteCSeq == nil || !responseCSeqOK || responseCSeq == nil {
+		return nil, fmt.Errorf("cannot build non-2xx ACK: transaction headers are incomplete")
+	}
+	if !strings.EqualFold(strings.TrimSpace(responseCSeq.MethodName), MethodInvite) || responseCSeq.SeqNo != inviteCSeq.SeqNo ||
+		strings.TrimSpace(string(*inviteCallID)) == "" || string(*inviteCallID) != string(*responseCallID) ||
+		sipViaBranchValue(inviteVia) == "" || sipViaBranchValue(inviteVia) != sipViaBranchValue(responseVia) {
+		return nil, fmt.Errorf("cannot build non-2xx ACK: response does not match INVITE transaction")
+	}
+	ack := NewRequest("", MethodACK, invite.Recipient().Clone(), invite.SipVersion(), nil, nil)
+	ack.AppendHeader(ViaHeader{inviteVia.Clone()})
+	CopyHeaders("Route", invite, ack)
+	CopyHeaders("From", invite, ack)
+	ack.AppendHeader(responseTo.Clone())
+	CopyHeaders("Call-ID", invite, ack)
+	CopyHeaders("Max-Forwards", invite, ack)
+	ack.AppendHeader(&CSeq{SeqNo: inviteCSeq.SeqNo, MethodName: MethodACK})
+	ack.SetSource(invite.Source())
+	ack.SetDestination(invite.Destination())
+	ack.SetConnection(invite.GetConnection())
+	ack.SetBody(nil, true)
+	return ack, nil
 }
 
 // StartLine returns Request Line - RFC 2361 7.1.
@@ -232,12 +367,20 @@ func (req *Request) GetConnection() Connection {
 
 // Clone Clone
 func (req *Request) Clone() Message {
-	return NewRequest(
+	var recipient *URI
+	if req.Recipient() != nil {
+		recipient = req.Recipient().Clone()
+	}
+	clone := NewRequest(
 		"",
 		req.Method(),
-		req.Recipient().Clone(),
+		recipient,
 		req.SipVersion(),
 		req.headers.CloneHeaders(),
 		req.Body(),
 	)
+	clone.SetSource(req.Source())
+	clone.SetDestination(req.Destination())
+	clone.SetConnection(req.GetConnection())
+	return clone
 }

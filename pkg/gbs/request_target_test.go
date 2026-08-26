@@ -101,6 +101,37 @@ func TestWrapRequestRejectsStoppedService(t *testing.T) {
 	}
 }
 
+func TestPrepareDialogRequestTransportUsesCurrentTCPConnection(t *testing.T) {
+	oldBase := newFlowConnection()
+	oldConnection := &tcpFlowConnection{flowConnection: oldBase}
+	currentBase := newFlowConnection()
+	currentConnection := &tcpFlowConnection{flowConnection: currentBase}
+	target := validRequestTarget(t, currentConnection)
+	target.device.UpdateRuntime(func(device *Device) {
+		device.conn = currentConnection
+		device.source = currentBase.remote
+	})
+	requestURI, err := sip.ParseSipURI("sip:" + gb10DeviceID + "@192.0.2.10:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := sip.NewRequest("", sip.MethodBYE, &requestURI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetMethod(sip.MethodBYE).
+			AddVia(&sip.ViaHop{Transport: "TCP", Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
+	request.SetConnection(oldConnection)
+	request.SetDestination(oldBase.remote)
+
+	if err := prepareDialogRequestTransport(request, target); err != nil {
+		t.Fatal(err)
+	}
+	if request.GetConnection() != currentConnection {
+		t.Fatal("dialog request retained stale TCP connection")
+	}
+	if request.Destination() != oldBase.remote {
+		t.Fatal("dialog request route destination was replaced by registration fallback")
+	}
+}
+
 func validRequestTarget(t *testing.T, conn sip.Connection) *Channel {
 	t.Helper()
 	channel := &Channel{ChannelID: "34020000001320000001", device: &Device{conn: conn}}

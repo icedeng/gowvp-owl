@@ -509,11 +509,14 @@ func sipResponseContext(ctx context.Context, tx *sip.Transaction) (*sip.Response
 	}
 	response, err := tx.GetResponseContext(ctx)
 	if err != nil {
+		_, cancelErr := tx.CancelInvite()
 		tx.Close()
-		return nil, err
+		return nil, errors.Join(err, cancelErr)
 	}
 	if response == nil {
-		return nil, sip.NewError(nil, "response timeout", "tx key:", tx.Key())
+		_, cancelErr := tx.CancelInvite()
+		tx.Close()
+		return nil, errors.Join(sip.NewError(nil, "response timeout", "tx key:", tx.Key()), cancelErr)
 	}
 	if response.StatusCode() != http.StatusOK {
 		return response, sip.NewError(nil, "device: ", response.StatusCode(), " ", response.Reason())

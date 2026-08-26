@@ -418,6 +418,32 @@ func requestTargetSnapshot(target Targeter) (*sip.Address, sip.Connection, net.A
 	}
 }
 
+// prepareDialogRequestTransport 优先复用建立对话的响应路径，仅在旧响应缺少传输元数据时回退注册链路。
+func prepareDialogRequestTransport(request *sip.Request, target Targeter) error {
+	if request == nil {
+		return fmt.Errorf("SIP dialog request is unavailable")
+	}
+	var connection sip.Connection
+	var destination net.Addr
+	if target != nil {
+		_, connection, destination = requestTargetSnapshot(target)
+	}
+	// TCP/TLS 注册可能已重连；发送连接取当前运行态，对话 Request-URI/Route 仍由原响应决定。
+	if connection != nil && (request.GetConnection() == nil || !strings.EqualFold(request.Transport(), "UDP")) {
+		request.SetConnection(connection)
+	}
+	if request.GetConnection() == nil {
+		return fmt.Errorf("SIP dialog connection is unavailable")
+	}
+	if request.Destination() == nil {
+		if destination == nil {
+			return fmt.Errorf("SIP dialog destination is unavailable")
+		}
+		request.SetDestination(destination)
+	}
+	return nil
+}
+
 func (s *Server) wrapRequest(t Targeter, method string, contentType *sip.ContentType, body []byte, opts ...RequestOption) (*sip.Transaction, error) {
 	return s.wrapRequestContext(context.Background(), t, method, contentType, body, opts...)
 }

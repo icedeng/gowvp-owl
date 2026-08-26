@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -1024,6 +1025,7 @@ func (w *cascadeWorker) exchangeRequest(ctx context.Context, request *sip.Reques
 	defer cancel()
 	response, err := tx.GetResponseContext(waitCtx)
 	if err != nil {
+		_, _ = tx.CancelInvite()
 		tx.Close()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -1031,7 +1033,9 @@ func (w *cascadeWorker) exchangeRequest(ctx context.Context, request *sip.Reques
 		return nil, fmt.Errorf("response timeout")
 	}
 	if response == nil {
-		return nil, fmt.Errorf("response timeout")
+		_, cancelErr := tx.CancelInvite()
+		tx.Close()
+		return nil, errors.Join(fmt.Errorf("response timeout"), cancelErr)
 	}
 	return response, nil
 }

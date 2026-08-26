@@ -54,11 +54,10 @@ func (g *GB28181API) stopPlay(ch *Channel, in *StopPlayInput) error {
 		if err != nil {
 			cleanupErr = errors.Join(cleanupErr, err)
 		} else {
-			req.SetDestination(ch.Source())
-			req.SetConnection(ch.Conn())
-
-			// 忽略响应，此处必须尽快返回。
-			_, err = g.svr.Request(req)
+			if err = prepareDialogRequestTransport(req, ch); err == nil {
+				// 忽略响应，此处必须尽快返回。
+				_, err = g.svr.Request(req)
+			}
 			cleanupErr = errors.Join(cleanupErr, err)
 		}
 	}
@@ -540,7 +539,9 @@ func SipStopPlay(ssrc string) {
 			play.Msg = err.Error()
 			return
 		}
-		req.SetDestination(user.source)
+		if req.Destination() == nil {
+			req.SetDestination(user.source)
+		}
 		server := defaultSIPServer.Load()
 		if server == nil {
 			play.Msg = "SIP server is unavailable"

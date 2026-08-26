@@ -225,8 +225,9 @@ func (g *GB28181API) ControlHistory(ctx context.Context, in *ControlHistoryInput
 	}
 	req.SetBody([]byte(cmd), true)
 	req.AppendHeader(&sip.GenericHeader{HeaderName: "Content-Type", Contents: "Application/MANSRTSP"})
-	req.SetDestination(ch.Source())
-	req.SetConnection(ch.Conn())
+	if err := prepareDialogRequestTransport(req, ch); err != nil {
+		return err
+	}
 	tx, err := g.svr.Request(req)
 	if err != nil {
 		return err
@@ -333,8 +334,9 @@ func (g *GB28181API) sendHistoryBYEContext(ctx context.Context, ch *Channel, str
 	}
 	req, responseErr := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp)
 	if responseErr == nil {
-		req.SetDestination(ch.Source())
-		req.SetConnection(ch.Conn())
+		responseErr = prepareDialogRequestTransport(req, ch)
+	}
+	if responseErr == nil {
 		tx, err := g.svr.Request(req)
 		if err != nil {
 			responseErr = err

@@ -79,6 +79,15 @@ func TestTransactionStoreCloseReleasesAllTransactions(t *testing.T) {
 	}
 }
 
+func TestTransactionStoreRejectsNewTransactionsAfterClose(t *testing.T) {
+	store := newTestTransactions()
+	store.close()
+	if tx := store.newTXIfOpen("after-close", nil); tx != nil {
+		tx.Close()
+		t.Fatal("closed transaction store accepted a new transaction")
+	}
+}
+
 func TestTransactionStoreDeduplicatesConcurrentKey(t *testing.T) {
 	store := newTestTransactions()
 	const workers = 32
@@ -372,4 +381,174 @@ func TestRequestRejectsDuplicateViaBranchParameters(t *testing.T) {
 	if _, err := server.Request(request); err == nil || !strings.Contains(err.Error(), "multiple branch") {
 		t.Fatalf("duplicate Via branch error = %v", err)
 	}
+}
+
+func TestTransactionCancelInvitePreservesOriginalTransaction(t *testing.T) {
+	serverURI, err := ParseSipURI("sip:34020000002000000001@192.0.2.20:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &serverURI, Params: NewParams()})
+	defer server.Close()
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	connection := NewTCPConnection(&sipTestTCPConn{
+		Conn: client, local: &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 41000},
+		remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060},
+	})
+	invite := newSignalDigestTestRequest(t, MethodInvite, []byte("offer"))
+	invite.SetConnection(connection)
+	invite.SetSource(connection.LocalAddr())
+	invite.SetDestination(connection.RemoteAddr())
+
+	sentInvite := make(chan struct {
+		tx  *Transaction
+		err error
+	}, 1)
+	go func() {
+		tx, requestErr := server.Request(invite)
+		sentInvite <- struct {
+			tx  *Transaction
+			err error
+		}{tx: tx, err: requestErr}
+	}()
+	buffer := make([]byte, 8192)
+	if err := peer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	n, err := peer.Read(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invitePayload := string(buffer[:n])
+	sent := <-sentInvite
+	if sent.err != nil {
+		t.Fatal(sent.err)
+	}
+
+	cancelResult := make(chan error, 1)
+	go func() {
+		_, cancelErr := sent.tx.CancelInvite()
+		cancelResult <- cancelErr
+	}()
+	n, err = peer.Read(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-cancelResult; err != nil {
+		t.Fatal(err)
+	}
+	cancelPayload := string(buffer[:n])
+	if !strings.HasPrefix(cancelPayload, "CANCEL ") {
+		t.Fatalf("CANCEL payload = %s", cancelPayload)
+	}
+	if headerValue(cancelPayload, "Content-Length") != "0" {
+		t.Fatalf("CANCEL Content-Length = %q", headerValue(cancelPayload, "Content-Length"))
+	}
+	inviteVia := headerValue(invitePayload, "Via")
+	cancelVia := headerValue(cancelPayload, "Via")
+	if inviteVia == "" || cancelVia != inviteVia {
+		t.Fatalf("CANCEL Via = %q, INVITE Via = %q", cancelVia, inviteVia)
+	}
+	inviteCSeq := headerValue(invitePayload, "CSeq")
+	cancelCSeq := headerValue(cancelPayload, "CSeq")
+	inviteNumber := strings.Fields(inviteCSeq)[0]
+	if cancelCSeq != inviteNumber+" CANCEL" {
+		t.Fatalf("CANCEL CSeq = %q, INVITE CSeq = %q", cancelCSeq, inviteCSeq)
+	}
+}
+
+func TestHandlerResponseAutomaticallyAcknowledgesNon2xxInvite(t *testing.T) {
+	serverURI, err := ParseSipURI("sip:34020000002000000001@192.0.2.20:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &serverURI, Params: NewParams()})
+	defer server.Close()
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	connection := NewTCPConnection(&sipTestTCPConn{
+		Conn: client, local: &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 41000},
+		remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060},
+	})
+	invite := newSignalDigestTestRequest(t, MethodInvite, []byte("offer"))
+	invite.SetConnection(connection)
+	invite.SetDestination(connection.RemoteAddr())
+
+	sentInvite := make(chan *Transaction, 1)
+	go func() {
+		tx, requestErr := server.Request(invite)
+		if requestErr != nil {
+			t.Errorf("send INVITE: %v", requestErr)
+		}
+		sentInvite <- tx
+	}()
+	buffer := make([]byte, 8192)
+	if err := peer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	n, err := peer.Read(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invitePayload := string(buffer[:n])
+	tx := <-sentInvite
+	response := NewResponseFromRequest("", invite, 486, "Busy Here", nil)
+	response.SetSource(connection.RemoteAddr())
+	delivered := make(chan struct{})
+	go func() {
+		server.handlerResponse(response)
+		close(delivered)
+	}()
+	n, err = peer.Read(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ackPayload := string(buffer[:n])
+	<-delivered
+	if !strings.HasPrefix(ackPayload, "ACK ") || headerValue(ackPayload, "Via") != headerValue(invitePayload, "Via") {
+		t.Fatalf("automatic non-2xx ACK = %s", ackPayload)
+	}
+	select {
+	case got := <-tx.resp:
+		if got != response {
+			t.Fatalf("delivered response = %p, want %p", got, response)
+		}
+	default:
+		t.Fatal("non-2xx response was not delivered after ACK")
+	}
+
+	delivered = make(chan struct{})
+	go func() {
+		server.handlerResponse(response)
+		close(delivered)
+	}()
+	n, err = peer.Read(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ackPayload = string(buffer[:n])
+	<-delivered
+	if !strings.HasPrefix(ackPayload, "ACK ") || headerValue(ackPayload, "Content-Length") != "0" {
+		t.Fatalf("retransmitted non-2xx ACK = %s", ackPayload)
+	}
+	select {
+	case got := <-tx.resp:
+		if got != response {
+			t.Fatalf("retransmitted response = %p, want %p", got, response)
+		}
+	default:
+		t.Fatal("retransmitted non-2xx response was not delivered after ACK")
+	}
+}
+
+func headerValue(payload, name string) string {
+	for line := range strings.SplitSeq(payload, "\r\n") {
+		if key, value, ok := strings.Cut(line, ":"); ok && strings.EqualFold(strings.TrimSpace(key), name) {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

@@ -2,6 +2,7 @@ package sip
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"strconv"
@@ -14,8 +15,9 @@ import (
 const transactionIdleTimeout = 20 * time.Second
 
 type transacionts struct {
-	txs map[string]*Transaction
-	rwm *sync.RWMutex
+	txs    map[string]*Transaction
+	rwm    *sync.RWMutex
+	closed bool
 }
 
 func (txs *transacionts) newTX(key string, conn Connection) *Transaction {
@@ -30,6 +32,26 @@ func (txs *transacionts) newTX(key string, conn Connection) *Transaction {
 	tx := newTransaction(key, conn, txs)
 	txs.txs[key] = tx
 	txs.rwm.Unlock()
+	return tx
+}
+
+func (txs *transacionts) newTXIfOpen(key string, conn Connection) *Transaction {
+	if txs == nil {
+		return nil
+	}
+	txs.rwm.Lock()
+	defer txs.rwm.Unlock()
+	if txs.closed {
+		return nil
+	}
+	if existing := txs.txs[key]; existing != nil {
+		if conn != nil {
+			existing.setConnection(conn)
+		}
+		return existing
+	}
+	tx := newTransaction(key, conn, txs)
+	txs.txs[key] = tx
 	return tx
 }
 
@@ -58,12 +80,13 @@ func (txs *transacionts) close() {
 	if txs == nil {
 		return
 	}
-	txs.rwm.RLock()
+	txs.rwm.Lock()
+	txs.closed = true
 	items := make([]*Transaction, 0, len(txs.txs))
 	for _, tx := range txs.txs {
 		items = append(items, tx)
 	}
-	txs.rwm.RUnlock()
+	txs.rwm.Unlock()
 	for _, tx := range items {
 		tx.Close()
 	}
@@ -80,6 +103,8 @@ type Transaction struct {
 	conn       Connection
 	securityMu sync.RWMutex
 	security   MessageSecurity
+	requestMu  sync.RWMutex
+	request    *Request
 	bindingMu  sync.RWMutex
 	binding    *responseTransactionBinding
 	key        string
@@ -137,6 +162,66 @@ func (tx *Transaction) messageSecurity() MessageSecurity {
 	security := tx.security
 	tx.securityMu.RUnlock()
 	return security
+}
+
+func (tx *Transaction) rememberRequest(request *Request) {
+	if tx == nil || request == nil {
+		return
+	}
+	clone, _ := request.Clone().(*Request)
+	if clone == nil {
+		return
+	}
+	tx.requestMu.Lock()
+	if tx.request == nil {
+		tx.request = clone
+	}
+	tx.requestMu.Unlock()
+}
+
+func (tx *Transaction) originalRequest() *Request {
+	if tx == nil {
+		return nil
+	}
+	tx.requestMu.RLock()
+	request := tx.request
+	tx.requestMu.RUnlock()
+	if request == nil {
+		return nil
+	}
+	clone, _ := request.Clone().(*Request)
+	return clone
+}
+
+// CancelInvite 发送与原 INVITE 客户端事务绑定的 CANCEL，并返回独立 CANCEL 事务。
+func (tx *Transaction) CancelInvite() (*Transaction, error) {
+	invite := tx.originalRequest()
+	if invite == nil || !strings.EqualFold(strings.TrimSpace(invite.Method()), MethodInvite) {
+		return nil, nil
+	}
+	cancel, err := NewCancelRequestFromInviteChecked(invite)
+	if err != nil {
+		return nil, err
+	}
+	connection := tx.connection()
+	if connection == nil {
+		connection = cancel.GetConnection()
+	}
+	var cancelTX *Transaction
+	if tx.owner != nil {
+		cancelTX = tx.owner.newTXIfOpen(getTXKey(cancel), connection)
+		if cancelTX == nil {
+			return nil, fmt.Errorf("transaction store is closed")
+		}
+	} else {
+		cancelTX = NewTransaction(getTXKey(cancel), connection)
+	}
+	cancelTX.SetMessageSecurity(tx.messageSecurity())
+	if err := cancelTX.Request(cancel); err != nil {
+		cancelTX.Close()
+		return nil, err
+	}
+	return cancelTX, nil
 }
 
 func (tx *Transaction) bindResponse(request *Request) {
@@ -358,6 +443,16 @@ func (tx *Transaction) receiveResponse(msg *Response) {
 			return
 		}
 	}
+	if msg.StatusCode() >= 300 && msg.StatusCode() <= 699 {
+		if invite := tx.originalRequest(); invite != nil && strings.EqualFold(strings.TrimSpace(invite.Method()), MethodInvite) {
+			ack, err := NewAckRequestForNon2xxResponseChecked(invite, msg)
+			if err != nil {
+				slog.Warn("cannot acknowledge non-2xx INVITE response", "tx_key", tx.key, "err", err)
+			} else if err := tx.Request(ack); err != nil {
+				slog.Warn("send non-2xx INVITE ACK failed", "tx_key", tx.key, "err", err)
+			}
+		}
+	}
 	// logrus.Traceln("receiveResponse tx", tx.Key(), time.Now().Format("2006-01-02 15:04:05"))
 	select {
 	case <-tx.done:
@@ -407,6 +502,8 @@ func (tx *Transaction) Request(req *Request) error {
 	}
 	str := req.String()
 	s := unsafe.Slice(unsafe.StringData(str), len(str))
+	// 必须在写出前保存事务快照；TCP 对端可能在 WriteTo 返回前就回送最终响应。
+	tx.rememberRequest(req)
 	logTraffic("out", conn.Network(), conn.LocalAddr(), req.dest, s)
 	// logrus.Traceln("send request,to:", req.dest.String(), "txkey:", tx.key, "message: \n", req.String())
 	_, err := conn.WriteTo(s, req.dest)
