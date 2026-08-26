@@ -175,8 +175,13 @@ func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 }
 
 func (g *GB28181API) validateCatalogEnvelope(ctx *sip.Context, msg MessageDeviceListResponse, notification bool) error {
-	if msg.XMLName.Local != "Response" && msg.XMLName.Local != "Notify" {
-		return fmt.Errorf("Catalog root must be Response or Notify")
+	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
+	expectedRoot := "Response"
+	if notification && version.AtLeast(GBVersion11) {
+		expectedRoot = "Notify"
+	}
+	if msg.XMLName.Local != expectedRoot {
+		return fmt.Errorf("Catalog root must be %s", expectedRoot)
 	}
 	if !strings.EqualFold(strings.TrimSpace(msg.CmdType), "Catalog") {
 		return fmt.Errorf("invalid Catalog command")
@@ -191,7 +196,7 @@ func (g *GB28181API) validateCatalogEnvelope(ctx *sip.Context, msg MessageDevice
 		if msg.SumNum != 0 {
 			return fmt.Errorf("Catalog DeviceList is required for non-empty results")
 		}
-		if notification || g.getDeviceGBProtocolVersion(ctx.DeviceID) == GBVersion10 {
+		if notification || version == GBVersion10 {
 			return fmt.Errorf("Catalog DeviceList is required by the protocol profile")
 		}
 	} else if msg.ListNum == nil || *msg.ListNum < 0 || *msg.ListNum != len(msg.Item) || len(msg.Item) > msg.SumNum || g.multiResponseChunkExceedsLimit(ctx, len(msg.Item)) {

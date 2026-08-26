@@ -96,7 +96,8 @@ func TestCatalogNotify11AcceptsNotifyRootAndEvent(t *testing.T) {
 		t.Fatalf("Catalog NOTIFY = %+v", notify)
 	}
 
-	api := &GB28181API{}
+	api, _ := newVersionGateAPI(GBVersion11)
+	api.lifecycleClosed = true
 	conn := newFlowConnection()
 	response := runFlowHandler(t, conn, api, sip.MethodNotify, "catalog-notify-1", body, api.sipNotifyCatalog)
 	assertFlowOK(t, response)
@@ -257,7 +258,12 @@ func TestCatalogEmptyResultListRulesByVersionAndMessageType(t *testing.T) {
 	}{
 		{name: "2011 response requires list", version: GBVersion10, root: "Response", wantErr: true},
 		{name: "2011 response with list", version: GBVersion10, root: "Response", list: `<DeviceList Num="0"></DeviceList>`},
+		{name: "2011 response rejects notify root", version: GBVersion10, root: "Notify", list: `<DeviceList Num="0"></DeviceList>`, wantErr: true},
+		{name: "2011 notify uses response root", version: GBVersion10, root: "Response", list: `<DeviceList Num="0"></DeviceList>`, notification: true},
+		{name: "2011 notify rejects notify root", version: GBVersion10, root: "Notify", list: `<DeviceList Num="0"></DeviceList>`, notification: true, wantErr: true},
 		{name: "2014 response may omit list", version: GBVersion11, root: "Response"},
+		{name: "2014 response rejects notify root", version: GBVersion11, root: "Notify", wantErr: true},
+		{name: "2014 notify rejects response root", version: GBVersion11, root: "Response", list: `<DeviceList Num="0"></DeviceList>`, notification: true, wantErr: true},
 		{name: "2014 notify requires list", version: GBVersion11, root: "Notify", notification: true, wantErr: true},
 		{name: "2014 notify with list", version: GBVersion11, root: "Notify", list: `<DeviceList Num="0"></DeviceList>`, notification: true},
 	}
