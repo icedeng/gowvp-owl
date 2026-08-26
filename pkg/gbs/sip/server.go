@@ -715,11 +715,19 @@ func (s *Server) handlerRequest(msg *Request) {
 				}
 			}
 		}
-		response := NewResponseFromRequest("", msg, http.StatusBadRequest, err.Error(), nil)
+		statusCode := http.StatusBadRequest
+		reason := err.Error()
+		if !isSupportedSIPVersion(msg.SipVersion()) {
+			statusCode = http.StatusHTTPVersionNotSupported
+			reason = "Version Not Supported"
+		}
+		response := NewResponseFromRequest("", msg, statusCode, reason, nil)
+		response.SetSipVersion(DefaultSipVersion)
 		if responseSecurity != nil {
 			if signErr := responseSecurity.Sign(response); signErr != nil {
-				// 核心字段虽不歧义但仍无法签名时，退化为全新无签名 400，避免发送部分签名头。
-				response = NewResponseFromRequest("", msg, http.StatusBadRequest, err.Error(), nil)
+				// 核心字段虽不歧义但仍无法签名时，退化为全新无签名错误响应，避免发送部分签名头。
+				response = NewResponseFromRequest("", msg, statusCode, reason, nil)
+				response.SetSipVersion(DefaultSipVersion)
 			}
 		}
 		_ = tx.Respond(response)
@@ -793,6 +801,9 @@ func validateInboundRequestHeaders(msg *Request) error {
 	if msg == nil {
 		return fmt.Errorf("request is nil")
 	}
+	if !isSupportedSIPVersion(msg.SipVersion()) {
+		return fmt.Errorf("request SIP version is invalid")
+	}
 	if headers := msg.GetHeaders("From"); len(headers) != 1 {
 		return fmt.Errorf("request must contain exactly one From header")
 	}
@@ -825,8 +836,7 @@ func validateInboundRequestHeaders(msg *Request) error {
 		return fmt.Errorf("request method does not match CSeq method")
 	}
 	via, ok := msg.ViaHop()
-	if !ok || via == nil || strings.TrimSpace(via.ProtocolName) == "" || strings.TrimSpace(via.ProtocolVersion) == "" ||
-		strings.TrimSpace(via.Transport) == "" || strings.TrimSpace(via.Host) == "" {
+	if !ok || !isValidSIPViaHop(via) {
 		return fmt.Errorf("request Via header is invalid")
 	}
 	return nil
@@ -887,13 +897,72 @@ func isTerminatedSubscriptionNotify(msg *Request) bool {
 }
 
 func (s *Server) handlerResponse(msg *Response) {
+	if err := validateInboundResponseHeaders(msg); err != nil {
+		slog.Warn("discard malformed SIP response", "err", err)
+		return
+	}
 	tx := s.getTX(getTXKey(msg))
 	if tx == nil {
 		// logrus.Infoln("not found tx. receive response from:", msg.Source(), "message: \n", msg.String())
-	} else {
+	} else if tx.acceptsResponse(msg) {
 		// logrus.Traceln("receive response from:", msg.Source(), "txKey:", tx.key, "message: \n", msg.String())
 		tx.receiveResponse(msg)
 	}
+}
+
+func validateInboundResponseHeaders(msg *Response) error {
+	if msg == nil {
+		return fmt.Errorf("response is nil")
+	}
+	if !isSupportedSIPVersion(msg.SipVersion()) {
+		return fmt.Errorf("response SIP version is invalid")
+	}
+	if msg.StatusCode() < 100 || msg.StatusCode() > 699 {
+		return fmt.Errorf("response status code is invalid")
+	}
+	if headers := msg.GetHeaders("From"); len(headers) != 1 {
+		return fmt.Errorf("response must contain exactly one From header")
+	}
+	from, ok := msg.From()
+	if !ok || from == nil || from.Address == nil {
+		return fmt.Errorf("response From header is invalid")
+	}
+	if headers := msg.GetHeaders("To"); len(headers) != 1 {
+		return fmt.Errorf("response must contain exactly one To header")
+	}
+	to, ok := msg.To()
+	if !ok || to == nil || to.Address == nil {
+		return fmt.Errorf("response To header is invalid")
+	}
+	if headers := msg.GetHeaders("Call-ID"); len(headers) != 1 {
+		return fmt.Errorf("response must contain exactly one Call-ID header")
+	}
+	callID, ok := msg.CallID()
+	if !ok || callID == nil || strings.TrimSpace(string(*callID)) == "" {
+		return fmt.Errorf("response Call-ID header is invalid")
+	}
+	if headers := msg.GetHeaders("CSeq"); len(headers) != 1 {
+		return fmt.Errorf("response must contain exactly one CSeq header")
+	}
+	cseq, ok := msg.CSeq()
+	if !ok || cseq == nil || strings.TrimSpace(cseq.MethodName) == "" {
+		return fmt.Errorf("response CSeq header is invalid")
+	}
+	via, ok := msg.ViaHop()
+	if !ok || !isValidSIPViaHop(via) {
+		return fmt.Errorf("response Via header is invalid")
+	}
+	return nil
+}
+
+func isSupportedSIPVersion(version string) bool {
+	return strings.EqualFold(strings.TrimSpace(version), DefaultSipVersion)
+}
+
+func isValidSIPViaHop(via *ViaHop) bool {
+	return via != nil && strings.EqualFold(strings.TrimSpace(via.ProtocolName), "SIP") &&
+		strings.EqualFold(strings.TrimSpace(via.ProtocolVersion), "2.0") &&
+		strings.TrimSpace(via.Transport) != "" && strings.TrimSpace(via.Host) != ""
 }
 
 // Request Request
@@ -905,6 +974,9 @@ func (s *Server) Request(req *Request) (*Transaction, error) {
 func (s *Server) RequestWithSecurity(req *Request, security MessageSecurity) (*Transaction, error) {
 	if s == nil || req == nil {
 		return nil, fmt.Errorf("SIP request is unavailable")
+	}
+	if !isSupportedSIPVersion(req.SipVersion()) {
+		return nil, fmt.Errorf("unsupported SIP request version")
 	}
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
@@ -929,10 +1001,23 @@ func (s *Server) RequestWithSecurity(req *Request, security MessageSecurity) (*T
 	if viaHop.Port == nil {
 		viaHop.Port = s.port
 	}
-	if viaHop.Params == nil {
-		viaHop.Params = NewParams().Add("branch", String{Str: GenerateBranch()})
+	if !isValidSIPViaHop(viaHop) {
+		return nil, fmt.Errorf("invalid SIP Via header")
 	}
-	if !viaHop.Params.Has("rport") {
+	if viaHop.Params == nil {
+		viaHop.Params = NewParams()
+	}
+	branchKey, branch, branchCount := sipViaParam(viaHop, "branch")
+	if branchCount > 1 {
+		return nil, fmt.Errorf("Via header contains multiple branch parameters")
+	}
+	if branchCount == 0 {
+		branchKey = "branch"
+	}
+	if branch == "" {
+		viaHop.Params.Add(branchKey, String{Str: GenerateBranch()})
+	}
+	if _, _, count := sipViaParam(viaHop, "rport"); count == 0 {
 		viaHop.Params.Add("rport", nil)
 	}
 

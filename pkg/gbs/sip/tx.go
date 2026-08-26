@@ -3,7 +3,7 @@ package sip
 import (
 	"context"
 	"log/slog"
-	"net/http"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,6 +80,8 @@ type Transaction struct {
 	conn       Connection
 	securityMu sync.RWMutex
 	security   MessageSecurity
+	bindingMu  sync.RWMutex
+	binding    *responseTransactionBinding
 	key        string
 	resp       chan *Response
 	active     chan int
@@ -87,6 +89,15 @@ type Transaction struct {
 	owner      *transacionts
 	closeOnce  sync.Once
 	watchDone  chan struct{}
+}
+
+type responseTransactionBinding struct {
+	protocolName    string
+	protocolVersion string
+	transport       string
+	sentBy          string
+	branch          string
+	remoteEndpoint  string
 }
 
 func (tx *Transaction) setConnection(conn Connection) {
@@ -126,6 +137,98 @@ func (tx *Transaction) messageSecurity() MessageSecurity {
 	security := tx.security
 	tx.securityMu.RUnlock()
 	return security
+}
+
+func (tx *Transaction) bindResponse(request *Request) {
+	if tx == nil || request == nil {
+		return
+	}
+	via, ok := request.ViaHop()
+	if !ok || via == nil {
+		return
+	}
+	_, branch, branchCount := sipViaParam(via, "branch")
+	if branchCount != 1 || branch == "" {
+		return
+	}
+	binding := &responseTransactionBinding{
+		protocolName: strings.TrimSpace(via.ProtocolName), protocolVersion: strings.TrimSpace(via.ProtocolVersion),
+		transport: strings.TrimSpace(via.Transport), sentBy: strings.TrimSpace(via.SentBy()),
+		branch: branch, remoteEndpoint: sipEndpointKey(request.Destination()),
+	}
+	tx.bindingMu.Lock()
+	if tx.binding == nil {
+		tx.binding = binding
+	}
+	tx.bindingMu.Unlock()
+}
+
+func (tx *Transaction) acceptsResponse(response *Response) bool {
+	if tx == nil || response == nil {
+		return false
+	}
+	tx.bindingMu.RLock()
+	binding := tx.binding
+	tx.bindingMu.RUnlock()
+	// 兼容仅用于内部测试或入向请求应答的未绑定事务；正式出向请求均在发送时绑定。
+	if binding == nil {
+		return true
+	}
+	via, ok := response.ViaHop()
+	if !ok || via == nil {
+		return false
+	}
+	_, branch, branchCount := sipViaParam(via, "branch")
+	return strings.EqualFold(binding.protocolName, strings.TrimSpace(via.ProtocolName)) &&
+		strings.EqualFold(binding.protocolVersion, strings.TrimSpace(via.ProtocolVersion)) &&
+		strings.EqualFold(binding.transport, strings.TrimSpace(via.Transport)) &&
+		strings.EqualFold(binding.sentBy, strings.TrimSpace(via.SentBy())) &&
+		branchCount == 1 && binding.branch != "" && binding.branch == branch &&
+		(binding.remoteEndpoint == "" || binding.remoteEndpoint == sipEndpointKey(response.Source()))
+}
+
+func sipViaBranchValue(via *ViaHop) string {
+	_, branch, count := sipViaParam(via, "branch")
+	if count != 1 {
+		return ""
+	}
+	return branch
+}
+
+func sipViaParam(via *ViaHop, name string) (key, value string, count int) {
+	if via == nil || via.Params == nil {
+		return "", "", 0
+	}
+	for _, candidate := range via.Params.Keys() {
+		if !strings.EqualFold(strings.TrimSpace(candidate), name) {
+			continue
+		}
+		count++
+		if count == 1 {
+			key = candidate
+			if parameter, ok := via.Params.Get(candidate); ok && parameter != nil {
+				value = strings.TrimSpace(parameter.String())
+			}
+		}
+	}
+	return key, value, count
+}
+
+func sipEndpointKey(address net.Addr) string {
+	if address == nil {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(strings.TrimSpace(address.String()))
+	if err != nil {
+		return strings.ToLower(strings.TrimSpace(address.String()))
+	}
+	host = strings.Trim(host, "[]")
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	} else {
+		host = strings.ToLower(host)
+	}
+	return net.JoinHostPort(host, port)
 }
 
 // NewTransaction NewTransaction
@@ -201,8 +304,8 @@ func (tx *Transaction) GetResponseContext(ctx context.Context) (*Response, error
 			}
 			tx.markActive(2)
 			// logrus.Traceln("response tx", tx.key, time.Now().Format("2006-01-02 15:04:05"))
-			if res.StatusCode() == http.StatusContinue || res.statusCode == http.StatusSwitchingProtocols {
-				// Trying and Dialog Establishement 等待下一个返回
+			if res.StatusCode() >= 100 && res.StatusCode() < 200 {
+				// 所有 1xx 均为临时响应，等待最终响应。
 				continue
 			}
 			return res, nil
@@ -296,6 +399,7 @@ func (tx *Transaction) Request(req *Request) error {
 	if conn == nil {
 		return NewError(nil, "transaction connection is unavailable")
 	}
+	tx.bindResponse(req)
 	if security := tx.messageSecurity(); security != nil {
 		if err := security.Sign(req); err != nil {
 			return NewError(err, "sign SIP request failed")

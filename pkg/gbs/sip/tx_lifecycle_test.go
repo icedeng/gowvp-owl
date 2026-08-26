@@ -2,6 +2,8 @@ package sip
 
 import (
 	"context"
+	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -148,5 +150,226 @@ func TestTransactionKeyFallsBackToCallIDWithoutCSeq(t *testing.T) {
 	}
 	if got := getTXKey(request); got != callID.String() {
 		t.Fatalf("legacy transaction key = %q, want %q", got, callID.String())
+	}
+}
+
+func TestHandlerResponseValidatesHeadersAndTransactionBinding(t *testing.T) {
+	serverURI, err := ParseSipURI("sip:34020000002000000001@192.0.2.20:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &serverURI, Params: NewParams()})
+	defer server.Close()
+	request := newSignalDigestTestRequest(t, MethodMessage, nil)
+	request.SetDestination(&net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060})
+	tx := server.txs.newTX(getTXKey(request), nil)
+	tx.bindResponse(request)
+
+	newResponse := func() *Response {
+		response := NewResponseFromRequest("", request, 200, "OK", nil)
+		response.SetSource(&net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060})
+		return response
+	}
+	assertDiscarded := func(name string, response *Response) {
+		t.Helper()
+		server.handlerResponse(response)
+		select {
+		case got := <-tx.resp:
+			t.Fatalf("%s response was delivered: %s", name, got)
+		default:
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*Response)
+	}{
+		{name: "duplicate From", mutate: func(response *Response) {
+			from, _ := response.From()
+			response.AppendHeader(from.Clone())
+		}},
+		{name: "duplicate To", mutate: func(response *Response) {
+			to, _ := response.To()
+			response.AppendHeader(to.Clone())
+		}},
+		{name: "duplicate Call-ID", mutate: func(response *Response) {
+			callID, _ := response.CallID()
+			response.AppendHeader(callID.Clone())
+		}},
+		{name: "duplicate CSeq", mutate: func(response *Response) {
+			cseq, _ := response.CSeq()
+			response.AppendHeader(cseq.Clone())
+		}},
+		{name: "wrong SIP version", mutate: func(response *Response) {
+			response.SetSipVersion("SIP/1.0")
+		}},
+		{name: "invalid status code", mutate: func(response *Response) {
+			response.SetStatusCode(700)
+		}},
+		{name: "wrong Via protocol", mutate: func(response *Response) {
+			via, _ := response.ViaHop()
+			via.ProtocolName = "HTTP"
+		}},
+		{name: "wrong Via version", mutate: func(response *Response) {
+			via, _ := response.ViaHop()
+			via.ProtocolVersion = "1.0"
+		}},
+		{name: "duplicate Via branch", mutate: func(response *Response) {
+			via, _ := response.ViaHop()
+			via.Params.Add("Branch", String{Str: sipViaBranchValue(via)})
+		}},
+	} {
+		response := newResponse()
+		test.mutate(response)
+		assertDiscarded(test.name, response)
+	}
+
+	wrongBranch := newResponse()
+	via, ok := wrongBranch.ViaHop()
+	if !ok || via == nil {
+		t.Fatal("response Via is unavailable")
+	}
+	via.Params.Add("branch", String{Str: "z9hG4bK-forged"})
+	assertDiscarded("wrong Via branch", wrongBranch)
+
+	missingBranch := newResponse()
+	via, ok = missingBranch.ViaHop()
+	if !ok || via == nil {
+		t.Fatal("response Via is unavailable")
+	}
+	via.Params = NewParams()
+	assertDiscarded("missing Via branch", missingBranch)
+
+	wrongSource := newResponse()
+	wrongSource.SetSource(&net.UDPAddr{IP: net.ParseIP("192.0.2.31"), Port: 5060})
+	assertDiscarded("wrong source", wrongSource)
+
+	valid := newResponse()
+	server.handlerResponse(valid)
+	select {
+	case got := <-tx.resp:
+		if got != valid {
+			t.Fatalf("delivered response = %p, want %p", got, valid)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("valid bound response was not delivered")
+	}
+}
+
+func TestRequestGeneratesMissingViaBranchAndBindsResponse(t *testing.T) {
+	serverURI, err := ParseSipURI("sip:34020000002000000001@192.0.2.20:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &serverURI, Params: NewParams()})
+	defer server.Close()
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	connection := NewTCPConnection(&sipTestTCPConn{
+		Conn: client, local: &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 41000},
+		remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060},
+	})
+	request := newSignalDigestTestRequest(t, MethodMessage, nil)
+	via, ok := request.ViaHop()
+	if !ok || via == nil {
+		t.Fatal("request Via is unavailable")
+	}
+	via.Params = NewParams()
+	request.SetConnection(connection)
+	request.SetSource(connection.LocalAddr())
+	request.SetDestination(connection.RemoteAddr())
+
+	result := make(chan struct {
+		tx  *Transaction
+		err error
+	}, 1)
+	go func() {
+		tx, requestErr := server.Request(request)
+		result <- struct {
+			tx  *Transaction
+			err error
+		}{tx: tx, err: requestErr}
+	}()
+	buffer := make([]byte, 8192)
+	if err := peer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peer.Read(buffer); err != nil {
+		t.Fatal(err)
+	}
+	sent := <-result
+	if sent.err != nil {
+		t.Fatal(sent.err)
+	}
+	branch := sipViaBranchValue(via)
+	if branch == "" {
+		t.Fatal("outbound request Via branch was not generated")
+	}
+	response := NewResponseFromRequest("", request, 200, "OK", nil)
+	response.SetSource(connection.RemoteAddr())
+	if !sent.tx.acceptsResponse(response) {
+		t.Fatal("generated Via branch was not retained in response binding")
+	}
+}
+
+func TestRequestUsesCaseInsensitiveViaParameters(t *testing.T) {
+	serverURI, err := ParseSipURI("sip:34020000002000000001@192.0.2.20:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &serverURI, Params: NewParams()})
+	defer server.Close()
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	connection := NewTCPConnection(&sipTestTCPConn{
+		Conn: client, local: &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 41000},
+		remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060},
+	})
+	request := newSignalDigestTestRequest(t, MethodMessage, nil)
+	via, _ := request.ViaHop()
+	via.Params = NewParams().Add("Branch", String{Str: "z9hG4bK-mixed-case"}).Add("RPort", nil)
+	request.SetConnection(connection)
+	request.SetDestination(connection.RemoteAddr())
+
+	result := make(chan error, 1)
+	go func() {
+		_, requestErr := server.Request(request)
+		result <- requestErr
+	}()
+	buffer := make([]byte, 8192)
+	if err := peer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	n, err := peer.Read(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	payload := string(buffer[:n])
+	if strings.Count(strings.ToLower(payload), ";branch=") != 1 || strings.Count(strings.ToLower(payload), ";rport") != 1 {
+		t.Fatalf("case-insensitive Via parameters were duplicated: %s", payload)
+	}
+}
+
+func TestRequestRejectsDuplicateViaBranchParameters(t *testing.T) {
+	serverURI, err := ParseSipURI("sip:34020000002000000001@192.0.2.20:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &serverURI, Params: NewParams()})
+	defer server.Close()
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	request := newSignalDigestTestRequest(t, MethodMessage, nil)
+	via, _ := request.ViaHop()
+	via.Params.Add("Branch", String{Str: "z9hG4bK-duplicate"})
+	request.SetConnection(NewTCPConnection(client))
+	request.SetDestination(&net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060})
+	if _, err := server.Request(request); err == nil || !strings.Contains(err.Error(), "multiple branch") {
+		t.Fatalf("duplicate Via branch error = %v", err)
 	}
 }

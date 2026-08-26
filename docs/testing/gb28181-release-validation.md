@@ -23,7 +23,8 @@ go test ./... -count=1
 覆盖内容包括：
 
 - 四版本 REGISTER、SIP/XML/SDP 夹具；
-- SIP/TCP 大小写不敏感 `Content-Length`、紧凑头 `l`、同连接连续报文分帧；入向请求的 From/To/Call-ID/CSeq 单值有效性、有效顶层 Via，以及 Request-Line/CSeq 方法一致性；畸形请求使用独立临时事务，不能替换相同 Call-ID/CSeq 的合法事务连接；对话路由集反转 `Record-Route` 及响应 CSeq 不变性；
+- SIP/TCP 大小写不敏感 `Content-Length`、紧凑头 `l`、同连接连续报文分帧；入向请求必须为 `SIP/2.0`，校验 From/To/Call-ID/CSeq 单值有效性、`SIP/2.0` 顶层 Via，以及 Request-Line/CSeq 方法一致性；不支持版本返回 505，其他畸形请求使用独立临时事务，不能替换相同 Call-ID/CSeq 的合法事务连接；对话路由集反转 `Record-Route` 及响应 CSeq 不变性；
+- 入向响应必须为 `SIP/2.0` 和 100～699 状态码，校验 From/To/Call-ID/CSeq 单值有效性及 `SIP/2.0` 顶层 Via；响应必须匹配出向事务记录的目标端点及 Via 协议/传输/Sent-by/branch，Via 参数名大小写不敏感，重复 branch、重复核心头、错误 branch 或错误来源不得唤醒响应等待；全部 1xx 临时响应不得提前结束最终响应等待；
 - SIP UDP/TCP/TLS 监听器、活动连接、parser/handler、请求处理器和事务 watcher 在关闭时全部等待退出；关闭后拒绝新连接、新 handler 和出向请求。GB 全局生命周期门禁还会拒绝停服起点后的 REGISTER/MESSAGE/NOTIFY/SUBSCRIBE/INVITE 等新业务，并等待此前已接纳请求；两阶段关闭先取消业务，再关闭 SIP 解除事务等待，最后清理 GB 会话，避免清理后状态复写和关闭互锁。GB 离线检查、订阅、INVITE 对话与运行状态 cleaner 同样随服务生命周期停止；
 - REGISTER 同时携带 Contact `expires` 与全局 `Expires` 时，以 Contact 绑定参数为准，包括 `expires=0` 注销语义；
 - 版本解析、协商、持久化、手动覆盖和下行版本；

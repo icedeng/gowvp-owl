@@ -274,10 +274,12 @@ func TestTransactionSignalDigestAcceptsValidAndDiscardsInvalidResponses(t *testi
 }
 
 func TestTransactionGetResponseContextSkipsProvisionalResponse(t *testing.T) {
-	tx := &Transaction{key: "context-response", resp: make(chan *Response, 2), active: make(chan int, 2)}
-	provisional := NewResponse("", DefaultSipVersion, http.StatusContinue, "Trying", nil, nil)
+	tx := &Transaction{key: "context-response", resp: make(chan *Response, 3), active: make(chan int, 3)}
+	trying := NewResponse("", DefaultSipVersion, http.StatusContinue, "Trying", nil, nil)
+	ringing := NewResponse("", DefaultSipVersion, 180, "Ringing", nil, nil)
 	final := NewResponse("", DefaultSipVersion, http.StatusOK, "OK", nil, nil)
-	tx.resp <- provisional
+	tx.resp <- trying
+	tx.resp <- ringing
 	tx.resp <- final
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

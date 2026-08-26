@@ -163,6 +163,40 @@ func TestProcessTCPConnRejectsMissingRequiredRoutingHeaders(t *testing.T) {
 	}
 }
 
+func TestProcessTCPConnRejectsUnsupportedSIPVersion(t *testing.T) {
+	localURI, err := ParseSipURI("sip:34020000002000000001@127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &localURI, Params: NewParams()})
+	defer server.Close()
+	serverPipe, clientConn := net.Pipe()
+	defer clientConn.Close()
+	serverConn := &sipTestTCPConn{
+		Conn: serverPipe, local: &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 5060},
+		remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 5060},
+	}
+	go server.ProcessTcpConn(serverConn)
+	request := "OPTIONS sip:34020000002000000001@127.0.0.1 SIP/1.0\r\n" +
+		"Via: SIP/1.0/TCP 127.0.0.1:5061;branch=z9hG4bK-old-version\r\n" +
+		"From: <sip:34020000001320000001@127.0.0.1>;tag=old-version\r\n" +
+		"To: <sip:34020000002000000001@127.0.0.1>\r\n" +
+		"Call-ID: old-version\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n"
+	if _, err := clientConn.Write([]byte(request)); err != nil {
+		t.Fatal(err)
+	}
+	if err := clientConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	status, err := bufio.NewReader(clientConn).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "SIP/2.0 505 Version Not Supported") {
+		t.Fatalf("unsupported SIP version response = %q", status)
+	}
+}
+
 func TestParserStopClosesHandlerOutput(t *testing.T) {
 	parser := newParser()
 	handlerDone := make(chan struct{})
