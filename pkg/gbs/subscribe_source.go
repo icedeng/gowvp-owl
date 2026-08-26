@@ -98,6 +98,8 @@ type outgoingSubscriptionDialog struct {
 	response     *sip.Response
 	remoteTarget *sip.URI
 	eventValue   string
+	deviceID     string
+	targetID     string
 	expiresAt    time.Time
 }
 
@@ -363,7 +365,7 @@ func (g *GB28181API) sipNotifySubscriptionState(ctx *sip.Context) {
 	state, _, _ = strings.Cut(state, ";")
 	terminated := strings.EqualFold(strings.TrimSpace(state), "terminated")
 	if terminated {
-		g.removeOutgoingSubscriptionDialog(ctx.Request)
+		g.removeOutgoingSubscriptionDialog(ctx.DeviceID, ctx.Request)
 		if len(ctx.Request.Body()) == 0 {
 			ctx.String(200, "OK")
 			ctx.Abort()
@@ -378,7 +380,7 @@ func (g *GB28181API) sipNotifySubscriptionState(ctx *sip.Context) {
 	ctx.Next()
 }
 
-func (g *GB28181API) removeOutgoingSubscriptionDialog(request *sip.Request) {
+func (g *GB28181API) removeOutgoingSubscriptionDialog(deviceID string, request *sip.Request) {
 	if g == nil || request == nil {
 		return
 	}
@@ -397,7 +399,7 @@ func (g *GB28181API) removeOutgoingSubscriptionDialog(request *sip.Request) {
 		matches := false
 		if response != nil {
 			if existing, exists := response.CallID(); exists && existing != nil {
-				matches = normalizeCallID(existing) == wanted
+				matches = normalizeCallID(existing) == wanted && outgoingSubscriptionNotifyMatches(deviceID, request, key, dialog, response)
 			}
 		}
 		dialog.mu.Unlock()
@@ -409,6 +411,25 @@ func (g *GB28181API) removeOutgoingSubscriptionDialog(request *sip.Request) {
 		}
 		return true
 	})
+}
+
+func outgoingSubscriptionNotifyMatches(deviceID string, request *sip.Request, key any, dialog *outgoingSubscriptionDialog, response *sip.Response) bool {
+	if request == nil || dialog == nil || response == nil {
+		return false
+	}
+	expectedDeviceID := strings.TrimSpace(dialog.deviceID)
+	if expectedDeviceID == "" {
+		if keyString, ok := key.(string); ok {
+			expectedDeviceID, _, _ = strings.Cut(keyString, "|")
+			expectedDeviceID = strings.TrimSpace(expectedDeviceID)
+		}
+	}
+	if expectedDeviceID != "" && expectedDeviceID != strings.TrimSpace(deviceID) {
+		return false
+	}
+	remoteTag := sipResponseToTag(response)
+	localTag := sipResponseFromTag(response)
+	return remoteTag != "" && localTag != "" && sipRequestFromTag(request) == remoteTag && sipRequestToTag(request) == localTag
 }
 
 func (g *GB28181API) renewTerminatedCascadeSubscription(key any, parents ...context.Context) {

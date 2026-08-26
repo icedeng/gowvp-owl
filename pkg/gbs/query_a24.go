@@ -65,6 +65,7 @@ type DeviceQueryOutput struct {
 
 type pendingQueryWait struct {
 	wait           chan *DeviceQueryOutput
+	targetID       string
 	mu             sync.Mutex
 	expectedConfig map[string]struct{}
 	config         *ConfigDownloadState
@@ -184,7 +185,7 @@ func (g *GB28181API) DeviceQuery(ctx context.Context, in *DeviceQueryInput) (*De
 	}
 
 	waitKey := buildPendingQueryKey(deviceID, cmdType, sn)
-	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}
+	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1), targetID: targetID}
 	if cmdType == "ConfigDownload" {
 		pending.expectedConfig = make(map[string]struct{})
 		for _, item := range strings.Split(req.ConfigType, "/") {
@@ -450,6 +451,9 @@ func (g *GB28181API) resolvePendingDeviceQueryResult(deviceID, cmdType string, s
 		out.Data = cloneDeviceQueryData(decoded.data)
 		out.AppendixA4 = cloneAppendixA4Objects(decoded.appendixA4)
 		pending := v.(*pendingQueryWait)
+		if expected := strings.TrimSpace(pending.targetID); expected != "" && expected != strings.TrimSpace(out.DeviceID) {
+			continue
+		}
 		if out.CmdType == "ConfigDownload" && (out.Result == "" || strings.EqualFold(out.Result, "OK")) {
 			state, _ := out.Data.(*ConfigDownloadState)
 			pending.mu.Lock()
@@ -595,7 +599,7 @@ func (g *GB28181API) validateGenericDeviceQueryResponse(ctx *sip.Context, msg ge
 	if msg.XMLName.Local != "Response" && msg.XMLName.Local != "Notify" {
 		return fmt.Errorf("query response root must be Response or Notify")
 	}
-	if msg.SN <= 0 || msg.DeviceID == "" {
+	if msg.SN <= 0 || !isGBDeviceIdentifier(msg.DeviceID) {
 		return fmt.Errorf("query response requires positive SN and DeviceID")
 	}
 	minimum, ok := genericQueryResponseMinimumVersion(msg.CmdType)
@@ -613,7 +617,29 @@ func (g *GB28181API) validateGenericDeviceQueryResponse(ctx *sip.Context, msg ge
 			return fmt.Errorf("DeviceStatus requires valid Result, Online and Status")
 		}
 	}
-	return g.validateAuthenticatedResponseTarget(ctx, msg.DeviceID)
+	if err := g.validateAuthenticatedResponseTarget(ctx, msg.DeviceID); err != nil {
+		return err
+	}
+	if ctx.Request != nil && strings.EqualFold(ctx.Request.Method(), sip.MethodMessage) && g.pendingDeviceQueryTargetMismatch(ctx.DeviceID, msg.CmdType, msg.SN, msg.DeviceID) {
+		return fmt.Errorf("query response target mismatch")
+	}
+	return nil
+}
+
+func (g *GB28181API) pendingDeviceQueryTargetMismatch(deviceID, cmdType string, sn int, targetID string) bool {
+	if g == nil || sn <= 0 {
+		return false
+	}
+	value, ok := g.pendingDeviceQuery.Load(buildPendingQueryKey(deviceID, canonicalGBQueryCmdType(cmdType), sn))
+	if !ok {
+		return false
+	}
+	pending, ok := value.(*pendingQueryWait)
+	if !ok || pending == nil {
+		return false
+	}
+	expected := strings.TrimSpace(pending.targetID)
+	return expected != "" && expected != strings.TrimSpace(targetID)
 }
 
 func (g *GB28181API) validateAuthenticatedResponseTarget(ctx *sip.Context, targetID string) error {

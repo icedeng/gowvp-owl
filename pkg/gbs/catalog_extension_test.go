@@ -1,11 +1,13 @@
 package gbs
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/internal/core/ipc"
@@ -110,8 +112,14 @@ func TestCatalogResponseRejectsInvalidEnvelopeBeforeAggregation(t *testing.T) {
 		{name: "wrong command", body: `<Response><CmdType>DeviceStatus</CmdType><SN>9</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>0</SumNum></Response>`},
 		{name: "non-positive SN", body: `<Response><CmdType>Catalog</CmdType><SN>0</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>0</SumNum></Response>`},
 		{name: "missing device", body: `<Response><CmdType>Catalog</CmdType><SN>9</SN><SumNum>0</SumNum></Response>`},
+		{name: "missing sum", body: `<Response><CmdType>Catalog</CmdType><SN>9</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Response>`},
 		{name: "negative sum", body: `<Response><CmdType>Catalog</CmdType><SN>9</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>-1</SumNum></Response>`},
 		{name: "invalid target", body: `<Response><CmdType>Catalog</CmdType><SN>9</SN><DeviceID>invalid</DeviceID><SumNum>0</SumNum></Response>`},
+		{name: "unknown target", body: `<Response><CmdType>Catalog</CmdType><SN>9</SN><DeviceID>34020000001320000009</DeviceID><SumNum>0</SumNum></Response>`},
+		{name: "missing list", body: `<Response><CmdType>Catalog</CmdType><SN>9</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>1</SumNum></Response>`},
+		{name: "missing list count", body: `<Response><CmdType>Catalog</CmdType><SN>9</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>1</SumNum><DeviceList><Item><DeviceID>` + gb10ChannelID + `</DeviceID></Item></DeviceList></Response>`},
+		{name: "list count mismatch", body: `<Response><CmdType>Catalog</CmdType><SN>9</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>1</SumNum><DeviceList Num="0"><Item><DeviceID>` + gb10ChannelID + `</DeviceID></Item></DeviceList></Response>`},
+		{name: "invalid item", body: `<Response><CmdType>Catalog</CmdType><SN>9</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>1</SumNum><DeviceList Num="1"><Item><DeviceID>bad</DeviceID></Item></DeviceList></Response>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -125,6 +133,82 @@ func TestCatalogResponseRejectsInvalidEnvelopeBeforeAggregation(t *testing.T) {
 	case out := <-pending.wait:
 		t.Fatalf("invalid Catalog resolved pending query: %+v", out)
 	default:
+	}
+}
+
+func TestCatalogResponseRejectsSiblingPendingTarget(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	firstChannelID := gb10ChannelID
+	secondChannelID := "34020000001320000003"
+	memory.runtime.Channels.Store(firstChannelID, &Channel{ChannelID: firstChannelID, device: memory.runtime})
+	memory.runtime.Channels.Store(secondChannelID, &Channel{ChannelID: secondChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1), targetID: firstChannelID}
+	api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "Catalog", 63), pending)
+	body := []byte(`<Response><CmdType>Catalog</CmdType><SN>63</SN><DeviceID>` + secondChannelID + `</DeviceID><SumNum>0</SumNum></Response>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "catalog-sibling-target", body, api.sipMessageCatalog)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("sibling Catalog response = %s", response)
+	}
+	select {
+	case out := <-pending.wait:
+		t.Fatalf("sibling Catalog response resolved pending query: %+v", out)
+	default:
+	}
+}
+
+func TestCatalogResponseRejectsSiblingAggregateTarget(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	secondChannelID := "34020000001320000003"
+	memory.runtime.Channels.Store(secondChannelID, &Channel{ChannelID: secondChannelID, device: memory.runtime})
+	collector := newMultiResponseCollector(func(item Channels) string { return item.ChannelID })
+	key := buildMultiResponseKey(gb10DeviceID, "Catalog", 65)
+	collector.Start(key)
+	api := &GB28181API{svr: &Server{memoryStorer: memory}, catalogResponses: collector}
+	body := []byte(`<Response><CmdType>Catalog</CmdType><SN>65</SN><DeviceID>` + secondChannelID + `</DeviceID><SumNum>0</SumNum></Response>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "catalog-sibling-aggregate", body, api.sipMessageCatalog)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("sibling aggregate Catalog response = %s", response)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	result := collector.Wait(waitCtx, key)
+	cancel()
+	if result.Complete || len(result.Items) != 0 {
+		t.Fatalf("sibling Catalog response changed collector: %+v", result)
+	}
+}
+
+func TestCatalogNotifyRejectsTargetAndCountBeforeRefresh(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "source mismatch", body: `<Notify><CmdType>Catalog</CmdType><SN>64</SN><DeviceID>34020000001320000009</DeviceID><SumNum>0</SumNum></Notify>`},
+		{name: "count mismatch", body: `<Notify><CmdType>Catalog</CmdType><SN>64</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>2</SumNum><DeviceList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID></Item></DeviceList></Notify>`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodNotify, "catalog-notify-invalid-"+test.name, []byte(test.body), api.sipNotifyCatalog)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("invalid Catalog NOTIFY response = %s", response)
+			}
+		})
+	}
+}
+
+func TestCatalogResponseAcceptsSameDomainOrganizationRootWithoutPendingQuery(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	for _, targetID := range []string{
+		"34020000002000000001",
+		"34020000002150000001",
+		"34020000002160000001",
+	} {
+		body := []byte(`<Response><CmdType>Catalog</CmdType><SN>66</SN><DeviceID>` + targetID + `</DeviceID><SumNum>0</SumNum></Response>`)
+		response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "catalog-organization-root-"+targetID, body, api.sipMessageCatalog)
+		assertFlowOK(t, response)
 	}
 }
 

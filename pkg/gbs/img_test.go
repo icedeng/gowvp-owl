@@ -91,24 +91,45 @@ func TestSnapshotFinishedRejectsSchemaViolations(t *testing.T) {
 	sessionID := "snapshot-session-0000000000000099"
 	fileID := gb10DeviceID + "022026082508150000001"
 	tests := []struct {
-		name    string
-		sn      string
-		cmdType string
-		files   string
+		name     string
+		root     string
+		deviceID string
+		sn       string
+		cmdType  string
+		files    string
 	}{
 		{name: "non-positive SN", sn: "0", cmdType: "UploadSnapShotFinished"},
+		{name: "wrong root", root: "Response", sn: "1", cmdType: "UploadSnapShotFinished"},
+		{name: "invalid device", deviceID: "bad", sn: "1", cmdType: "UploadSnapShotFinished"},
 		{name: "wrong command", sn: "1", cmdType: "Catalog"},
+		{name: "missing list", sn: "1", cmdType: "UploadSnapShotFinished", files: "__NO_LIST__"},
+		{name: "invalid file", sn: "1", cmdType: "UploadSnapShotFinished", files: `<SnapShotFileID>bad</SnapShotFileID>`},
 		{name: "too many files", sn: "1", cmdType: "UploadSnapShotFinished", files: strings.Repeat("<SnapShotFileID>"+fileID+"</SnapShotFileID>", 11)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			body := []byte(`<Notify><CmdType>` + test.cmdType + `</CmdType><SN>` + test.sn + `</SN><DeviceID>` + gb10DeviceID +
-				`</DeviceID><SessionID>` + sessionID + `</SessionID><SnapShotList>` + test.files + `</SnapShotList></Notify>`)
+			root := test.root
+			if root == "" {
+				root = "Notify"
+			}
+			deviceID := test.deviceID
+			if deviceID == "" {
+				deviceID = gb10DeviceID
+			}
+			list := `<SnapShotList>` + test.files + `</SnapShotList>`
+			if test.files == "__NO_LIST__" {
+				list = ""
+			}
+			body := []byte(`<` + root + `><CmdType>` + test.cmdType + `</CmdType><SN>` + test.sn + `</SN><DeviceID>` + deviceID +
+				`</DeviceID><SessionID>` + sessionID + `</SessionID>` + list + `</` + root + `>`)
 			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "snapshot-schema-"+test.name, body, api.sipMessageSnapshotFinished)
 			if !strings.Contains(response, "SIP/2.0 400") {
 				t.Fatalf("schema-invalid snapshot response = %s", response)
 			}
 		})
+	}
+	if _, ok := api.SnapshotState(gb10DeviceID, sessionID); ok {
+		t.Fatal("schema-invalid snapshot notification changed state")
 	}
 }
 

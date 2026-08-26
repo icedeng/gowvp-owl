@@ -264,10 +264,11 @@ func TestTerminatedNotifyClearsOutgoingSubscription(t *testing.T) {
 	api := &GB28181API{}
 	connection := newFlowConnection()
 	subscribe := newFlowRequest(t, connection, sip.MethodSubscribe, "terminated-subscription", []byte("query"))
-	dialog := &outgoingSubscriptionDialog{response: sip.NewResponseFromRequest("", subscribe, 200, "OK", nil)}
+	dialog := &outgoingSubscriptionDialog{response: sip.NewResponseFromRequest("", subscribe, 200, "OK", nil), deviceID: gb10DeviceID}
 	api.outgoingSubscriptions.Store("catalog-key", dialog)
 
 	request := newFlowRequest(t, connection, sip.MethodNotify, "terminated-subscription", nil)
+	applyTerminatedNotifyDialog(t, request, dialog.response)
 	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: "terminated;reason=timeout"})
 	ctx := &sip.Context{
 		Request: request, Tx: sip.NewTransaction("terminated-notify", connection),
@@ -284,7 +285,7 @@ func TestTerminatedNotifyRenewsReferencedCascadeSubscription(t *testing.T) {
 	api := &GB28181API{cascadeSubscriptions: make(map[string]*cascadeDownstreamSubscription)}
 	connection := newFlowConnection()
 	subscribe := newFlowRequest(t, connection, sip.MethodSubscribe, "terminated-cascade-subscription", []byte("query"))
-	dialog := &outgoingSubscriptionDialog{response: sip.NewResponseFromRequest("", subscribe, 200, "OK", nil)}
+	dialog := &outgoingSubscriptionDialog{response: sip.NewResponseFromRequest("", subscribe, 200, "OK", nil), deviceID: gb10DeviceID}
 	key := "cascade-catalog-key"
 	api.outgoingSubscriptions.Store(key, dialog)
 	input := SubscribeInput{DeviceID: gb10DeviceID, TargetID: gb10DeviceID, Event: "Catalog", Expires: 60}
@@ -296,6 +297,7 @@ func TestTerminatedNotifyRenewsReferencedCascadeSubscription(t *testing.T) {
 	}
 
 	request := newFlowRequest(t, connection, sip.MethodNotify, "terminated-cascade-subscription", nil)
+	applyTerminatedNotifyDialog(t, request, dialog.response)
 	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: "terminated;reason=timeout"})
 	ctx := &sip.Context{
 		Request: request, Tx: sip.NewTransaction("terminated-cascade-notify", connection),
@@ -311,6 +313,54 @@ func TestTerminatedNotifyRenewsReferencedCascadeSubscription(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("terminated referenced cascade subscription was not renewed")
 	}
+}
+
+func TestTerminatedNotifyRejectsForeignSourceAndDialogTags(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		deviceID string
+		wrongTag bool
+	}{
+		{name: "foreign source", deviceID: "34020000001320000009"},
+		{name: "foreign dialog", deviceID: gb10DeviceID, wrongTag: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			api := &GB28181API{}
+			connection := newFlowConnection()
+			subscribe := newFlowRequest(t, connection, sip.MethodSubscribe, "terminated-protected", []byte("query"))
+			dialog := &outgoingSubscriptionDialog{response: sip.NewResponseFromRequest("", subscribe, 200, "OK", nil), deviceID: gb10DeviceID}
+			api.outgoingSubscriptions.Store("protected-key", dialog)
+			request := newFlowRequest(t, connection, sip.MethodNotify, "terminated-protected", nil)
+			applyTerminatedNotifyDialog(t, request, dialog.response)
+			if test.wrongTag {
+				from, _ := request.From()
+				from.Params.Add("tag", sip.String{Str: "foreign-tag"})
+			}
+			request.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: "terminated;reason=timeout"})
+			ctx := &sip.Context{Request: request, Tx: sip.NewTransaction("terminated-protected", connection), DeviceID: test.deviceID, Source: connection.remote}
+			api.sipNotifySubscriptionState(ctx)
+			assertFlowOK(t, <-flowResponse(t, connection))
+			if _, exists := api.outgoingSubscriptions.Load("protected-key"); !exists {
+				t.Fatal("foreign terminated NOTIFY removed subscription dialog")
+			}
+		})
+	}
+}
+
+func applyTerminatedNotifyDialog(t *testing.T, request *sip.Request, response *sip.Response) {
+	t.Helper()
+	request.RemoveHeader("From")
+	request.RemoveHeader("To")
+	remote, ok := response.To()
+	if !ok || remote == nil {
+		t.Fatal("subscription response missing remote address")
+	}
+	local, ok := response.From()
+	if !ok || local == nil {
+		t.Fatal("subscription response missing local address")
+	}
+	request.AppendHeader(&sip.FromHeader{Address: remote.Address.Clone(), Params: remote.Params.Clone()})
+	request.AppendHeader(&sip.ToHeader{Address: local.Address.Clone(), Params: local.Params.Clone()})
 }
 
 func TestCatalogSubscriptionInitialRenewCancel11(t *testing.T) {

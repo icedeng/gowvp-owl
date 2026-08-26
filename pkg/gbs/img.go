@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -29,11 +30,15 @@ type SnapshotState struct {
 }
 
 type snapshotFinishedNotify struct {
-	CmdType   string   `xml:"CmdType"`
-	SN        int      `xml:"SN"`
-	DeviceID  string   `xml:"DeviceID"`
-	SessionID string   `xml:"SessionID"`
-	FileIDs   []string `xml:"SnapShotList>SnapShotFileID"`
+	XMLName      xml.Name
+	CmdType      string `xml:"CmdType"`
+	SN           int    `xml:"SN"`
+	DeviceID     string `xml:"DeviceID"`
+	SessionID    string `xml:"SessionID"`
+	SnapShotList struct {
+		XMLName xml.Name
+		FileIDs []string `xml:"SnapShotFileID"`
+	} `xml:"SnapShotList"`
 }
 
 func (g *GB28181API) QuerySnapshot(deviceID, targetID, coverKey string) (*SnapshotState, error) {
@@ -311,8 +316,8 @@ func (g *GB28181API) sipMessageSnapshotFinished(ctx *sip.Context) {
 	}
 	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
 	msg.SessionID = strings.TrimSpace(msg.SessionID)
-	if msg.SN <= 0 || !strings.EqualFold(strings.TrimSpace(msg.CmdType), "UploadSnapShotFinished") || msg.DeviceID == "" ||
-		validateGBSessionID(msg.SessionID) != nil || len(msg.FileIDs) > 10 {
+	if msg.XMLName.Local != "Notify" || msg.SN <= 0 || !strings.EqualFold(strings.TrimSpace(msg.CmdType), "UploadSnapShotFinished") || !isGBDeviceIdentifier(msg.DeviceID) ||
+		validateGBSessionID(msg.SessionID) != nil || msg.SnapShotList.XMLName.Local == "" || len(msg.SnapShotList.FileIDs) > 10 {
 		ctx.String(400, "invalid UploadSnapShotFinished notification")
 		return
 	}
@@ -322,12 +327,13 @@ func (g *GB28181API) sipMessageSnapshotFinished(ctx *sip.Context) {
 			return
 		}
 	}
-	fileIDs := make([]string, 0, len(msg.FileIDs))
-	seen := make(map[string]struct{}, len(msg.FileIDs))
-	for _, fileID := range msg.FileIDs {
+	fileIDs := make([]string, 0, len(msg.SnapShotList.FileIDs))
+	seen := make(map[string]struct{}, len(msg.SnapShotList.FileIDs))
+	for _, fileID := range msg.SnapShotList.FileIDs {
 		fileID = strings.TrimSpace(fileID)
 		if !validSnapshotFileID(fileID, msg.DeviceID) {
-			continue
+			ctx.String(400, "invalid SnapShotFileID")
+			return
 		}
 		if _, ok := seen[fileID]; !ok && len(fileIDs) < 10 {
 			seen[fileID] = struct{}{}

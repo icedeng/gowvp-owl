@@ -86,11 +86,15 @@ func TestDeviceUpgradeResultRejectsSchemaViolations(t *testing.T) {
 	api, _ := newVersionGateAPI(GBVersion30)
 	sessionID := "upgrade-session-0000000000000099"
 	tests := []struct {
-		name string
-		sn   string
-		body string
+		name     string
+		root     string
+		deviceID string
+		sn       string
+		body     string
 	}{
 		{name: "non-positive SN", sn: "0", body: `<UpgradeResult>OK</UpgradeResult><Firmware>V1</Firmware>`},
+		{name: "wrong root", root: "Response", sn: "1", body: `<UpgradeResult>OK</UpgradeResult><Firmware>V1</Firmware>`},
+		{name: "invalid device", deviceID: "bad", sn: "1", body: `<UpgradeResult>OK</UpgradeResult><Firmware>V1</Firmware>`},
 		{name: "invalid result", sn: "1", body: `<UpgradeResult>MAYBE</UpgradeResult><Firmware>V1</Firmware>`},
 		{name: "missing firmware", sn: "1", body: `<UpgradeResult>OK</UpgradeResult>`},
 		{name: "missing failure reason", sn: "1", body: `<UpgradeResult>ERROR</UpgradeResult><Firmware>V1</Firmware>`},
@@ -98,13 +102,24 @@ func TestDeviceUpgradeResultRejectsSchemaViolations(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			body := []byte(`<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>` + test.sn + `</SN><DeviceID>` + gb10DeviceID +
-				`</DeviceID><SessionID>` + sessionID + `</SessionID>` + test.body + `</Notify>`)
+			root := test.root
+			if root == "" {
+				root = "Notify"
+			}
+			deviceID := test.deviceID
+			if deviceID == "" {
+				deviceID = gb10DeviceID
+			}
+			body := []byte(`<` + root + `><CmdType>DeviceUpgradeResult</CmdType><SN>` + test.sn + `</SN><DeviceID>` + deviceID +
+				`</DeviceID><SessionID>` + sessionID + `</SessionID>` + test.body + `</` + root + `>`)
 			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "upgrade-schema-"+test.name, body, api.sipMessageDeviceUpgradeResult)
 			if !strings.Contains(response, "SIP/2.0 400") {
 				t.Fatalf("schema-invalid upgrade result response = %s", response)
 			}
 		})
+	}
+	if _, ok := api.UpgradeState(gb10DeviceID, sessionID); ok {
+		t.Fatal("schema-invalid upgrade result changed state")
 	}
 }
 

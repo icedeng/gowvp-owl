@@ -27,12 +27,41 @@ const (
 
 // MessageDeviceListResponse 设备明细列表返回结构
 type MessageDeviceListResponse struct {
-	XMLName  xml.Name
-	CmdType  string     `xml:"CmdType"`
-	SN       int        `xml:"SN"`
-	DeviceID string     `xml:"DeviceID"`
-	SumNum   int        `xml:"SumNum"`
-	Item     []Channels `xml:"DeviceList>Item"`
+	XMLName   xml.Name
+	CmdType   string     `xml:"CmdType"`
+	SN        int        `xml:"SN"`
+	DeviceID  string     `xml:"DeviceID"`
+	SumNum    int        `xml:"SumNum"`
+	HasSumNum bool       `xml:"-"`
+	Item      []Channels `xml:"-"`
+	ListNum   *int       `xml:"-"`
+	HasList   bool       `xml:"-"`
+}
+
+func (m *MessageDeviceListResponse) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
+	var value struct {
+		CmdType  string `xml:"CmdType"`
+		SN       int    `xml:"SN"`
+		DeviceID string `xml:"DeviceID"`
+		SumNum   *int   `xml:"SumNum"`
+		List     *struct {
+			Num  *int       `xml:"Num,attr"`
+			Item []Channels `xml:"Item"`
+		} `xml:"DeviceList"`
+	}
+	if err := decoder.DecodeElement(&value, &start); err != nil {
+		return err
+	}
+	*m = MessageDeviceListResponse{
+		XMLName: start.Name, CmdType: value.CmdType, SN: value.SN, DeviceID: value.DeviceID,
+	}
+	if value.SumNum != nil {
+		m.SumNum, m.HasSumNum = *value.SumNum, true
+	}
+	if value.List != nil {
+		m.HasList, m.ListNum, m.Item = true, value.List.Num, value.List.Item
+	}
+	return nil
 }
 
 func classifyGBCatalogItem(deviceID string) GBCatalogItemKind {
@@ -122,7 +151,7 @@ func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 	}
 	msg.CmdType = strings.TrimSpace(msg.CmdType)
 	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
-	if err := validateCatalogEnvelope(msg); err != nil {
+	if err := g.validateCatalogEnvelope(ctx, msg, false); err != nil {
 		ctx.String(400, err.Error())
 		return
 	}
@@ -145,7 +174,7 @@ func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 	g.persistDecodedQuery(stateDeviceID, msg.CmdType, decoded)
 }
 
-func validateCatalogEnvelope(msg MessageDeviceListResponse) error {
+func (g *GB28181API) validateCatalogEnvelope(ctx *sip.Context, msg MessageDeviceListResponse, notification bool) error {
 	if msg.XMLName.Local != "Response" && msg.XMLName.Local != "Notify" {
 		return fmt.Errorf("Catalog root must be Response or Notify")
 	}
@@ -155,10 +184,54 @@ func validateCatalogEnvelope(msg MessageDeviceListResponse) error {
 	if msg.SN <= 0 || !isGBDeviceIdentifier(strings.TrimSpace(msg.DeviceID)) {
 		return fmt.Errorf("Catalog requires positive SN and 20-digit DeviceID")
 	}
-	if msg.SumNum < 0 {
+	if !msg.HasSumNum || msg.SumNum < 0 {
 		return fmt.Errorf("Catalog SumNum must not be negative")
 	}
+	if !msg.HasList {
+		if msg.SumNum != 0 {
+			return fmt.Errorf("Catalog DeviceList is required for non-empty results")
+		}
+	} else if msg.ListNum == nil || *msg.ListNum < 0 || *msg.ListNum != len(msg.Item) || len(msg.Item) > msg.SumNum {
+		return fmt.Errorf("invalid Catalog DeviceList count")
+	}
+	if notification && msg.HasList && *msg.ListNum != msg.SumNum {
+		return fmt.Errorf("Catalog notification count mismatch")
+	}
+	for _, item := range msg.Item {
+		if classifyGBCatalogItem(strings.TrimSpace(item.ChannelID)) == GBCatalogItemUnknown {
+			return fmt.Errorf("invalid Catalog item DeviceID")
+		}
+	}
+	if err := g.validateCatalogResponseTarget(ctx, msg.DeviceID); err != nil {
+		return err
+	}
+	if !notification && g.pendingDeviceQueryTargetMismatch(ctx.DeviceID, msg.CmdType, msg.SN, msg.DeviceID) {
+		return fmt.Errorf("Catalog response target mismatch")
+	}
+	if !notification && g.catalogResponses != nil && g.catalogResponses.Has(buildMultiResponseKey(ctx.DeviceID, "Catalog", msg.SN)) && msg.DeviceID != strings.TrimSpace(ctx.DeviceID) {
+		return fmt.Errorf("Catalog aggregate target mismatch")
+	}
 	return nil
+}
+
+func (g *GB28181API) validateCatalogResponseTarget(ctx *sip.Context, targetID string) error {
+	if err := g.validateAuthenticatedResponseTarget(ctx, targetID); err == nil {
+		return nil
+	}
+	sourceID := ""
+	if ctx != nil {
+		sourceID = strings.TrimSpace(ctx.DeviceID)
+	}
+	targetID = strings.TrimSpace(targetID)
+	if len(sourceID) != 20 || len(targetID) != 20 || sourceID[:10] != targetID[:10] {
+		return fmt.Errorf("Catalog response target mismatch")
+	}
+	switch classifyGBCatalogItem(targetID) {
+	case GBCatalogItemSystem, GBCatalogItemBusinessGroup, GBCatalogItemVirtualOrganization:
+		return nil
+	default:
+		return fmt.Errorf("Catalog response target mismatch")
+	}
 }
 
 // QueryCatalog 设备目录查询或订阅请求

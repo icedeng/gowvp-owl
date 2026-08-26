@@ -128,6 +128,8 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 	dialog := loaded.(*outgoingSubscriptionDialog)
 	dialog.mu.Lock()
 	defer dialog.mu.Unlock()
+	dialog.deviceID = deviceID
+	dialog.targetID = targetID
 	if !dialog.expiresAt.IsZero() && time.Now().After(dialog.expiresAt) {
 		dialog.response = nil
 		dialog.remoteTarget = nil
@@ -219,7 +221,7 @@ func (g *GB28181API) sipNotifyCatalog(ctx *sip.Context) {
 	}
 	msg.CmdType = strings.TrimSpace(msg.CmdType)
 	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
-	if err := validateCatalogEnvelope(msg); err != nil {
+	if err := g.validateCatalogEnvelope(ctx, msg, true); err != nil {
 		ctx.String(400, "invalid catalog notify")
 		return
 	}

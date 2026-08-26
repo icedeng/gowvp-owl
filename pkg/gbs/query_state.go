@@ -875,7 +875,7 @@ func (g *GB28181API) sipMessageVideoUploadNotify(ctx *sip.Context) {
 	msg.CmdType = strings.TrimSpace(msg.CmdType)
 	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
 	msg.Time = strings.TrimSpace(msg.Time)
-	if msg.SN <= 0 || !strings.EqualFold(msg.CmdType, "VideoUploadNotify") || msg.DeviceID == "" {
+	if msg.XMLName.Local != "Notify" || msg.SN <= 0 || !strings.EqualFold(msg.CmdType, "VideoUploadNotify") || !isGBDeviceIdentifier(msg.DeviceID) {
 		ctx.String(400, "invalid VideoUploadNotify notification")
 		return
 	}

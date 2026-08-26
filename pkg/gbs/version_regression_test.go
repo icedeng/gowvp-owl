@@ -257,6 +257,31 @@ func TestGenericQueryResponseRejectsInvalidEnvelopeVersionAndTarget(t *testing.T
 	}
 }
 
+func TestGenericQueryResponseRejectsSiblingPendingTargetBeforeState(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion30)
+	firstChannelID := gb10ChannelID
+	secondChannelID := "34020000001320000003"
+	memory.runtime.Channels.Store(firstChannelID, &Channel{ChannelID: firstChannelID, device: memory.runtime})
+	memory.runtime.Channels.Store(secondChannelID, &Channel{ChannelID: secondChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1), targetID: firstChannelID}
+	api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "PTZPosition", 76), pending)
+	body := []byte(`<Response><CmdType>PTZPosition</CmdType><SN>76</SN><DeviceID>` + secondChannelID + `</DeviceID><Pan>1</Pan></Response>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "query-sibling-target", body, api.sipMessageQueryGeneric)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("sibling query response = %s", response)
+	}
+	select {
+	case out := <-pending.wait:
+		t.Fatalf("sibling response resolved pending query: %+v", out)
+	default:
+	}
+	if state, ok := api.GetQueryState(gb10DeviceID); ok && state.PTZPosition != nil {
+		t.Fatalf("sibling response changed query state: %+v", state.PTZPosition)
+	}
+}
+
 func TestDeviceStatusResponseValidatesRequiredFieldsBeforeStateAndRuntime(t *testing.T) {
 	api, memory := newVersionGateAPI(GBVersion10)
 	initialOnline := memory.device.runtimeSnapshot().IsOnline
