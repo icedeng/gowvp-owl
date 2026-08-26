@@ -1,6 +1,6 @@
 # GB/T 28181 1.0/1.1/2.0/3.0 实现完成度审计
 
-审计时间：2026-08-26（Asia/Shanghai）
+审计时间：2026-08-27（Asia/Shanghai）
 
 ## 1. 审计结论
 
@@ -22,14 +22,14 @@
 | AI-201 1.0 门禁 | 完成 | Config、广播/对讲、RTP over TCP、IFrame、DragZoom 等能力门禁测试 |
 | AI-202 1.0 SDP | 完成 | 统一 SDP Builder；直播/回放/下载 golden；Subject、u/t/y/f 测试 |
 | AI-203 1.0 核心流程 | 完成（设备接入模拟器） | REGISTER→Keepalive→Catalog、RecordInfo、Alarm 流程测试；Keepalive 在补载设备和写在线态前校验 Notify 根、固定命令、正 SN、源设备一致性及故障设备编码，保留空 Status 和 ON/OFF 厂商兼容，并在在线状态落定后先返回 `200 OK`，再转发 DeviceStatus NOTIFY 和执行首次 Catalog 补载；Alarm 在附录 A.4、业务回调和订阅转发前校验四版本必填包络、目标、级别、方式、时间及 WGS-84 经纬度范围；2016+ 进一步按方式校验报警类型，方式 5 的类型 13 仅对 2022 开放，入侵报警 EventType 只允许进/出区域。MobilePosition、DeviceInfo、ConfigDownload 及通用查询响应同样先确认入向 SIP 报文、后执行外部回调/订阅转发，避免慢消费方触发设备重传；DeviceInfo 四版本应答固定校验 Response 根、固定命令、正 SN、`OK/ERROR` 结果和父设备/已知子通道目标，非法应答不更新设备信息或解除等待；平台主动点播的 1.0 UDP SDP 由 golden 测试覆盖；SIP/TCP 支持大小写不敏感 `Content-Length`、紧凑头 `l` 及同连接连续报文分帧，连接断开时解析器关闭输出通道并终止对应 handler goroutine，不再按设备重连次数泄漏；单头行、总头、正文分别限制为 8 KiB、64 KiB、1 MiB，超限长度、重复长度和截断正文在分配/分派前拒绝，UDP Content-Length 同样在正文分配前受限。入向请求必须为 `SIP/2.0`，各有且仅有一个有效 From、To、Call-ID、CSeq，并含 `SIP/2.0` 顶层 Via；Request-Line 方法必须匹配 CSeq 方法，不支持版本返回 505，其他畸形请求通过独立临时事务在业务 handler 前返回 400，不能覆盖合法事务的连接/响应安全器，畸形 ACK 静默丢弃。对话请求按 RFC 3261 反转 `Record-Route`，同时覆盖宽松路由和首 Route 无 `lr` 的严格路由，且不修改原响应 CSeq；新 Via 不回送响应侧 `received/rport` 值。设备 2xx 缺失 Contact 时回退 To，缺失 To/From/Via/Call-ID/CSeq 时向直播、回放、下载、广播和对讲调用链返回错误，不再构造半有效请求或 panic。短 URI、纯空白地址、缺失 `>`、空主机等畸形输入返回错误，合法裸地址与括号 IPv6 保持可解析，并有模糊测试防止解析 panic。已注册上级的入向 INVITE 进入级联 B2BUA，其他未知入向 INVITE 明确返回 501；`server_tcp_test.go`、`panic_fix_test.go`、`parser_robustness_test.go`、`notification_envelope_test.go`、`subscribe_11_test.go` |
-| AI-301 Catalog 扩展 | 完成 | 目录树五类节点、2014 字段、厂商 XML 保留；查询响应和变化通知校验 Response/Notify 根、固定命令、正 SN、20 位顶层目标及非负 SumNum，兼容 2014 合法行政/系统目录根，非法目录不进入聚合器；`catalog_extension_test.go` |
+| AI-301 Catalog 扩展 | 完成 | 目录树五类节点、2014 字段、厂商 XML 保留；查询响应和变化通知校验 Response/Notify 根、固定命令、正 SN、20 位顶层目标及非负 SumNum，兼容 2014 合法行政/系统目录根。目录项在聚合和持久化前校验 ON/OFF 状态、0/1 属性、安全/注册方式、证书错误码、端口、有限坐标、证书有效期以及 2014+ 摄像机属性枚举；2011 拒绝 2014 新增的 `Info/BusinessGroupID`，非法目录不进入聚合器；`catalog_extension_test.go` |
 | AI-302 配置读写 | 完成 | ConfigDownload 支持 BasicParam、VideoParamOpt/Config、AudioParamOpt/Config、SVACEncode/DecodeConfig 多响应聚合，并在修改运行态前校验响应 envelope、版本和目标；成功 BasicParam 的心跳间隔/次数强制为 `1..65535`，非法值不截断、不修正、不静默忽略，也不写状态或解除等待；失败响应及子通道 BasicParam 不改写父设备心跳。DeviceConfig 写入支持 BasicParam、结构化 VideoParamConfig/AudioParamConfig 及经过 XML 完整性/指令校验的 SVACEncodeConfig/SVACDecodeConfig，可组合下发并保留 BasicParam 兼容 API；其应答按 2014+ 门禁并校验根、固定命令、正 SN 和目标所有权，非法应答不写状态或唤醒等待。DeviceControl 四版本应答进一步校验固定命令、结果枚举、目标所有权及与在途请求目标一致性，非法应答不解除控制等待。Web/Core/Adapter/Swagger 已贯通；`config_11_test.go`、`gb_config_test.go`、`ipc_gb_config_test.go`、`ptz_test.go` |
 | AI-303 MediaStatus | 完成 | 四版本通知校验 Notify 根、固定命令、正 SN、必填设备和通知类型；可找到会话现场时强绑定父设备/通道与 Call-ID，错误目标不能结束任务；121 收敛历史 RTP/裸 TCP 下载，未知类型和已清理会话重复通知保持幂等；`media_status_test.go`、`notification_envelope_test.go`；并纳入 1.1 串联模拟流程 |
 | AI-304 多响应 | 完成 | 四版本目录/录像分包以及订阅目录通知分包；乱序、重复、总数冲突、超时部分结果、同设备并发；通用查询强制 `MESSAGE + Response`、订阅事件强制 `NOTIFY + Notify`，均校验正 SN、20 位设备编码、命令版本能力和设备/已知子通道所有权；合法 NOTIFY 可更新事件状态但不能解除 `MESSAGE` 查询等待，2022 `VideoUploadNotify` 等独立业务通知由专用包络处理，不套用查询应答矩阵；在途等待绑定原始目标，兄弟通道不能写状态或抢先解除等待；DeviceStatus 额外校验四版本必填的 Result、Online、Status 枚举，失败结果和子通道状态不改写父设备在线运行态；Catalog 区分缺失 SumNum 与零值，校验 DeviceList Num、本包条目、通知总数、条目编码、来源和父设备聚合目标；通知各分包使用同一 SN、相同总 `SumNum`，`DeviceList Num` 只表示当前包条数。2014+ 目录/录像/通知单包按附录 M 限制为最多 10000 项，2011 仍受 SIP 正文安全上限约束。RecordInfo 在进入聚合器前校验固定命令、正 SN、20 位目标、必填名称、非负总数、有列表时的 RecordList Num、条目非空 Name、显式 Secrecy 0/1、可选 dateTime 起止时间和在途通道目标；条目 Type 按 2011 与 2014+ 枚举区分，FileSize 仅 2016+、RecordLocation/StreamNumber 仅 2022，后两者校验 20 位编码和 0..2 码流序号。无结果时接受标准规定的 `SumNum=0` 且不携带 `RecordList`，兼容 NVR 顶层父设备编码别名，非法分包不能污染或提前完成查询；级联录像按上级版本裁剪扩展字段，并映射 RecorderID/RecordLocation，未知下级编码不透传。级联零目录响应按版本生成：1.0 保留显式空 DeviceList，1.1+ 省略；零录像响应省略 RecordList，并保留必填录像名称。服务关闭会并发幂等地关闭 Catalog/RecordInfo 聚合器并立即唤醒等待者，关闭后拒绝创建新聚合项；XML 的 UTF-8→GBK/GB18030 兼容回退使用临时对象原子解码，首轮失败的部分目录/录像切片不会残留并在第二轮重复追加，完全失败也不污染调用方目标；`catalog_extension_test.go`、`multi_response_test.go`、`record_mobile_position_envelope_test.go`、`version_regression_test.go`、`sip/xml_decode_test.go` |
 | AI-305 目录/事件订阅 | 完成（自动化） | Catalog 初始、续订、取消、Event id、部分目录目标及真实 ADD/DEL/ON/OFF/UPDATE 增量；2011 Catalog 通知使用 `Response` 根，2014+ 使用 `Notify` 根；空消息体 terminated NOTIFY 正确确认、清理并在仍被上级引用时重订，但必须同时匹配下级设备、Call-ID、远端 From tag 和本地 To tag，复用 Call-ID 的其他设备/对话不能删除订阅；入向事件订阅会话按设备/上级、Call-ID、双向 tag、事件类型和目标隔离，创建必须无 To tag，续订/取消必须匹配原对话并递增 SUBSCRIBE CSeq；不存在对话的取消、错误 tag 和回放 CSeq 返回 481，且不能改变过期时间、过滤条件、下游引用或删除原订阅；Alarm 查询过滤参数、MobilePosition Interval、PTZPosition 版本门禁；Broadcast 2014+ 应答校验根、固定命令、正 SN、结果枚举和已登记目标，非法应答不解除广播等待；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅自动桥接下级并按引用计数复用及释放，目录快照变化后重新计算 Catalog 下级来源；`subscribe_11_test.go`、`broadcast_11_test.go`、`cascade_subscribe_test.go`、`cascade_query_test.go` |
 
 订阅边界补充：入向事件订阅白名单固定为 2011+ Alarm/Catalog、2016+ MobilePosition、2022 PTZPosition，查询、状态、广播及任意后缀扩展均拒绝。创建、续订、取消统一校验 Query 根、正 SN、20 位 DeviceID 和匹配正文的必填 Event，空目标不转为通配符；取消请求仍允许旧版本清理既有高版本事件对话。四类标准事件的 active/pending/terminated NOTIFY 必须绑定真实出向订阅并匹配设备、目标、Event、Subscription-State、Call-ID、双向 tag、递增 CSeq 和有效期；首个 NOTIFY 早于 SUBSCRIBE 最终响应时只允许合法对话绑定一次远端 tag，伪造请求返回 481 且不能进入业务 handler。独立业务通知不套用该门禁。通用 NOTIFY 仅允许 2022 PTZPosition，查询/状态命令的 NOTIFY 不写状态、不转发订阅，MESSAGE 查询应答也不进入事件发布链路。
-Catalog 根节点边界补充：入向普通查询四版本固定使用 `Response`；订阅通知 2011 使用 `Response`，2014+ 使用 `Notify`，其他根节点在业务处理前拒绝。DeviceStatus 可选 `Encode/Record/DeviceTime/Alarmstatus` 也在状态写入和等待解除前校验；报警状态字段名按 2011 `Status`、2014 `StatusDutyStatus`、2016/2022 `DutyStatus` 区分，级联输出还保留 2016 标准的小写 `num` 属性。
+Catalog 根节点边界补充：入向普通查询四版本固定使用 `Response`；订阅通知 2011 使用 `Response`，2014+ 使用 `Notify`，其他根节点在业务处理前拒绝。目录项已出现的标准值会在多响应聚合和持久化前验证；未出现字段仍保留零值兼容，不把稀疏厂商目录突然收紧为完整 XSD 必填校验。DeviceStatus 可选 `Encode/Record/DeviceTime/Alarmstatus` 也在状态写入和等待解除前校验；报警状态字段名按 2011 `Status`、2014 `StatusDutyStatus`、2016/2022 `DutyStatus` 区分，级联输出还保留 2016 标准的小写 `num` 属性。
 
 | AI-401 广播时序 | 完成（自动化） | 接收者主动 INVITE；1.1 `PS/90000` 与 2.0/3.0 `PCMA/8000` 分派；ZLM `startSendRtp/stopSendRtp`；ACK/BYE 清理；`broadcast_11_test.go`、`pkg/zlm/rtp_test.go` |
 | AI-402 技术验证 | 完成 | `docs/adr/gb28181-2014-direct-tcp-download.md`，已采用 Owl 内置客户端 |
@@ -71,7 +71,7 @@ Catalog 根节点边界补充：入向普通查询四版本固定使用 `Respons
 
 ## 5. 最近验证
 
-2026-08-26 最终工作树已执行并通过：
+2026-08-27 当前工作树已执行并通过：
 
 ```bash
 env GOCACHE=/private/tmp/owl-go-cache go test ./... -count=1

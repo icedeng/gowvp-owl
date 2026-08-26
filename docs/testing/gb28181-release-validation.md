@@ -1,6 +1,6 @@
 # GB/T 28181 1.0/1.1 开发验证报告
 
-记录时间：2026-08-26（Asia/Shanghai）
+记录时间：2026-08-27（Asia/Shanghai）
 
 ## 1. 当前结论
 
@@ -39,7 +39,7 @@ go test ./... -count=1
 - MediaStatus/121 幂等收敛；
 - Catalog/RecordInfo 多响应乱序、重复、总数冲突、超时部分结果和同设备并发；
 - RecordInfo 响应包络、列表计数、条目非空名称、显式 `Secrecy=0/1`、可选 dateTime 起止时间、版本化 Type/FileSize/RecordLocation/StreamNumber、目标所有权和在途通道绑定；级联响应按上级版本裁剪新字段并映射 RecorderID/RecordLocation，非法分包不得进入聚合器，NVR 顶层父设备编码别名仍可映射到原查询通道；
-- Catalog 缺失/零值 SumNum、DeviceList Num、本包与通知总数、条目编码、已鉴权来源及父设备聚合目标；通用查询相同 SN 的兄弟通道响应不得抢占等待；
+- Catalog 缺失/零值 SumNum、DeviceList Num、本包与通知总数、条目编码、已鉴权来源及父设备聚合目标；目录项的状态、0/1 属性、安全/注册方式、错误码、端口、有限坐标、证书时间和 2014+ 摄像机属性枚举在聚合前校验，2011 不接受 2014 新增的 `Info/BusinessGroupID`；通用查询相同 SN 的兄弟通道响应不得抢占等待；
 - MobilePosition 的 2011/2014 版本门禁、2016 单点坐标及 2022 批量 `DeviceList` 解码；非法时间、坐标、方向、计数或目标不得写状态和转发；
 - 2022 升级、抓拍完成和实时视音频回传通知的固定 Notify 根、20 位目标及抓拍列表/文件标识完整性；
 - terminated NOTIFY 的设备、Call-ID 和双向 tag 对话绑定，以及伪造终止不得删除或重建下级订阅；
@@ -90,7 +90,7 @@ go test ./... -count=1
 - ConfigDownload 成功 BasicParam 的心跳间隔/次数仅允许 `1..65535`；缺失、非正或溢出值不得被截断、修正或静默忽略，也不得改运行态、写状态或解除等待；失败响应和子通道 BasicParam 不得改写父设备心跳运行态；
 - DeviceConfig/ConfigDownload 缺失或非法 `Result` 不得写状态、改运行态或解除等待；DeviceConfig 响应必须匹配原目标通道，兄弟通道复用 SN 不得抢占配置或抓拍等待；
 - DeviceConfig 非法版本、根、命令、SN 或目标不得写状态、附录 A.4 或解除等待；
-- Catalog 非法根、命令、SN、非 20 位顶层目标或负 SumNum 不得进入多响应聚合或解除查询等待；
+- Catalog 非法根、命令、SN、非 20 位顶层目标、负 SumNum 或非法目录项值不得进入多响应聚合、写入目录或解除查询等待；稀疏厂商目录仍允许省略可兼容字段；
 - 四版本历史级联 `INVITE→ACK→INFO→BYE` 完整对话、媒体启动/释放和 MANSRTSP/RTSP 转换；
 - SIP 响应添加 To-tag 时不得修改原请求；级联 INVITE 缓存响应只对 CSeq、Request-URI、顶层 Via 均一致的原事务重传复用，相同 Call-ID/tag 的另一事务返回 491 且不得获得原 200/SDP；
 - 缓存响应经事务发送并附加信令摘要/用户身份头后，原缓存对象仍不含本次发送产生的可变安全头；并发重传须通过 race 验证；

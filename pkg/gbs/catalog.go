@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"strings"
 	"time"
@@ -206,6 +207,9 @@ func (g *GB28181API) validateCatalogEnvelope(ctx *sip.Context, msg MessageDevice
 		if classifyGBCatalogItem(strings.TrimSpace(item.ChannelID)) == GBCatalogItemUnknown {
 			return fmt.Errorf("invalid Catalog item DeviceID")
 		}
+		if err := validateCatalogItemValues(item, version); err != nil {
+			return err
+		}
 	}
 	if err := g.validateCatalogResponseTarget(ctx, msg.DeviceID); err != nil {
 		return err
@@ -215,6 +219,47 @@ func (g *GB28181API) validateCatalogEnvelope(ctx *sip.Context, msg MessageDevice
 	}
 	if !notification && g.catalogResponses != nil && g.catalogResponses.Has(buildMultiResponseKey(ctx.DeviceID, "Catalog", msg.SN)) && msg.DeviceID != strings.TrimSpace(ctx.DeviceID) {
 		return fmt.Errorf("Catalog aggregate target mismatch")
+	}
+	return nil
+}
+
+func validateCatalogItemValues(item Channels, version GBProtocolVersion) error {
+	status := strings.TrimSpace(item.Status)
+	if status != "" && !equalFoldAny(status, "ON", "OFF") {
+		return fmt.Errorf("Catalog item Status must be ON or OFF")
+	}
+	if item.Parental < 0 || item.Parental > 1 || item.Certifiable < 0 || item.Certifiable > 1 || item.Secrecy < 0 || item.Secrecy > 1 {
+		return fmt.Errorf("Catalog item boolean values must be 0 or 1")
+	}
+	if item.SafetyWay != 0 && item.SafetyWay != 2 && item.SafetyWay != 3 && item.SafetyWay != 4 {
+		return fmt.Errorf("invalid Catalog item SafetyWay")
+	}
+	if item.RegisterWay < 0 || item.RegisterWay > 3 {
+		return fmt.Errorf("invalid Catalog item RegisterWay")
+	}
+	if item.ErrCode < 0 {
+		return fmt.Errorf("invalid Catalog item ErrCode")
+	}
+	if item.Port < 0 || item.Port > 65535 {
+		return fmt.Errorf("invalid Catalog item Port")
+	}
+	if math.IsNaN(item.Longitude) || math.IsInf(item.Longitude, 0) || math.IsNaN(item.Latitude) || math.IsInf(item.Latitude, 0) {
+		return fmt.Errorf("Catalog item coordinates must be finite")
+	}
+	if endTime := strings.TrimSpace(item.EndTime); endTime != "" && !validGBDateTime(endTime) {
+		return fmt.Errorf("Catalog item EndTime must be dateTime")
+	}
+	info := item.Info
+	if !version.AtLeast(GBVersion11) && (strings.TrimSpace(info.RawXML) != "" || info.PTZType != 0 || info.PositionType != 0 || info.RoomType != 0 || info.UseType != 0 || info.SupplyLightType != 0 || info.DirectionType != 0 || strings.TrimSpace(info.Resolution) != "" || strings.TrimSpace(info.BusinessGroupID) != "") {
+		return fmt.Errorf("Catalog item Info requires protocol 1.1")
+	}
+	if info.PTZType < 0 || info.PTZType > 4 || info.PositionType < 0 || info.PositionType > 10 || info.RoomType < 0 || info.RoomType > 2 || info.UseType < 0 || info.UseType > 3 || info.SupplyLightType < 0 || info.SupplyLightType > 3 || info.DirectionType < 0 || info.DirectionType > 8 {
+		return fmt.Errorf("invalid Catalog item Info value")
+	}
+	if businessGroupID := strings.TrimSpace(info.BusinessGroupID); businessGroupID != "" {
+		if !version.AtLeast(GBVersion11) || !isGBDeviceIdentifier(businessGroupID) {
+			return fmt.Errorf("invalid Catalog item BusinessGroupID")
+		}
 	}
 	return nil
 }

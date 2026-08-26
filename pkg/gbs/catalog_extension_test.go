@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,6 +154,68 @@ func TestCatalogRejectsChunkOverStandardLimit(t *testing.T) {
 	}
 	if err := api.validateCatalogEnvelope(&sip.Context{DeviceID: gb10DeviceID}, msg, false); err == nil {
 		t.Fatal("Catalog chunk above the 10000-item standard limit was accepted")
+	}
+}
+
+func TestCatalogRejectsInvalidItemValuesBeforeAggregation(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion11)
+	valid := Channels{ChannelID: gb10ChannelID, Status: "ON"}
+	tests := []struct {
+		name   string
+		mutate func(*Channels)
+	}{
+		{name: "status", mutate: func(item *Channels) { item.Status = "OK" }},
+		{name: "parental", mutate: func(item *Channels) { item.Parental = 2 }},
+		{name: "safety way", mutate: func(item *Channels) { item.SafetyWay = 1 }},
+		{name: "register way", mutate: func(item *Channels) { item.RegisterWay = 4 }},
+		{name: "certifiable", mutate: func(item *Channels) { item.Certifiable = 2 }},
+		{name: "error code", mutate: func(item *Channels) { item.ErrCode = -1 }},
+		{name: "secrecy", mutate: func(item *Channels) { item.Secrecy = 2 }},
+		{name: "port", mutate: func(item *Channels) { item.Port = 65536 }},
+		{name: "longitude", mutate: func(item *Channels) { item.Longitude = math.NaN() }},
+		{name: "end time", mutate: func(item *Channels) { item.EndTime = "invalid" }},
+		{name: "info", mutate: func(item *Channels) { item.Info.PTZType = -1 }},
+		{name: "info upper bound", mutate: func(item *Channels) { item.Info.DirectionType = 9 }},
+		{name: "business group", mutate: func(item *Channels) { item.Info.BusinessGroupID = "bad" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			item := valid
+			test.mutate(&item)
+			count := 1
+			msg := MessageDeviceListResponse{
+				XMLName: xml.Name{Local: "Response"}, CmdType: "Catalog", SN: 10, DeviceID: gb10DeviceID,
+				SumNum: 1, HasSumNum: true, HasList: true, ListNum: &count, Item: []Channels{item},
+			}
+			if err := api.validateCatalogEnvelope(&sip.Context{DeviceID: gb10DeviceID}, msg, false); err == nil {
+				t.Fatalf("invalid Catalog item accepted: %+v", item)
+			}
+		})
+	}
+}
+
+func TestCatalog10RejectsCatalogInfo(t *testing.T) {
+	for _, info := range []CatalogItemInfo{{PTZType: 1}, {RawXML: "<PTZType>0</PTZType>"}} {
+		item := Channels{ChannelID: gb10ChannelID, Status: "ON", Info: info}
+		if err := validateCatalogItemValues(item, GBVersion10); err == nil {
+			t.Fatalf("protocol 1.0 accepted Catalog Info introduced by protocol 1.1: %+v", info)
+		}
+	}
+}
+
+func TestCatalogAcceptsValidOptionalItemValuesByVersion(t *testing.T) {
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30} {
+		item := Channels{
+			ChannelID: gb10ChannelID, Status: "off", Parental: 1, SafetyWay: 4, RegisterWay: 3,
+			Certifiable: 1, ErrCode: 1, Secrecy: 1, Port: 65535,
+			EndTime: "2026-08-25T10:00:00+08:00", Longitude: 120.1, Latitude: 30.2,
+		}
+		if version.AtLeast(GBVersion11) {
+			item.Info = CatalogItemInfo{PTZType: 1, PositionType: 1, BusinessGroupID: gb10DeviceID}
+		}
+		if err := validateCatalogItemValues(item, version); err != nil {
+			t.Fatalf("valid %s Catalog item rejected: %v", version, err)
+		}
 	}
 }
 
