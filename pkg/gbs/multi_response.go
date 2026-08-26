@@ -4,7 +4,18 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/gowvp/owl/pkg/gbs/sip"
 )
+
+const gbMultiResponseMaxItems = 10000
+
+func (g *GB28181API) multiResponseChunkExceedsLimit(ctx *sip.Context, count int) bool {
+	if ctx == nil {
+		return false
+	}
+	return g.getDeviceGBProtocolVersion(ctx.DeviceID).AtLeast(GBVersion11) && count > gbMultiResponseMaxItems
+}
 
 func buildMultiResponseKey(deviceID, cmdType string, sn int) string {
 	return fmt.Sprintf("%s:%s:%d", deviceID, cmdType, sn)

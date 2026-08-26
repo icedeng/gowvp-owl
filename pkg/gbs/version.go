@@ -130,6 +130,7 @@ func (v GBProtocolVersion) Capabilities() GBCapabilities {
 	case GBVersion10:
 		return GBCapabilities{
 			DirectoryNotify: true,
+			MultiResponse:   true,
 			MediaStatus:     true,
 		}
 	case GBVersion11:

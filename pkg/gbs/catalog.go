@@ -191,7 +191,10 @@ func (g *GB28181API) validateCatalogEnvelope(ctx *sip.Context, msg MessageDevice
 		if msg.SumNum != 0 {
 			return fmt.Errorf("Catalog DeviceList is required for non-empty results")
 		}
-	} else if msg.ListNum == nil || *msg.ListNum < 0 || *msg.ListNum != len(msg.Item) || len(msg.Item) > msg.SumNum {
+		if notification || g.getDeviceGBProtocolVersion(ctx.DeviceID) == GBVersion10 {
+			return fmt.Errorf("Catalog DeviceList is required by the protocol profile")
+		}
+	} else if msg.ListNum == nil || *msg.ListNum < 0 || *msg.ListNum != len(msg.Item) || len(msg.Item) > msg.SumNum || g.multiResponseChunkExceedsLimit(ctx, len(msg.Item)) {
 		return fmt.Errorf("invalid Catalog DeviceList count")
 	}
 	if notification && msg.HasList && *msg.ListNum != msg.SumNum {

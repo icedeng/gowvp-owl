@@ -101,6 +101,21 @@ func TestMultiResponseCollectorAddAndCloseConcurrent(t *testing.T) {
 	collector.Close()
 }
 
+func TestMultiResponseChunkLimitStartsWith2014(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	ctx := &sip.Context{DeviceID: gb10DeviceID}
+
+	memory.runtime.setGBVersion(GBVersion10)
+	if api.multiResponseChunkExceedsLimit(ctx, gbMultiResponseMaxItems+1) {
+		t.Fatal("2011 must not inherit the 2014 Annex M item limit")
+	}
+	memory.runtime.setGBVersion(GBVersion11)
+	if !api.multiResponseChunkExceedsLimit(ctx, gbMultiResponseMaxItems+1) {
+		t.Fatal("2014 must enforce the Annex M item limit")
+	}
+}
+
 func TestRecordInfo11DecodesRecorderAndFileSize(t *testing.T) {
 	body := []byte(`<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10ChannelID + `</DeviceID><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><FilePath>/record/1.ps</FilePath><StartTime>2026-08-25T10:00:00</StartTime><EndTime>2026-08-25T10:01:00</EndTime><RecorderID>` + gb10DeviceID + `</RecorderID><FileSize>1048576</FileSize></Item></RecordList></Response>`)
 	var response MessageRecordInfoResponse

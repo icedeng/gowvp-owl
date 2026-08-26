@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"encoding/xml"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,45 @@ func TestRecordInfoParentAliasPreservesChannelTarget(t *testing.T) {
 	result := collector.Wait(context.Background(), key)
 	if !result.Complete || len(result.Items) != 1 || result.Items[0].DeviceID != gb10ChannelID {
 		t.Fatalf("parent alias result = %+v", result)
+	}
+}
+
+func TestRecordInfoAcceptsEmptyResultWithoutRecordListForAllVersions(t *testing.T) {
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30} {
+		t.Run(string(version), func(t *testing.T) {
+			memory := newFlowMemory(gb10DeviceID)
+			memory.runtime.setGBVersion(version)
+			memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+			collector := newMultiResponseCollector(func(item RecordItem) string { return item.DeviceID + item.FilePath })
+			key := buildMultiResponseKey(gb10ChannelID, "RecordInfo", 4)
+			collector.Start(key)
+			api := &GB28181API{svr: &Server{memoryStorer: memory}, recordResponses: collector}
+			body := `<Response><CmdType>RecordInfo</CmdType><SN>4</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>0</SumNum></Response>`
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "record-empty-"+string(version), []byte(body), api.sipMessageRecordInfo)
+			assertFlowOK(t, response)
+			result := collector.Wait(context.Background(), key)
+			if !result.Complete || result.Expected != 0 || len(result.Items) != 0 {
+				t.Fatalf("empty RecordInfo result = %+v", result)
+			}
+		})
+	}
+}
+
+func TestRecordInfoRejectsChunkOverStandardLimit(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion11)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	count := gbMultiResponseMaxItems + 1
+	message := &MessageRecordInfoResponse{
+		XMLName: xml.Name{Local: "Response"}, CmdType: "RecordInfo", SN: 5, DeviceID: gb10ChannelID, Name: "camera",
+		SumNum: count, HasSumNum: true, HasList: true, ListNum: &count, Item: make([]RecordItem, count),
+	}
+	for index := range message.Item {
+		message.Item[index].DeviceID = gb10ChannelID
+	}
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	if err := api.validateRecordInfoEnvelope(&sip.Context{DeviceID: gb10DeviceID}, message, gb10ChannelID); err == nil {
+		t.Fatal("RecordInfo chunk above the 10000-item standard limit was accepted")
 	}
 }
 

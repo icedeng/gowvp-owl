@@ -64,7 +64,7 @@ func TestBuildCascadeCatalogItemsUsesMappingAndVersionProfile(t *testing.T) {
 
 	body, err := sip.XMLEncode(cascadeCatalogResponse{
 		CmdType: "Catalog", SN: 7, DeviceID: gb10DeviceID, SumNum: 1,
-		DeviceList: cascadeCatalogDeviceList{Num: 1, Items: supplement},
+		DeviceList: &cascadeCatalogDeviceList{Num: 1, Items: supplement},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -911,6 +911,47 @@ func TestCascadeRecordInfoQueriesSharedChannelAndMapsResponse(t *testing.T) {
 		if strings.Contains(body, "<DeviceID>"+channel.ChannelID+"</DeviceID>") || strings.Contains(body, "<RecorderID>"+channel.DeviceID+"</RecorderID>") {
 			t.Fatalf("RecordInfo chunk %d leaked local IDs: %s", index, body)
 		}
+	}
+}
+
+func TestCascadeEmptyCatalogAndRecordInfoUseVersionedLists(t *testing.T) {
+	adapter, _, _ := newCascadeMediaCore(t)
+	worker := newCascadeWorker(nil, testSharedCascadePlatform(t))
+	var bodies []string
+	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+		bodies = append(bodies, string(request.Body()))
+		return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+	}
+	api := &GB28181API{core: adapter}
+	worker.effective = GBVersion10
+	if err := api.respondCascadeCatalog(t.Context(), worker, cascadeQueryEnvelope{
+		CmdType: "Catalog", SN: 89, DeviceID: "34020000002110000009",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	worker.effective = GBVersion11
+	if err := api.respondCascadeCatalog(t.Context(), worker, cascadeQueryEnvelope{
+		CmdType: "Catalog", SN: 90, DeviceID: "34020000002110000009",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.sendCascadeRecordItems(t.Context(), worker, cascadeQueryEnvelope{
+		CmdType: "RecordInfo", SN: 91, DeviceID: testExposedChannelID,
+	}, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 3 {
+		t.Fatalf("empty cascade responses = %d, want 3", len(bodies))
+	}
+	if !strings.Contains(bodies[0], "<SumNum>0</SumNum>") || !strings.Contains(bodies[0], `<DeviceList Num="0"></DeviceList>`) {
+		t.Fatalf("empty 1.0 Catalog response is not standard-compliant: %s", bodies[0])
+	}
+	if !strings.Contains(bodies[1], "<SumNum>0</SumNum>") || strings.Contains(bodies[1], "<DeviceList") {
+		t.Fatalf("empty 1.1 Catalog response is not standard-compliant: %s", bodies[1])
+	}
+	if !strings.Contains(bodies[2], "<SumNum>0</SumNum>") || strings.Contains(bodies[2], "<RecordList") ||
+		!strings.Contains(bodies[2], "<Name>"+testExposedChannelID+"</Name>") {
+		t.Fatalf("empty RecordInfo response is not standard-compliant: %s", bodies[2])
 	}
 }
 

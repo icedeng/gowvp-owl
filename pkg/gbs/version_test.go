@@ -137,6 +137,9 @@ func TestGBProtocolVersionCapabilities(t *testing.T) {
 	if !gb10.DirectoryNotify {
 		t.Fatal("1.0 must enable basic Catalog subscription notifications")
 	}
+	if !gb10.MultiResponse {
+		t.Fatal("1.0 must enable Catalog and RecordInfo multi-response collection")
+	}
 	if gb10.ConfigQuery {
 		t.Fatal("1.0 must not enable ConfigDownload")
 	}

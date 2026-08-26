@@ -104,6 +104,7 @@ type MessageRecordInfoResponse struct {
 	HasSumNum bool         `xml:"-"`
 	Item      []RecordItem `xml:"-"`
 	ListNum   *int         `xml:"-"`
+	HasList   bool         `xml:"-"`
 }
 
 func (m *MessageRecordInfoResponse) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
@@ -113,7 +114,7 @@ func (m *MessageRecordInfoResponse) UnmarshalXML(decoder *xml.Decoder, start xml
 		DeviceID string `xml:"DeviceID"`
 		Name     string `xml:"Name"`
 		SumNum   *int   `xml:"SumNum"`
-		List     struct {
+		List     *struct {
 			Num  *int         `xml:"Num,attr"`
 			Item []RecordItem `xml:"Item"`
 		} `xml:"RecordList"`
@@ -123,7 +124,9 @@ func (m *MessageRecordInfoResponse) UnmarshalXML(decoder *xml.Decoder, start xml
 	}
 	*m = MessageRecordInfoResponse{
 		XMLName: start.Name, CmdType: value.CmdType, SN: value.SN, DeviceID: value.DeviceID, Name: value.Name,
-		Item: value.List.Item, ListNum: value.List.Num,
+	}
+	if value.List != nil {
+		m.HasList, m.Item, m.ListNum = true, value.List.Item, value.List.Num
 	}
 	if value.SumNum != nil {
 		m.SumNum, m.HasSumNum = *value.SumNum, true
@@ -200,10 +203,14 @@ func (g *GB28181API) validateRecordInfoEnvelope(ctx *sip.Context, message *Messa
 	if message == nil || message.XMLName.Local != "Response" || !strings.EqualFold(message.CmdType, "RecordInfo") || message.SN <= 0 {
 		return fmt.Errorf("invalid RecordInfo envelope")
 	}
-	if !isGBDeviceIdentifier(message.DeviceID) || message.Name == "" || !message.HasSumNum || message.SumNum < 0 || message.ListNum == nil || *message.ListNum < 0 {
+	if !isGBDeviceIdentifier(message.DeviceID) || message.Name == "" || !message.HasSumNum || message.SumNum < 0 {
 		return fmt.Errorf("invalid RecordInfo response")
 	}
-	if *message.ListNum != len(message.Item) || len(message.Item) > message.SumNum {
+	if !message.HasList {
+		if message.SumNum != 0 || len(message.Item) != 0 {
+			return fmt.Errorf("RecordInfo RecordList is required for non-empty results")
+		}
+	} else if message.ListNum == nil || *message.ListNum < 0 || *message.ListNum != len(message.Item) || len(message.Item) > message.SumNum || g.multiResponseChunkExceedsLimit(ctx, len(message.Item)) {
 		return fmt.Errorf("invalid RecordInfo list count")
 	}
 	if err := g.validateAuthenticatedResponseTarget(ctx, message.DeviceID); err != nil {

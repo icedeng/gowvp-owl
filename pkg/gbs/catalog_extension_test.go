@@ -3,6 +3,7 @@ package gbs
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,6 +137,24 @@ func TestCatalogResponseRejectsInvalidEnvelopeBeforeAggregation(t *testing.T) {
 	}
 }
 
+func TestCatalogRejectsChunkOverStandardLimit(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion11)
+	count := gbMultiResponseMaxItems + 1
+	items := make([]Channels, count)
+	for index := range items {
+		items[index].ChannelID = gb10ChannelID
+	}
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	msg := MessageDeviceListResponse{
+		XMLName: xml.Name{Local: "Response"}, CmdType: "Catalog", SN: 10, DeviceID: gb10DeviceID,
+		SumNum: count, HasSumNum: true, HasList: true, ListNum: &count, Item: items,
+	}
+	if err := api.validateCatalogEnvelope(&sip.Context{DeviceID: gb10DeviceID}, msg, false); err == nil {
+		t.Fatal("Catalog chunk above the 10000-item standard limit was accepted")
+	}
+}
+
 func TestCatalogResponseRejectsSiblingPendingTarget(t *testing.T) {
 	memory := newFlowMemory(gb10DeviceID)
 	firstChannelID := gb10ChannelID
@@ -200,6 +219,7 @@ func TestCatalogNotifyRejectsTargetAndCountBeforeRefresh(t *testing.T) {
 
 func TestCatalogResponseAcceptsSameDomainOrganizationRootWithoutPendingQuery(t *testing.T) {
 	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion11)
 	api := &GB28181API{svr: &Server{memoryStorer: memory}}
 	for _, targetID := range []string{
 		"34020000002000000001",
@@ -209,6 +229,39 @@ func TestCatalogResponseAcceptsSameDomainOrganizationRootWithoutPendingQuery(t *
 		body := []byte(`<Response><CmdType>Catalog</CmdType><SN>66</SN><DeviceID>` + targetID + `</DeviceID><SumNum>0</SumNum></Response>`)
 		response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "catalog-organization-root-"+targetID, body, api.sipMessageCatalog)
 		assertFlowOK(t, response)
+	}
+}
+
+func TestCatalogEmptyResultListRulesByVersionAndMessageType(t *testing.T) {
+	tests := []struct {
+		name         string
+		version      GBProtocolVersion
+		root         string
+		list         string
+		notification bool
+		wantErr      bool
+	}{
+		{name: "2011 response requires list", version: GBVersion10, root: "Response", wantErr: true},
+		{name: "2011 response with list", version: GBVersion10, root: "Response", list: `<DeviceList Num="0"></DeviceList>`},
+		{name: "2014 response may omit list", version: GBVersion11, root: "Response"},
+		{name: "2014 notify requires list", version: GBVersion11, root: "Notify", notification: true, wantErr: true},
+		{name: "2014 notify with list", version: GBVersion11, root: "Notify", list: `<DeviceList Num="0"></DeviceList>`, notification: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			memory := newFlowMemory(gb10DeviceID)
+			memory.runtime.setGBVersion(test.version)
+			api := &GB28181API{svr: &Server{memoryStorer: memory}}
+			var msg MessageDeviceListResponse
+			body := `<` + test.root + `><CmdType>Catalog</CmdType><SN>11</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>0</SumNum>` + test.list + `</` + test.root + `>`
+			if err := sip.XMLDecode([]byte(body), &msg); err != nil {
+				t.Fatal(err)
+			}
+			err := api.validateCatalogEnvelope(&sip.Context{DeviceID: gb10DeviceID}, msg, test.notification)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateCatalogEnvelope() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
 	}
 }
 

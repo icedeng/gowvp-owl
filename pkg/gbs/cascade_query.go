@@ -39,12 +39,12 @@ type cascadeQueryEnvelope struct {
 }
 
 type cascadeCatalogResponse struct {
-	XMLName    xml.Name                 `xml:"Response"`
-	CmdType    string                   `xml:"CmdType"`
-	SN         int                      `xml:"SN"`
-	DeviceID   string                   `xml:"DeviceID"`
-	SumNum     int                      `xml:"SumNum"`
-	DeviceList cascadeCatalogDeviceList `xml:"DeviceList"`
+	XMLName    xml.Name                  `xml:"Response"`
+	CmdType    string                    `xml:"CmdType"`
+	SN         int                       `xml:"SN"`
+	DeviceID   string                    `xml:"DeviceID"`
+	SumNum     int                       `xml:"SumNum"`
+	DeviceList *cascadeCatalogDeviceList `xml:"DeviceList,omitempty"`
 }
 
 type cascadeCatalogNotify struct {
@@ -144,13 +144,13 @@ type cascadeQueryErrorResponse struct {
 }
 
 type cascadeRecordInfoResponse struct {
-	XMLName    xml.Name              `xml:"Response"`
-	CmdType    string                `xml:"CmdType"`
-	SN         int                   `xml:"SN"`
-	DeviceID   string                `xml:"DeviceID"`
-	Name       string                `xml:"Name"`
-	SumNum     int                   `xml:"SumNum"`
-	RecordList cascadeRecordInfoList `xml:"RecordList"`
+	XMLName    xml.Name               `xml:"Response"`
+	CmdType    string                 `xml:"CmdType"`
+	SN         int                    `xml:"SN"`
+	DeviceID   string                 `xml:"DeviceID"`
+	Name       string                 `xml:"Name"`
+	SumNum     int                    `xml:"SumNum"`
+	RecordList *cascadeRecordInfoList `xml:"RecordList,omitempty"`
 }
 
 type cascadeRecordInfoList struct {
@@ -564,16 +564,19 @@ func (g *GB28181API) respondCascadeCatalog(ctx context.Context, worker *cascadeW
 	}
 	items = filterCascadeCatalogNotifyItems(items, responseDeviceID, worker.platform.localID)
 	if len(items) == 0 {
-		return sendCascadeXML(ctx, worker, cascadeCatalogResponse{
+		response := cascadeCatalogResponse{
 			CmdType: "Catalog", SN: query.SN, DeviceID: responseDeviceID,
-			DeviceList: cascadeCatalogDeviceList{},
-		})
+		}
+		if worker.protocolVersion() == GBVersion10 {
+			response.DeviceList = &cascadeCatalogDeviceList{}
+		}
+		return sendCascadeXML(ctx, worker, response)
 	}
 	for start := 0; start < len(items); start += cascadeCatalogChunkSize {
 		end := min(start+cascadeCatalogChunkSize, len(items))
 		if err := sendCascadeXML(ctx, worker, cascadeCatalogResponse{
 			CmdType: "Catalog", SN: query.SN, DeviceID: responseDeviceID, SumNum: len(items),
-			DeviceList: cascadeCatalogDeviceList{Num: end - start, Items: items[start:end]},
+			DeviceList: &cascadeCatalogDeviceList{Num: end - start, Items: items[start:end]},
 		}); err != nil {
 			return err
 		}
@@ -1024,17 +1027,17 @@ func (g *GB28181API) respondCascadeRecordInfo(ctx context.Context, worker *casca
 }
 
 func (g *GB28181API) sendCascadeRecordItems(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope, items []RecordItem, name string) error {
+	name = firstNonEmpty(strings.TrimSpace(name), strings.TrimSpace(query.DeviceID))
 	if len(items) == 0 {
 		return sendCascadeXML(ctx, worker, cascadeRecordInfoResponse{
 			CmdType: "RecordInfo", SN: query.SN, DeviceID: query.DeviceID, Name: name,
-			RecordList: cascadeRecordInfoList{},
 		})
 	}
 	for start := 0; start < len(items); start += cascadeCatalogChunkSize {
 		end := min(start+cascadeCatalogChunkSize, len(items))
 		if err := sendCascadeXML(ctx, worker, cascadeRecordInfoResponse{
 			CmdType: "RecordInfo", SN: query.SN, DeviceID: query.DeviceID, Name: name, SumNum: len(items),
-			RecordList: cascadeRecordInfoList{Num: end - start, Items: items[start:end]},
+			RecordList: &cascadeRecordInfoList{Num: end - start, Items: items[start:end]},
 		}); err != nil {
 			return err
 		}
