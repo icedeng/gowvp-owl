@@ -79,6 +79,7 @@ type eventSubscription struct {
 
 	GBVersion      string
 	Event          string
+	DialogRequest  *sip.Request
 	Response       *sip.Response
 	Contact        *sip.Address
 	DialogCallID   string
@@ -98,13 +99,12 @@ type eventSubscription struct {
 }
 
 type outgoingSubscriptionDialog struct {
-	mu           sync.Mutex
-	response     *sip.Response
-	remoteTarget *sip.URI
-	eventValue   string
-	deviceID     string
-	targetID     string
-	expiresAt    time.Time
+	mu         sync.Mutex
+	response   *sip.Response
+	eventValue string
+	deviceID   string
+	targetID   string
+	expiresAt  time.Time
 
 	// notifyMu 保护 NOTIFY 对话快照。它与 mu 分离，避免设备在 SUBSCRIBE 最终响应前
 	// 先发送首个 NOTIFY 时，因 Subscribe 正在等待响应而形成互锁。
@@ -418,8 +418,16 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 		Conn:      ctx.Request.GetConnection(),
 		GBVersion: ctx.XGBVer,
 		Event:     eventValue,
-		Cascade:   cascade,
-		Identity:  monitorUserIdentityFromContext(monitorUserIdentityContext(ctx)),
+		DialogRequest: func() *sip.Request {
+			if existing != nil {
+				existing.mu.Lock()
+				defer existing.mu.Unlock()
+				return refreshInboundSubscriptionDialog(existing.DialogRequest, ctx.Request)
+			}
+			return refreshInboundSubscriptionDialog(nil, ctx.Request)
+		}(),
+		Cascade:  cascade,
+		Identity: monitorUserIdentityFromContext(monitorUserIdentityContext(ctx)),
 		LocalGatewayID: func() string {
 			if cascade != nil && cascade.platform.monitorUserIdentity != nil {
 				return cascade.platform.monitorUserIdentity.localGatewayID
@@ -449,6 +457,7 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 			existing.Conn = sub.Conn
 			existing.GBVersion = sub.GBVersion
 			existing.Event = sub.Event
+			existing.DialogRequest = sub.DialogRequest
 			existing.Response = sub.Response
 			existing.Contact = sub.Contact
 			existing.DialogCallID = sub.DialogCallID
@@ -924,6 +933,33 @@ func validateInboundSubscribeDialog(existing *eventSubscription, incoming inboun
 	return nil
 }
 
+// refreshInboundSubscriptionDialog 保留初始请求建立的路由集，只刷新对端 Contact 与当前传输路径。
+func refreshInboundSubscriptionDialog(initial, current *sip.Request) *sip.Request {
+	if current == nil {
+		return nil
+	}
+	if initial == nil {
+		clone, _ := current.Clone().(*sip.Request)
+		return clone
+	}
+	clone, _ := initial.Clone().(*sip.Request)
+	if clone == nil {
+		return nil
+	}
+	for _, name := range []string{"From", "To", "Call-ID", "CSeq"} {
+		clone.RemoveHeader(name)
+		sip.CopyHeaders(name, current, clone)
+	}
+	if contact, ok := current.Contact(); ok && contact != nil && contact.Address != nil {
+		clone.RemoveHeader("Contact")
+		clone.AppendHeader(contact.Clone())
+	}
+	clone.SetSource(current.Source())
+	clone.SetDestination(current.Destination())
+	clone.SetConnection(current.GetConnection())
+	return clone
+}
+
 // publishEventNotify 向匹配订阅方发送 NOTIFY。
 func (g *GB28181API) publishEventNotify(cmdType, deviceID string, body []byte) {
 	cmdType = strings.TrimSpace(cmdType)
@@ -1088,7 +1124,13 @@ func (g *GB28181API) sendEventNotifyContext(ctx context.Context, sub *eventSubsc
 	if cascade != nil {
 		return g.sendCascadeEventNotifyContext(ctx, sub, cmdType, body)
 	}
+	sub.notifyMu.Lock()
+	defer sub.notifyMu.Unlock()
 	sub.mu.Lock()
+	if sub.DialogRequest == nil || sub.Response == nil || sub.To == nil || sub.To.URI == nil {
+		sub.mu.Unlock()
+		return fmt.Errorf("subscription dialog is unavailable")
+	}
 	to := sub.To.Clone()
 	source := sub.Source
 	conn := sub.Conn
@@ -1096,7 +1138,18 @@ func (g *GB28181API) sendEventNotifyContext(ctx context.Context, sub *eventSubsc
 	expiresAt := sub.ExpiresAt
 	event := sub.Event
 	deviceID := sub.DeviceID
+	dialogRequest, _ := sub.DialogRequest.Clone().(*sip.Request)
+	dialogResponse := sub.Response
+	sub.CSeq++
+	if sub.CSeq == 0 {
+		sub.CSeq = 1
+	}
+	cseq := sub.CSeq
 	sub.mu.Unlock()
+	dialogNotify, err := sip.NewRequestFromServerDialogChecked(sip.MethodNotify, dialogRequest, dialogResponse, cseq)
+	if err != nil {
+		return err
+	}
 	target := &subscriptionTarget{
 		to:        to,
 		source:    source,
@@ -1110,7 +1163,8 @@ func (g *GB28181API) sendEventNotifyContext(ctx context.Context, sub *eventSubsc
 	} else {
 		state = fmt.Sprintf("active;expires=%d", expires)
 	}
-	tx, err := g.svr.wrapRequest(target, sip.MethodNotify, &sip.ContentTypeXML, body, func(r *sip.Request) {
+	tx, err := g.svr.wrapRequestContext(ctx, target, sip.MethodNotify, &sip.ContentTypeXML, body, func(r *sip.Request) {
+		applyServerSubscriptionDialog(r, dialogNotify)
 		eventValue := strings.TrimSpace(event)
 		if eventValue == "" {
 			version, ok := ParseGBProtocolVersion(gbVersion)
@@ -1141,7 +1195,7 @@ func (g *GB28181API) sendCascadeEventNotifyContext(ctx context.Context, sub *eve
 	defer sub.notifyMu.Unlock()
 
 	sub.mu.Lock()
-	if sub.Response == nil || sub.Cascade == nil {
+	if sub.DialogRequest == nil || sub.Response == nil || sub.Cascade == nil {
 		sub.mu.Unlock()
 		return fmt.Errorf("cascade subscription dialog is unavailable")
 	}
@@ -1149,29 +1203,14 @@ func (g *GB28181API) sendCascadeEventNotifyContext(ctx context.Context, sub *eve
 		sub.mu.Unlock()
 		return fmt.Errorf("cascade subscription has expired")
 	}
-	if sub.To == nil || sub.To.URI == nil {
-		sub.mu.Unlock()
-		return fmt.Errorf("cascade subscription target is unavailable")
-	}
+	dialogRequest, _ := sub.DialogRequest.Clone().(*sip.Request)
 	dialogResponse := sub.Response
 	cascade := sub.Cascade
-	to := sub.To.Clone()
-	var contact *sip.Address
-	if sub.Contact != nil {
-		contact = sub.Contact.Clone()
-	}
 	gbVersion := sub.GBVersion
 	event := sub.Event
 	deviceID := sub.DeviceID
 	expiresAt := sub.ExpiresAt
 	identity := sub.Identity.clone()
-	local, localOK := dialogResponse.To()
-	remote, remoteOK := dialogResponse.From()
-	callID, callIDOK := dialogResponse.CallID()
-	if !localOK || local == nil || local.Address == nil || !remoteOK || remote == nil || remote.Address == nil || !callIDOK || callID == nil {
-		sub.mu.Unlock()
-		return fmt.Errorf("cascade subscription target is unavailable")
-	}
 	sub.CSeq++
 	if sub.CSeq == 0 {
 		sub.CSeq = 1
@@ -1179,22 +1218,9 @@ func (g *GB28181API) sendCascadeEventNotifyContext(ctx context.Context, sub *eve
 	cseq := sub.CSeq
 	sub.mu.Unlock()
 
-	localAddress := &sip.Address{DisplayName: local.DisplayName, URI: local.Address.Clone(), Params: local.Params.Clone()}
-	remoteAddress := &sip.Address{DisplayName: remote.DisplayName, URI: remote.Address.Clone(), Params: remote.Params.Clone()}
-	headers := sip.NewHeaderBuilder().
-		SetFrom(localAddress).
-		SetToWithParam(remoteAddress).
-		SetContentType(&sip.ContentTypeXML).
-		SetMethod(sip.MethodNotify).
-		SetSeqNo(uint(cseq)).
-		SetCallID(callID).
-		SetXGBVerValue(gbVersion).
-		AddVia(&sip.ViaHop{
-			Host: cascade.platform.localHost, Port: sip.NewPort(cascade.platform.localPort), Transport: "UDP",
-			Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
-		}).Build()
-	if contact != nil && contact.URI != nil {
-		headers = append(headers, &sip.ContactHeader{DisplayName: contact.DisplayName, Address: contact.URI.Clone(), Params: contact.Params.Clone()})
+	dialogNotify, err := sip.NewRequestFromServerDialogChecked(sip.MethodNotify, dialogRequest, dialogResponse, cseq)
+	if err != nil {
+		return err
 	}
 	eventValue := strings.TrimSpace(event)
 	if eventValue == "" {
@@ -1209,19 +1235,13 @@ func (g *GB28181API) sendCascadeEventNotifyContext(ctx context.Context, sub *eve
 	if expires > 0 {
 		state = fmt.Sprintf("active;expires=%d", expires)
 	}
-	headers = append(headers,
-		&sip.GenericHeader{HeaderName: "Event", Contents: eventValue},
-		&sip.GenericHeader{HeaderName: "Subscription-State", Contents: state},
-	)
-	request := sip.NewRequest("", sip.MethodNotify, to.URI.Clone(), sip.DefaultSipVersion, headers, body)
+	request := cascade.newRequest(sip.MethodNotify, &sip.ContentTypeXML, body, nil, cseq, -1, nil)
+	applyServerSubscriptionDialog(request, dialogNotify)
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: eventValue})
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subscription-State", Contents: state})
 	identityCtx := withMonitorUserIdentity(ctx, identity)
 	if err := cascade.platform.monitorUserIdentity.apply(identityCtx, request); err != nil {
 		return err
-	}
-	request.SetDestination(cascade.remoteDestination())
-	if g != nil && g.svr != nil && g.svr.UDPConn() != nil {
-		request.SetConnection(g.svr.UDPConn())
-		request.SetSource(g.svr.UDPConn().LocalAddr())
 	}
 	exchangeCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

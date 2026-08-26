@@ -36,7 +36,7 @@ func TestRemovingCascadeSubscriptionDoesNotWaitForNotifyResponse(t *testing.T) {
 	sub := &eventSubscription{
 		Key: "cascade-notify-removal", CmdType: "Alarm", DeviceID: platform.localID,
 		ExpiresAt: time.Now().Add(time.Minute), To: remote, GBVersion: string(GBVersion30),
-		Event: "presence", Response: response, Cascade: worker,
+		Event: "presence", DialogRequest: request, Response: response, Cascade: worker,
 	}
 	api := &GB28181API{}
 	api.eventSubscribers.Store(sub.Key, sub)
@@ -97,7 +97,7 @@ func TestCascadeEventNotifyHonorsCallerCancellation(t *testing.T) {
 	sub := &eventSubscription{
 		Key: "cascade-notify-caller-cancel", CmdType: "Catalog", DeviceID: platform.localID,
 		ExpiresAt: time.Now().Add(time.Minute), To: remote, GBVersion: string(GBVersion30),
-		Event: "Catalog", Response: response, Cascade: worker,
+		Event: "Catalog", DialogRequest: request, Response: response, Cascade: worker,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -117,6 +117,51 @@ func TestCascadeEventNotifyHonorsCallerCancellation(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("caller cancellation did not stop cascade NOTIFY")
+	}
+}
+
+func TestCascadeEventNotifyPreservesTCPDialogRouting(t *testing.T) {
+	platform := testCascadeTCPPlatform(t, "3.0")
+	worker := newCascadeWorker(nil, platform)
+	local := mustFlowAddress(t, "sip:"+platform.localID+"@local.example")
+	remote := mustFlowAddress(t, "sip:"+platform.serverID+"@remote.example")
+	remote.Params.Add("tag", sip.String{Str: "remote-tag"})
+	contact := mustFlowAddress(t, "sip:"+platform.serverID+"@contact.example:5070;transport=tcp")
+	callID := sip.CallID("cascade-tcp-notify-dialog")
+	subscribe := sip.NewRequest("", sip.MethodSubscribe, local.URI.Clone(), sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetContact(contact).SetMethod(sip.MethodSubscribe).SetCallID(&callID).
+			AddVia(&sip.ViaHop{Host: "remote.example", Port: sip.NewPort(5060), Transport: "TCP", Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
+	proxy, _ := sip.ParseURI("sip:proxy.example;lr;transport=tcp")
+	subscribe.AppendHeader(&sip.RecordRouteHeader{Addresses: []*sip.URI{proxy}})
+	response := sip.NewResponseFromRequest("", subscribe, http.StatusOK, "OK", nil)
+	sub := &eventSubscription{
+		CmdType: "Alarm", DeviceID: platform.localID, ExpiresAt: time.Now().Add(time.Minute),
+		To: contact, GBVersion: string(GBVersion30), Event: "presence",
+		DialogRequest: subscribe, Response: response, Cascade: worker,
+	}
+	var request *sip.Request
+	worker.exchange = func(_ context.Context, actual *sip.Request) (*sip.Response, error) {
+		request = actual
+		return sip.NewResponseFromRequest("", actual, http.StatusOK, "OK", nil), nil
+	}
+	if err := (&GB28181API{}).sendCascadeEventNotify(sub, "Alarm", []byte(`<Notify><CmdType>Alarm</CmdType></Notify>`)); err != nil {
+		t.Fatal(err)
+	}
+	if request == nil || request.Recipient().Host() != "contact.example" {
+		t.Fatalf("cascade TCP NOTIFY target = %v", request)
+	}
+	via, _ := request.ViaHop()
+	if via == nil || !strings.EqualFold(via.Transport, "TCP") {
+		t.Fatalf("cascade NOTIFY Via = %v", via)
+	}
+	route, ok := request.GetHeaders("Route")[0].(*sip.RouteHeader)
+	if !ok || len(route.Addresses) != 1 || route.Addresses[0].Host() != "proxy.example" {
+		t.Fatalf("cascade NOTIFY Route = %#v", request.GetHeaders("Route"))
+	}
+	requestCallID, _ := request.CallID()
+	cseq, _ := request.CSeq()
+	if requestCallID == nil || *requestCallID != callID || cseq == nil || cseq.SeqNo != 1 || cseq.MethodName != sip.MethodNotify {
+		t.Fatalf("cascade NOTIFY dialog = Call-ID %v, CSeq %+v", requestCallID, cseq)
 	}
 }
 
@@ -838,6 +883,7 @@ func newCascadeEventSubscriptionForTest(t *testing.T, worker *cascadeWorker, cmd
 	return &eventSubscription{
 		CmdType: cmdType, DeviceID: deviceID, Event: "presence", ExpiresAt: time.Now().Add(time.Hour),
 		To: &sip.Address{URI: &remoteURI, Params: sip.NewParams()}, GBVersion: string(GBVersion30),
-		Response: sip.NewResponseFromRequest("", subscribe, http.StatusOK, "OK", nil), Contact: worker.contactAddress(), Cascade: worker,
+		DialogRequest: subscribe, Response: sip.NewResponseFromRequest("", subscribe, http.StatusOK, "OK", nil),
+		Contact: worker.contactAddress(), Cascade: worker,
 	}
 }

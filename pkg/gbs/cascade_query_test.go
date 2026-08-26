@@ -417,8 +417,9 @@ func newCascadeCatalogTestSubscription(t *testing.T, worker *cascadeWorker) *eve
 	return &eventSubscription{
 		CmdType: "Catalog", DeviceID: gb10DeviceID, Event: "Catalog;id=" + gb10DeviceID,
 		ExpiresAt: time.Now().Add(time.Hour), To: &sip.Address{URI: &remoteContactURI, Params: sip.NewParams()},
-		GBVersion: string(GBVersion11), Response: sip.NewResponseFromRequest("", subscribe, http.StatusOK, "OK", nil),
-		Contact: worker.contactAddress(), Cascade: worker,
+		GBVersion: string(GBVersion11), DialogRequest: subscribe,
+		Response: sip.NewResponseFromRequest("", subscribe, http.StatusOK, "OK", nil),
+		Contact:  worker.contactAddress(), Cascade: worker,
 	}
 }
 
@@ -1021,7 +1022,8 @@ func TestCascadeCatalogNotifyUsesSubscribeDialog(t *testing.T) {
 	sub := &eventSubscription{
 		CmdType: "Catalog", DeviceID: gb10DeviceID, Event: "Catalog;id=" + gb10DeviceID,
 		ExpiresAt: time.Now().Add(time.Hour), To: &sip.Address{URI: &remoteContactURI, Params: sip.NewParams()},
-		GBVersion: "1.1", Response: dialogResponse, Contact: worker.contactAddress(), Cascade: worker,
+		GBVersion: "1.1", DialogRequest: subscribe, Response: dialogResponse,
+		Contact: worker.contactAddress(), Cascade: worker,
 	}
 	requests := make([]*sip.Request, 0, 2)
 	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
@@ -1135,7 +1137,8 @@ func TestCascadeAlarmNotifyUsesMappedSharedChannel(t *testing.T) {
 	sub := &eventSubscription{
 		CmdType: "Alarm", DeviceID: testExposedChannelID, Event: "presence", ExpiresAt: time.Now().Add(time.Hour),
 		To: &sip.Address{URI: &remoteContactURI, Params: sip.NewParams()}, GBVersion: "1.1",
-		Response: sip.NewResponseFromRequest("", subscribe, http.StatusOK, "OK", nil), Contact: worker.contactAddress(), Cascade: worker,
+		DialogRequest: subscribe, Response: sip.NewResponseFromRequest("", subscribe, http.StatusOK, "OK", nil),
+		Contact: worker.contactAddress(), Cascade: worker,
 	}
 	var request *sip.Request
 	worker.exchange = func(_ context.Context, in *sip.Request) (*sip.Response, error) {
@@ -1188,7 +1191,8 @@ func TestCascadePTZPositionNotifyUsesMappedSharedChannel(t *testing.T) {
 	sub := &eventSubscription{
 		CmdType: "PTZPosition", DeviceID: testExposedChannelID, Event: "presence", ExpiresAt: time.Now().Add(time.Hour),
 		To: &sip.Address{URI: &remoteContactURI, Params: sip.NewParams()}, GBVersion: string(GBVersion30),
-		Response: sip.NewResponseFromRequest("", subscribe, http.StatusOK, "OK", nil), Contact: worker.contactAddress(), Cascade: worker,
+		DialogRequest: subscribe, Response: sip.NewResponseFromRequest("", subscribe, http.StatusOK, "OK", nil),
+		Contact: worker.contactAddress(), Cascade: worker,
 	}
 	var request *sip.Request
 	worker.exchange = func(_ context.Context, in *sip.Request) (*sip.Response, error) {

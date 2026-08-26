@@ -236,6 +236,93 @@ func TestNewRequestFromResponseAppliesStrictAndLooseRouting(t *testing.T) {
 	}
 }
 
+func TestNewRequestFromServerDialogAppliesStrictAndLooseRouting(t *testing.T) {
+	local, _ := ParseURI("sip:34020000002000000001@local.example")
+	remote, _ := ParseURI("sip:34020000002000000002@remote.example")
+	contact, _ := ParseURI("sip:34020000002000000002@contact.example:5070")
+	callID := CallID("server-dialog-routing")
+	inbound := NewRequest("", MethodSubscribe, local.Clone(), DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodSubscribe).SetSeqNo(7).
+		SetFrom(&Address{URI: remote.Clone(), Params: NewParams().Add("tag", String{Str: "remote-tag"})}).
+		SetTo(&Address{URI: local.Clone(), Params: NewParams()}).
+		SetContact(&Address{URI: contact.Clone(), Params: NewParams()}).
+		SetCallID(&callID).
+		AddVia(&ViaHop{Host: "remote.example", Port: NewPort(5060), Params: NewParams().Add("branch", String{Str: GenerateBranch()})}).
+		Build(), nil)
+	inbound.SetSource(&net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060})
+	inbound.SetDestination(&net.UDPAddr{IP: net.ParseIP("192.0.2.20"), Port: 5060})
+	first, _ := ParseURI("sip:first-proxy.example;lr")
+	second, _ := ParseURI("sip:second-proxy.example;lr")
+	inbound.AppendHeader(&RecordRouteHeader{Addresses: []*URI{first, second}})
+	response := NewResponseFromRequest("", inbound, 200, "OK", nil)
+
+	notify, err := NewRequestFromServerDialogChecked(MethodNotify, inbound, response, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := notify.Recipient().Host(); got != "contact.example" {
+		t.Fatalf("loose-route Request-URI host = %q", got)
+	}
+	route, ok := notify.GetHeaders("Route")[0].(*RouteHeader)
+	if !ok || len(route.Addresses) != 2 || route.Addresses[0].Host() != "first-proxy.example" || route.Addresses[1].Host() != "second-proxy.example" {
+		t.Fatalf("loose-route Route = %#v", notify.GetHeaders("Route"))
+	}
+	from, _ := notify.From()
+	to, _ := notify.To()
+	if dialogHeaderParam(from.Params, "tag") == "" || dialogHeaderParam(to.Params, "tag") != "remote-tag" {
+		t.Fatalf("NOTIFY dialog tags = From %v, To %v", from, to)
+	}
+	if actualCallID, _ := notify.CallID(); actualCallID == nil || *actualCallID != callID {
+		t.Fatalf("NOTIFY Call-ID = %v", actualCallID)
+	}
+	if actualCSeq, _ := notify.CSeq(); actualCSeq == nil || actualCSeq.SeqNo != 1 || actualCSeq.MethodName != MethodNotify {
+		t.Fatalf("NOTIFY CSeq = %+v", actualCSeq)
+	}
+	if notify.Destination() == nil || notify.Destination().String() != inbound.Source().String() {
+		t.Fatalf("NOTIFY destination = %v", notify.Destination())
+	}
+
+	inbound.RemoveHeader("Record-Route")
+	strict, _ := ParseURI("sip:strict-proxy.example")
+	loose, _ := ParseURI("sip:loose-proxy.example;lr")
+	inbound.AppendHeader(&RecordRouteHeader{Addresses: []*URI{strict, loose}})
+	notify, err = NewRequestFromServerDialogChecked(MethodNotify, inbound, response, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := notify.Recipient().Host(); got != "strict-proxy.example" {
+		t.Fatalf("strict-route Request-URI host = %q", got)
+	}
+	route, ok = notify.GetHeaders("Route")[0].(*RouteHeader)
+	if !ok || len(route.Addresses) != 2 || route.Addresses[0].Host() != "loose-proxy.example" || route.Addresses[1].Host() != "contact.example" {
+		t.Fatalf("strict-route Route = %#v", notify.GetHeaders("Route"))
+	}
+}
+
+func TestNewRequestFromServerDialogRejectsMalformedDialog(t *testing.T) {
+	target, _ := ParseURI("sip:34020000002000000001@example.com")
+	callID := CallID("malformed-server-dialog")
+	inbound := NewRequest("", MethodSubscribe, target.Clone(), DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodSubscribe).
+		SetFrom(&Address{URI: target.Clone(), Params: NewParams().Add("tag", String{Str: "remote-tag"})}).
+		SetTo(&Address{URI: target.Clone(), Params: NewParams()}).
+		SetCallID(&callID).
+		AddVia(&ViaHop{Host: "example.com", Params: NewParams().Add("branch", String{Str: GenerateBranch()})}).
+		Build(), nil)
+	response := NewResponseFromRequest("", inbound, 200, "OK", nil)
+	responseTo, _ := response.To()
+	responseTo.Params = NewParams()
+	if request, err := NewRequestFromServerDialogChecked(MethodNotify, inbound, response, 1); err == nil || request != nil {
+		t.Fatal("dialog without local tag produced NOTIFY")
+	}
+
+	response = NewResponseFromRequest("", inbound, 200, "OK", nil)
+	inbound.AppendHeader(&GenericHeader{HeaderName: "Record-Route", Contents: "invalid"})
+	if request, err := NewRequestFromServerDialogChecked(MethodNotify, inbound, response, 1); err == nil || request != nil {
+		t.Fatal("malformed Record-Route produced NOTIFY")
+	}
+}
+
 func TestNewRequestFromResponseSanitizesViaAndAllocatesDialogCSeq(t *testing.T) {
 	target, _ := ParseURI("sip:34020000001320000001@device.example:5060")
 	request := NewRequest("", MethodInvite, target, DefaultSipVersion, NewHeaderBuilder().

@@ -132,7 +132,6 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 	dialog.targetID = targetID
 	if !dialog.expiresAt.IsZero() && time.Now().After(dialog.expiresAt) {
 		dialog.response = nil
-		dialog.remoteTarget = nil
 		dialog.eventValue = ""
 		dialog.clearPendingNotifyDialog()
 	}
@@ -144,12 +143,18 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 		dialog.eventValue = buildSubscriptionEventValueForVersion(version, cmdType, targetID)
 	}
 	previousNotify := dialog.snapshotNotifyDialog()
+	var dialogRequest *sip.Request
+	if dialog.response != nil {
+		dialogRequest, err = sip.NewRequestFromResponseChecked(sip.MethodSubscribe, dialog.response)
+		if err != nil {
+			dialog.restoreNotifyDialog(previousNotify)
+			return err
+		}
+	}
 
-	var request *sip.Request
 	tx, err := g.svr.wrapRequestContext(ctx, target, sip.MethodSubscribe, &sip.ContentTypeXML, body, func(r *sip.Request) {
-		request = r
-		if dialog.response != nil {
-			applyOutgoingSubscriptionDialog(r, dialog)
+		if dialogRequest != nil {
+			applyOutgoingSubscriptionDialog(r, dialogRequest)
 		}
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: dialog.eventValue})
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: fmt.Sprintf("%d", expires)})
@@ -185,11 +190,6 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 		g.outgoingSubscriptions.CompareAndDelete(key, dialog)
 		return err
 	}
-	if contact, ok := response.Contact(); ok && contact != nil && contact.Address != nil {
-		dialog.remoteTarget = contact.Address.Clone()
-	} else if request != nil && request.Recipient() != nil {
-		dialog.remoteTarget = request.Recipient().Clone()
-	}
 	return nil
 }
 
@@ -208,21 +208,33 @@ func buildOutgoingSubscriptionKey(deviceID, targetID, cmdType string, in *Subscr
 	return strings.Join(values, "|")
 }
 
-func applyOutgoingSubscriptionDialog(request *sip.Request, dialog *outgoingSubscriptionDialog) {
-	if request == nil || dialog == nil || dialog.response == nil {
+func applyOutgoingSubscriptionDialog(request, dialogRequest *sip.Request) {
+	if request == nil || dialogRequest == nil || dialogRequest.Recipient() == nil {
 		return
 	}
-	for _, name := range []string{"From", "To", "Call-ID", "CSeq"} {
+	for _, name := range []string{"Via", "Route", "From", "To", "Call-ID", "CSeq"} {
 		request.RemoveHeader(name)
 	}
-	sip.CopyHeaders("From", dialog.response, request)
-	sip.CopyHeaders("To", dialog.response, request)
-	sip.CopyHeaders("Call-ID", dialog.response, request)
-	if previous, ok := dialog.response.CSeq(); ok && previous != nil {
-		request.AppendHeader(&sip.CSeq{SeqNo: previous.SeqNo + 1, MethodName: sip.MethodSubscribe})
+	for _, name := range []string{"Via", "Route", "From", "To", "Call-ID", "CSeq"} {
+		sip.CopyHeaders(name, dialogRequest, request)
 	}
-	if dialog.remoteTarget != nil {
-		request.SetRecipient(dialog.remoteTarget.Clone())
+	request.SetRecipient(dialogRequest.Recipient().Clone())
+	if dialogRequest.Destination() != nil {
+		request.SetDestination(dialogRequest.Destination())
+	}
+}
+
+func applyServerSubscriptionDialog(request, dialogRequest *sip.Request) {
+	if request == nil || dialogRequest == nil || dialogRequest.Recipient() == nil {
+		return
+	}
+	for _, name := range []string{"Route", "From", "To", "Call-ID", "CSeq"} {
+		request.RemoveHeader(name)
+		sip.CopyHeaders(name, dialogRequest, request)
+	}
+	request.SetRecipient(dialogRequest.Recipient().Clone())
+	if dialogRequest.Destination() != nil {
+		request.SetDestination(dialogRequest.Destination())
 	}
 }
 

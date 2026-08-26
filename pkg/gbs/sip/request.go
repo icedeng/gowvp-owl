@@ -150,6 +150,137 @@ func NewRequestFromResponseChecked(method string, resp *Response) (*Request, err
 	return ackRequest, nil
 }
 
+// NewRequestFromServerDialogChecked 根据入向请求及其 2xx 响应构造 UAS 侧对话内请求。
+// 路由集按初始请求的 Record-Route 顺序建立，调用方可将生成的对话头复制到
+// 已按当前连接创建的请求上，避免复用已经失效的 TCP/TLS 连接。
+func NewRequestFromServerDialogChecked(method string, inbound *Request, response *Response, cseq uint32) (*Request, error) {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method == "" {
+		return nil, fmt.Errorf("cannot build server dialog request without method")
+	}
+	if inbound == nil || response == nil {
+		return nil, fmt.Errorf("cannot build %s server dialog request without request and response", method)
+	}
+	if response.StatusCode() < 200 || response.StatusCode() >= 300 {
+		return nil, fmt.Errorf("cannot build %s server dialog request from non-2xx response", method)
+	}
+	if cseq == 0 {
+		return nil, fmt.Errorf("cannot build %s server dialog request with zero CSeq", method)
+	}
+
+	remote, remoteOK := inbound.From()
+	local, localOK := response.To()
+	responseRemote, responseRemoteOK := response.From()
+	requestCallID, requestCallIDOK := inbound.CallID()
+	responseCallID, responseCallIDOK := response.CallID()
+	requestCSeq, requestCSeqOK := inbound.CSeq()
+	responseCSeq, responseCSeqOK := response.CSeq()
+	if !remoteOK || remote == nil || remote.Address == nil ||
+		!localOK || local == nil || local.Address == nil ||
+		!responseRemoteOK || responseRemote == nil || responseRemote.Address == nil ||
+		!requestCallIDOK || requestCallID == nil || !responseCallIDOK || responseCallID == nil ||
+		!requestCSeqOK || requestCSeq == nil || !responseCSeqOK || responseCSeq == nil {
+		return nil, fmt.Errorf("cannot build %s server dialog request: dialog headers are incomplete", method)
+	}
+	if strings.TrimSpace(string(*requestCallID)) == "" || string(*requestCallID) != string(*responseCallID) {
+		return nil, fmt.Errorf("cannot build %s server dialog request: Call-ID does not match", method)
+	}
+	if requestCSeq.SeqNo == 0 || requestCSeq.SeqNo != responseCSeq.SeqNo ||
+		!strings.EqualFold(strings.TrimSpace(requestCSeq.MethodName), strings.TrimSpace(responseCSeq.MethodName)) {
+		return nil, fmt.Errorf("cannot build %s server dialog request: CSeq does not match", method)
+	}
+	remoteTag := dialogHeaderParam(remote.Params, "tag")
+	responseRemoteTag := dialogHeaderParam(responseRemote.Params, "tag")
+	localTag := dialogHeaderParam(local.Params, "tag")
+	if remoteTag == "" || responseRemoteTag == "" || localTag == "" || remoteTag != responseRemoteTag {
+		return nil, fmt.Errorf("cannot build %s server dialog request: dialog tags are invalid", method)
+	}
+
+	var remoteTarget *URI
+	if contact, ok := inbound.Contact(); ok && contact != nil && contact.Address != nil {
+		remoteTarget = contact.Address.Clone()
+	} else {
+		remoteTarget = remote.Address.Clone()
+	}
+	if remoteTarget == nil || strings.TrimSpace(remoteTarget.Host()) == "" {
+		return nil, fmt.Errorf("cannot build %s server dialog request: remote target is invalid", method)
+	}
+	routeSet, err := serverDialogRouteSet(inbound)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build %s server dialog request: %w", method, err)
+	}
+	recipient := remoteTarget.Clone()
+	routes := routeSet
+	if len(routeSet) > 0 && !sipURIHasParam(routeSet[0], "lr") {
+		// RFC 3261 12.2.1.1 严格路由：首个 route 成为 Request-URI，远端 target 追加到 Route 尾部。
+		recipient = routeSet[0].Clone()
+		routes = append(cloneURISlice(routeSet[1:]), remoteTarget.Clone())
+	}
+
+	request := NewRequest("", method, recipient, response.SipVersion(), nil, nil)
+	if len(routes) > 0 {
+		request.AppendHeader(&RouteHeader{Addresses: routes})
+	}
+	request.AppendHeader(&FromHeader{
+		DisplayName: local.DisplayName,
+		Address:     local.Address.Clone(),
+		Params:      cloneDialogParams(local.Params),
+	})
+	request.AppendHeader(&ToHeader{
+		DisplayName: responseRemote.DisplayName,
+		Address:     responseRemote.Address.Clone(),
+		Params:      cloneDialogParams(responseRemote.Params),
+	})
+	callID := *responseCallID
+	request.AppendHeader(&callID)
+	request.AppendHeader(&CSeq{SeqNo: cseq, MethodName: method})
+	request.SetSource(inbound.Destination())
+	request.SetDestination(inbound.Source())
+	request.SetBody(nil, true)
+	return request, nil
+}
+
+func serverDialogRouteSet(inbound *Request) ([]*URI, error) {
+	var routeSet []*URI
+	for _, header := range inbound.GetHeaders("Record-Route") {
+		recordRoute, ok := header.(*RecordRouteHeader)
+		if !ok || recordRoute == nil {
+			return nil, fmt.Errorf("invalid Record-Route header")
+		}
+		for _, uri := range recordRoute.Addresses {
+			if uri == nil || strings.TrimSpace(uri.Host()) == "" {
+				return nil, fmt.Errorf("invalid Record-Route target")
+			}
+			routeSet = append(routeSet, uri.Clone())
+		}
+	}
+	return routeSet, nil
+}
+
+func dialogHeaderParam(params Params, name string) string {
+	if params == nil {
+		return ""
+	}
+	for _, key := range params.Keys() {
+		if !strings.EqualFold(strings.TrimSpace(key), name) {
+			continue
+		}
+		value, ok := params.Get(key)
+		if !ok || value == nil {
+			return ""
+		}
+		return strings.TrimSpace(value.String())
+	}
+	return ""
+}
+
+func cloneDialogParams(params Params) Params {
+	if params == nil {
+		return NewParams()
+	}
+	return params.Clone()
+}
+
 func dialogRouteSet(resp *Response) ([]*URI, error) {
 	var routeSet []*URI
 	for _, header := range resp.GetHeaders("Record-Route") {

@@ -2,7 +2,9 @@ package gbs
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -18,6 +20,13 @@ type tcpFlowConnection struct {
 
 func (*tcpFlowConnection) Network() string { return "tcp" }
 
+func attachFlowEventSubscriptionDialog(t *testing.T, sub *eventSubscription, conn *flowConnection, callID string) {
+	t.Helper()
+	request := newFlowRequest(t, conn, sip.MethodSubscribe, callID, []byte("query"))
+	sub.DialogRequest = request
+	sub.Response = sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil)
+}
+
 func TestKeepaliveRespondsBeforeSlowSubscriptionNotify(t *testing.T) {
 	baseConn := newFlowConnection()
 	conn := &tcpFlowConnection{flowConnection: baseConn}
@@ -30,12 +39,14 @@ func TestKeepaliveRespondsBeforeSlowSubscriptionNotify(t *testing.T) {
 	}
 	api := &GB28181API{svr: server}
 	server.gb = api
-	api.eventSubscribers.Store("slow-device-status", &eventSubscription{
+	statusSubscription := &eventSubscription{
 		Key: "slow-device-status", CmdType: "DeviceStatus", DeviceID: gb10DeviceID,
 		ExpiresAt: time.Now().Add(time.Minute),
 		To:        mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000"),
 		Source:    baseConn.remote, Conn: conn, GBVersion: string(GBVersion10), Event: "presence",
-	})
+	}
+	attachFlowEventSubscriptionDialog(t, statusSubscription, baseConn, "slow-device-status-dialog")
+	api.eventSubscribers.Store("slow-device-status", statusSubscription)
 
 	request := newFlowRequest(t, baseConn, sip.MethodMessage, "keepalive-before-notify", readGB10Fixture(t, "keepalive.xml"))
 	request.SetConnection(conn)
@@ -90,12 +101,14 @@ func TestAlarmRespondsBeforeSlowSubscriptionNotify(t *testing.T) {
 	server.memoryStorer = memory
 	api := &GB28181API{svr: server}
 	server.gb = api
-	api.eventSubscribers.Store("slow-alarm", &eventSubscription{
+	alarmSubscription := &eventSubscription{
 		Key: "slow-alarm", CmdType: "Alarm", DeviceID: gb10DeviceID,
 		ExpiresAt: time.Now().Add(time.Minute),
 		To:        mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000"),
 		Source:    baseConn.remote, Conn: conn, GBVersion: string(GBVersion10), Event: "presence",
-	})
+	}
+	attachFlowEventSubscriptionDialog(t, alarmSubscription, baseConn, "slow-alarm-dialog")
+	api.eventSubscribers.Store("slow-alarm", alarmSubscription)
 
 	request := newFlowRequest(t, baseConn, sip.MethodMessage, "alarm-before-notify", readGB10Fixture(t, "alarm-notify.xml"))
 	request.SetConnection(conn)
@@ -130,6 +143,78 @@ func TestAlarmRespondsBeforeSlowSubscriptionNotify(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("Alarm handler did not stop after SIP shutdown")
+	}
+}
+
+func TestDeviceEventNotifyUsesSubscriptionDialogAndSerializesCSeq(t *testing.T) {
+	oldConn := newFlowConnection()
+	currentBase := newFlowConnection()
+	currentConn := &tcpFlowConnection{flowConnection: currentBase}
+	platform := mustFlowAddress(t, "sip:"+gb10PlatformID+"@3402000000")
+	sipServer := sip.NewServer(platform)
+	t.Cleanup(sipServer.Close)
+	server := &Server{Server: sipServer, fromAddress: *platform}
+	api := &GB28181API{svr: server}
+	server.gb = api
+
+	subscribe := newFlowRequest(t, oldConn, sip.MethodSubscribe, "device-notify-dialog", []byte("query"))
+	contact := mustFlowAddress(t, "sip:"+gb10DeviceID+"@contact.example:5070")
+	subscribe.AppendHeader(&sip.ContactHeader{Address: contact.URI.Clone(), Params: sip.NewParams()})
+	proxy, _ := sip.ParseURI("sip:proxy.example;lr")
+	subscribe.AppendHeader(&sip.RecordRouteHeader{Addresses: []*sip.URI{proxy}})
+	response := sip.NewResponseFromRequest("", subscribe, http.StatusOK, "OK", nil)
+	sub := &eventSubscription{
+		CmdType: "Alarm", DeviceID: gb10DeviceID, Event: "presence",
+		ExpiresAt: time.Now().Add(time.Minute), To: contact, Source: currentBase.remote, Conn: currentConn,
+		GBVersion: string(GBVersion10), DialogRequest: subscribe, Response: response,
+	}
+	body := []byte(`<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Notify>`)
+	errs := make(chan error, 2)
+	firstCtx, firstCancel := context.WithTimeout(t.Context(), 60*time.Millisecond)
+	defer firstCancel()
+	secondCtx, secondCancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
+	defer secondCancel()
+	go func() { errs <- api.sendEventNotifyContext(firstCtx, sub, "Alarm", body) }()
+
+	requests := make([]string, 0, 2)
+	select {
+	case payload := <-currentBase.writes:
+		requests = append(requests, string(payload))
+	case err := <-errs:
+		t.Fatalf("first subscription NOTIFY failed before send: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("first subscription NOTIFY was not sent")
+	}
+	go func() { errs <- api.sendEventNotifyContext(secondCtx, sub, "Alarm", body) }()
+	select {
+	case payload := <-currentBase.writes:
+		requests = append(requests, string(payload))
+	case <-time.After(time.Second):
+		t.Fatal("second subscription NOTIFY was not sent")
+	}
+	for range 2 {
+		if err := <-errs; err == nil {
+			t.Fatal("NOTIFY without response unexpectedly succeeded")
+		}
+	}
+	select {
+	case payload := <-oldConn.writes:
+		t.Fatalf("NOTIFY reused stale subscription connection: %s", payload)
+	default:
+	}
+
+	for index, request := range requests {
+		for _, expected := range []string{
+			"NOTIFY sip:" + gb10DeviceID + "@contact.example:5070 SIP/2.0",
+			"Route: <sip:proxy.example;lr>",
+			"Call-ID: device-notify-dialog",
+			fmt.Sprintf("CSeq: %d NOTIFY", index+1),
+			"Event: presence",
+		} {
+			if !strings.Contains(request, expected) {
+				t.Fatalf("NOTIFY %d missing %q:\n%s", index+1, expected, request)
+			}
+		}
 	}
 }
 
@@ -331,14 +416,17 @@ func TestOutgoingSubscriptionRenewalReusesDialog(t *testing.T) {
 	to.Params.Add("tag", sip.String{Str: "remote-tag"})
 	remoteTarget := mustFlowAddress(t, "sip:"+gb10DeviceID+"@192.0.2.99:5070")
 	response.AppendHeader(&sip.ContactHeader{Address: remoteTarget.URI.Clone(), Params: sip.NewParams()})
+	proxy1, _ := sip.ParseURI("sip:proxy1.example;lr")
+	proxy2, _ := sip.ParseURI("sip:proxy2.example;lr")
+	response.AppendHeader(&sip.RecordRouteHeader{Addresses: []*sip.URI{proxy1, proxy2}})
 
-	dialog := &outgoingSubscriptionDialog{
-		response:     response,
-		remoteTarget: remoteTarget.URI.Clone(),
-		eventValue:   "Catalog;id=" + gb10DeviceID,
+	currentConn := newFlowConnection()
+	renewal := newFlowRequest(t, currentConn, sip.MethodSubscribe, "different-dialog", []byte("query"))
+	dialogRequest, err := sip.NewRequestFromResponseChecked(sip.MethodSubscribe, response)
+	if err != nil {
+		t.Fatal(err)
 	}
-	renewal := newFlowRequest(t, conn, sip.MethodSubscribe, "different-dialog", []byte("query"))
-	applyOutgoingSubscriptionDialog(renewal, dialog)
+	applyOutgoingSubscriptionDialog(renewal, dialogRequest)
 
 	callID, ok := renewal.CallID()
 	if !ok || normalizeCallID(callID) != "subscribe-dialog" {
@@ -359,6 +447,13 @@ func TestOutgoingSubscriptionRenewalReusesDialog(t *testing.T) {
 	if renewal.Recipient().String() != remoteTarget.URI.String() {
 		t.Fatalf("renewal target = %s; want %s", renewal.Recipient(), remoteTarget.URI)
 	}
+	route, ok := renewal.GetHeaders("Route")[0].(*sip.RouteHeader)
+	if !ok || len(route.Addresses) != 2 || route.Addresses[0].Host() != "proxy2.example" || route.Addresses[1].Host() != "proxy1.example" {
+		t.Fatalf("renewal Route = %#v", renewal.GetHeaders("Route"))
+	}
+	if renewal.GetConnection() != currentConn {
+		t.Fatal("renewal replaced the current connection with the original dialog connection")
+	}
 }
 
 func TestOutgoingSubscriptionCancelRequiresDialog(t *testing.T) {
@@ -367,6 +462,35 @@ func TestOutgoingSubscriptionCancelRequiresDialog(t *testing.T) {
 	err := api.Subscribe(t.Context(), &SubscribeInput{DeviceID: gb10DeviceID, Event: "catalog", Cancel: true})
 	if err == nil || !strings.Contains(err.Error(), "subscription does not exist") {
 		t.Fatalf("cancel missing subscription error = %v", err)
+	}
+}
+
+func TestRefreshInboundSubscriptionDialogPreservesRouteAndUpdatesContact(t *testing.T) {
+	conn := newFlowConnection()
+	initial := newFlowRequest(t, conn, sip.MethodSubscribe, "refresh-inbound-dialog", []byte("query"))
+	oldContact := mustFlowAddress(t, "sip:"+gb10DeviceID+"@old-contact.example:5060")
+	initial.AppendHeader(&sip.ContactHeader{Address: oldContact.URI.Clone(), Params: sip.NewParams()})
+	proxy, _ := sip.ParseURI("sip:proxy.example;lr")
+	initial.AppendHeader(&sip.RecordRouteHeader{Addresses: []*sip.URI{proxy}})
+
+	refresh := newFlowRequest(t, conn, sip.MethodSubscribe, "refresh-inbound-dialog", []byte("query"))
+	newContact := mustFlowAddress(t, "sip:"+gb10DeviceID+"@new-contact.example:5070")
+	refresh.AppendHeader(&sip.ContactHeader{Address: newContact.URI.Clone(), Params: sip.NewParams()})
+	merged := refreshInboundSubscriptionDialog(initial, refresh)
+	if merged == nil {
+		t.Fatal("refreshed dialog snapshot is nil")
+	}
+	contact, ok := merged.Contact()
+	if !ok || contact == nil || contact.Address == nil || contact.Address.Host() != "new-contact.example" {
+		t.Fatalf("refreshed Contact = %v", contact)
+	}
+	recordRoutes := merged.GetHeaders("Record-Route")
+	if len(recordRoutes) != 1 {
+		t.Fatalf("refreshed Record-Route = %v", recordRoutes)
+	}
+	route, ok := recordRoutes[0].(*sip.RecordRouteHeader)
+	if !ok || len(route.Addresses) != 1 || route.Addresses[0].Host() != "proxy.example" {
+		t.Fatalf("refreshed route set = %#v", recordRoutes)
 	}
 }
 
