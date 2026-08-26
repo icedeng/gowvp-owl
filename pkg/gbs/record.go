@@ -321,7 +321,7 @@ func validRecordTypeForVersion(recordType string, version GBProtocolVersion) boo
 	case "time", "alarm", "manual":
 		return true
 	case "all":
-		return version == GBVersion10
+		return version == GBVersion10 || version == GBVersion11
 	default:
 		return false
 	}

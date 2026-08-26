@@ -99,7 +99,8 @@ func TestRecordInfoValidatesOptionalItemFieldsByVersion(t *testing.T) {
 		wantOK  bool
 	}{
 		{name: "2011 all type", version: GBVersion10, body: strings.Replace(valid, "<Type>time</Type>", "<Type>all</Type>", 1), wantOK: true},
-		{name: "2014 all type", version: GBVersion11, body: strings.Replace(valid, "<Type>time</Type>", "<Type>all</Type>", 1)},
+		{name: "2014 all type", version: GBVersion11, body: strings.Replace(valid, "<Type>time</Type>", "<Type>all</Type>", 1), wantOK: true},
+		{name: "2016 all type", version: GBVersion20, body: strings.Replace(valid, "<Type>time</Type>", "<Type>all</Type>", 1)},
 		{name: "uppercase type normalized", version: GBVersion20, body: strings.Replace(valid, "<Type>time</Type>", "<Type>ALARM</Type>", 1), wantOK: true},
 		{name: "unknown type", version: GBVersion30, body: strings.Replace(valid, "<Type>time</Type>", "<Type>other</Type>", 1)},
 		{name: "empty type", version: GBVersion20, body: strings.Replace(valid, "<Type>time</Type>", "<Type></Type>", 1)},
