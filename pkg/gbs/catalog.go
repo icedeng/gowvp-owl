@@ -250,7 +250,7 @@ func validateCatalogItemValues(item Channels, version GBProtocolVersion) error {
 		return fmt.Errorf("Catalog item EndTime must be dateTime")
 	}
 	info := item.Info
-	if !version.AtLeast(GBVersion11) && (strings.TrimSpace(info.RawXML) != "" || info.PTZType != 0 || info.PositionType != 0 || info.RoomType != 0 || info.UseType != 0 || info.SupplyLightType != 0 || info.DirectionType != 0 || strings.TrimSpace(info.Resolution) != "" || strings.TrimSpace(info.BusinessGroupID) != "") {
+	if !version.AtLeast(GBVersion11) && (info.XMLName.Local != "" || strings.TrimSpace(info.RawXML) != "" || info.PTZType != 0 || info.PositionType != 0 || info.RoomType != 0 || info.UseType != 0 || info.SupplyLightType != 0 || info.DirectionType != 0 || strings.TrimSpace(info.Resolution) != "" || strings.TrimSpace(info.BusinessGroupID) != "") {
 		return fmt.Errorf("Catalog item Info requires protocol 1.1")
 	}
 	if info.PTZType < 0 || info.PTZType > 4 || info.PositionType < 0 || info.PositionType > 10 || info.RoomType < 0 || info.RoomType > 2 || info.UseType < 0 || info.UseType > 3 || info.SupplyLightType < 0 || info.SupplyLightType > 3 || info.DirectionType < 0 || info.DirectionType > 8 {

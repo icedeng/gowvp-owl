@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"log/slog"
 	"net"
@@ -549,15 +550,16 @@ type Channels struct {
 
 // CatalogItemInfo 是 2014 修改补充文件新增的目录项摄像机属性。
 type CatalogItemInfo struct {
-	PTZType         int    `xml:"PTZType" json:"ptz_type"`
-	PositionType    int    `xml:"PositionType" json:"position_type"`
-	RoomType        int    `xml:"RoomType" json:"room_type"`
-	UseType         int    `xml:"UseType" json:"use_type"`
-	SupplyLightType int    `xml:"SupplyLightType" json:"supply_light_type"`
-	DirectionType   int    `xml:"DirectionType" json:"direction_type"`
-	Resolution      string `xml:"Resolution" json:"resolution"`
-	BusinessGroupID string `xml:"BusinessGroupID" json:"business_group_id"`
-	RawXML          string `xml:",innerxml" json:"-"`
+	XMLName         xml.Name `xml:"Info" json:"-"`
+	PTZType         int      `xml:"PTZType" json:"ptz_type"`
+	PositionType    int      `xml:"PositionType" json:"position_type"`
+	RoomType        int      `xml:"RoomType" json:"room_type"`
+	UseType         int      `xml:"UseType" json:"use_type"`
+	SupplyLightType int      `xml:"SupplyLightType" json:"supply_light_type"`
+	DirectionType   int      `xml:"DirectionType" json:"direction_type"`
+	Resolution      string   `xml:"Resolution" json:"resolution"`
+	BusinessGroupID string   `xml:"BusinessGroupID" json:"business_group_id"`
+	RawXML          string   `xml:",innerxml" json:"-"`
 }
 
 // 同步摄像头编码格式

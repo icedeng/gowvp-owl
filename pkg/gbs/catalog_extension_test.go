@@ -203,6 +203,21 @@ func TestCatalog10RejectsCatalogInfo(t *testing.T) {
 	}
 }
 
+func TestCatalog10RejectsEmptyCatalogInfoFromXML(t *testing.T) {
+	body := []byte(`<?xml version="1.0"?><Response><CmdType>Catalog</CmdType><SN>10</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>1</SumNum><DeviceList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Info/></Item></DeviceList></Response>`)
+	var msg MessageDeviceListResponse
+	if err := sip.XMLDecode(body, &msg); err != nil {
+		t.Fatalf("decode Catalog: %v", err)
+	}
+	if len(msg.Item) != 1 || msg.Item[0].Info.XMLName.Local != "Info" {
+		t.Fatalf("Catalog Info presence was not retained: %+v", msg.Item)
+	}
+	api, _ := newVersionGateAPI(GBVersion10)
+	if err := api.validateCatalogEnvelope(&sip.Context{DeviceID: gb10DeviceID}, msg, false); err == nil {
+		t.Fatal("protocol 1.0 accepted empty Catalog Info introduced by protocol 1.1")
+	}
+}
+
 func TestCatalogAcceptsValidOptionalItemValuesByVersion(t *testing.T) {
 	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30} {
 		item := Channels{
