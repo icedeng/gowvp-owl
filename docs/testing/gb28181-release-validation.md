@@ -73,6 +73,7 @@ go test ./... -count=1
 - A.4 ExtraInfo JSON 的整数、零值、数组和 20 位数值型编码保持原始精度；未知数值型对象编码同样拒绝转发；
 - 共享通道 PTZ、录像和版本化通道控制转发；设备级高影响控制不因共享单个通道而被级联放大；
 - 通用查询响应的根节点、正 SN、命令版本和目标所有权校验；未知跨设备响应不能改变状态或解除等待；
+- DeviceInfo 固定 `Response` 根和必填 `OK/ERROR` 结果校验；空结果或 Notify 根不得更新父设备/子通道元数据或解除等待；
 - PresetQuery/HomePositionQuery/CruiseTrackListQuery/CruiseTrackQuery/PTZPosition/SDCardStatus 业务载荷的必填字段、列表计数、枚举、数值范围和有限浮点校验；非法载荷不能写状态、解除等待或转发订阅，2014/2016 PresetQuery 仍兼容无 `SumNum` 应答；
 - DeviceInfo 非法根、命令、SN 或未知目标不得覆盖父设备/子通道信息或解除等待；
 - DeviceStatus 缺失或非法 Result、Online、Status 枚举不得写状态或解除等待；失败结果及子通道状态不得改写父设备在线运行态；

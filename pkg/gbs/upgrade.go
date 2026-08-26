@@ -145,9 +145,6 @@ func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOut
 	select {
 	case resp := <-pending.wait:
 		result := strings.ToUpper(strings.TrimSpace(resp.Result))
-		if result == "" {
-			result = "OK"
-		}
 		if result != "OK" {
 			g.storeUpgradeState(UpgradeState{
 				SN: sn, DeviceID: in.DeviceID, ChannelID: in.ChannelID, SessionID: sessionID,

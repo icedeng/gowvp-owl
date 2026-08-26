@@ -454,7 +454,7 @@ func (g *GB28181API) resolvePendingDeviceQueryResult(deviceID, cmdType string, s
 		if expected := strings.TrimSpace(pending.targetID); expected != "" && expected != strings.TrimSpace(out.DeviceID) {
 			continue
 		}
-		if out.CmdType == "ConfigDownload" && (out.Result == "" || strings.EqualFold(out.Result, "OK")) {
+		if out.CmdType == "ConfigDownload" && strings.EqualFold(out.Result, "OK") {
 			state, _ := out.Data.(*ConfigDownloadState)
 			pending.mu.Lock()
 			tracking := len(pending.expectedConfig) > 0

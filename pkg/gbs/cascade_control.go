@@ -121,9 +121,6 @@ func (g *GB28181API) sendCascadeDeviceControlDownstream(ctx context.Context, cha
 		return "ERROR", ErrServiceStopped
 	case response := <-pending.wait:
 		result := strings.ToUpper(strings.TrimSpace(response.Result))
-		if result == "" {
-			result = ptzResultOK
-		}
 		return result, nil
 	case <-timer.C:
 		cfg := g.configSnapshot()

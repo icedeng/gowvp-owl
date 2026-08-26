@@ -165,9 +165,6 @@ func (g *GB28181API) PTZContext(ctx context.Context, in *PTZInput) (*PTZOutput, 
 	select {
 	case resp := <-pending.wait:
 		result := strings.ToUpper(strings.TrimSpace(resp.Result))
-		if result == "" {
-			result = ptzResultOK
-		}
 		if result != ptzResultOK {
 			return nil, fmt.Errorf("device control failed: %s", resp.Result)
 		}

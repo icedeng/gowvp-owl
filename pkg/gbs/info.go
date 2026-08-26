@@ -37,13 +37,6 @@ type MessageDeviceInfoResponse struct {
 	Result       string `xml:"Result"`       // 査询结果(必选)
 }
 
-// isResultOK 判定 DeviceInfo 应答是否成功
-// 为什么: 部分厂商不严格按协议返回 Result，可能为空串或大小写不一；空串按成功处理，维持与历史行为兼容。
-func (m *MessageDeviceInfoResponse) isResultOK() bool {
-	r := strings.TrimSpace(m.Result)
-	return r == "" || strings.EqualFold(r, "OK")
-}
-
 // sipMessageDeviceInfo 设备信息查询应答
 // GB/T28181 91 页 A.2.6.5
 func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
@@ -56,8 +49,9 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 
 	msg.CmdType = strings.TrimSpace(msg.CmdType)
 	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
+	msg.Result = strings.TrimSpace(msg.Result)
 	ctx.DeviceID = strings.TrimSpace(ctx.DeviceID)
-	if !strings.EqualFold(msg.CmdType, "DeviceInfo") {
+	if msg.XMLName.Local != "Response" || !strings.EqualFold(msg.CmdType, "DeviceInfo") || !isGBResultValue(msg.Result) {
 		ctx.String(400, "invalid DeviceInfo response")
 		return
 	}
@@ -70,7 +64,7 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 	isChannelResponse := msg.DeviceID != ctx.DeviceID
 
 	// 为什么: Result 非 OK 代表设备端查询失败，可选字段可能为空或旧值，不应覆盖数据库，避免清空已有厂商/型号等信息。
-	if !msg.isResultOK() {
+	if !strings.EqualFold(msg.Result, "OK") {
 		ctx.Log.Warn("sipMessageDeviceInfo result not ok", "result", msg.Result, "sn", msg.SN)
 		stateDeviceID := firstNonEmpty(msg.DeviceID, ctx.DeviceID)
 		decoded := g.decodeAndStoreQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body())

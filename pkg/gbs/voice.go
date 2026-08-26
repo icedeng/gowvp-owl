@@ -424,7 +424,7 @@ func (g *GB28181API) startBroadcastNotification(ctx context.Context, ch *Channel
 	defer timer.Stop()
 	select {
 	case response := <-pending.wait:
-		if response.Result != "" && !strings.EqualFold(strings.TrimSpace(response.Result), "OK") {
+		if !strings.EqualFold(strings.TrimSpace(response.Result), "OK") {
 			return fmt.Errorf("broadcast rejected: %s", response.Result)
 		}
 		return nil

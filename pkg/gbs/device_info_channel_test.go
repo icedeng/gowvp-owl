@@ -77,8 +77,11 @@ func TestDeviceInfoResponseRejectsInvalidEnvelopeBeforeWait(t *testing.T) {
 		body string
 	}{
 		{name: "wrong root", body: `<Query><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Query>`},
+		{name: "notify root", body: `<Notify><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Notify>`},
 		{name: "wrong command", body: `<Response><CmdType>DeviceStatus</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
 		{name: "non-positive SN", body: `<Response><CmdType>DeviceInfo</CmdType><SN>0</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
+		{name: "missing result", body: `<Response><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><DeviceName>Untrusted</DeviceName></Response>`},
+		{name: "invalid result", body: `<Response><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>SUCCESS</Result><DeviceName>Untrusted</DeviceName></Response>`},
 		{name: "unknown target", body: `<Response><CmdType>DeviceInfo</CmdType><SN>903</SN><DeviceID>34020000001320000009</DeviceID><Result>OK</Result></Response>`},
 	}
 	for _, test := range tests {
