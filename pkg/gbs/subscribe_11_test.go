@@ -205,6 +205,115 @@ func TestNormalizeSubscribeCmdType(t *testing.T) {
 	if got, ok := normalizeSubscribeCmdType("Alarm\r\nX-Injected: true"); ok || got != "" {
 		t.Fatalf("header injection event accepted: %q, %v", got, ok)
 	}
+	for _, unsupported := range []string{
+		"DeviceInfo", "DeviceStatus", "RecordInfo", "ConfigDownload", "PresetQuery",
+		"HomePositionQuery", "CruiseTrackListQuery", "CruiseTrackQuery", "SDCardStatus", "Broadcast", "VendorStatus",
+	} {
+		if got, ok := normalizeSubscribeCmdType(unsupported); ok || got != "" {
+			t.Errorf("non-standard subscription %q accepted as %q", unsupported, got)
+		}
+	}
+}
+
+func TestEventSubscriptionVersionMatrix(t *testing.T) {
+	for _, test := range []struct {
+		cmdType string
+		version GBProtocolVersion
+		wantOK  bool
+	}{
+		{cmdType: "Alarm", version: GBVersion10, wantOK: true},
+		{cmdType: "Catalog", version: GBVersion10, wantOK: true},
+		{cmdType: "MobilePosition", version: GBVersion11},
+		{cmdType: "MobilePosition", version: GBVersion20, wantOK: true},
+		{cmdType: "PTZPosition", version: GBVersion20},
+		{cmdType: "PTZPosition", version: GBVersion30, wantOK: true},
+		{cmdType: "DeviceStatus", version: GBVersion30},
+	} {
+		t.Run(string(test.version)+"-"+test.cmdType, func(t *testing.T) {
+			err := validateSubscribeEventRequest(subscribeEventRequest{SN: 1, DeviceID: gb10DeviceID}, test.cmdType, test.version)
+			if test.wantOK && err != nil {
+				t.Fatalf("valid subscription rejected: %v", err)
+			}
+			if !test.wantOK && err == nil {
+				t.Fatal("invalid subscription accepted")
+			}
+		})
+	}
+}
+
+func TestEventSubscriptionRequiresEnvelopeOnCreateAndCancel(t *testing.T) {
+	for _, expires := range []string{"90", "0"} {
+		for _, body := range []string{
+			`<Query><CmdType>Alarm</CmdType><SN>0</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Query>`,
+			`<Query><CmdType>Alarm</CmdType><SN>1</SN></Query>`,
+			`<Query><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>invalid</DeviceID></Query>`,
+		} {
+			api := &GB28181API{}
+			conn := newFlowConnection()
+			req := newFlowRequest(t, conn, sip.MethodSubscribe, "subscribe-invalid-envelope-"+expires, []byte(body))
+			req.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "presence"})
+			req.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: expires})
+			ctx := &sip.Context{
+				Request: req, Tx: sip.NewTransaction("subscribe-invalid-envelope-tx-"+expires, conn), DeviceID: gb10PlatformID,
+				Source: conn.remote, To: mustFlowAddress(t, "sip:"+gb10PlatformID+"@3402000000"), XGBVer: string(GBVersion30),
+			}
+			api.sipSubscribeEvent(ctx)
+			if response := <-flowResponse(t, conn); !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("Expires %s invalid envelope response:\n%s", expires, response)
+			}
+		}
+	}
+}
+
+func TestEventSubscriptionRequiresEventHeader(t *testing.T) {
+	api := &GB28181API{}
+	conn := newFlowConnection()
+	body := []byte(`<Query><CmdType>Catalog</CmdType><SN>53</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Query>`)
+	req := newFlowRequest(t, conn, sip.MethodSubscribe, "subscribe-missing-event", body)
+	req.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "90"})
+	ctx := &sip.Context{
+		Request: req, Tx: sip.NewTransaction("subscribe-missing-event-tx", conn), DeviceID: gb10PlatformID,
+		Source: conn.remote, To: mustFlowAddress(t, "sip:"+gb10PlatformID+"@3402000000"), XGBVer: string(GBVersion11),
+	}
+	api.sipSubscribeEvent(ctx)
+	response := <-flowResponse(t, conn)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("missing Event header response:\n%s", response)
+	}
+	stored := false
+	api.eventSubscribers.Range(func(_, _ any) bool {
+		stored = true
+		return false
+	})
+	if stored {
+		t.Fatal("subscription without Event header was stored")
+	}
+}
+
+func TestEventSubscriptionRejectsNonStandardQueryCommand(t *testing.T) {
+	api := &GB28181API{}
+	conn := newFlowConnection()
+	body := []byte(`<?xml version="1.0"?><Query><CmdType>DeviceStatus</CmdType><SN>52</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Query>`)
+	req := newFlowRequest(t, conn, sip.MethodSubscribe, "subscribe-non-event", body)
+	req.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "presence"})
+	req.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "90"})
+	ctx := &sip.Context{
+		Request: req, Tx: sip.NewTransaction("subscribe-non-event-tx", conn), DeviceID: gb10PlatformID,
+		Source: conn.remote, To: mustFlowAddress(t, "sip:"+gb10PlatformID+"@3402000000"), XGBVer: string(GBVersion30),
+	}
+	api.sipSubscribeEvent(ctx)
+	response := <-flowResponse(t, conn)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("non-standard subscription response:\n%s", response)
+	}
+	stored := false
+	api.eventSubscribers.Range(func(_, _ any) bool {
+		stored = true
+		return false
+	})
+	if stored {
+		t.Fatal("non-standard subscription was stored")
+	}
 }
 
 func TestOutgoingSubscriptionRenewalReusesDialog(t *testing.T) {

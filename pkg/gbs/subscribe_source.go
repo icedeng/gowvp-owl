@@ -152,15 +152,12 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 	cmdType := strings.TrimSpace(req.CmdType)
 	if normalized, ok := normalizeSubscribeCmdType(cmdType); ok {
 		cmdType = normalized
-	} else if !isSupportedSubscribeCmdType(cmdType) {
+	} else {
 		ctx.String(400, "unsupported subscribe cmd_type")
 		return
 	}
 
 	deviceID := strings.TrimSpace(req.DeviceID)
-	if deviceID == "" {
-		deviceID = "*"
-	}
 	var cascade *cascadeWorker
 	if value, exists := ctx.Get(cascadeWorkerContextKey); exists {
 		cascade, _ = value.(*cascadeWorker)
@@ -200,6 +197,10 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 	} else if g != nil {
 		subscriptionVersion = g.getDeviceGBProtocolVersion(ctx.DeviceID)
 	}
+	if err := validateSubscribeEventEnvelope(req, cmdType); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 	if expires != 0 {
 		if err := validateSubscribeEventRequest(req, cmdType, subscriptionVersion); err != nil {
 			ctx.String(400, err.Error())
@@ -211,14 +212,13 @@ func (g *GB28181API) sipSubscribeEvent(ctx *sip.Context) {
 		ctx.String(400, err.Error())
 		return
 	}
-	if eventValue != "" {
-		if err := validateSubscriptionEventHeader(eventValue, cmdType, eventID, deviceID); err != nil {
-			ctx.String(400, err.Error())
-			return
-		}
-	}
 	if eventValue == "" {
-		eventValue = buildSubscriptionEventValueForVersion(subscriptionVersion, cmdType, deviceID)
+		ctx.String(400, "missing event header")
+		return
+	}
+	if err := validateSubscriptionEventHeader(eventValue, cmdType, eventID, deviceID); err != nil {
+		ctx.String(400, err.Error())
+		return
 	}
 	if eventID != "" && deviceID != "*" && eventID != deviceID {
 		ctx.String(400, "event id does not match DeviceID")
@@ -528,22 +528,6 @@ func normalizeSubscribeCmdType(value string) (string, bool) {
 		return "MobilePosition", true
 	case "ptzposition":
 		return "PTZPosition", true
-	case "devicestatus":
-		return "DeviceStatus", true
-	case "recordinfo":
-		return "RecordInfo", true
-	case "deviceinfo":
-		return "DeviceInfo", true
-	case "configdownload":
-		return "ConfigDownload", true
-	case "presetquery":
-		return "PresetQuery", true
-	case "homepositionquery":
-		return "HomePositionQuery", true
-	case "sdcardstatus":
-		return "SDCardStatus", true
-	case "broadcast":
-		return "Broadcast", true
 	default:
 		return "", false
 	}
@@ -625,22 +609,6 @@ func parseSubscribeExpiresForProfile(value, cmdType string, cascade *cascadeWork
 		return defaultCascadeCatalogSubscribeExpires, nil
 	}
 	return parseSubscribeExpires(value)
-}
-
-func isSupportedSubscribeCmdType(cmdType string) bool {
-	cmd := strings.TrimSpace(cmdType)
-	if cmd == "" {
-		return false
-	}
-	switch cmd {
-	case "Alarm", "Catalog", "MobilePosition", "PTZPosition",
-		"DeviceStatus", "RecordInfo", "DeviceInfo", "ConfigDownload",
-		"PresetQuery", "HomePositionQuery", "SDCardStatus", "Broadcast":
-		return true
-	default:
-		// 兼容扩展事件类型：允许 Query/Status 结尾的订阅命令。
-		return strings.HasSuffix(cmd, "Query") || strings.HasSuffix(cmd, "Status")
-	}
 }
 
 func subscriptionOwnerKey(ctx *sip.Context, cascade *cascadeWorker) string {

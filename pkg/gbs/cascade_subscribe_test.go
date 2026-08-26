@@ -529,6 +529,7 @@ func TestCascadeSubscribeUsesNegotiatedVersionWhenHeaderMissing(t *testing.T) {
 	request := sip.NewRequest("", sip.MethodSubscribe, local.URI, sip.DefaultSipVersion,
 		sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodSubscribe).SetCallID(&callID).
 			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), body)
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "Catalog;id=" + platform.localID})
 	request.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "60"})
 	request.SetConnection(connection)
 	request.SetSource(connection.remote)

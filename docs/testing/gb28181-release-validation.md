@@ -42,6 +42,7 @@ go test ./... -count=1
 - 2022 升级、抓拍完成和实时视音频回传通知的固定 Notify 根、20 位目标及抓拍列表/文件标识完整性；
 - terminated NOTIFY 的设备、Call-ID 和双向 tag 对话绑定，以及伪造终止不得删除或重建下级订阅；
 - `Event: Catalog;id=...` 初始订阅、续订、取消；
+- 入向订阅只接受 2011+ Alarm/Catalog、2016+ MobilePosition、2022 PTZPosition；创建、续订和取消均要求 Query 根、正 SN、20 位 DeviceID、必填且匹配的 Event，空目标不得扩大为通配订阅；旧版本取消既有高版本事件对话仍可完成清理；
 - Broadcast 通知与业务应答、接收者主动 INVITE、版本化 SDP、ZLM RTP 启停和 ACK/BYE 清理；
 - 2016/2022 对讲在设备音频流建立后复用 RTP 连接反向发送 G.711 A-law 音频；
 - 媒体注册、注销、RTP 超时状态竞争；
@@ -73,6 +74,7 @@ go test ./... -count=1
 - A.4 ExtraInfo JSON 的整数、零值、数组和 20 位数值型编码保持原始精度；未知数值型对象编码同样拒绝转发；
 - 共享通道 PTZ、录像和版本化通道控制转发；设备级高影响控制不因共享单个通道而被级联放大；
 - 通用查询严格校验 `MESSAGE + Response`、订阅事件严格校验 `NOTIFY + Notify`，并校验正 SN、命令版本和目标所有权；NOTIFY 不能解除 MESSAGE 查询等待，2022 独立业务通知走专用包络，未知跨设备报文不能改变状态或解除等待；
+- 通用 NOTIFY 只允许 2022 PTZPosition；DeviceStatus、Preset/HomePosition/CruiseTrack/SDCardStatus/ConfigDownload 等查询或状态命令的 NOTIFY 必须拒绝，MESSAGE 查询应答不得转发成订阅事件；
 - DeviceInfo 固定 `Response` 根和必填 `OK/ERROR` 结果校验；空结果或 Notify 根不得更新父设备/子通道元数据或解除等待；
 - PresetQuery/HomePositionQuery/CruiseTrackListQuery/CruiseTrackQuery/PTZPosition/SDCardStatus 业务载荷的必填字段、列表计数、枚举、数值范围和有限浮点校验；非法载荷不能写状态、解除等待或转发订阅，2014/2016 PresetQuery 仍兼容无 `SumNum` 应答；
 - DeviceInfo 非法根、命令、SN 或未知目标不得覆盖父设备/子通道信息或解除等待；

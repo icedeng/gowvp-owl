@@ -291,6 +291,25 @@ func TestGenericQueryNotifyRejectsResponseRoot(t *testing.T) {
 	}
 }
 
+func TestGenericQueryNotifyRejectsNonEventCommands(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	for _, cmdType := range []string{
+		"DeviceStatus", "PresetQuery", "HomePositionQuery", "CruiseTrackListQuery",
+		"CruiseTrackQuery", "SDCardStatus", "ConfigDownload",
+	} {
+		t.Run(cmdType, func(t *testing.T) {
+			body := []byte(`<Notify><CmdType>` + cmdType + `</CmdType><SN>73</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Notify>`)
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodNotify, "non-event-notify-"+cmdType, body, api.sipMessageQueryGeneric)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("non-event NOTIFY response = %s", response)
+			}
+		})
+	}
+	if state, ok := api.GetQueryState(gb10DeviceID); ok && state != nil {
+		t.Fatalf("non-event NOTIFY changed query state: %+v", state)
+	}
+}
+
 func TestGenericQueryResponseRejectsSiblingPendingTargetBeforeState(t *testing.T) {
 	memory := newFlowMemory(gb10DeviceID)
 	memory.runtime.setGBVersion(GBVersion30)

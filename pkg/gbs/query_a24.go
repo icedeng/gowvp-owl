@@ -594,8 +594,10 @@ func (g *GB28181API) sipMessageQueryGeneric(ctx *sip.Context) {
 	}
 	ctx.String(200, "OK")
 	g.persistDecodedQuery(deviceID, msg.CmdType, decoded)
-	// 9.11 事件源侧：通用查询类事件通知。
-	g.publishEventNotify(msg.CmdType, deviceID, ctx.Request.Body())
+	if strings.EqualFold(ctx.Request.Method(), sip.MethodNotify) {
+		// 9.11 事件源侧：只转发真实事件通知，查询应答不得触发订阅事件。
+		g.publishEventNotify(msg.CmdType, deviceID, ctx.Request.Body())
+	}
 }
 
 func (g *GB28181API) validateGenericDeviceQueryResponse(ctx *sip.Context, msg genericDeviceQueryResponse) error {
@@ -617,6 +619,9 @@ func (g *GB28181API) validateGenericDeviceQueryResponse(ctx *sip.Context, msg ge
 		return fmt.Errorf("query response requires positive SN and DeviceID")
 	}
 	minimum, ok := genericQueryResponseMinimumVersion(msg.CmdType)
+	if strings.EqualFold(ctx.Request.Method(), sip.MethodNotify) {
+		minimum, ok = genericQueryNotificationMinimumVersion(msg.CmdType)
+	}
 	if !ok {
 		return fmt.Errorf("unsupported query response command: %s", msg.CmdType)
 	}
@@ -638,6 +643,15 @@ func (g *GB28181API) validateGenericDeviceQueryResponse(ctx *sip.Context, msg ge
 		return fmt.Errorf("query response target mismatch")
 	}
 	return nil
+}
+
+func genericQueryNotificationMinimumVersion(cmdType string) (GBProtocolVersion, bool) {
+	switch cmdType {
+	case "PTZPosition":
+		return GBVersion30, true
+	default:
+		return "", false
+	}
 }
 
 func (g *GB28181API) pendingDeviceQueryTargetMismatch(deviceID, cmdType string, sn int, targetID string) bool {

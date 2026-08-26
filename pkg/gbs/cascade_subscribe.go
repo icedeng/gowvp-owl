@@ -25,22 +25,29 @@ func subscriptionFilterFromRequest(req subscribeEventRequest) eventSubscriptionF
 	}
 }
 
-func validateSubscribeEventRequest(req subscribeEventRequest, cmdType string, version GBProtocolVersion) error {
+func validateSubscribeEventEnvelope(req subscribeEventRequest, cmdType string) error {
 	if req.SN <= 0 {
 		return fmt.Errorf("invalid subscription SN")
+	}
+	if !isGBDeviceIdentifier(strings.TrimSpace(req.DeviceID)) {
+		return fmt.Errorf("invalid subscription DeviceID")
+	}
+	if _, ok := subscribeEventMinimumVersion(cmdType); !ok {
+		return fmt.Errorf("unsupported subscribe cmd_type")
+	}
+	return nil
+}
+
+func validateSubscribeEventRequest(req subscribeEventRequest, cmdType string, version GBProtocolVersion) error {
+	if err := validateSubscribeEventEnvelope(req, cmdType); err != nil {
+		return err
 	}
 	if req.Interval != nil && *req.Interval <= 0 {
 		return fmt.Errorf("subscription interval must be positive")
 	}
-	switch cmdType {
-	case "MobilePosition":
-		if !version.Capabilities().MobilePosition {
-			return fmt.Errorf("MobilePosition subscription requires GB/T 28181-2016 or later")
-		}
-	case "PTZPosition":
-		if !version.Capabilities().PTZPosition {
-			return fmt.Errorf("PTZPosition subscription requires GB/T 28181-2022")
-		}
+	minimum, _ := subscribeEventMinimumVersion(cmdType)
+	if !version.AtLeast(minimum) {
+		return fmt.Errorf("%s subscription requires %s or later", cmdType, minimum.StandardName())
 	}
 	if !strings.EqualFold(cmdType, "Alarm") {
 		return nil
@@ -80,6 +87,19 @@ func validateSubscribeEventRequest(req subscribeEventRequest, cmdType string, ve
 		return fmt.Errorf("StartAlarmTime must not be after EndAlarmTime")
 	}
 	return nil
+}
+
+func subscribeEventMinimumVersion(cmdType string) (GBProtocolVersion, bool) {
+	switch strings.TrimSpace(cmdType) {
+	case "Alarm", "Catalog":
+		return GBVersion10, true
+	case "MobilePosition":
+		return GBVersion20, true
+	case "PTZPosition":
+		return GBVersion30, true
+	default:
+		return "", false
+	}
 }
 
 func parseAlarmPriorityFilter(value string) (int, error) {
