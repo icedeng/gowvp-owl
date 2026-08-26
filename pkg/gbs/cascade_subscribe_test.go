@@ -312,13 +312,16 @@ func TestClosingCascadeSubscriptionsWaitsForPendingCreate(t *testing.T) {
 func TestAlarmSubscriptionFilterValidationAndMatch(t *testing.T) {
 	valid := subscribeEventRequest{
 		CmdType: "Alarm", SN: 1, DeviceID: gb10DeviceID,
-		StartAlarmPriority: "1", EndAlarmPriority: "3", AlarmMethod: "25",
+		StartAlarmPriority: "1", EndAlarmPriority: "3", AlarmMethod: "2/5",
 		AlarmType: "2", StartAlarmTime: "2026-08-25T08:00:00", EndAlarmTime: "2026-08-25T09:00:00",
 	}
 	if err := validateSubscribeEventRequest(valid, "Alarm", GBVersion30); err != nil {
 		t.Fatalf("valid Alarm subscription rejected: %v", err)
 	}
 	filter := subscriptionFilterFromRequest(valid)
+	if filter.AlarmMethod != "25" {
+		t.Fatalf("normalized AlarmMethod = %q", filter.AlarmMethod)
+	}
 	matching := []byte(`<Notify><CmdType>Alarm</CmdType><SN>2</SN><DeviceID>` + testCascadeChannelID + `</DeviceID><AlarmPriority>2</AlarmPriority><AlarmMethod>5</AlarmMethod><AlarmType>2</AlarmType><AlarmTime>2026-08-25T08:30:00</AlarmTime></Notify>`)
 	if !alarmMatchesSubscription(filter, matching) {
 		t.Fatal("matching Alarm event was filtered")
@@ -339,6 +342,95 @@ func TestAlarmSubscriptionFilterValidationAndMatch(t *testing.T) {
 	invalidRange.StartAlarmPriority, invalidRange.EndAlarmPriority = "4", "1"
 	if err := validateSubscribeEventRequest(invalidRange, "Alarm", GBVersion30); err == nil {
 		t.Fatal("invalid Alarm priority range was accepted")
+	}
+	for _, method := range []string{"/2", "2/", "2//5", "25/7", "2/57", "2/2", "0/2", "8"} {
+		invalid := valid
+		invalid.AlarmMethod = method
+		if err := validateSubscribeEventRequest(invalid, "Alarm", GBVersion30); err == nil {
+			t.Fatalf("invalid AlarmMethod %q accepted", method)
+		}
+	}
+	invalidType := valid
+	invalidType.AlarmMethod, invalidType.AlarmType = "6", "3"
+	if err := validateSubscribeEventRequest(invalidType, "Alarm", GBVersion30); err == nil {
+		t.Fatal("invalid AlarmType accepted for AlarmMethod 6")
+	}
+}
+
+func TestAlarmMethodFilterFormatByVersion(t *testing.T) {
+	tests := []struct {
+		version GBProtocolVersion
+		input   string
+		want    string
+	}{
+		{version: GBVersion10, input: "1/2", want: "12"},
+		{version: GBVersion11, input: "12", want: "12"},
+		{version: GBVersion20, input: "1/2", want: "12"},
+		{version: GBVersion30, input: "12", want: "1/2"},
+		{version: GBVersion30, input: "1/2", want: "1/2"},
+	}
+	for _, test := range tests {
+		got, err := formatAlarmMethodFilter(test.version, test.input)
+		if err != nil || got != test.want {
+			t.Fatalf("formatAlarmMethodFilter(%s, %q) = %q, %v; want %q", test.version, test.input, got, err, test.want)
+		}
+	}
+}
+
+func TestSubscribeAlarmMethodXMLByVersion(t *testing.T) {
+	tests := []struct {
+		version GBProtocolVersion
+		input   string
+		want    string
+	}{
+		{version: GBVersion10, input: "2/5", want: "25"},
+		{version: GBVersion11, input: "2/5", want: "25"},
+		{version: GBVersion20, input: "2/5", want: "25"},
+		{version: GBVersion30, input: "25", want: "2/5"},
+	}
+	for _, test := range tests {
+		t.Run(string(test.version), func(t *testing.T) {
+			baseConnection := newFlowConnection()
+			connection := &tcpFlowConnection{flowConnection: baseConnection}
+			platform := mustFlowAddress(t, "sip:"+gb10PlatformID+"@192.0.2.20:5060")
+			device := mustFlowAddress(t, "sip:"+gb10DeviceID+"@192.0.2.10:5060")
+			sipServer := sip.NewServer(platform)
+			t.Cleanup(sipServer.Close)
+			runtime := &Device{IsOnline: true, gbVersion: string(test.version)}
+			runtime.UpdateRuntime(func(current *Device) {
+				current.conn = connection
+				current.source = baseConnection.remote
+				current.to = device
+			})
+			memory := &flowMemory{persistent: &ipc.Device{DeviceID: gb10DeviceID}, runtime: runtime}
+			server := &Server{Server: sipServer, fromAddress: *platform, memoryStorer: memory}
+			api := &GB28181API{svr: server}
+			server.gb = api
+
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() {
+				done <- api.Subscribe(ctx, &SubscribeInput{
+					DeviceID: gb10DeviceID, Event: "Alarm", Expires: 60,
+					AlarmMethod: test.input,
+				})
+			}()
+
+			select {
+			case payload := <-baseConnection.writes:
+				if body := string(payload); !strings.Contains(body, "<AlarmMethod>"+test.want+"</AlarmMethod>") {
+					t.Fatalf("%s SUBSCRIBE AlarmMethod payload =\n%s", test.version, body)
+				}
+			case err := <-done:
+				t.Fatalf("%s SUBSCRIBE ended before send: %v", test.version, err)
+			case <-time.After(time.Second):
+				t.Fatalf("%s SUBSCRIBE was not sent", test.version)
+			}
+			cancel()
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Fatalf("%s SUBSCRIBE cancellation error = %v", test.version, err)
+			}
+		})
 	}
 }
 
@@ -371,7 +463,7 @@ func TestCascadeAlarmSubscriptionBridgesRenewalAndCancel(t *testing.T) {
 	}
 	body, err := sip.XMLEncode(subscribeEventRequest{
 		CmdType: "Alarm", SN: 18, DeviceID: testExposedChannelID,
-		StartAlarmPriority: "1", EndAlarmPriority: "3", AlarmMethod: "25", AlarmType: "2",
+		StartAlarmPriority: "1", EndAlarmPriority: "3", AlarmMethod: "2/5", AlarmType: "2",
 	})
 	if err != nil {
 		t.Fatal(err)

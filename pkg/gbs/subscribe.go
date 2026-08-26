@@ -97,6 +97,10 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 		}
 	}
 	version := g.getDeviceGBProtocolVersion(deviceID)
+	method, err := formatAlarmMethodFilter(version, in.AlarmMethod)
+	if err != nil {
+		return fmt.Errorf("invalid AlarmMethod: %w", err)
+	}
 	var interval *int
 	if in.Interval > 0 {
 		value := in.Interval
@@ -108,7 +112,7 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 		DeviceID:           targetID,
 		StartAlarmPriority: strings.TrimSpace(in.StartAlarmPriority),
 		EndAlarmPriority:   strings.TrimSpace(in.EndAlarmPriority),
-		AlarmMethod:        strings.TrimSpace(in.AlarmMethod),
+		AlarmMethod:        method,
 		AlarmType:          strings.TrimSpace(in.AlarmType),
 		StartAlarmTime:     strings.TrimSpace(in.StartAlarmTime),
 		EndAlarmTime:       strings.TrimSpace(in.EndAlarmTime),
@@ -123,7 +127,9 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 	if err != nil {
 		return err
 	}
-	key := buildOutgoingSubscriptionKey(deviceID, targetID, cmdType, in)
+	keyInput := *in
+	keyInput.AlarmMethod, _ = normalizeAlarmMethodFilter(in.AlarmMethod)
+	key := buildOutgoingSubscriptionKey(deviceID, targetID, cmdType, &keyInput)
 	loaded, _ := g.outgoingSubscriptions.LoadOrStore(key, &outgoingSubscriptionDialog{})
 	dialog := loaded.(*outgoingSubscriptionDialog)
 	dialog.mu.Lock()

@@ -66,6 +66,7 @@ func TestRecordQueryFiltersByVersion(t *testing.T) {
 		{name: "2022 additional substream", version: GBVersion30, input: RecordQueryInput{StreamNumber: &stream3}},
 		{name: "2022 rejects negative stream", version: GBVersion30, input: RecordQueryInput{StreamNumber: &streamNegative}, wantErr: true},
 		{name: "2022 alarm filter", version: GBVersion30, input: RecordQueryInput{AlarmMethod: "5", AlarmType: "13"}},
+		{name: "2022 slash alarm methods", version: GBVersion30, input: RecordQueryInput{AlarmMethod: "2/5", AlarmType: "2"}},
 		{name: "2022 rejects type without method", version: GBVersion30, input: RecordQueryInput{AlarmType: "1"}, wantErr: true},
 		{name: "2022 rejects invalid type for method", version: GBVersion30, input: RecordQueryInput{AlarmMethod: "6", AlarmType: "3"}, wantErr: true},
 	}

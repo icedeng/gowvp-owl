@@ -26,12 +26,12 @@ func TestGetRecordInfoXMLWith2022Filters(t *testing.T) {
 	streamNumber := 2
 	body := string(GetRecordInfoXMLWithFilters("34020000001320000001", 9, 1, 2, RecordInfoQueryFilters{
 		StreamNumber: &streamNumber,
-		AlarmMethod:  "5",
+		AlarmMethod:  "2/5",
 		AlarmType:    "13",
 	}))
 	for _, expected := range []string{
 		"<StreamNumber>2</StreamNumber>",
-		"<AlarmMethod>5</AlarmMethod>",
+		"<AlarmMethod>2/5</AlarmMethod>",
 		"<AlarmType>13</AlarmType>",
 	} {
 		if !strings.Contains(body, expected) {

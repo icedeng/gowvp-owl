@@ -58,6 +58,7 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 	if err := validateRecordQueryFilters(g.getDeviceGBProtocolVersion(in.DeviceID), in); err != nil {
 		return nil, err
 	}
+	alarmMethod, _ := formatAlarmMethodFilter(g.getDeviceGBProtocolVersion(in.DeviceID), in.AlarmMethod)
 
 	if in.Timeout <= 0 {
 		in.Timeout = 10 * time.Second
@@ -73,7 +74,7 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 	// 按 GB28181 A.2.4.9 发送 RecordInfo 查询命令。
 	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodMessage, &sip.ContentTypeXML, sip.GetRecordInfoXMLWithFilters(in.ChannelID, sn, in.Start, in.End, sip.RecordInfoQueryFilters{
 		StreamNumber: in.StreamNumber,
-		AlarmMethod:  in.AlarmMethod,
+		AlarmMethod:  alarmMethod,
 		AlarmType:    in.AlarmType,
 	}))
 	if err != nil {
@@ -114,8 +115,12 @@ func validateRecordQueryFilters(version GBProtocolVersion, in *RecordQueryInput)
 	if method == "" && alarmType == "" {
 		return nil
 	}
-	if err := validateAlarmResetInfo(method, alarmType); err != nil {
-		return fmt.Errorf("invalid record query alarm filter: %w", err)
+	method, err := normalizeAlarmMethodFilter(method)
+	if err != nil {
+		return fmt.Errorf("invalid record query alarm method: %w", err)
+	}
+	if alarmType != "" && !alarmTypeMatchesMethods(version, method, alarmType) {
+		return fmt.Errorf("invalid record query alarm type for method")
 	}
 	return nil
 }

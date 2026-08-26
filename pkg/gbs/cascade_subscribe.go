@@ -15,10 +15,11 @@ import (
 )
 
 func subscriptionFilterFromRequest(req subscribeEventRequest) eventSubscriptionFilter {
+	method, _ := normalizeAlarmMethodFilter(req.AlarmMethod)
 	return eventSubscriptionFilter{
 		StartAlarmPriority: strings.TrimSpace(req.StartAlarmPriority),
 		EndAlarmPriority:   strings.TrimSpace(req.EndAlarmPriority),
-		AlarmMethod:        strings.TrimSpace(req.AlarmMethod),
+		AlarmMethod:        method,
 		AlarmType:          strings.TrimSpace(req.AlarmType),
 		StartAlarmTime:     strings.TrimSpace(req.StartAlarmTime),
 		EndAlarmTime:       strings.TrimSpace(req.EndAlarmTime),
@@ -63,17 +64,16 @@ func validateSubscribeEventRequest(req subscribeEventRequest, cmdType string, ve
 	if start > 0 && end > 0 && start > end {
 		return fmt.Errorf("StartAlarmPriority must not exceed EndAlarmPriority")
 	}
-	method := strings.TrimSpace(req.AlarmMethod)
-	for _, value := range method {
-		if value < '0' || value > '7' {
-			return fmt.Errorf("invalid AlarmMethod")
-		}
+	method, err := normalizeAlarmMethodFilter(req.AlarmMethod)
+	if err != nil {
+		return fmt.Errorf("invalid AlarmMethod: %w", err)
 	}
-	if len(method) > 1 && strings.Contains(method, "0") {
-		return fmt.Errorf("AlarmMethod 0 cannot be combined with other values")
-	}
-	if strings.TrimSpace(req.AlarmType) != "" && !version.AtLeast(GBVersion20) {
+	alarmType := strings.TrimSpace(req.AlarmType)
+	if alarmType != "" && !version.AtLeast(GBVersion20) {
 		return fmt.Errorf("AlarmType subscription requires GB/T 28181-2016 or later")
+	}
+	if alarmType != "" && !alarmTypeMatchesMethods(version, method, alarmType) {
+		return fmt.Errorf("AlarmType is invalid for AlarmMethod")
 	}
 	startTime, hasStart, err := parseSubscriptionTime(req.StartAlarmTime)
 	if err != nil {
@@ -87,6 +87,63 @@ func validateSubscribeEventRequest(req subscribeEventRequest, cmdType string, ve
 		return fmt.Errorf("StartAlarmTime must not be after EndAlarmTime")
 	}
 	return nil
+}
+
+func normalizeAlarmMethodFilter(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	compact := strings.ReplaceAll(value, "/", "")
+	if strings.Contains(compact, " ") || strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") || strings.Contains(value, "//") {
+		return "", fmt.Errorf("must be 0 or a combination of 1..7")
+	}
+	if strings.Contains(value, "/") {
+		for _, part := range strings.Split(value, "/") {
+			if len(part) != 1 {
+				return "", fmt.Errorf("separated values must contain one method")
+			}
+		}
+	}
+	seen := make(map[byte]struct{}, len(compact))
+	for index := 0; index < len(compact); index++ {
+		method := compact[index]
+		if method < '0' || method > '7' {
+			return "", fmt.Errorf("must be 0 or a combination of 1..7")
+		}
+		if _, exists := seen[method]; exists {
+			return "", fmt.Errorf("must not contain duplicate values")
+		}
+		seen[method] = struct{}{}
+	}
+	if len(compact) > 1 && strings.Contains(compact, "0") {
+		return "", fmt.Errorf("0 cannot be combined with other values")
+	}
+	return compact, nil
+}
+
+func formatAlarmMethodFilter(version GBProtocolVersion, value string) (string, error) {
+	compact, err := normalizeAlarmMethodFilter(value)
+	if err != nil || compact == "" || !version.AtLeast(GBVersion30) {
+		return compact, err
+	}
+	parts := make([]string, len(compact))
+	for index := range compact {
+		parts[index] = compact[index : index+1]
+	}
+	return strings.Join(parts, "/"), nil
+}
+
+func alarmTypeMatchesMethods(version GBProtocolVersion, methods, alarmType string) bool {
+	if strings.TrimSpace(alarmType) == "" {
+		return true
+	}
+	for _, method := range methods {
+		if validateAlarmTypeForMethod(version, string(method), alarmType) == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func subscribeEventMinimumVersion(cmdType string) (GBProtocolVersion, bool) {
@@ -179,6 +236,7 @@ func alarmMatchesSubscription(filter eventSubscriptionFilter, body []byte) bool 
 }
 
 func alarmMethodIntersects(wanted, actual string) bool {
+	wanted, _ = normalizeAlarmMethodFilter(wanted)
 	for _, value := range actual {
 		if value >= '1' && value <= '7' && strings.ContainsRune(wanted, value) {
 			return true
@@ -188,11 +246,12 @@ func alarmMethodIntersects(wanted, actual string) bool {
 }
 
 func copyCascadeSubscribeInput(req subscribeEventRequest, deviceID, targetID, cmdType string, expires int) SubscribeInput {
+	method, _ := normalizeAlarmMethodFilter(req.AlarmMethod)
 	return SubscribeInput{
 		DeviceID: deviceID, TargetID: targetID, Event: cmdType, Expires: expires,
 		StartAlarmPriority: strings.TrimSpace(req.StartAlarmPriority),
 		EndAlarmPriority:   strings.TrimSpace(req.EndAlarmPriority),
-		AlarmMethod:        strings.TrimSpace(req.AlarmMethod),
+		AlarmMethod:        method,
 		AlarmType:          strings.TrimSpace(req.AlarmType),
 		StartAlarmTime:     strings.TrimSpace(req.StartAlarmTime),
 		EndAlarmTime:       strings.TrimSpace(req.EndAlarmTime),
