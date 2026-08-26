@@ -131,6 +131,7 @@ func (a *Adapter) QueryRecords(ctx context.Context, device *ipc.Device, channel 
 		Start:        in.StartAt,
 		End:          in.EndAt,
 		Timeout:      time.Duration(in.Timeout) * time.Second,
+		Type:         in.Type,
 		StreamNumber: in.StreamNumber,
 		AlarmMethod:  in.AlarmMethod,
 		AlarmType:    in.AlarmType,

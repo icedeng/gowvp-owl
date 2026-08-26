@@ -885,13 +885,13 @@ func TestCascadeRecordInfoQueriesSharedChannelAndMapsResponse(t *testing.T) {
 	query := cascadeQueryEnvelope{
 		CmdType: "RecordInfo", SN: 88, DeviceID: testExposedChannelID,
 		StartTime: "2024-04-01T00:00:00", EndTime: "2024-04-01T01:00:00",
-		StreamNumber: intPointer(2), AlarmMethod: "5", AlarmType: "13",
+		Type: "ALL", StreamNumber: intPointer(2), AlarmMethod: "5", AlarmType: "13",
 	}
 	if err := api.respondCascadeRecordInfo(t.Context(), worker, query); err != nil {
 		t.Fatal(err)
 	}
 	if downstream == nil || downstream.DeviceID != channel.DeviceID || downstream.ChannelID != channel.ChannelID || downstream.End <= downstream.Start ||
-		downstream.StreamNumber == nil || *downstream.StreamNumber != 2 || downstream.AlarmMethod != "5" || downstream.AlarmType != "13" {
+		downstream.Type != "all" || downstream.StreamNumber == nil || *downstream.StreamNumber != 2 || downstream.AlarmMethod != "5" || downstream.AlarmType != "13" {
 		t.Fatalf("downstream RecordInfo query = %+v", downstream)
 	}
 	if len(requests) != 2 {
@@ -924,6 +924,38 @@ func TestCascadeRecordInfoQueriesSharedChannelAndMapsResponse(t *testing.T) {
 		if strings.Contains(body, channel.DeviceID) {
 			t.Fatalf("RecordInfo chunk %d leaked local storage ID: %s", index, body)
 		}
+	}
+}
+
+func TestCascadeRecordInfoPreservesTypeForAllVersions(t *testing.T) {
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30} {
+		t.Run(string(version), func(t *testing.T) {
+			adapter, _, _ := newCascadeMediaCore(t)
+			server := &Server{}
+			api := &GB28181API{core: adapter, svr: server}
+			server.gb = api
+			platform := testSharedCascadePlatform(t)
+			platform.version = version
+			worker := newCascadeWorker(server, platform)
+			worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+				return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+			}
+			var downstream *RecordQueryInput
+			api.cascadeQueryRecords = func(_ context.Context, input *RecordQueryInput) ([]RecordItem, error) {
+				downstream = input
+				return nil, nil
+			}
+			err := api.respondCascadeRecordInfo(t.Context(), worker, cascadeQueryEnvelope{
+				CmdType: "RecordInfo", SN: 188, DeviceID: testExposedChannelID, Type: "ALL",
+				StartTime: "2024-04-01T00:00:00", EndTime: "2024-04-01T01:00:00",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if downstream == nil || downstream.Type != "all" {
+				t.Fatalf("version %s downstream RecordInfo query = %+v", version, downstream)
+			}
+		})
 	}
 }
 

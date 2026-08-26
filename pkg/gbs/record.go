@@ -18,6 +18,7 @@ type RecordQueryInput struct {
 	Start        int64 // 查询起始时间（unix 秒）
 	End          int64 // 查询结束时间（unix 秒）
 	Timeout      time.Duration
+	Type         string
 	StreamNumber *int
 	AlarmMethod  string
 	AlarmType    string
@@ -58,6 +59,7 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 	if err := validateRecordQueryFilters(g.getDeviceGBProtocolVersion(in.DeviceID), in); err != nil {
 		return nil, err
 	}
+	recordType, _ := normalizeRecordQueryType(in.Type)
 	alarmMethod, _ := formatAlarmMethodFilter(g.getDeviceGBProtocolVersion(in.DeviceID), in.AlarmMethod)
 
 	if in.Timeout <= 0 {
@@ -73,6 +75,7 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 
 	// 按 GB28181 A.2.4.9 发送 RecordInfo 查询命令。
 	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodMessage, &sip.ContentTypeXML, sip.GetRecordInfoXMLWithFilters(in.ChannelID, sn, in.Start, in.End, sip.RecordInfoQueryFilters{
+		Type:         recordType,
 		StreamNumber: in.StreamNumber,
 		AlarmMethod:  alarmMethod,
 		AlarmType:    in.AlarmType,
@@ -101,6 +104,9 @@ func validateRecordQueryFilters(version GBProtocolVersion, in *RecordQueryInput)
 	if in == nil {
 		return errors.New("invalid record query input")
 	}
+	if _, err := normalizeRecordQueryType(in.Type); err != nil {
+		return err
+	}
 	method := strings.TrimSpace(in.AlarmMethod)
 	alarmType := strings.TrimSpace(in.AlarmType)
 	if in.StreamNumber == nil && method == "" && alarmType == "" {
@@ -123,6 +129,19 @@ func validateRecordQueryFilters(version GBProtocolVersion, in *RecordQueryInput)
 		return fmt.Errorf("invalid record query alarm type for method")
 	}
 	return nil
+}
+
+func normalizeRecordQueryType(value string) (string, error) {
+	if value == "" {
+		return "time", nil
+	}
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "time", "alarm", "manual", "all":
+		return value, nil
+	default:
+		return "", fmt.Errorf("invalid record query type")
+	}
 }
 
 func recordQueryItemsResult(result multiResponseResult[RecordItem]) ([]RecordItem, error) {
@@ -360,7 +379,8 @@ func validRecordTypeForVersion(recordType string, version GBProtocolVersion) boo
 	case "time", "alarm", "manual":
 		return true
 	case "all":
-		return version == GBVersion10 || version == GBVersion11
+		// 2014 补充文件明确要求文件目录响应项携带具体录像类型，不能返回 all。
+		return version == GBVersion10
 	default:
 		return false
 	}

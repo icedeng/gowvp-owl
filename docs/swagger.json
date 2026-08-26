@@ -5928,6 +5928,16 @@
         "api.queryRecordsInput": {
             "type": "object",
             "properties": {
+                "alarm_method": {
+                    "description": "2022 报警方式过滤条件",
+                    "type": "string",
+                    "example": "5"
+                },
+                "alarm_type": {
+                    "description": "2022 报警类型过滤条件",
+                    "type": "string",
+                    "example": "2"
+                },
                 "end_at": {
                     "description": "查询结束时间，Unix 秒",
                     "type": "integer",
@@ -5938,10 +5948,20 @@
                     "type": "integer",
                     "example": 1710864000
                 },
+                "stream_number": {
+                    "description": "2022 码流编号：0 主码流，1/2/... 子码流",
+                    "type": "integer",
+                    "example": 0
+                },
                 "timeout": {
                     "description": "等待设备应答超时时间，单位秒",
                     "type": "integer",
                     "example": 10
+                },
+                "type": {
+                    "description": "录像类型：time、alarm、manual、all；空值默认 time",
+                    "type": "string",
+                    "example": "all"
                 }
             }
         },

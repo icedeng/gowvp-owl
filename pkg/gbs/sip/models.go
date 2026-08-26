@@ -95,7 +95,7 @@ var (
 <StartTime>%s</StartTime>
 <EndTime>%s</EndTime>
 <Secrecy>0</Secrecy>
-<Type>time</Type>
+<Type>%s</Type>
 </Query>
 `
 	// DeviceInfoXML 查询设备详情xml样式
@@ -123,16 +123,23 @@ func GetRecordInfoXML(id string, sceqNo int, start, end int64) []byte {
 	return GetRecordInfoXMLWithFilters(id, sceqNo, start, end, RecordInfoQueryFilters{})
 }
 
-// RecordInfoQueryFilters 对应 GB/T 28181-2022 文件目录检索新增过滤条件。
+// RecordInfoQueryFilters 对应文件目录检索类型及 GB/T 28181-2022 新增过滤条件。
 type RecordInfoQueryFilters struct {
+	Type         string
 	StreamNumber *int
 	AlarmMethod  string
 	AlarmType    string
 }
 
-// GetRecordInfoXMLWithFilters 获取带 2022 扩展过滤条件的录像文件列表指令。
+// GetRecordInfoXMLWithFilters 获取带录像类型及 2022 扩展过滤条件的录像文件列表指令。
 func GetRecordInfoXMLWithFilters(id string, sceqNo int, start, end int64, filters RecordInfoQueryFilters) []byte {
-	body := fmt.Appendf(nil, RecordInfoXML, sceqNo, id, FormatGBTime(time.Unix(start, 0), "2006-01-02T15:04:05"), FormatGBTime(time.Unix(end, 0), "2006-01-02T15:04:05"))
+	recordType := strings.ToLower(strings.TrimSpace(filters.Type))
+	if recordType == "" {
+		recordType = "time"
+	}
+	var escapedType strings.Builder
+	_ = xml.EscapeText(&escapedType, []byte(recordType))
+	body := fmt.Appendf(nil, RecordInfoXML, sceqNo, id, FormatGBTime(time.Unix(start, 0), "2006-01-02T15:04:05"), FormatGBTime(time.Unix(end, 0), "2006-01-02T15:04:05"), escapedType.String())
 	closing := []byte("</Query>")
 	index := strings.LastIndex(string(body), string(closing))
 	if index < 0 {

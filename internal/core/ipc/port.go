@@ -263,6 +263,7 @@ type RecordQueryInput struct {
 	StartAt      int64 // unix seconds
 	EndAt        int64 // unix seconds
 	Timeout      int   // seconds
+	Type         string
 	StreamNumber *int
 	AlarmMethod  string
 	AlarmType    string

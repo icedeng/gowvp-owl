@@ -1361,6 +1361,7 @@ type queryRecordsInput struct {
 	StartAt      int64  `json:"start_at" example:"1710864000"` // 查询开始时间，Unix 秒
 	EndAt        int64  `json:"end_at" example:"1710950400"`   // 查询结束时间，Unix 秒
 	Timeout      int    `json:"timeout" example:"10"`          // 等待设备应答超时时间，单位秒
+	Type         string `json:"type" example:"all"`            // 录像类型：time、alarm、manual、all；空值默认 time
 	StreamNumber *int   `json:"stream_number" example:"0"`     // 2022 码流编号：0 主码流，1/2/... 子码流
 	AlarmMethod  string `json:"alarm_method" example:"5"`      // 2022 报警方式过滤条件
 	AlarmType    string `json:"alarm_type" example:"2"`        // 2022 报警类型过滤条件
@@ -1598,6 +1599,7 @@ func (a IPCAPI) queryRecords(c *gin.Context, in *queryRecordsInput) (any, error)
 		StartAt:      in.StartAt,
 		EndAt:        in.EndAt,
 		Timeout:      in.Timeout,
+		Type:         in.Type,
 		StreamNumber: in.StreamNumber,
 		AlarmMethod:  in.AlarmMethod,
 		AlarmType:    in.AlarmType,

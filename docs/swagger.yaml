@@ -1633,6 +1633,14 @@ definitions:
     type: object
   api.queryRecordsInput:
     properties:
+      alarm_method:
+        description: 2022 报警方式过滤条件
+        example: "5"
+        type: string
+      alarm_type:
+        description: 2022 报警类型过滤条件
+        example: "2"
+        type: string
       end_at:
         description: 查询结束时间，Unix 秒
         example: 1710950400
@@ -1641,10 +1649,18 @@ definitions:
         description: 查询开始时间，Unix 秒
         example: 1710864000
         type: integer
+      stream_number:
+        description: 2022 码流编号：0 主码流，1/2/... 子码流
+        example: 0
+        type: integer
       timeout:
         description: 等待设备应答超时时间，单位秒
         example: 10
         type: integer
+      type:
+        description: 录像类型：time、alarm、manual、all；空值默认 time
+        example: all
+        type: string
     type: object
   api.refreshSnapshotInput:
     properties:

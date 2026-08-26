@@ -33,6 +33,7 @@ type cascadeQueryEnvelope struct {
 	TargetID     string `xml:"TargetID"`
 	StartTime    string `xml:"StartTime"`
 	EndTime      string `xml:"EndTime"`
+	Type         string `xml:"Type"`
 	StreamNumber *int   `xml:"StreamNumber"`
 	AlarmMethod  string `xml:"AlarmMethod"`
 	AlarmType    string `xml:"AlarmType"`
@@ -1024,11 +1025,12 @@ func (g *GB28181API) respondCascadeRecordInfo(ctx context.Context, worker *casca
 	recordQuery := &RecordQueryInput{
 		DeviceID: channel.DeviceID, ChannelID: localChannelID,
 		Start: startAt.Unix(), End: endAt.Unix(), Timeout: 25 * time.Second,
-		StreamNumber: query.StreamNumber, AlarmMethod: query.AlarmMethod, AlarmType: query.AlarmType,
+		Type: query.Type, StreamNumber: query.StreamNumber, AlarmMethod: query.AlarmMethod, AlarmType: query.AlarmType,
 	}
 	if err := validateRecordQueryFilters(worker.protocolVersion(), recordQuery); err != nil {
 		return sendCascadeQueryError(ctx, worker, query)
 	}
+	recordQuery.Type, _ = normalizeRecordQueryType(recordQuery.Type)
 	queryRecords := g.queryRecordItems
 	if g.cascadeQueryRecords != nil {
 		queryRecords = g.cascadeQueryRecords

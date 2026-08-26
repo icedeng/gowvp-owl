@@ -61,6 +61,14 @@ func TestRecordQueryFiltersByVersion(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "legacy query unchanged", version: GBVersion10},
+		{name: "2011 all type", version: GBVersion10, input: RecordQueryInput{Type: "all"}},
+		{name: "2014 all type", version: GBVersion11, input: RecordQueryInput{Type: "all"}},
+		{name: "2016 all type", version: GBVersion20, input: RecordQueryInput{Type: "all"}},
+		{name: "2022 all type", version: GBVersion30, input: RecordQueryInput{Type: "ALL"}},
+		{name: "alarm type", version: GBVersion20, input: RecordQueryInput{Type: "alarm"}},
+		{name: "manual type", version: GBVersion30, input: RecordQueryInput{Type: "MANUAL"}},
+		{name: "rejects blank type", version: GBVersion30, input: RecordQueryInput{Type: "  "}, wantErr: true},
+		{name: "rejects unknown record type", version: GBVersion30, input: RecordQueryInput{Type: "other"}, wantErr: true},
 		{name: "2016 rejects stream filter", version: GBVersion20, input: RecordQueryInput{StreamNumber: &stream0}, wantErr: true},
 		{name: "2022 stream boundary", version: GBVersion30, input: RecordQueryInput{StreamNumber: &stream0}},
 		{name: "2022 additional substream", version: GBVersion30, input: RecordQueryInput{StreamNumber: &stream3}},
@@ -127,7 +135,7 @@ func TestRecordInfoValidatesOptionalItemFieldsByVersion(t *testing.T) {
 		wantOK  bool
 	}{
 		{name: "2011 all type", version: GBVersion10, body: strings.Replace(valid, "<Type>time</Type>", "<Type>all</Type>", 1), wantOK: true},
-		{name: "2014 all type", version: GBVersion11, body: strings.Replace(valid, "<Type>time</Type>", "<Type>all</Type>", 1), wantOK: true},
+		{name: "2014 all type", version: GBVersion11, body: strings.Replace(valid, "<Type>time</Type>", "<Type>all</Type>", 1)},
 		{name: "2016 all type", version: GBVersion20, body: strings.Replace(valid, "<Type>time</Type>", "<Type>all</Type>", 1)},
 		{name: "uppercase type normalized", version: GBVersion20, body: strings.Replace(valid, "<Type>time</Type>", "<Type>ALARM</Type>", 1), wantOK: true},
 		{name: "unknown type", version: GBVersion30, body: strings.Replace(valid, "<Type>time</Type>", "<Type>other</Type>", 1)},
@@ -157,6 +165,14 @@ func TestRecordInfoValidatesOptionalItemFieldsByVersion(t *testing.T) {
 			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "record-optional-"+test.name, []byte(test.body), api.sipMessageRecordInfo)
 			if gotOK := strings.Contains(response, "SIP/2.0 200"); gotOK != test.wantOK {
 				t.Fatalf("RecordInfo response = %s, want OK %v", response, test.wantOK)
+			}
+			if !test.wantOK {
+				waitCtx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
+				result := collector.Wait(waitCtx, key)
+				cancel()
+				if result.Complete || len(result.Items) != 0 {
+					t.Fatalf("invalid RecordInfo changed collector: %+v", result)
+				}
 			}
 		})
 	}
