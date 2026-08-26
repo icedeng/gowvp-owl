@@ -197,9 +197,6 @@ func (g *GB28181API) validateCatalogEnvelope(ctx *sip.Context, msg MessageDevice
 	} else if msg.ListNum == nil || *msg.ListNum < 0 || *msg.ListNum != len(msg.Item) || len(msg.Item) > msg.SumNum || g.multiResponseChunkExceedsLimit(ctx, len(msg.Item)) {
 		return fmt.Errorf("invalid Catalog DeviceList count")
 	}
-	if notification && msg.HasList && *msg.ListNum != msg.SumNum {
-		return fmt.Errorf("Catalog notification count mismatch")
-	}
 	for _, item := range msg.Item {
 		if classifyGBCatalogItem(strings.TrimSpace(item.ChannelID)) == GBCatalogItemUnknown {
 			return fmt.Errorf("invalid Catalog item DeviceID")

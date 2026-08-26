@@ -205,7 +205,7 @@ func TestCatalogNotifyRejectsTargetAndCountBeforeRefresh(t *testing.T) {
 		body string
 	}{
 		{name: "source mismatch", body: `<Notify><CmdType>Catalog</CmdType><SN>64</SN><DeviceID>34020000001320000009</DeviceID><SumNum>0</SumNum></Notify>`},
-		{name: "count mismatch", body: `<Notify><CmdType>Catalog</CmdType><SN>64</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>2</SumNum><DeviceList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID></Item></DeviceList></Notify>`},
+		{name: "count exceeds total", body: `<Notify><CmdType>Catalog</CmdType><SN>64</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>0</SumNum><DeviceList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID></Item></DeviceList></Notify>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -214,6 +214,20 @@ func TestCatalogNotifyRejectsTargetAndCountBeforeRefresh(t *testing.T) {
 				t.Fatalf("invalid Catalog NOTIFY response = %s", response)
 			}
 		})
+	}
+}
+
+func TestCatalogNotifyAcceptsMultiResponseChunkCount(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion11)
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	body := `<Notify><CmdType>Catalog</CmdType><SN>65</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>2</SumNum><DeviceList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID></Item></DeviceList></Notify>`
+	var msg MessageDeviceListResponse
+	if err := sip.XMLDecode([]byte(body), &msg); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.validateCatalogEnvelope(&sip.Context{DeviceID: gb10DeviceID}, msg, true); err != nil {
+		t.Fatalf("valid multi-response Catalog NOTIFY chunk rejected: %v", err)
 	}
 }
 

@@ -205,7 +205,7 @@ func TestCascadeCatalogNotifyChunkCountsMatch(t *testing.T) {
 	for index := range items {
 		items[index].DeviceID = fmt.Sprintf("3402000000132%07d", index)
 	}
-	notify := newCascadeCatalogNotify("34020000002000000001", 8, "", items)
+	notify := newCascadeCatalogNotify("34020000002000000001", 8, "", len(items), items)
 	if notify.SumNum != len(items) || notify.DeviceList.Num != len(items) {
 		t.Fatalf("Catalog NOTIFY chunk counts = SumNum %d, Num %d", notify.SumNum, notify.DeviceList.Num)
 	}
@@ -265,13 +265,13 @@ func TestCascadeCatalogNotifyDeltaLifecycle(t *testing.T) {
 	}
 	for index, request := range requests {
 		body := string(request.Body())
-		wantCount := 20
+		wantChunkCount := 20
 		if index == 1 {
-			wantCount = 1
+			wantChunkCount = 1
 		}
 		for _, expected := range []string{
-			fmt.Sprintf("<SumNum>%d</SumNum>", wantCount),
-			fmt.Sprintf(`<DeviceList Num="%d">`, wantCount),
+			"<SumNum>21</SumNum>",
+			fmt.Sprintf(`<DeviceList Num="%d">`, wantChunkCount),
 		} {
 			if !strings.Contains(body, expected) {
 				t.Fatalf("Catalog delta chunk %d missing %q: %s", index, expected, body)

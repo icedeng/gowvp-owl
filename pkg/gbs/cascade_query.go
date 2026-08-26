@@ -678,7 +678,7 @@ func (g *GB28181API) sendCascadeCatalogNotifyMode(ctx context.Context, sub *even
 	}
 	sn := g.nextQuerySN()
 	if len(items) == 0 {
-		body, err := encodeCascadeCatalogNotify(worker.protocolVersion(), newCascadeCatalogNotify(notifyDeviceID, sn, status, nil))
+		body, err := encodeCascadeCatalogNotify(worker.protocolVersion(), newCascadeCatalogNotify(notifyDeviceID, sn, status, 0, nil))
 		if err != nil {
 			return err
 		}
@@ -692,7 +692,7 @@ func (g *GB28181API) sendCascadeCatalogNotifyMode(ctx context.Context, sub *even
 	}
 	for start := 0; start < len(items); start += cascadeCatalogChunkSize {
 		end := min(start+cascadeCatalogChunkSize, len(items))
-		body, err := encodeCascadeCatalogNotify(worker.protocolVersion(), newCascadeCatalogNotify(notifyDeviceID, sn, status, items[start:end]))
+		body, err := encodeCascadeCatalogNotify(worker.protocolVersion(), newCascadeCatalogNotify(notifyDeviceID, sn, status, len(items), items[start:end]))
 		if err != nil {
 			return err
 		}
@@ -706,9 +706,9 @@ func (g *GB28181API) sendCascadeCatalogNotifyMode(ctx context.Context, sub *even
 	return nil
 }
 
-func newCascadeCatalogNotify(deviceID string, sn int, status string, items []cascadeCatalogItem) cascadeCatalogNotify {
+func newCascadeCatalogNotify(deviceID string, sn int, status string, total int, items []cascadeCatalogItem) cascadeCatalogNotify {
 	return cascadeCatalogNotify{
-		CmdType: "Catalog", SN: sn, DeviceID: deviceID, Status: status, SumNum: len(items),
+		CmdType: "Catalog", SN: sn, DeviceID: deviceID, Status: status, SumNum: total,
 		DeviceList: cascadeCatalogDeviceList{Num: len(items), Items: items},
 	}
 }
