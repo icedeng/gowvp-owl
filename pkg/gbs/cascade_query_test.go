@@ -480,6 +480,8 @@ func TestCascadeExtendedQueryVersionMatrix(t *testing.T) {
 	}{
 		{name: "2011 preset", cmdType: "PresetQuery", version: GBVersion10},
 		{name: "2014 preset", cmdType: "PresetQuery", version: GBVersion11, allowed: true},
+		{name: "2011 config", cmdType: "ConfigDownload", version: GBVersion10},
+		{name: "2014 config", cmdType: "ConfigDownload", version: GBVersion11, allowed: true},
 		{name: "2014 home position", cmdType: "HomePositionQuery", version: GBVersion11},
 		{name: "2016 home position", cmdType: "HomePositionQuery", version: GBVersion20, allowed: true},
 		{name: "2014 mobile position", cmdType: "MobilePosition", version: GBVersion11},
@@ -500,6 +502,84 @@ func TestCascadeExtendedQueryVersionMatrix(t *testing.T) {
 				t.Fatalf("cascadeExtendedQueryAction(%q, %q) allowed = %v, want %v", tt.cmdType, tt.version, got, tt.allowed)
 			}
 		})
+	}
+}
+
+func TestCascadeConfigDownloadTypeVersionMatrix(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		version GBProtocolVersion
+		want    string
+		allowed bool
+	}{
+		{name: "2011 base", value: "BasicParam", version: GBVersion10},
+		{name: "2014 base", value: "BasicParam/VideoParamOpt", version: GBVersion11, want: "BasicParam/VideoParamOpt", allowed: true},
+		{name: "2016 base", value: "AudioParamConfig", version: GBVersion20, want: "AudioParamConfig", allowed: true},
+		{name: "2016 extension", value: "VideoRecordPlan", version: GBVersion20},
+		{name: "2022 extension", value: "video_record_plan/snapshot", version: GBVersion30, want: "VideoRecordPlan/SnapShotConfig", allowed: true},
+		{name: "unknown", value: "VendorConfig", version: GBVersion30},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, allowed := cascadeConfigDownloadType(test.value, test.version)
+			if got != test.want || allowed != test.allowed {
+				t.Fatalf("cascadeConfigDownloadType(%q, %s) = %q, %v; want %q, %v", test.value, test.version, got, allowed, test.want, test.allowed)
+			}
+		})
+	}
+}
+
+func TestCascadeConfigDownloadForwardsAllResponses(t *testing.T) {
+	adapter, _, channel := newCascadeMediaCore(t)
+	server := &Server{}
+	api := &GB28181API{core: adapter, svr: server}
+	server.gb = api
+	worker := newCascadeWorker(server, testSharedCascadePlatform(t))
+	worker.mu.Lock()
+	worker.effective = GBVersion11
+	worker.mu.Unlock()
+
+	var downstream *DeviceQueryInput
+	first := `<Response><CmdType>ConfigDownload</CmdType><SN>4321</SN><DeviceID>` + channel.ChannelID + `</DeviceID><Result>OK</Result><BasicParam><Name>IPC</Name></BasicParam></Response>`
+	second := `<Response><CmdType>ConfigDownload</CmdType><SN>4321</SN><DeviceID>` + channel.ChannelID + `</DeviceID><Result>OK</Result><VideoParamOpt><VideoFormatOpt>2/5</VideoFormatOpt></VideoParamOpt></Response>`
+	api.cascadeDeviceQuery = func(_ context.Context, input *DeviceQueryInput) (*DeviceQueryOutput, error) {
+		copyInput := *input
+		downstream = &copyInput
+		return &DeviceQueryOutput{
+			SN: 4321, CmdType: "ConfigDownload", DeviceID: channel.ChannelID, Result: "OK", XML: second,
+			responseXML: []string{first, second},
+		}, nil
+	}
+	var requests []*sip.Request
+	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+		requests = append(requests, request)
+		return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+	}
+
+	api.respondCascadeQuery(worker, cascadeQueryEnvelope{
+		CmdType: "ConfigDownload", SN: 97, DeviceID: testExposedChannelID,
+		ConfigType: "basic_param/video_param_opt",
+	})
+	if downstream == nil || downstream.Action != deviceQueryActionConfigDownload || downstream.ConfigType != "BasicParam/VideoParamOpt" || downstream.TargetID != channel.ChannelID {
+		t.Fatalf("downstream ConfigDownload = %+v", downstream)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("ConfigDownload cascade responses = %d, want 2", len(requests))
+	}
+	for index, request := range requests {
+		body := string(request.Body())
+		for _, expected := range []string{"<CmdType>ConfigDownload</CmdType>", "<SN>97</SN>", "<DeviceID>" + testExposedChannelID + "</DeviceID>"} {
+			if !strings.Contains(body, expected) {
+				t.Fatalf("ConfigDownload response %d missing %q: %s", index, expected, body)
+			}
+		}
+		if strings.Contains(body, channel.ChannelID) || strings.Contains(body, "<SN>4321</SN>") {
+			t.Fatalf("ConfigDownload response %d leaked downstream identity: %s", index, body)
+		}
+	}
+	if !strings.Contains(string(requests[0].Body()), "<BasicParam>") || !strings.Contains(string(requests[1].Body()), "<VideoParamOpt>") {
+		t.Fatalf("ConfigDownload response order/content = %s / %s", requests[0].Body(), requests[1].Body())
 	}
 }
 
@@ -838,7 +918,7 @@ func TestCascadeQueryTargetAllowsSupportedSharedQueries(t *testing.T) {
 	platform := testSharedCascadePlatform(t)
 	for _, cmdType := range []string{
 		"Catalog", "DeviceInfo", "DeviceStatus", "RecordInfo", "PresetQuery", "HomePositionQuery",
-		"CruiseTrackListQuery", "CruiseTrackQuery", "MobilePosition", "PTZPosition", "SDCardStatus",
+		"CruiseTrackListQuery", "CruiseTrackQuery", "MobilePosition", "PTZPosition", "SDCardStatus", "ConfigDownload",
 	} {
 		if !cascadeQueryTargetAllowed(platform, cmdType, testExposedChannelID) {
 			t.Errorf("shared %s query was rejected", cmdType)
@@ -862,6 +942,8 @@ func TestCascadeQueryRequestRejectsInvalidRequiredPayload(t *testing.T) {
 		{name: "missing cruise number", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "CruiseTrackQuery", SN: 1, DeviceID: testExposedChannelID}},
 		{name: "invalid cruise number", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "CruiseTrackQuery", SN: 1, DeviceID: testExposedChannelID, Number: intPointer(2)}},
 		{name: "negative mobile interval", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "MobilePosition", SN: 1, DeviceID: testExposedChannelID, Interval: -1}},
+		{name: "missing config type", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "ConfigDownload", SN: 1, DeviceID: testExposedChannelID}},
+		{name: "unknown config type", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "ConfigDownload", SN: 1, DeviceID: testExposedChannelID, ConfigType: "VendorConfig"}},
 		{name: "missing record time", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "RecordInfo", SN: 1, DeviceID: testExposedChannelID}},
 		{name: "reversed record time", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "RecordInfo", SN: 1, DeviceID: testExposedChannelID, StartTime: validRecord.EndTime, EndTime: validRecord.StartTime}},
 		{name: "unsupported command", query: cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "Unknown", SN: 1, DeviceID: testExposedChannelID}},
@@ -879,6 +961,10 @@ func TestCascadeQueryRequestRejectsInvalidRequiredPayload(t *testing.T) {
 	validCruise := cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "CruiseTrackQuery", SN: 1, DeviceID: testExposedChannelID, Number: intPointer(0)}
 	if err := validateCascadeQueryRequest(validCruise); err != nil {
 		t.Fatalf("valid CruiseTrackQuery number 0 rejected: %v", err)
+	}
+	validConfig := cascadeQueryEnvelope{XMLName: xml.Name{Local: "Query"}, CmdType: "ConfigDownload", SN: 1, DeviceID: testExposedChannelID, ConfigType: "BasicParam/VideoParamOpt"}
+	if err := validateCascadeQueryRequest(validConfig); err != nil {
+		t.Fatalf("valid ConfigDownload rejected: %v", err)
 	}
 }
 

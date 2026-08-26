@@ -61,6 +61,8 @@ type DeviceQueryOutput struct {
 	Data     any    `json:"data,omitempty"`
 	// AppendixA4 为附录 A.4 扩展对象结构化结果。
 	AppendixA4 []AppendixA4Object `json:"appendix_a4,omitempty"`
+	// responseXML 保留同一次 ConfigDownload 的分包响应，仅供级联逐包转发。
+	responseXML []string
 }
 
 type pendingQueryWait struct {
@@ -69,6 +71,7 @@ type pendingQueryWait struct {
 	mu             sync.Mutex
 	expectedConfig map[string]struct{}
 	config         *ConfigDownloadState
+	responseXML    []string
 }
 
 type genericDeviceQueryResponse struct {
@@ -326,29 +329,35 @@ func (g *GB28181API) resolveDeviceQueryCmdType(deviceID, action, configType stri
 
 func (g *GB28181API) requireConfigTypeVersion(deviceID, configType string) error {
 	name := strings.TrimSpace(configType)
-	switch name {
-	case "BasicParam", "VideoParamOpt", "VideoParamConfig", "AudioParamOpt", "AudioParamConfig",
-		"SVACEncodeConfig", "SVACDecodeConfig":
-		return g.requireGBFeature(deviceID, "config_query", "配置查询("+name+")", func(c GBCapabilities) bool {
-			return c.ConfigQuery
-		})
-	case "VideoParamAttribute", "VideoRecordPlan",
-		"VideoAlarmRecord", "PictureMask", "FrameMirror", "AlarmReport", "OSDConfig", "SnapShotConfig":
-		if err := g.requireGBFeature(deviceID, "config_query", "配置查询("+name+")", func(c GBCapabilities) bool {
-			return c.ConfigQuery
+	minimum, ok := configTypeMinimumVersion(name)
+	if !ok {
+		return fmt.Errorf("unsupported config_type: %s", name)
+	}
+	if err := g.requireGBFeature(deviceID, "config_query", "配置查询("+name+")", func(c GBCapabilities) bool {
+		return c.ConfigQuery
+	}); err != nil {
+		return err
+	}
+	if name == "SnapShotConfig" {
+		if err := g.requireGBFeature(deviceID, "snapshot", "配置查询(SnapShot)", func(c GBCapabilities) bool {
+			return c.Snapshot
 		}); err != nil {
 			return err
 		}
-		if name == "SnapShotConfig" {
-			if err := g.requireGBFeature(deviceID, "snapshot", "配置查询(SnapShot)", func(c GBCapabilities) bool {
-				return c.Snapshot
-			}); err != nil {
-				return err
-			}
-		}
-		return g.requireGBVersionAtLeast(deviceID, gbVersion2022, "配置查询("+name+")")
+	}
+	return g.requireGBVersionAtLeast(deviceID, minimum.StandardYear(), "配置查询("+name+")")
+}
+
+func configTypeMinimumVersion(name string) (GBProtocolVersion, bool) {
+	switch strings.TrimSpace(name) {
+	case "BasicParam", "VideoParamOpt", "VideoParamConfig", "AudioParamOpt", "AudioParamConfig",
+		"SVACEncodeConfig", "SVACDecodeConfig":
+		return GBVersion11, true
+	case "VideoParamAttribute", "VideoRecordPlan", "VideoAlarmRecord", "PictureMask", "FrameMirror",
+		"AlarmReport", "OSDConfig", "SnapShotConfig":
+		return GBVersion30, true
 	default:
-		return fmt.Errorf("unsupported config_type: %s", name)
+		return "", false
 	}
 }
 
@@ -454,21 +463,35 @@ func (g *GB28181API) resolvePendingDeviceQueryResult(deviceID, cmdType string, s
 		if expected := strings.TrimSpace(pending.targetID); expected != "" && expected != strings.TrimSpace(out.DeviceID) {
 			continue
 		}
-		if out.CmdType == "ConfigDownload" && strings.EqualFold(out.Result, "OK") {
-			state, _ := out.Data.(*ConfigDownloadState)
+		if out.CmdType == "ConfigDownload" {
 			pending.mu.Lock()
 			tracking := len(pending.expectedConfig) > 0
-			if tracking && pending.config == nil {
-				pending.config = &ConfigDownloadState{}
-			}
 			if tracking {
-				mergeConfigDownloadState(pending.config, state)
-				for _, configType := range configDownloadStateTypes(state) {
-					delete(pending.expectedConfig, configType)
+				if strings.EqualFold(out.Result, "OK") {
+					state, _ := out.Data.(*ConfigDownloadState)
+					contributed := false
+					for _, configType := range configDownloadStateTypes(state) {
+						if _, expected := pending.expectedConfig[configType]; expected {
+							delete(pending.expectedConfig, configType)
+							contributed = true
+						}
+					}
+					if contributed {
+						if pending.config == nil {
+							pending.config = &ConfigDownloadState{}
+						}
+						mergeConfigDownloadState(pending.config, state)
+						pending.responseXML = append(pending.responseXML, out.XML)
+					}
+					out.Data = pending.config
+				} else {
+					pending.responseXML = append(pending.responseXML, out.XML)
 				}
-				out.Data = pending.config
 			}
-			complete := len(pending.expectedConfig) == 0
+			complete := !strings.EqualFold(out.Result, "OK") || len(pending.expectedConfig) == 0
+			if complete {
+				out.responseXML = append([]string(nil), pending.responseXML...)
+			}
 			pending.mu.Unlock()
 			if tracking && !complete {
 				return

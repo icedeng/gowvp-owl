@@ -25,16 +25,17 @@ import (
 const cascadeCatalogChunkSize = 20
 
 type cascadeQueryEnvelope struct {
-	XMLName   xml.Name
-	CmdType   string `xml:"CmdType"`
-	SN        int    `xml:"SN"`
-	DeviceID  string `xml:"DeviceID"`
-	SourceID  string `xml:"SourceID"`
-	TargetID  string `xml:"TargetID"`
-	StartTime string `xml:"StartTime"`
-	EndTime   string `xml:"EndTime"`
-	Interval  int    `xml:"Interval"`
-	Number    *int   `xml:"Number"`
+	XMLName    xml.Name
+	CmdType    string `xml:"CmdType"`
+	SN         int    `xml:"SN"`
+	DeviceID   string `xml:"DeviceID"`
+	SourceID   string `xml:"SourceID"`
+	TargetID   string `xml:"TargetID"`
+	StartTime  string `xml:"StartTime"`
+	EndTime    string `xml:"EndTime"`
+	Interval   int    `xml:"Interval"`
+	Number     *int   `xml:"Number"`
+	ConfigType string `xml:"ConfigType"`
 }
 
 type cascadeCatalogResponse struct {
@@ -206,6 +207,31 @@ func (g *GB28181API) sipCascadeMessageMiddleware(ctx *sip.Context) {
 		return
 	}
 	if query.XMLName.Local == "Control" {
+		if query.CmdType == "DeviceConfig" {
+			var request DeviceConfigRequest
+			if err := sip.XMLDecode(ctx.Request.Body(), &request); err != nil {
+				ctx.AbortString(400, ErrXMLDecode.Error())
+				return
+			}
+			request.CmdType = strings.TrimSpace(request.CmdType)
+			request.DeviceID = strings.TrimSpace(request.DeviceID)
+			if err := validateCascadeDeviceConfigPayload(&request); err != nil {
+				ctx.AbortString(400, err.Error())
+				return
+			}
+			if worker.platform.exposedChannelMap[request.DeviceID] == "" {
+				ctx.AbortString(404, "cascade config target not found")
+				return
+			}
+			ctx.String(200, "OK")
+			ctx.Abort()
+			body := append([]byte(nil), ctx.Request.Body()...)
+			identityCtx := monitorUserIdentityContext(ctx)
+			g.startLifecycleTask(identityCtx, func(taskCtx context.Context) {
+				g.forwardCascadeDeviceConfig(worker, body, taskCtx)
+			})
+			return
+		}
 		if query.CmdType != ptzCmdTypeDeviceControl || worker.platform.exposedChannelMap[query.DeviceID] == "" {
 			ctx.AbortString(404, "cascade control target not found")
 			return
@@ -247,6 +273,11 @@ func validateCascadeQueryRequest(query cascadeQueryEnvelope) error {
 	switch query.CmdType {
 	case "Catalog", "DeviceInfo", "DeviceStatus", "PresetQuery", "HomePositionQuery", "CruiseTrackListQuery", "PTZPosition", "SDCardStatus":
 		return nil
+	case "ConfigDownload":
+		if _, ok := normalizeConfigTypes(query.ConfigType); !ok {
+			return fmt.Errorf("ConfigDownload requires valid ConfigType")
+		}
+		return nil
 	case "MobilePosition":
 		if query.Interval < 0 {
 			return fmt.Errorf("MobilePosition Interval must not be negative")
@@ -286,7 +317,7 @@ func (g *GB28181API) respondCascadeQuery(worker *cascadeWorker, query cascadeQue
 		err = g.respondCascadeDeviceStatus(ctx, worker, query)
 	case "RecordInfo":
 		err = g.respondCascadeRecordInfo(ctx, worker, query)
-	case "PresetQuery", "HomePositionQuery", "CruiseTrackListQuery", "CruiseTrackQuery", "MobilePosition", "PTZPosition", "SDCardStatus":
+	case "PresetQuery", "HomePositionQuery", "CruiseTrackListQuery", "CruiseTrackQuery", "MobilePosition", "PTZPosition", "SDCardStatus", "ConfigDownload":
 		err = g.respondCascadeExtendedQuery(ctx, worker, query)
 	default:
 		err = sendCascadeQueryError(ctx, worker, query)
@@ -306,7 +337,7 @@ func cascadeQueryTargetAllowed(platform cascadePlatform, cmdType, deviceID strin
 	}
 	switch strings.TrimSpace(cmdType) {
 	case "Catalog", "DeviceInfo", "DeviceStatus", "RecordInfo", "PresetQuery", "HomePositionQuery",
-		"CruiseTrackListQuery", "CruiseTrackQuery", "MobilePosition", "PTZPosition", "SDCardStatus":
+		"CruiseTrackListQuery", "CruiseTrackQuery", "MobilePosition", "PTZPosition", "SDCardStatus", "ConfigDownload":
 		return true
 	default:
 		return false
@@ -329,6 +360,8 @@ func cascadeExtendedQueryAction(cmdType string, version GBProtocolVersion) (stri
 		return deviceQueryActionPTZPosition, version.AtLeast(GBVersion30)
 	case "SDCardStatus":
 		return deviceQueryActionSDCardStatus, version.AtLeast(GBVersion30)
+	case "ConfigDownload":
+		return deviceQueryActionConfigDownload, version.AtLeast(GBVersion11)
 	default:
 		return "", false
 	}
@@ -336,10 +369,27 @@ func cascadeExtendedQueryAction(cmdType string, version GBProtocolVersion) (stri
 
 func (g *GB28181API) respondCascadeExtendedQuery(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope) error {
 	action, allowed := cascadeExtendedQueryAction(query.CmdType, worker.protocolVersion())
+	if allowed && action == deviceQueryActionConfigDownload {
+		query.ConfigType, allowed = cascadeConfigDownloadType(query.ConfigType, worker.protocolVersion())
+	}
 	if !allowed {
 		return sendCascadeQueryError(ctx, worker, query)
 	}
 	return g.respondCascadeForwardedQuery(ctx, worker, query, action)
+}
+
+func cascadeConfigDownloadType(value string, version GBProtocolVersion) (string, bool) {
+	canonical, ok := normalizeConfigTypes(value)
+	if !ok {
+		return "", false
+	}
+	for _, name := range strings.Split(canonical, "/") {
+		minimum, known := configTypeMinimumVersion(name)
+		if !known || !version.AtLeast(minimum) {
+			return "", false
+		}
+	}
+	return canonical, true
 }
 
 func (g *GB28181API) respondCascadeForwardedQuery(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope, action string) error {
@@ -354,7 +404,7 @@ func (g *GB28181API) respondCascadeForwardedQuery(ctx context.Context, worker *c
 	}
 	out, err := queryDevice(ctx, &DeviceQueryInput{
 		DeviceID: channel.DeviceID, TargetID: channel.ChannelID, Action: action,
-		Timeout: 25 * time.Second, Interval: query.Interval, Number: cascadeQueryNumber(query),
+		Timeout: 25 * time.Second, ConfigType: query.ConfigType, Interval: query.Interval, Number: cascadeQueryNumber(query),
 	})
 	if err != nil || out == nil || strings.TrimSpace(out.XML) == "" ||
 		!strings.EqualFold(canonicalGBQueryCmdType(out.CmdType), query.CmdType) {
@@ -363,12 +413,21 @@ func (g *GB28181API) respondCascadeForwardedQuery(ctx context.Context, worker *c
 		}
 		return sendCascadeQueryError(ctx, worker, query)
 	}
-	body, err := rewriteCascadeQueryResponse([]byte(out.XML), query, worker.platform, channel)
-	if err != nil {
-		slog.Warn("rewrite cascade query response failed", "upstream", worker.platform.name, "cmd_type", query.CmdType, "channel", query.DeviceID, "err", err)
-		return sendCascadeQueryError(ctx, worker, query)
+	responses := out.responseXML
+	if len(responses) == 0 {
+		responses = []string{out.XML}
 	}
-	return worker.sendMessage(ctx, body)
+	for _, response := range responses {
+		body, rewriteErr := rewriteCascadeQueryResponse([]byte(response), query, worker.platform, channel)
+		if rewriteErr != nil {
+			slog.Warn("rewrite cascade query response failed", "upstream", worker.platform.name, "cmd_type", query.CmdType, "channel", query.DeviceID, "err", rewriteErr)
+			return sendCascadeQueryError(ctx, worker, query)
+		}
+		if err := worker.sendMessage(ctx, body); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func cascadeQueryNumber(query cascadeQueryEnvelope) int {

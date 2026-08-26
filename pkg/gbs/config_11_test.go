@@ -381,12 +381,21 @@ func TestConfigDownload11AggregatesMultipleResponses(t *testing.T) {
 		t.Fatalf("combined query completed after first response: %+v", out)
 	default:
 	}
+	resolve([]byte(`<Response><CmdType>ConfigDownload</CmdType><SN>18</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><BasicParam><Name>IPC duplicate</Name></BasicParam></Response>`))
+	select {
+	case out := <-pending.wait:
+		t.Fatalf("combined query completed after duplicate response: %+v", out)
+	default:
+	}
 	resolve([]byte(`<Response><CmdType>ConfigDownload</CmdType><SN>18</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><VideoParamOpt><VideoFormatOpt>2/5</VideoFormatOpt></VideoParamOpt></Response>`))
 	select {
 	case out := <-pending.wait:
 		state, ok := out.Data.(*ConfigDownloadState)
 		if !ok || state.BasicParam == nil || state.VideoParamOpt == nil {
 			t.Fatalf("aggregated ConfigDownload = %#v", out.Data)
+		}
+		if len(out.responseXML) != 2 || !strings.Contains(out.responseXML[0], "<BasicParam>") || !strings.Contains(out.responseXML[1], "<VideoParamOpt>") {
+			t.Fatalf("ConfigDownload response XML = %v", out.responseXML)
 		}
 	default:
 		t.Fatal("combined query did not complete after all responses")

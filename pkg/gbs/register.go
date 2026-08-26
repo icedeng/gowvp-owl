@@ -129,6 +129,7 @@ type GB28181API struct {
 	cascadeQueryRecords    func(context.Context, *RecordQueryInput) ([]RecordItem, error)
 	cascadeDeviceQuery     func(context.Context, *DeviceQueryInput) (*DeviceQueryOutput, error)
 	cascadeDeviceControl   func(context.Context, *ipc.Channel, *deviceControlA23Request) (string, error)
+	cascadeDeviceConfig    func(context.Context, *ipc.Channel, *DeviceConfigRequest) (string, error)
 	cascadeBroadcastNotify func(context.Context, *Channel, *VoiceInput) error
 	// 设备控制命令全局序列号，避免 PTZ 与 DeviceControl 并发冲突。
 	controlSN atomic.Uint32
