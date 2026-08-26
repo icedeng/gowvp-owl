@@ -140,14 +140,36 @@ type RecordItem struct {
 	DeviceID string `xml:"DeviceID" bson:"DeviceID" json:"DeviceID"`
 	// Name 设备名称
 	Name       string `xml:"Name" bson:"Name" json:"Name"`
+	HasName    bool   `xml:"-" bson:"-" json:"-"`
 	FilePath   string `xml:"FilePath" bson:"FilePath" json:"FilePath"`
 	Address    string `xml:"Address" bson:"Address" json:"Address"`
 	StartTime  string `xml:"StartTime" bson:"StartTime" json:"StartTime"`
 	EndTime    string `xml:"EndTime" bson:"EndTime" json:"EndTime"`
 	Secrecy    int    `xml:"Secrecy" bson:"Secrecy" json:"Secrecy"`
+	HasSecrecy bool   `xml:"-" bson:"-" json:"-"`
 	Type       string `xml:"Type" bson:"Type" json:"Type"`
 	RecorderID string `xml:"RecorderID" bson:"RecorderID" json:"RecorderID,omitempty"`
 	FileSize   string `xml:"FileSize" bson:"FileSize" json:"FileSize,omitempty"`
+}
+
+func (item *RecordItem) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
+	type recordItemAlias RecordItem
+	var value struct {
+		recordItemAlias
+		Name    *string `xml:"Name"`
+		Secrecy *int    `xml:"Secrecy"`
+	}
+	if err := decoder.DecodeElement(&value, &start); err != nil {
+		return err
+	}
+	*item = RecordItem(value.recordItemAlias)
+	if value.Name != nil {
+		item.Name, item.HasName = *value.Name, true
+	}
+	if value.Secrecy != nil {
+		item.Secrecy, item.HasSecrecy = *value.Secrecy, true
+	}
+	return nil
 }
 
 func (g *GB28181API) sipMessageRecordInfo(ctx *sip.Context) {
@@ -220,9 +242,14 @@ func (g *GB28181API) validateRecordInfoEnvelope(ctx *sip.Context, message *Messa
 		expectedTarget = message.DeviceID
 	}
 	for index := range message.Item {
-		message.Item[index].DeviceID = strings.TrimSpace(message.Item[index].DeviceID)
-		if message.Item[index].DeviceID != expectedTarget {
+		item := &message.Item[index]
+		item.DeviceID = strings.TrimSpace(item.DeviceID)
+		item.Name = strings.TrimSpace(item.Name)
+		if item.DeviceID != expectedTarget {
 			return fmt.Errorf("RecordInfo item target mismatch")
+		}
+		if !item.HasName || item.Name == "" || !item.HasSecrecy || item.Secrecy < 0 || item.Secrecy > 1 {
+			return fmt.Errorf("invalid RecordInfo item")
 		}
 	}
 	return nil

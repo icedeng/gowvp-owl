@@ -25,6 +25,10 @@ func TestRecordInfoRejectsInvalidEnvelopeBeforeCollector(t *testing.T) {
 		{name: "list count mismatch", body: `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="0"><Item><DeviceID>` + gb10ChannelID + `</DeviceID></Item></RecordList></Response>`},
 		{name: "unknown target", body: `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>34020000001320000009</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>34020000001320000009</DeviceID></Item></RecordList></Response>`},
 		{name: "item target mismatch", body: `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10DeviceID + `</DeviceID></Item></RecordList></Response>`},
+		{name: "missing item name", body: `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Secrecy>0</Secrecy></Item></RecordList></Response>`},
+		{name: "empty item name", body: `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Name> </Name><Secrecy>0</Secrecy></Item></RecordList></Response>`},
+		{name: "missing item secrecy", body: `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Name>record</Name></Item></RecordList></Response>`},
+		{name: "invalid item secrecy", body: `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Name>record</Name><Secrecy>2</Secrecy></Item></RecordList></Response>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -56,12 +60,33 @@ func TestRecordInfoParentAliasPreservesChannelTarget(t *testing.T) {
 	collector.Start(key)
 	api := &GB28181API{svr: &Server{memoryStorer: memory}, recordResponses: collector}
 	api.recordResponseAliases.Store(buildMultiResponseKey(gb10DeviceID, "RecordInfo", 3), key)
-	body := `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Name>record</Name><FilePath>/record.ps</FilePath></Item></RecordList></Response>`
+	body := `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Name>record</Name><FilePath>/record.ps</FilePath><Secrecy>0</Secrecy></Item></RecordList></Response>`
 	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "record-parent-alias", []byte(body), api.sipMessageRecordInfo)
 	assertFlowOK(t, response)
 	result := collector.Wait(context.Background(), key)
 	if !result.Complete || len(result.Items) != 1 || result.Items[0].DeviceID != gb10ChannelID {
 		t.Fatalf("parent alias result = %+v", result)
+	}
+}
+
+func TestRecordInfoAcceptsRequiredItemFieldsForAllVersions(t *testing.T) {
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30} {
+		t.Run(string(version), func(t *testing.T) {
+			memory := newFlowMemory(gb10DeviceID)
+			memory.runtime.setGBVersion(version)
+			memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+			collector := newMultiResponseCollector(func(item RecordItem) string { return item.DeviceID + item.FilePath })
+			key := buildMultiResponseKey(gb10ChannelID, "RecordInfo", 6)
+			collector.Start(key)
+			api := &GB28181API{svr: &Server{memoryStorer: memory}, recordResponses: collector}
+			body := `<Response><CmdType>RecordInfo</CmdType><SN>6</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Name> record </Name><Secrecy>0</Secrecy></Item></RecordList></Response>`
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "record-required-"+string(version), []byte(body), api.sipMessageRecordInfo)
+			assertFlowOK(t, response)
+			result := collector.Wait(context.Background(), key)
+			if !result.Complete || len(result.Items) != 1 || result.Items[0].Name != "record" || !result.Items[0].HasName || !result.Items[0].HasSecrecy {
+				t.Fatalf("RecordInfo required fields = %+v", result)
+			}
+		})
 	}
 }
 
