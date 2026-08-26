@@ -53,6 +53,34 @@ func TestDirectTCPDownloadManagerKnownSizeAndSHA256(t *testing.T) {
 	}
 }
 
+func TestDirectTCPDownloadManagerIPv6(t *testing.T) {
+	listener, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback is unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	payload := []byte("gb28181-direct-tcp-ipv6")
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Write(payload)
+	}()
+
+	manager := newTestDirectTCPManager(t)
+	startDirectTCPTestDownload(t, manager, DirectTCPDownloadRequest{
+		SessionID: "ipv6", DeviceID: gb10DeviceID, ChannelID: gb10ChannelID,
+		Address: listener.Addr().String(), RegisteredIP: net.ParseIP("::1"),
+		FileSize: int64(len(payload)), FileSizeKnown: true,
+	})
+	state := waitDirectTCPState(t, manager, "ipv6")
+	if state.Status != directTCPStatusCompleted || !state.SizeVerified || state.Received != int64(len(payload)) {
+		t.Fatalf("IPv6 download state = %+v", state)
+	}
+}
+
 func TestDirectTCPDownloadManagerUnknownSizeEOF(t *testing.T) {
 	address := startDirectTCPFixture(t, func(conn net.Conn) {
 		_, _ = conn.Write([]byte("unknown-size"))
@@ -273,6 +301,16 @@ func TestDirectTCPDownloadManagerLimitsAndAddressPolicy(t *testing.T) {
 	unsafeOptions.AllowedAddressCIDRs = []string{"192.0.2.0/24"}
 	if err := validateDirectTCPAddress("192.0.2.20:9000", net.ParseIP("192.0.2.21"), unsafeOptions); err != nil {
 		t.Fatalf("CIDR-allowed mismatch rejected: %v", err)
+	}
+	if err := validateDirectTCPAddress("[2001:db8::20]:9000", net.ParseIP("2001:db8::20"), unsafeOptions); err != nil {
+		t.Fatalf("matching IPv6 address rejected: %v", err)
+	}
+	if err := validateDirectTCPAddress("[fe80::1]:9000", net.ParseIP("fe80::1"), unsafeOptions); err == nil || !strings.Contains(err.Error(), "unsafe") {
+		t.Fatalf("link-local IPv6 error = %v", err)
+	}
+	unsafeOptions.AllowedAddressCIDRs = []string{"2001:db8::/32"}
+	if err := validateDirectTCPAddress("[2001:db8::20]:9000", net.ParseIP("2001:db9::21"), unsafeOptions); err != nil {
+		t.Fatalf("CIDR-allowed IPv6 mismatch rejected: %v", err)
 	}
 
 	release := make(chan struct{})

@@ -729,14 +729,13 @@ func validateDirectTCPAddress(address string, registeredIP net.IP, opts DirectTC
 		return fmt.Errorf("invalid direct TCP download port: %s", portText)
 	}
 	ip := net.ParseIP(strings.Trim(host, "[]"))
-	if ip == nil || ip.To4() == nil {
-		return fmt.Errorf("direct TCP download requires an IPv4 address: %s", host)
+	if ip == nil || ip.To16() == nil {
+		return fmt.Errorf("direct TCP download requires an IP address: %s", host)
 	}
 	if !opts.AllowUnsafeAddresses && (ip.IsUnspecified() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast()) {
 		return fmt.Errorf("unsafe direct TCP download address is forbidden: %s", ip)
 	}
-	registered := registeredIP.To4()
-	if registered != nil && ip.Equal(registered) {
+	if registeredIP != nil && ip.Equal(registeredIP) {
 		return nil
 	}
 	if !opts.AllowAddressMismatch {

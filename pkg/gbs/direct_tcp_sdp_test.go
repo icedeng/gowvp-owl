@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +81,31 @@ func TestParseDirectTCPDownloadSDP(t *testing.T) {
 	}
 	if offer.Address != "192.0.2.10:9412" || !offer.FileSizeKnown || offer.FileSize != 12345 || offer.SSRC != "1100000000" {
 		t.Fatalf("parsed offer = %+v", offer)
+	}
+}
+
+func TestDirectTCPDownloadSDPIPv6(t *testing.T) {
+	body, err := buildGBSDP(gbSDPInput{
+		Version: GBVersion11, SessionName: historyModeDownload,
+		ChannelID: gb10ChannelID, URI: gb10ChannelID + ":3",
+		IP: "2001:db8::20", Port: 9,
+		StartAt: time.Unix(1711929600, 0), EndAt: time.Unix(1711933200, 0),
+		SSRC: "1100000001", DirectTCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := string(body); !strings.Contains(text, "o="+gb10ChannelID+" 0 0 IN IP6 2001:db8::20\r\n") || !strings.Contains(text, "c=IN IP6 2001:DB8::20\r\n") {
+		t.Fatalf("IPv6 direct TCP request SDP mismatch:\n%s", text)
+	}
+
+	response := []byte("v=0\r\no=x 0 0 IN IP6 2001:db8::30\r\ns=x\r\nc=IN IP6 2001:db8::30\r\nt=0 0\r\nm=video 9000 tcp 96\r\na=filesize:7\r\n")
+	offer, err := parseDirectTCPDownloadSDP(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offer.Address != "[2001:db8::30]:9000" || !offer.IP.Equal(net.ParseIP("2001:db8::30")) {
+		t.Fatalf("IPv6 direct TCP offer = %+v", offer)
 	}
 }
 

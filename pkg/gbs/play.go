@@ -230,28 +230,25 @@ func (g *GB28181API) PlayContext(ctx context.Context, in *PlayInput) error {
 	return nil
 }
 
-// GetIP 判断输入字符串并返回对应的IP地址
-// 输入可能是IPv4地址、域名、空值或其他非法值
+// GetIP 判断输入字符串并返回对应的 IP 地址。
+// 输入可以是 IPv4、IPv6、域名或非法值；域名同时存在两种地址时优先 IPv4。
 func GetIP(input string) (string, error) {
 	slog.Info("开始域名解析", "输入", input)
-	// 处理空字符串情况
+	input = strings.TrimSpace(input)
 	if input == "" {
 		slog.Error("输入为空字符串")
 		return input, fmt.Errorf("输入为空")
 	}
+	if strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]") {
+		input = strings.TrimSuffix(strings.TrimPrefix(input, "["), "]")
+	}
 
-	// 去除前后空格
-	input = strings.TrimSpace(input)
-
-	// 首先尝试直接解析为IPv4地址
+	// 字面 IP 直接规范化；IPv4-mapped IPv6 仍按 IPv4 返回。
 	if ip := net.ParseIP(input); ip != nil {
-		// 检查是否是IPv4地址
-		if ip.To4() != nil {
-			return ip.String(), nil
+		if ipv4 := ip.To4(); ipv4 != nil {
+			return ipv4.String(), nil
 		}
-		// 如果是IPv6地址，记录错误
-		slog.Error("不支持的IPv6地址", "输入", input)
-		return input, fmt.Errorf("IPv6地址暂不支持")
+		return ip.String(), nil
 	}
 
 	// 尝试解析为域名
@@ -268,10 +265,12 @@ func GetIP(input string) (string, error) {
 		}
 	}
 
-	// 如果没有IPv4地址，选择第一个IPv6地址（如果有）
-	if len(ips) > 0 {
-		slog.Warn("域名只解析到IPv6地址", "域名", input)
-		return ips[0].String(), nil
+	// 没有 IPv4 时选择第一个有效 IPv6 地址。
+	for _, ip := range ips {
+		if ip != nil && ip.To16() != nil {
+			slog.Warn("域名只解析到IPv6地址", "域名", input)
+			return ip.String(), nil
+		}
 	}
 
 	slog.Error("域名没有解析到任何IP地址", "域名", input)

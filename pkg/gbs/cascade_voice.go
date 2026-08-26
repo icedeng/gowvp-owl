@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -270,7 +269,7 @@ func prepareCascadeDialogRequest(worker *cascadeWorker, request *sip.Request) {
 	}
 	remote := worker.remoteDestination()
 	if request.Destination() == nil || (strings.EqualFold(request.Transport(), "TLS") && cascadeTransportForAddr(remote) == "tls") {
-		// TLS 响应源是 net.TCPAddr，会丢失 TLS/serverName 类型信息；此处恢复已验证的上级目标。
+		// TLS 响应源会丢失 TLS/serverName 类型信息；此处恢复已验证的上级目标。
 		request.SetDestination(remote)
 	}
 	if request.GetConnection() == nil && worker.server != nil && worker.server.Server != nil && worker.server.UDPConn() != nil {
@@ -288,15 +287,19 @@ func buildCascadeVoiceReceiveSDP(localID string, server *sms.MediaServer, versio
 	if err != nil {
 		return nil, err
 	}
+	address, err := parseSDPAddress(ipAddress)
+	if err != nil {
+		return nil, err
+	}
 	audio := sdp.Media{Description: sdp.MediaDescription{
 		Type: "audio", Port: port, Formats: []string{strconv.Itoa(payload)}, Protocol: "RTP/AVP",
 	}}
 	audio.AddAttribute("recvonly")
 	audio.AddAttribute("rtpmap", strconv.Itoa(payload), mapping)
 	message := &sdp.Message{
-		Origin:     sdp.Origin{Username: localID, NetworkType: "IN", AddressType: "IP4", Address: ipAddress},
+		Origin:     sdp.Origin{Username: localID, NetworkType: "IN", AddressType: address.Type, Address: address.Canonical},
 		Name:       historyModePlay,
-		Connection: sdp.ConnectionData{NetworkType: "IN", AddressType: "IP4", IP: net.ParseIP(ipAddress)},
+		Connection: sdp.ConnectionData{NetworkType: "IN", AddressType: address.Type, IP: address.IP},
 		Timing:     []sdp.Timing{{}}, Medias: []sdp.Media{audio}, SSRC: ssrc,
 	}
 	body := message.Append(nil).AppendTo(nil)

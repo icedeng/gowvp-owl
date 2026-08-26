@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -746,32 +745,7 @@ func (g *GB28181API) sipInviteVoice(ctx context.Context, ch *Channel, in *VoiceI
 	if cfg == nil {
 		return fmt.Errorf("SIP configuration is unavailable")
 	}
-	protocol := "TCP/RTP/AVP"
-	if in.StreamMode == 0 {
-		protocol = "RTP/AVP"
-	}
-	audio := sdp.Media{
-		Description: sdp.MediaDescription{
-			Type:     "audio",
-			Port:     port,
-			Formats:  []string{"8", "0", "9"},
-			Protocol: protocol,
-		},
-	}
-	if in.StreamMode == 1 {
-		audio.AddAttribute("setup", "passive")
-		audio.AddAttribute("connection", "new")
-	}
-	if in.StreamMode == 2 {
-		audio.AddAttribute("setup", "active")
-		audio.AddAttribute("connection", "new")
-	}
-	audio.AddAttribute("sendrecv")
-	audio.AddAttribute("rtpmap", "8", "PCMA/8000")
-	audio.AddAttribute("rtpmap", "0", "PCMU/8000")
-	audio.AddAttribute("rtpmap", "9", "G722/8000")
-
-	ip4str, err := GetIP(in.SMS.GetSDPIP())
+	ipAddress, err := GetIP(in.SMS.GetSDPIP())
 	if err != nil {
 		return err
 	}
@@ -779,25 +753,10 @@ func (g *GB28181API) sipInviteVoice(ctx context.Context, ch *Channel, in *VoiceI
 	if err != nil {
 		return err
 	}
-	msg := &sdp.Message{
-		Origin: sdp.Origin{
-			Username:    ch.ChannelID,
-			NetworkType: "IN",
-			AddressType: "IP4",
-			Address:     ip4str,
-		},
-		Name: historyModePlay,
-		Connection: sdp.ConnectionData{
-			NetworkType: "IN",
-			AddressType: "IP4",
-			IP:          net.ParseIP(ip4str),
-		},
-		Timing: []sdp.Timing{{}},
-		Medias: []sdp.Media{audio},
-		SSRC:   ssrc,
+	body, err := buildVoiceSDP(ch.ChannelID, ipAddress, port, in.StreamMode, ssrc)
+	if err != nil {
+		return err
 	}
-	body := msg.Append(nil).AppendTo(nil)
-	body = append(body, "f=v/////a/1/8/1\r\n"...)
 	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodInvite, &sip.ContentTypeSDP, body, func(r *sip.Request) {
 		r.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: buildGBInviteSubject(ch.ChannelID, ssrc, cfg.ID)})
 	})
@@ -823,4 +782,55 @@ func (g *GB28181API) sipInviteVoice(ctx context.Context, ch *Channel, in *VoiceI
 		return err
 	}
 	return tx.Request(ack)
+}
+
+func buildVoiceSDP(channelID, ipAddress string, port int, streamMode int8, ssrc string) ([]byte, error) {
+	protocol := "TCP/RTP/AVP"
+	if streamMode == 0 {
+		protocol = "RTP/AVP"
+	}
+	audio := sdp.Media{
+		Description: sdp.MediaDescription{
+			Type:     "audio",
+			Port:     port,
+			Formats:  []string{"8", "0", "9"},
+			Protocol: protocol,
+		},
+	}
+	if streamMode == 1 {
+		audio.AddAttribute("setup", "passive")
+		audio.AddAttribute("connection", "new")
+	}
+	if streamMode == 2 {
+		audio.AddAttribute("setup", "active")
+		audio.AddAttribute("connection", "new")
+	}
+	audio.AddAttribute("sendrecv")
+	audio.AddAttribute("rtpmap", "8", "PCMA/8000")
+	audio.AddAttribute("rtpmap", "0", "PCMU/8000")
+	audio.AddAttribute("rtpmap", "9", "G722/8000")
+
+	address, err := parseSDPAddress(ipAddress)
+	if err != nil {
+		return nil, err
+	}
+	msg := &sdp.Message{
+		Origin: sdp.Origin{
+			Username:    channelID,
+			NetworkType: "IN",
+			AddressType: address.Type,
+			Address:     address.Canonical,
+		},
+		Name: historyModePlay,
+		Connection: sdp.ConnectionData{
+			NetworkType: "IN",
+			AddressType: address.Type,
+			IP:          address.IP,
+		},
+		Timing: []sdp.Timing{{}},
+		Medias: []sdp.Media{audio},
+		SSRC:   ssrc,
+	}
+	body := msg.Append(nil).AppendTo(nil)
+	return append(body, "f=v/////a/1/8/1\r\n"...), nil
 }

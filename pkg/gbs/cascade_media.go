@@ -143,8 +143,13 @@ func parseCascadeVideoOffer(body []byte, version GBProtocolVersion, platform cas
 			return nil, fmt.Errorf("cascade SDP receiver must accept media")
 		}
 		remoteIP := media.Connection.IP
+		networkType, addressType := media.Connection.NetworkType, media.Connection.AddressType
 		if remoteIP == nil {
 			remoteIP = message.Connection.IP
+			networkType, addressType = message.Connection.NetworkType, message.Connection.AddressType
+		}
+		if err := validateSDPConnectionAddress(networkType, addressType, remoteIP); err != nil {
+			return nil, fmt.Errorf("invalid cascade RTP address: %w", err)
 		}
 		if remoteIP == nil || remoteIP.IsUnspecified() || remoteIP.IsMulticast() || !platform.allowsMediaDestination(remoteIP) {
 			return nil, fmt.Errorf("cascade RTP destination is not allowed: %v", remoteIP)
@@ -646,6 +651,10 @@ func buildCascadeSDPAnswer(localID string, server *sms.MediaServer, offer *casca
 	if err != nil {
 		return nil, err
 	}
+	address, err := parseSDPAddress(ipAddress)
+	if err != nil {
+		return nil, err
+	}
 	video := sdp.Media{Description: sdp.MediaDescription{
 		Type: "video", Port: localPort, Formats: []string{strconv.Itoa(offer.Payload)}, Protocol: offer.Protocol,
 	}}
@@ -669,9 +678,9 @@ func buildCascadeSDPAnswer(localID string, server *sms.MediaServer, offer *casca
 		mode = historyModePlay
 	}
 	message := &sdp.Message{
-		Origin:     sdp.Origin{Username: localID, NetworkType: "IN", AddressType: "IP4", Address: ipAddress},
+		Origin:     sdp.Origin{Username: localID, NetworkType: "IN", AddressType: address.Type, Address: address.Canonical},
 		Name:       mode,
-		Connection: sdp.ConnectionData{NetworkType: "IN", AddressType: "IP4", IP: net.ParseIP(ipAddress)},
+		Connection: sdp.ConnectionData{NetworkType: "IN", AddressType: address.Type, IP: address.IP},
 		Timing:     []sdp.Timing{{}}, Medias: []sdp.Media{video}, SSRC: offer.SSRC,
 	}
 	if mode != historyModePlay {

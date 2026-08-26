@@ -2,7 +2,6 @@ package gbs
 
 import (
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -40,9 +39,9 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 	if strings.TrimSpace(in.ChannelID) == "" {
 		return nil, fmt.Errorf("SDP channel ID is required")
 	}
-	ip := net.ParseIP(strings.TrimSpace(in.IP))
-	if ip == nil || ip.To4() == nil {
-		return nil, fmt.Errorf("SDP requires a valid IPv4 address: %s", in.IP)
+	address, err := parseSDPAddress(in.IP)
+	if err != nil {
+		return nil, err
 	}
 	if in.Port <= 0 || in.Port > 65535 {
 		return nil, fmt.Errorf("invalid SDP media port: %d", in.Port)
@@ -136,14 +135,14 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 		Origin: sdp.Origin{
 			Username:    in.ChannelID,
 			NetworkType: "IN",
-			AddressType: "IP4",
-			Address:     ip.To4().String(),
+			AddressType: address.Type,
+			Address:     address.Canonical,
 		},
 		Name: in.SessionName,
 		Connection: sdp.ConnectionData{
 			NetworkType: "IN",
-			AddressType: "IP4",
-			IP:          ip.To4(),
+			AddressType: address.Type,
+			IP:          address.IP,
 		},
 		Timing: []sdp.Timing{{Start: in.StartAt, End: in.EndAt}},
 		Medias: []sdp.Media{video},

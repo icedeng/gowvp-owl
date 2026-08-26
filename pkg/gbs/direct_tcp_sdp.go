@@ -33,11 +33,18 @@ func parseDirectTCPDownloadSDP(body []byte) (directTCPDownloadOffer, error) {
 			return directTCPDownloadOffer{}, fmt.Errorf("invalid direct TCP download SDP port: %d", media.Description.Port)
 		}
 		ip := media.Connection.IP
+		networkType, addressType := media.Connection.NetworkType, media.Connection.AddressType
 		if ip == nil {
 			ip = message.Connection.IP
+			networkType, addressType = message.Connection.NetworkType, message.Connection.AddressType
 		}
-		if ip == nil || ip.To4() == nil {
-			return directTCPDownloadOffer{}, fmt.Errorf("invalid direct TCP download SDP: SDP does not contain a valid IPv4 connection address")
+		if err := validateSDPConnectionAddress(networkType, addressType, ip); err != nil {
+			return directTCPDownloadOffer{}, fmt.Errorf("invalid direct TCP download SDP: SDP does not contain a valid IP connection address")
+		}
+		if ipv4 := ip.To4(); ipv4 != nil {
+			ip = ipv4
+		} else {
+			ip = ip.To16()
 		}
 		value := strings.TrimSpace(media.Attribute("filesize"))
 		if value == "" {
@@ -55,10 +62,10 @@ func parseDirectTCPDownloadSDP(body []byte) (directTCPDownloadOffer, error) {
 			ssrc = directTCPSDPLineValue(body, "y")
 		}
 		offer := directTCPDownloadOffer{
-			IP:      ip.To4(),
+			IP:      ip,
 			Port:    media.Description.Port,
 			SSRC:    ssrc,
-			Address: net.JoinHostPort(ip.To4().String(), strconv.Itoa(media.Description.Port)),
+			Address: net.JoinHostPort(ip.String(), strconv.Itoa(media.Description.Port)),
 		}
 		if value != "" {
 			size, err := strconv.ParseInt(value, 10, 64)

@@ -149,8 +149,13 @@ func parseBroadcastSDPOffer(body []byte, version GBProtocolVersion) (*broadcastS
 			return nil, fmt.Errorf("Broadcast receiver SDP must accept media")
 		}
 		remoteIP := media.Connection.IP
+		networkType, addressType := media.Connection.NetworkType, media.Connection.AddressType
 		if remoteIP == nil {
 			remoteIP = message.Connection.IP
+			networkType, addressType = message.Connection.NetworkType, message.Connection.AddressType
+		}
+		if err := validateSDPConnectionAddress(networkType, addressType, remoteIP); err != nil {
+			return nil, fmt.Errorf("invalid Broadcast RTP address: %w", err)
 		}
 		if remoteIP == nil || remoteIP.IsUnspecified() || remoteIP.IsMulticast() {
 			return nil, fmt.Errorf("invalid Broadcast RTP address")
@@ -327,16 +332,20 @@ func buildBroadcastSDPAnswer(session *broadcastSession, port, payload int, mappi
 	if err != nil {
 		return nil, err
 	}
+	address, err := parseSDPAddress(ip4str)
+	if err != nil {
+		return nil, err
+	}
 	audio := sdp.Media{Description: sdp.MediaDescription{
 		Type: "audio", Port: port, Formats: []string{strconv.Itoa(payload)}, Protocol: "RTP/AVP",
 	}}
 	audio.AddAttribute("sendonly")
 	audio.AddAttribute("rtpmap", strconv.Itoa(payload), mapping)
 	message := &sdp.Message{
-		Origin: sdp.Origin{Username: session.SourceID, NetworkType: "IN", AddressType: "IP4", Address: ip4str},
+		Origin: sdp.Origin{Username: session.SourceID, NetworkType: "IN", AddressType: address.Type, Address: address.Canonical},
 		Name:   historyModePlay,
 		Connection: sdp.ConnectionData{
-			NetworkType: "IN", AddressType: "IP4", IP: net.ParseIP(ip4str),
+			NetworkType: "IN", AddressType: address.Type, IP: address.IP,
 		},
 		Timing: []sdp.Timing{{}}, Medias: []sdp.Media{audio}, SSRC: ssrc,
 	}
