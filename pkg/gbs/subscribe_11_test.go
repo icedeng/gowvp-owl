@@ -1013,6 +1013,36 @@ func TestAlarmSubscriptionBusinessResponseVersionMatrix(t *testing.T) {
 	}
 }
 
+func TestValidateSubscribeBusinessResponse(t *testing.T) {
+	request := subscribeEventRequest{CmdType: "Alarm", SN: 52, DeviceID: gb10DeviceID}
+	response := func(body string) *sip.Response {
+		return sip.NewResponse("", sip.DefaultSipVersion, 200, "OK", nil, []byte(body))
+	}
+	tests := []struct {
+		name    string
+		version GBProtocolVersion
+		body    string
+		wantErr bool
+	}{
+		{name: "valid 2016 response", version: GBVersion20, body: `<Response><CmdType>Alarm</CmdType><SN>52</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
+		{name: "empty legacy vendor response", version: GBVersion20},
+		{name: "business error", version: GBVersion20, body: `<Response><CmdType>Alarm</CmdType><SN>52</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>ERROR</Result></Response>`, wantErr: true},
+		{name: "wrong sequence", version: GBVersion11, body: `<Response><CmdType>Alarm</CmdType><SN>53</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`, wantErr: true},
+		{name: "wrong target", version: GBVersion10, body: `<Response><CmdType>Alarm</CmdType><SN>52</SN><DeviceID>44010000001320000001</DeviceID><Result>OK</Result></Response>`, wantErr: true},
+		{name: "wrong root", version: GBVersion20, body: `<Notify><CmdType>Alarm</CmdType><SN>52</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Notify>`, wantErr: true},
+		{name: "malformed xml", version: GBVersion20, body: `<Response>`, wantErr: true},
+		{name: "2022 ignores obsolete body", version: GBVersion30, body: `<Response><Result>ERROR</Result></Response>`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateSubscribeBusinessResponse(response(test.body), request, test.version)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateSubscribeBusinessResponse() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func flowResponse(t *testing.T, conn *flowConnection) <-chan string {
 	t.Helper()
 	out := make(chan string, 1)

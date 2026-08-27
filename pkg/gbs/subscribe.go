@@ -181,6 +181,13 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 		}
 		return err
 	}
+	if err := validateSubscribeBusinessResponse(response, requestBody, version); err != nil {
+		dialog.restoreNotifyDialog(previousNotify)
+		if dialog.response == nil {
+			g.outgoingSubscriptions.CompareAndDelete(key, dialog)
+		}
+		return err
+	}
 	if in.Cancel {
 		g.outgoingSubscriptions.CompareAndDelete(key, dialog)
 		return nil
@@ -193,6 +200,38 @@ func (g *GB28181API) Subscribe(ctx context.Context, in *SubscribeInput) error {
 	if err := dialog.confirmNotifyDialog(response, expires); err != nil {
 		g.outgoingSubscriptions.CompareAndDelete(key, dialog)
 		return err
+	}
+	return nil
+}
+
+type subscribeBusinessResponse struct {
+	XMLName  xml.Name
+	CmdType  string `xml:"CmdType"`
+	SN       int    `xml:"SN"`
+	DeviceID string `xml:"DeviceID"`
+	Result   string `xml:"Result"`
+}
+
+// validateSubscribeBusinessResponse 校验旧版订阅响应中携带的 MANSCDP 业务结果。
+// 部分存量厂商只返回空 200，继续兼容；一旦携带业务应答，就不能把 ERROR 或错配响应当成订阅成功。
+func validateSubscribeBusinessResponse(response *sip.Response, request subscribeEventRequest, version GBProtocolVersion) error {
+	if response == nil || !shouldIncludeSubscribeBusinessResponse(version, request.CmdType) {
+		return nil
+	}
+	body := response.Body()
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return nil
+	}
+	var result subscribeBusinessResponse
+	if err := sip.XMLDecode(body, &result); err != nil {
+		return fmt.Errorf("invalid subscribe business response: %w", err)
+	}
+	if result.XMLName.Local != "Response" || strings.TrimSpace(result.CmdType) != strings.TrimSpace(request.CmdType) ||
+		result.SN != request.SN || strings.TrimSpace(result.DeviceID) != strings.TrimSpace(request.DeviceID) {
+		return fmt.Errorf("subscribe business response does not match request")
+	}
+	if strings.ToUpper(strings.TrimSpace(result.Result)) != "OK" {
+		return fmt.Errorf("subscribe business response failed: %s", strings.TrimSpace(result.Result))
 	}
 	return nil
 }
