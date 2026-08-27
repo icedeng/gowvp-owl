@@ -2,12 +2,15 @@ package gbs
 
 import (
 	"context"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/sms"
+	"github.com/gowvp/owl/pkg/gbs/sip"
 	"github.com/ixugo/goddd/pkg/conc"
 )
 
@@ -44,6 +47,79 @@ func TestMediaStreamLifecycleActiveAndInactive(t *testing.T) {
 	// 重复注销和 MediaStatus 竞争后均应保持幂等。
 	if err := api.OnMediaStreamChanged(context.Background(), MediaStreamEvent{StreamID: stream.StreamID, Reason: "duplicate"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMediaStreamLossSendsDeviceBYEAndClosesRTPServer(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		key  string
+	}{
+		{name: "live", key: resolvePlaySessionKey(gb10DeviceID, gb10ChannelID, "")},
+		{name: "playback", key: historyKey(historyModePlayback, gb10DeviceID, gb10ChannelID)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			baseConnection := newFlowConnection()
+			connection := &tcpFlowConnection{flowConnection: baseConnection}
+			local := mustFlowAddress(t, "sip:"+gb10PlatformID+"@192.0.2.20:5060")
+			remote := mustFlowAddress(t, "sip:"+gb10ChannelID+"@192.0.2.10:5060")
+			local.Params.Add("tag", sip.String{Str: "platform-tag"})
+			callID := sip.CallID("media-loss-" + test.name)
+			invite := sip.NewRequest("", sip.MethodInvite, remote.URI, sip.DefaultSipVersion,
+				sip.NewHeaderBuilder().SetFrom(local).SetTo(remote).SetContact(local).SetMethod(sip.MethodInvite).
+					SetSeqNo(1).SetCallID(&callID).
+					AddVia(&sip.ViaHop{Host: "192.0.2.20", Port: sip.NewPort(5060), Transport: "TCP", Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(), nil)
+			invite.SetConnection(connection)
+			invite.SetSource(baseConnection.local)
+			invite.SetDestination(baseConnection.remote)
+			response := sip.NewResponseFromRequest("", invite, http.StatusOK, "OK", nil)
+			response.AppendHeader(&sip.ContactHeader{Address: remote.URI.Clone(), Params: sip.NewParams()})
+			response.SetConnection(connection)
+
+			sipServer := sip.NewServer(local)
+			defer sipServer.Close()
+			media := &fakeRTPMediaService{}
+			streams := &conc.Map[string, *Streams]{}
+			stream := &Streams{
+				DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, StreamID: "lost-" + test.name,
+				Resp: response, mediaServer: &sms.MediaServer{ID: sms.DefaultMediaServerID},
+			}
+			streams.Store(test.key, stream)
+			api := &GB28181API{sms: media, streams: streams}
+			api.svr = &Server{Server: sipServer, gb: api, fromAddress: *local}
+
+			if err := api.OnMediaStreamChanged(t.Context(), MediaStreamEvent{StreamID: stream.StreamID, Reason: "rtp_timeout"}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case payload := <-baseConnection.writes:
+				bye := string(payload)
+				if !strings.HasPrefix(bye, "BYE ") || !strings.Contains(bye, "Call-ID: "+string(callID)) || !strings.Contains(bye, "CSeq: 2 BYE") {
+					t.Fatalf("media loss BYE:\n%s", bye)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("media loss did not send device BYE")
+			}
+			media.mu.Lock()
+			closeCalls, closed := media.closeCalls, media.closed
+			media.mu.Unlock()
+			if closeCalls != 1 || closed.StreamID != stream.StreamID {
+				t.Fatalf("RTP cleanup = calls:%d request:%+v", closeCalls, closed)
+			}
+			if _, ok := streams.Load(test.key); ok {
+				t.Fatal("lost stream remained registered")
+			}
+
+			if err := api.OnMediaStreamChanged(t.Context(), MediaStreamEvent{StreamID: stream.StreamID, Reason: "duplicate"}); err != nil {
+				t.Fatal(err)
+			}
+			media.mu.Lock()
+			closeCalls = media.closeCalls
+			media.mu.Unlock()
+			if closeCalls != 1 {
+				t.Fatalf("duplicate stream loss closed RTP %d times", closeCalls)
+			}
+		})
 	}
 }
 
