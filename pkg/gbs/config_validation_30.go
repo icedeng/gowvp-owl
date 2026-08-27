@@ -3,6 +3,7 @@ package gbs
 import (
 	"encoding/xml"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -60,8 +61,31 @@ type videoTimeSegment30 struct {
 }
 
 type videoAlarmRecord30 struct {
-	RecordEnable *int `xml:"RecordEnable"`
-	StreamNumber *int `xml:"StreamNumber"`
+	RecordEnable  *int `xml:"RecordEnable"`
+	RecordTime    *int `xml:"RecordTime"`
+	PreRecordTime *int `xml:"PreRecordTime"`
+	StreamNumber  *int `xml:"StreamNumber"`
+}
+
+type pictureMask30 struct {
+	On         *int                     `xml:"On"`
+	SumNum     *int                     `xml:"SumNum"`
+	RegionList *pictureMaskRegionList30 `xml:"RegionList"`
+}
+
+type pictureMaskRegionList30 struct {
+	Num   *int                      `xml:"Num,attr"`
+	Items []pictureMaskRegionItem30 `xml:"Item"`
+}
+
+type pictureMaskRegionItem30 struct {
+	Seq   *int    `xml:"Seq"`
+	Point *string `xml:"Point"`
+}
+
+type alarmReport30 struct {
+	MotionDetection *int `xml:"MotionDetection"`
+	FieldDetection  *int `xml:"FieldDetection"`
 }
 
 func validateDeviceConfig30Fragment(name, value string) error {
@@ -72,6 +96,12 @@ func validateDeviceConfig30Fragment(name, value string) error {
 		return validateVideoRecordPlan30(value)
 	case "VideoAlarmRecord":
 		return validateVideoAlarmRecord30(value)
+	case "PictureMask":
+		return validatePictureMask30(value)
+	case "FrameMirror":
+		return validateFrameMirror30(value)
+	case "AlarmReport":
+		return validateAlarmReport30(value)
 	default:
 		return nil
 	}
@@ -188,6 +218,75 @@ func validateVideoAlarmRecord30(value string) error {
 	}
 	if !requiredBinaryValue(config.RecordEnable) || config.StreamNumber == nil || *config.StreamNumber < 0 || *config.StreamNumber > 2 {
 		return fmt.Errorf("VideoAlarmRecord requires RecordEnable 0~1 and StreamNumber 0~2")
+	}
+	if (config.RecordTime != nil && *config.RecordTime < 0) || (config.PreRecordTime != nil && *config.PreRecordTime < 0) {
+		return fmt.Errorf("VideoAlarmRecord time values must not be negative")
+	}
+	return nil
+}
+
+func validatePictureMask30(value string) error {
+	var config pictureMask30
+	if err := decodeDeviceConfig30Fragment("PictureMask", value, &config); err != nil {
+		return err
+	}
+	if !requiredBinaryValue(config.On) || config.SumNum == nil || *config.SumNum < 0 || *config.SumNum > 4 {
+		return fmt.Errorf("PictureMask requires On 0~1 and SumNum 0~4")
+	}
+	if config.RegionList == nil {
+		if *config.SumNum != 0 {
+			return fmt.Errorf("PictureMask SumNum must be 0 when RegionList is absent")
+		}
+		return nil
+	}
+	regions := config.RegionList
+	if regions.Num == nil || *regions.Num != len(regions.Items) || *config.SumNum != len(regions.Items) || len(regions.Items) > 4 {
+		return fmt.Errorf("PictureMask SumNum and RegionList Num must match 0~4 Item elements")
+	}
+	seen := make(map[int]struct{}, len(regions.Items))
+	for index, item := range regions.Items {
+		if item.Seq == nil || *item.Seq < 1 || *item.Seq > 4 || item.Point == nil || !validPictureMaskPoint(*item.Point) {
+			return fmt.Errorf("PictureMask item %d requires Seq 1~4 and four Point coordinates", index+1)
+		}
+		if _, ok := seen[*item.Seq]; ok {
+			return fmt.Errorf("PictureMask item %d has duplicate Seq", index+1)
+		}
+		seen[*item.Seq] = struct{}{}
+	}
+	return nil
+}
+
+func validPictureMaskPoint(value string) bool {
+	parts := strings.Split(strings.TrimSpace(value), ",")
+	if len(parts) != 4 {
+		return false
+	}
+	coordinates := make([]int, 4)
+	for index, part := range parts {
+		coordinate, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || coordinate < 0 {
+			return false
+		}
+		coordinates[index] = coordinate
+	}
+	return coordinates[0] < coordinates[2] && coordinates[1] < coordinates[3]
+}
+
+func validateFrameMirror30(value string) error {
+	mode, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || mode < 0 || mode > 3 {
+		return fmt.Errorf("FrameMirror must be 0~3")
+	}
+	return nil
+}
+
+func validateAlarmReport30(value string) error {
+	var config alarmReport30
+	if err := decodeDeviceConfig30Fragment("AlarmReport", value, &config); err != nil {
+		return err
+	}
+	if !requiredBinaryValue(config.MotionDetection) || !requiredBinaryValue(config.FieldDetection) {
+		return fmt.Errorf("AlarmReport requires MotionDetection and FieldDetection values 0~1")
 	}
 	return nil
 }

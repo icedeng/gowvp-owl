@@ -38,7 +38,7 @@ go test ./... -count=1
 - 设备级 `gb_disabled_capabilities` 会同步影响持久化能力快照、诊断输出和发送前能力门禁；
 - 1.1 Keepalive、Catalog、DeviceConfig、MediaStatus/121、Broadcast Response 串联模拟流程；
 - 1.1 Catalog 扩展与目录节点、未知 XML 保留；
-- BasicParam、VideoParamConfig、AudioParamConfig、SVACEncodeConfig、SVACDecodeConfig 查询与写入报文、组合下发、SVAC XML 片段安全校验及原始响应保存；
+- ConfigDownload 精确版本矩阵（2014 七类、2016 四类、2022 十二类）和 DeviceConfig 精确配置段矩阵（2014 五类、2016 三类、2022 十一类）；BasicParam 按版本要求/裁剪字段，VideoParamConfig、AudioParamConfig、SVACEncodeConfig、SVACDecodeConfig 支持范围不跨版本泄漏，组合下发、SVAC XML 片段安全校验及原始响应保存；
 - MediaStatus/121 幂等收敛；
 - Catalog/RecordInfo 多响应乱序、重复、总数冲突、超时部分结果和同设备并发；
 - RecordInfo 响应包络、列表计数、条目非空名称、显式 `Secrecy=0/1`、可选 dateTime 起止时间、版本化 Type/FileSize/RecordLocation/StreamNumber、目标所有权和在途通道绑定；级联响应按上级版本裁剪新字段并映射 RecorderID/RecordLocation，非法分包不得进入聚合器，NVR 顶层父设备编码别名仍可映射到原查询通道；
@@ -74,7 +74,7 @@ go test ./... -count=1
 - 3.0 PTZ 精准位置变化事件订阅/通知及级联；1.0/1.1/2.0 版本门禁，通知通道编码映射和非共享通道隔离；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅自动建立下级订阅并覆盖续订、退订、引用计数、过期和上级移除清理；Catalog 会订阅承载共享通道的下级 NVR，并在目录快照变化后为新增或迁移通道补订阅；
 - 3.0 CruiseTrackListQuery/CruiseTrackQuery 的请求、结构化响应、轨迹编号参数和安全级联；
 - 3.0 附录 H `X-PreferredPath` 首跳消费/剩余路径转发和 `X-RoutePath` 响应前置；平台编码、重复路径、错误首跳、下级确认不匹配及路由环拒绝；不同指定路径的实时、回放和下载媒体源隔离及正确释放；
-- 3.0 ConfigDownload 使用标准 `SnapShotConfig`，响应解析兼容厂商旧节点 `SnapShot`；
+- 3.0 DeviceConfig 命令使用 `SnapShotConfig`，ConfigDownload 查询应答使用标准 `SnapShot`，响应解析继续兼容厂商沿用的 `SnapShotConfig`；
 - 3.0 `DeviceUpgradeResult` 与 `UploadSnapShotFinished` 最终通知同时校验已鉴权设备、`SessionID` 和原目标通道，同一 NVR 的兄弟通道不能覆盖会话终态；
 - 3.0 `VideoUploadNotify` 校验固定命令类型、正 SN、设备编码、时间和有限经纬度，未知跨设备目标不能写入查询状态；
 - 2.0/3.0 HomePosition 及 3.0 PTZPreciseCtrl 按标准边界拒绝无效参数，其中精准控制 Pan 为 `0..360`、Tilt 为 `-30..90`；PTZCmdParams 仅允许 3.0 且巡航轨迹名称不超过 32 字节；3.0 报警复位校验方式组合和按方式限定的报警类型，升级结果校验正 SN、结果枚举、固件和失败原因，抓拍完成通知校验正 SN、命令类型及最多 10 个文件标识；
@@ -90,10 +90,10 @@ go test ./... -count=1
 - Keepalive 非法根、命令、SN、源设备、状态枚举或故障设备编码不得补载设备、改在线态、写查询状态或触发 Catalog；空 Status 及 ON/OFF 兼容路径须保留；
 - Alarm 非法根、命令、SN、目标、级别、方式、时间或非有限经纬度不得写附录 A.4、触发业务回调或向订阅方转发；
 - MediaStatus 非法根、命令、SN、设备、空通知类型或活动会话目标不匹配不得结束任务；未知类型及已清理会话重复 121 应保持 200 幂等确认；
-- ConfigDownload 成功 BasicParam 的心跳间隔/次数仅允许 `1..65535`；缺失、非正或溢出值不得被截断、修正或静默忽略，也不得改运行态、写状态或解除等待；失败响应和子通道 BasicParam 不得改写父设备心跳运行态；
+- ConfigDownload 的 BasicParam 按版本校验字段存在性：2014 十项必填、2016 四项必填、2022 四项可选；出现的心跳间隔/次数仅允许 `1..65535`，且只有两项同时出现才更新运行态。非法值不得被截断、修正或静默忽略，也不得改运行态、写状态或解除等待；失败响应和子通道 BasicParam 不得改写父设备心跳运行态；
 - DeviceConfig/ConfigDownload 缺失或非法 `Result` 不得写状态、改运行态或解除等待；DeviceConfig 响应必须匹配原目标通道，兄弟通道复用 SN 不得抢占配置或抓拍等待；
 - DeviceConfig 非法版本、根、命令、SN 或目标不得写状态、附录 A.4 或解除等待；
-- 2022 DeviceConfig/ConfigDownload 的 OSD、视频参数属性、录像计划和报警录像配置必须校验必填字段、声明计数、列表上限、0/1 枚举、0~2 码流编号、周/时分秒范围及 OSD 文字长度；本地下发的 `VideoParamAttribute Num` 必须与 Item 数一致，非法本地或级联请求不得发往设备，非法查询应答不得写状态或解除等待；
+- 2022 DeviceConfig/ConfigDownload 的 OSD、视频参数属性、录像计划、报警录像、PictureMask、FrameMirror 和 AlarmReport 配置必须校验必填字段、声明计数、列表上限、0/1 或 0~3 枚举、0~2 码流编号、周/时分秒、非负录像时间、遮挡区域及 OSD 文字长度；本地下发的 `VideoParamAttribute Num` 必须与 Item 数一致，非法本地或级联请求不得发往设备，非法查询应答不得写状态或解除等待；
 - Catalog 非法根、命令、SN、非 20 位顶层目标、负 SumNum 或非法目录项值不得进入多响应聚合、写入目录或解除查询等待；稀疏厂商目录仍允许省略可兼容字段；
 - 四版本历史级联 `INVITE→ACK→INFO→BYE` 完整对话、媒体启动/释放和 MANSRTSP/RTSP 转换；
 - SIP 响应添加 To-tag 时不得修改原请求；级联 INVITE 缓存响应只对 CSeq、Request-URI、顶层 Via 均一致的原事务重传复用，相同 Call-ID/tag 的另一事务返回 491 且不得获得原 200/SDP；

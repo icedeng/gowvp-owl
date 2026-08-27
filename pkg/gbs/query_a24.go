@@ -341,8 +341,8 @@ func (g *GB28181API) resolveDeviceQueryCmdType(deviceID, action, configType stri
 
 func (g *GB28181API) requireConfigTypeVersion(deviceID, configType string) error {
 	name := strings.TrimSpace(configType)
-	minimum, ok := configTypeMinimumVersion(name)
-	if !ok {
+	version := g.getDeviceGBProtocolVersion(deviceID)
+	if !configTypeSupported(version, name) {
 		return fmt.Errorf("unsupported config_type: %s", name)
 	}
 	if err := g.requireGBFeature(deviceID, "config_query", "配置查询("+name+")", func(c GBCapabilities) bool {
@@ -357,20 +357,51 @@ func (g *GB28181API) requireConfigTypeVersion(deviceID, configType string) error
 			return err
 		}
 	}
-	return g.requireGBVersionAtLeast(deviceID, minimum.StandardYear(), "配置查询("+name+")")
+	return nil
 }
 
-func configTypeMinimumVersion(name string) (GBProtocolVersion, bool) {
-	switch strings.TrimSpace(name) {
-	case "BasicParam", "VideoParamOpt", "VideoParamConfig", "AudioParamOpt", "AudioParamConfig",
-		"SVACEncodeConfig", "SVACDecodeConfig":
-		return GBVersion11, true
-	case "VideoParamAttribute", "VideoRecordPlan", "VideoAlarmRecord", "PictureMask", "FrameMirror",
-		"AlarmReport", "OSDConfig", "SnapShotConfig":
-		return GBVersion30, true
-	default:
-		return "", false
+func configTypeSupported(version GBProtocolVersion, name string) bool {
+	switch version {
+	case GBVersion11:
+		switch strings.TrimSpace(name) {
+		case "BasicParam", "VideoParamOpt", "VideoParamConfig", "AudioParamOpt", "AudioParamConfig", "SVACEncodeConfig", "SVACDecodeConfig":
+			return true
+		}
+	case GBVersion20:
+		switch strings.TrimSpace(name) {
+		case "BasicParam", "VideoParamOpt", "SVACEncodeConfig", "SVACDecodeConfig":
+			return true
+		}
+	case GBVersion30:
+		switch strings.TrimSpace(name) {
+		case "BasicParam", "VideoParamOpt", "SVACEncodeConfig", "SVACDecodeConfig", "VideoParamAttribute", "VideoRecordPlan",
+			"VideoAlarmRecord", "PictureMask", "FrameMirror", "AlarmReport", "OSDConfig", "SnapShotConfig":
+			return true
+		}
 	}
+	return false
+}
+
+func deviceConfigSectionSupported(version GBProtocolVersion, name string) bool {
+	switch version {
+	case GBVersion11:
+		switch strings.TrimSpace(name) {
+		case "BasicParam", "VideoParamConfig", "AudioParamConfig", "SVACEncodeConfig", "SVACDecodeConfig":
+			return true
+		}
+	case GBVersion20:
+		switch strings.TrimSpace(name) {
+		case "BasicParam", "SVACEncodeConfig", "SVACDecodeConfig":
+			return true
+		}
+	case GBVersion30:
+		switch strings.TrimSpace(name) {
+		case "BasicParam", "SVACEncodeConfig", "SVACDecodeConfig", "VideoParamAttribute", "VideoRecordPlan",
+			"VideoAlarmRecord", "PictureMask", "FrameMirror", "AlarmReport", "OSDConfig", "SnapShotConfig":
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeConfigType(configType string) (string, bool) {

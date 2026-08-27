@@ -574,7 +574,9 @@ func TestCascadeConfigDownloadTypeVersionMatrix(t *testing.T) {
 	}{
 		{name: "2011 base", value: "BasicParam", version: GBVersion10},
 		{name: "2014 base", value: "BasicParam/VideoParamOpt", version: GBVersion11, want: "BasicParam/VideoParamOpt", allowed: true},
-		{name: "2016 base", value: "AudioParamConfig", version: GBVersion20, want: "AudioParamConfig", allowed: true},
+		{name: "2016 removed 2014 audio", value: "AudioParamConfig", version: GBVersion20},
+		{name: "2016 base", value: "BasicParam/SVACEncodeConfig", version: GBVersion20, want: "BasicParam/SVACEncodeConfig", allowed: true},
+		{name: "2022 removed 2014 video", value: "VideoParamConfig", version: GBVersion30},
 		{name: "2016 extension", value: "VideoRecordPlan", version: GBVersion20},
 		{name: "2022 extension", value: "video_record_plan/snapshot", version: GBVersion30, want: "VideoRecordPlan/SnapShotConfig", allowed: true},
 		{name: "unknown", value: "VendorConfig", version: GBVersion30},

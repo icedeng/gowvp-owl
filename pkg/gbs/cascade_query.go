@@ -427,8 +427,7 @@ func cascadeConfigDownloadType(value string, version GBProtocolVersion) (string,
 		return "", false
 	}
 	for _, name := range strings.Split(canonical, "/") {
-		minimum, known := configTypeMinimumVersion(name)
-		if !known || !version.AtLeast(minimum) {
+		if !configTypeSupported(version, name) {
 			return "", false
 		}
 	}

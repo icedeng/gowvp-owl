@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -70,8 +69,9 @@ type ConfigDownloadResponse struct {
 	FrameMirror         *FrameMirror         `xml:"FrameMirror"`
 	AlarmReport         *AlarmReport         `xml:"AlarmReport"`
 	OSDConfig           *OSDConfig           `xml:"OSDConfig"`
-	SnapShotConfig      *SnapShot            `xml:"SnapShotConfig"`
-	// SnapShot 兼容部分厂商使用的非标准旧节点。
+	// SnapShotConfig 兼容部分厂商在查询应答中沿用配置命令节点名。
+	SnapShotConfig *SnapShot `xml:"SnapShotConfig"`
+	// SnapShot 是 2022 A.2.6.9 规定的配置查询应答节点。
 	SnapShot *SnapShot `xml:"SnapShot"`
 }
 
@@ -84,16 +84,83 @@ type SnapShot struct {
 
 // BasicParam 设备基本参数配置
 type BasicParam struct {
-	Name              string `xml:"Name"`              // 设备名称
-	DeviceID          string `xml:"DeviceID"`          // 设备 ID
-	SIPServerID       string `xml:"SIPServerID"`       // SIP 服务器 ID
-	SIPServerIP       string `xml:"SIPServerIP"`       // SIP 服务器 IP
-	SIPServerPort     int    `xml:"SIPServerPort"`     // SIP 服务器端口
-	DomainName        string `xml:"DomainName"`        // SIP 服务器域
-	Expiration        int    `xml:"Expiration"`        // 注册过期时间
-	Password          string `xml:"Password" json:"-"` // 注册口令
-	HeartBeatInterval int    `xml:"HeartBeatInterval"` // 心跳间隔时间
-	HeartBeatCount    int    `xml:"HeartBeatCount"`    // 心跳超时次数
+	Name              string `xml:"Name,omitempty"`              // 设备名称
+	DeviceID          string `xml:"DeviceID,omitempty"`          // 设备 ID
+	SIPServerID       string `xml:"SIPServerID,omitempty"`       // SIP 服务器 ID
+	SIPServerIP       string `xml:"SIPServerIP,omitempty"`       // SIP 服务器 IP
+	SIPServerPort     int    `xml:"SIPServerPort,omitempty"`     // SIP 服务器端口
+	DomainName        string `xml:"DomainName,omitempty"`        // SIP 服务器域
+	Expiration        int    `xml:"Expiration,omitempty"`        // 注册过期时间
+	Password          string `xml:"Password,omitempty" json:"-"` // 注册口令
+	HeartBeatInterval int    `xml:"HeartBeatInterval,omitempty"` // 心跳间隔时间
+	HeartBeatCount    int    `xml:"HeartBeatCount,omitempty"`    // 心跳超时次数
+	present           basicParamPresence
+}
+
+type basicParamPresence struct {
+	Name              bool
+	DeviceID          bool
+	SIPServerID       bool
+	SIPServerIP       bool
+	SIPServerPort     bool
+	DomainName        bool
+	Expiration        bool
+	Password          bool
+	HeartBeatInterval bool
+	HeartBeatCount    bool
+}
+
+func (param *BasicParam) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
+	var decoded struct {
+		Name              *string `xml:"Name"`
+		DeviceID          *string `xml:"DeviceID"`
+		SIPServerID       *string `xml:"SIPServerID"`
+		SIPServerIP       *string `xml:"SIPServerIP"`
+		SIPServerPort     *int    `xml:"SIPServerPort"`
+		DomainName        *string `xml:"DomainName"`
+		Expiration        *int    `xml:"Expiration"`
+		Password          *string `xml:"Password"`
+		HeartBeatInterval *int    `xml:"HeartBeatInterval"`
+		HeartBeatCount    *int    `xml:"HeartBeatCount"`
+	}
+	if err := decoder.DecodeElement(&decoded, &start); err != nil {
+		return err
+	}
+	if decoded.Name != nil {
+		param.Name, param.present.Name = *decoded.Name, true
+	}
+	if decoded.DeviceID != nil {
+		param.DeviceID, param.present.DeviceID = *decoded.DeviceID, true
+	}
+	if decoded.SIPServerID != nil {
+		param.SIPServerID, param.present.SIPServerID = *decoded.SIPServerID, true
+	}
+	if decoded.SIPServerIP != nil {
+		param.SIPServerIP, param.present.SIPServerIP = *decoded.SIPServerIP, true
+	}
+	if decoded.SIPServerPort != nil {
+		param.SIPServerPort, param.present.SIPServerPort = *decoded.SIPServerPort, true
+	}
+	if decoded.DomainName != nil {
+		param.DomainName, param.present.DomainName = *decoded.DomainName, true
+	}
+	if decoded.Expiration != nil {
+		param.Expiration, param.present.Expiration = *decoded.Expiration, true
+	}
+	if decoded.Password != nil {
+		param.Password, param.present.Password = *decoded.Password, true
+	}
+	if decoded.HeartBeatInterval != nil {
+		param.HeartBeatInterval, param.present.HeartBeatInterval = *decoded.HeartBeatInterval, true
+	}
+	if decoded.HeartBeatCount != nil {
+		param.HeartBeatCount, param.present.HeartBeatCount = *decoded.HeartBeatCount, true
+	}
+	return nil
+}
+
+func (param *BasicParam) hasBothHeartbeatFields() bool {
+	return param != nil && param.present.HeartBeatInterval && param.present.HeartBeatCount
 }
 
 // 下述配置结构体采用 innerxml 承接，保证协议字段兼容且不阻塞解析。
@@ -379,12 +446,10 @@ func (g *GB28181API) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput)
 
 func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, in *DeviceConfigInput) (*DeviceConfigRequest, error) {
 	request := NewDeviceConfig(targetID)
+	version := g.deviceConfigVersion(in.DeviceID, device)
 	configured := false
 	if in.BasicParam != nil {
-		if in.BasicParam.Expiration <= 0 || in.BasicParam.HeartBeatInterval <= 0 || in.BasicParam.HeartBeatCount <= 0 {
-			return nil, fmt.Errorf("BasicParam expiration, heartbeat interval and count must be positive")
-		}
-		param, err := g.completeBasicParam(targetID, device, *in.BasicParam)
+		param, err := g.prepareBasicParam(targetID, device, *in.BasicParam, version)
 		if err != nil {
 			return nil, err
 		}
@@ -392,6 +457,9 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 		configured = true
 	}
 	if in.VideoParamConfig != nil {
+		if !deviceConfigSectionSupported(version, "VideoParamConfig") {
+			return nil, fmt.Errorf("VideoParamConfig is not supported by %s", version.StandardName())
+		}
 		config := *in.VideoParamConfig
 		config.Items = append([]VideoParamWriteItem(nil), in.VideoParamConfig.Items...)
 		if err := validateVideoParamConfig(&config); err != nil {
@@ -402,6 +470,9 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 		configured = true
 	}
 	if in.AudioParamConfig != nil {
+		if !deviceConfigSectionSupported(version, "AudioParamConfig") {
+			return nil, fmt.Errorf("AudioParamConfig is not supported by %s", version.StandardName())
+		}
 		config := *in.AudioParamConfig
 		config.Items = append([]AudioParamWriteItem(nil), in.AudioParamConfig.Items...)
 		if err := validateAudioParamConfig(&config); err != nil {
@@ -412,6 +483,9 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 		configured = true
 	}
 	if in.SVACEncodeConfig != nil {
+		if !deviceConfigSectionSupported(version, "SVACEncodeConfig") {
+			return nil, fmt.Errorf("SVACEncodeConfig is not supported by %s", version.StandardName())
+		}
 		config := *in.SVACEncodeConfig
 		if err := validateDeviceConfigXMLFragment("SVACEncodeConfig", config.InnerXML); err != nil {
 			return nil, err
@@ -420,6 +494,9 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 		configured = true
 	}
 	if in.SVACDecodeConfig != nil {
+		if !deviceConfigSectionSupported(version, "SVACDecodeConfig") {
+			return nil, fmt.Errorf("SVACDecodeConfig is not supported by %s", version.StandardName())
+		}
 		config := *in.SVACDecodeConfig
 		if err := validateDeviceConfigXMLFragment("SVACDecodeConfig", config.InnerXML); err != nil {
 			return nil, err
@@ -486,6 +563,19 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 		return nil, fmt.Errorf("DeviceConfig requires at least one configuration section")
 	}
 	return request, nil
+}
+
+func (g *GB28181API) deviceConfigVersion(deviceID string, device *Device) GBProtocolVersion {
+	if device != nil {
+		if version, ok := ParseGBProtocolVersion(device.GBVersion()); ok {
+			return version
+		}
+	}
+	if g != nil && g.svr != nil && g.svr.memoryStorer != nil {
+		return g.getDeviceGBProtocolVersion(deviceID)
+	}
+	// 直接构造请求的兼容 API 源自 2014 修改补充文件；无设备上下文时沿用该档案。
+	return GBVersion11
 }
 
 func validateSnapshotConfig(config *SnapShot) error {
@@ -617,6 +707,55 @@ func (g *GB28181API) completeBasicParam(targetID string, device *Device, in Basi
 	return out, nil
 }
 
+func (g *GB28181API) prepareBasicParam(targetID string, device *Device, in BasicParam, version GBProtocolVersion) (BasicParam, error) {
+	if version == GBVersion11 {
+		if strings.TrimSpace(in.Name) == "" || in.Expiration <= 0 || in.HeartBeatInterval <= 0 || in.HeartBeatCount <= 0 {
+			return BasicParam{}, fmt.Errorf("BasicParam requires name, expiration and heartbeat values for %s", version.StandardName())
+		}
+		return g.completeBasicParam(targetID, device, in)
+	}
+	if !deviceConfigSectionSupported(version, "BasicParam") {
+		return BasicParam{}, fmt.Errorf("BasicParam is not supported by %s", version.StandardName())
+	}
+	if in.Expiration < 0 || in.HeartBeatInterval < 0 || in.HeartBeatCount < 0 {
+		return BasicParam{}, fmt.Errorf("BasicParam values must not be negative")
+	}
+	return BasicParam{
+		Name: strings.TrimSpace(in.Name), Expiration: in.Expiration,
+		HeartBeatInterval: in.HeartBeatInterval, HeartBeatCount: in.HeartBeatCount,
+	}, nil
+}
+
+func validateBasicParamResponse(param *BasicParam, version GBProtocolVersion) error {
+	if param == nil {
+		return nil
+	}
+	if version == GBVersion11 {
+		p := param.present
+		if !p.Name || !p.DeviceID || !p.SIPServerID || !p.SIPServerIP || !p.SIPServerPort || !p.DomainName ||
+			!p.Expiration || !p.Password || !p.HeartBeatInterval || !p.HeartBeatCount {
+			return fmt.Errorf("ConfigDownload BasicParam is incomplete for %s", version.StandardName())
+		}
+	} else if version == GBVersion20 {
+		p := param.present
+		if !p.Name || !p.Expiration || !p.HeartBeatInterval || !p.HeartBeatCount {
+			return fmt.Errorf("ConfigDownload BasicParam is incomplete for %s", version.StandardName())
+		}
+	} else if version != GBVersion30 {
+		return fmt.Errorf("ConfigDownload BasicParam is not supported by %s", version.StandardName())
+	}
+	if param.present.Expiration && param.Expiration < 0 {
+		return fmt.Errorf("ConfigDownload BasicParam expiration is invalid")
+	}
+	if param.present.HeartBeatInterval && (param.HeartBeatInterval <= 0 || param.HeartBeatInterval > 65535) {
+		return fmt.Errorf("ConfigDownload BasicParam heartbeat interval is invalid")
+	}
+	if param.present.HeartBeatCount && (param.HeartBeatCount <= 0 || param.HeartBeatCount > 65535) {
+		return fmt.Errorf("ConfigDownload BasicParam heartbeat count is invalid")
+	}
+	return nil
+}
+
 func buildPendingDeviceConfigKey(deviceID string, sn int) string {
 	return strings.TrimSpace(deviceID) + ":" + strconv.Itoa(sn)
 }
@@ -649,7 +788,34 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 	}
 
 	resultOK := strings.EqualFold(msg.Result, "OK")
+	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
 	if resultOK {
+		responseSections := []struct {
+			name    string
+			present bool
+		}{
+			{"BasicParam", msg.BasicParam != nil},
+			{"VideoParamOpt", msg.VideoParamOpt != nil},
+			{"VideoParamConfig", msg.VideoParamConfig != nil},
+			{"AudioParamOpt", msg.AudioParamOpt != nil},
+			{"AudioParamConfig", msg.AudioParamConfig != nil},
+			{"SVACEncodeConfig", msg.SVACEncodeConfig != nil},
+			{"SVACDecodeConfig", msg.SVACDecodeConfig != nil},
+			{"VideoParamAttribute", msg.VideoParamAttribute != nil},
+			{"VideoRecordPlan", msg.VideoRecordPlan != nil},
+			{"VideoAlarmRecord", msg.VideoAlarmRecord != nil},
+			{"PictureMask", msg.PictureMask != nil},
+			{"FrameMirror", msg.FrameMirror != nil},
+			{"AlarmReport", msg.AlarmReport != nil},
+			{"OSDConfig", msg.OSDConfig != nil},
+			{"SnapShotConfig", msg.SnapShotConfig != nil || msg.SnapShot != nil},
+		}
+		for _, section := range responseSections {
+			if section.present && !configTypeSupported(version, section.name) {
+				ctx.String(400, "ConfigDownload "+section.name+" is not supported by "+version.StandardName())
+				return
+			}
+		}
 		sections := []struct {
 			name    string
 			value   string
@@ -702,13 +868,12 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 		}
 	}
 	if resultOK && msg.BasicParam != nil {
-		if msg.BasicParam.HeartBeatInterval <= 0 || msg.BasicParam.HeartBeatInterval > math.MaxUint16 ||
-			msg.BasicParam.HeartBeatCount <= 0 || msg.BasicParam.HeartBeatCount > math.MaxUint16 {
-			ctx.String(400, "ConfigDownload BasicParam heartbeat values are invalid")
+		if err := validateBasicParamResponse(msg.BasicParam, version); err != nil {
+			ctx.String(400, err.Error())
 			return
 		}
 	}
-	if msg.BasicParam != nil && msg.DeviceID == strings.TrimSpace(ctx.DeviceID) && resultOK {
+	if msg.BasicParam != nil && msg.DeviceID == strings.TrimSpace(ctx.DeviceID) && resultOK && msg.BasicParam.hasBothHeartbeatFields() {
 		ipc, ok := g.svr.memoryStorer.Load(ctx.DeviceID)
 		if !ok {
 			ctx.Log.Debug("sipMessageConfigDownload", "deviceID", ctx.DeviceID, "err", "device offline")

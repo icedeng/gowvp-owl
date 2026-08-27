@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -175,7 +176,7 @@ func TestDeviceConfig30WritesAll2022Sections(t *testing.T) {
 		VideoParamAttribute: &VideoParamAttribute{InnerXML: `<Item><StreamNumber>0</StreamNumber><VideoFormat>H.265</VideoFormat><Resolution>1920x1080</Resolution><FrameRate>25</FrameRate><BitRateType>1</BitRateType></Item>`},
 		VideoRecordPlan:     &VideoRecordPlan{InnerXML: `<RecordEnable>1</RecordEnable><RecordScheduleSumNum>1</RecordScheduleSumNum><RecordSchedule><WeekDayNum>1</WeekDayNum><TimeSegmentSumNum>1</TimeSegmentSumNum><TimeSegment><StartHour>0</StartHour><StartMin>0</StartMin><StartSec>0</StartSec><StopHour>23</StopHour><StopMin>59</StopMin><StopSec>59</StopSec></TimeSegment></RecordSchedule><StreamNumber>0</StreamNumber>`},
 		VideoAlarmRecord:    &VideoAlarmRecord{InnerXML: `<RecordEnable>1</RecordEnable><StreamNumber>0</StreamNumber>`},
-		PictureMask:         &PictureMask{InnerXML: `<Enable>1</Enable><SumNum>0</SumNum>`},
+		PictureMask:         &PictureMask{InnerXML: `<On>1</On><SumNum>1</SumNum><RegionList Num="1"><Item><Seq>1</Seq><Point>20,30,50,60</Point></Item></RegionList>`},
 		FrameMirror:         &FrameMirror{InnerXML: `1`},
 		AlarmReport:         &AlarmReport{InnerXML: `<MotionDetection>1</MotionDetection><FieldDetection>1</FieldDetection>`},
 		OSDConfig:           &OSDConfig{InnerXML: `<Length>1920</Length><Width>1080</Width><TimeX>10</TimeX><TimeY>10</TimeY><SumNum>0</SumNum>`},
@@ -233,6 +234,12 @@ func TestDeviceConfig30RejectsInvalidStructuredSections(t *testing.T) {
 		{name: "record plan missing fields", input: &DeviceConfigInput{DeviceID: "device", VideoRecordPlan: &VideoRecordPlan{InnerXML: `<RecordPlan>1</RecordPlan>`}}},
 		{name: "record plan bad time", input: &DeviceConfigInput{DeviceID: "device", VideoRecordPlan: &VideoRecordPlan{InnerXML: `<RecordEnable>1</RecordEnable><RecordScheduleSumNum>1</RecordScheduleSumNum><RecordSchedule><WeekDayNum>1</WeekDayNum><TimeSegmentSumNum>1</TimeSegmentSumNum><TimeSegment><StartHour>24</StartHour><StartMin>0</StartMin><StartSec>0</StartSec><StopHour>23</StopHour><StopMin>59</StopMin><StopSec>59</StopSec></TimeSegment></RecordSchedule><StreamNumber>0</StreamNumber>`}}},
 		{name: "alarm recording enum", input: &DeviceConfigInput{DeviceID: "device", VideoAlarmRecord: &VideoAlarmRecord{InnerXML: `<RecordEnable>2</RecordEnable><StreamNumber>0</StreamNumber>`}}},
+		{name: "alarm recording negative time", input: &DeviceConfigInput{DeviceID: "device", VideoAlarmRecord: &VideoAlarmRecord{InnerXML: `<RecordEnable>1</RecordEnable><RecordTime>-1</RecordTime><StreamNumber>0</StreamNumber>`}}},
+		{name: "picture mask missing On", input: &DeviceConfigInput{DeviceID: "device", PictureMask: &PictureMask{InnerXML: `<SumNum>0</SumNum>`}}},
+		{name: "picture mask count mismatch", input: &DeviceConfigInput{DeviceID: "device", PictureMask: &PictureMask{InnerXML: `<On>1</On><SumNum>1</SumNum><RegionList Num="0"><Item><Seq>1</Seq><Point>20,30,50,60</Point></Item></RegionList>`}}},
+		{name: "picture mask point format", input: &DeviceConfigInput{DeviceID: "device", PictureMask: &PictureMask{InnerXML: `<On>1</On><SumNum>1</SumNum><RegionList Num="1"><Item><Seq>1</Seq><Point>20,30,10,60</Point></Item></RegionList>`}}},
+		{name: "frame mirror enum", input: &DeviceConfigInput{DeviceID: "device", FrameMirror: &FrameMirror{InnerXML: `4`}}},
+		{name: "alarm report missing field", input: &DeviceConfigInput{DeviceID: "device", AlarmReport: &AlarmReport{InnerXML: `<MotionDetection>1</MotionDetection>`}}},
 		{name: "osd count mismatch", input: &DeviceConfigInput{DeviceID: "device", OSDConfig: &OSDConfig{InnerXML: `<Length>1920</Length><Width>1080</Width><TimeX>0</TimeX><TimeY>0</TimeY><SumNum>1</SumNum>`}}},
 	}
 	for _, test := range tests {
@@ -245,22 +252,37 @@ func TestDeviceConfig30RejectsInvalidStructuredSections(t *testing.T) {
 }
 
 func TestConfigDownload30RejectsInvalidStructuredSectionBeforeStateAndWait(t *testing.T) {
-	api, _ := newVersionGateAPI(GBVersion30)
-	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1), targetID: "device"}
-	api.pendingDeviceQuery.Store(buildPendingQueryKey("device", CMDTypeConfigDownload, 81), pending)
-	defer api.pendingDeviceQuery.Delete(buildPendingQueryKey("device", CMDTypeConfigDownload, 81))
-	body := []byte(`<Response><CmdType>ConfigDownload</CmdType><SN>81</SN><DeviceID>device</DeviceID><Result>OK</Result><VideoRecordPlan><RecordEnable>1</RecordEnable><RecordScheduleSumNum>1</RecordScheduleSumNum><StreamNumber>0</StreamNumber></VideoRecordPlan></Response>`)
-	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "config-download-invalid-2022-section", body, api.sipMessageConfigDownload)
-	if !strings.Contains(response, "SIP/2.0 400") {
-		t.Fatalf("invalid ConfigDownload response = %s", response)
+	tests := []struct {
+		name    string
+		section string
+	}{
+		{name: "record plan", section: `<VideoRecordPlan><RecordEnable>1</RecordEnable><RecordScheduleSumNum>1</RecordScheduleSumNum><StreamNumber>0</StreamNumber></VideoRecordPlan>`},
+		{name: "picture mask", section: `<PictureMask><On>1</On><SumNum>1</SumNum><RegionList Num="0"><Item><Seq>1</Seq><Point>20,30,50,60</Point></Item></RegionList></PictureMask>`},
+		{name: "frame mirror", section: `<FrameMirror>4</FrameMirror>`},
+		{name: "alarm report", section: `<AlarmReport><MotionDetection>1</MotionDetection></AlarmReport>`},
 	}
-	select {
-	case output := <-pending.wait:
-		t.Fatalf("invalid ConfigDownload resolved pending query: %+v", output)
-	default:
-	}
-	if state, ok := api.GetQueryState("device"); ok && state.ConfigDownload != nil {
-		t.Fatalf("invalid ConfigDownload changed query state: %+v", state.ConfigDownload)
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			api, _ := newVersionGateAPI(GBVersion30)
+			sn := 81 + index
+			pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1), targetID: gb10DeviceID}
+			key := buildPendingQueryKey(gb10DeviceID, CMDTypeConfigDownload, sn)
+			api.pendingDeviceQuery.Store(key, pending)
+			defer api.pendingDeviceQuery.Delete(key)
+			body := []byte(`<Response><CmdType>ConfigDownload</CmdType><SN>` + strconv.Itoa(sn) + `</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result>` + test.section + `</Response>`)
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "config-download-invalid-2022-section", body, api.sipMessageConfigDownload)
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("invalid ConfigDownload response = %s", response)
+			}
+			select {
+			case output := <-pending.wait:
+				t.Fatalf("invalid ConfigDownload resolved pending query: %+v", output)
+			default:
+			}
+			if state, ok := api.GetQueryState(gb10DeviceID); ok && state.ConfigDownload != nil {
+				t.Fatalf("invalid ConfigDownload changed query state: %+v", state.ConfigDownload)
+			}
+		})
 	}
 }
 
@@ -377,6 +399,70 @@ func TestConfigDownloadResponseValidatesBeforeRuntimeUpdate(t *testing.T) {
 	}
 }
 
+func TestConfigDownloadBasicParamValidationByVersion(t *testing.T) {
+	full2014 := `<BasicParam><Name>IPC</Name><DeviceID>` + gb10DeviceID + `</DeviceID><SIPServerID>` + gb10PlatformID + `</SIPServerID><SIPServerIP>192.0.2.20</SIPServerIP><SIPServerPort>5060</SIPServerPort><DomainName>3402000000</DomainName><Expiration>3600</Expiration><Password>secret</Password><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam>`
+	tests := []struct {
+		name    string
+		version GBProtocolVersion
+		param   string
+		ok      bool
+	}{
+		{name: "2014 complete", version: GBVersion11, param: full2014, ok: true},
+		{name: "2014 partial", version: GBVersion11, param: `<BasicParam><Name>IPC</Name></BasicParam>`},
+		{name: "2016 complete", version: GBVersion20, param: `<BasicParam><Name>IPC</Name><Expiration>3600</Expiration><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam>`, ok: true},
+		{name: "2016 partial", version: GBVersion20, param: `<BasicParam><Name>IPC</Name></BasicParam>`},
+		{name: "2022 partial", version: GBVersion30, param: `<BasicParam><Name>IPC</Name></BasicParam>`, ok: true},
+		{name: "2022 invalid present heartbeat", version: GBVersion30, param: `<BasicParam><HeartBeatInterval>0</HeartBeatInterval></BasicParam>`},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			api, _ := newVersionGateAPI(test.version)
+			body := []byte(`<Response><CmdType>ConfigDownload</CmdType><SN>` + strconv.Itoa(90+index) + `</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result>` + test.param + `</Response>`)
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "config-download-basic-version", body, api.sipMessageConfigDownload)
+			gotOK := strings.Contains(response, "SIP/2.0 200")
+			if gotOK != test.ok {
+				t.Fatalf("response = %s, want ok=%v", response, test.ok)
+			}
+		})
+	}
+}
+
+func TestDeviceConfigAndQueryUseExactVersionProfiles(t *testing.T) {
+	for _, version := range []GBProtocolVersion{GBVersion20, GBVersion30} {
+		api, _ := newVersionGateAPI(version)
+		if err := api.requireConfigTypeVersion("device", "AudioParamConfig"); err == nil {
+			t.Fatalf("%s accepted removed AudioParamConfig query", version)
+		}
+		if _, err := api.buildDeviceConfigRequest("device", nil, &DeviceConfigInput{
+			DeviceID: "device", AudioParamConfig: &AudioParamConfigWrite{Items: []AudioParamWriteItem{{
+				StreamName: "Stream1", AudioFormat: "G.711", AudioBitRate: "64", SamplingRate: "8",
+			}}},
+		}); err == nil {
+			t.Fatalf("%s accepted removed AudioParamConfig write", version)
+		}
+	}
+	api, _ := newVersionGateAPI(GBVersion30)
+	request, err := api.buildDeviceConfigRequest("device", nil, &DeviceConfigInput{
+		DeviceID: "device", BasicParam: &BasicParam{Name: "IPC", Expiration: 3600, HeartBeatInterval: 60, HeartBeatCount: 3},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := sip.XMLEncode(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, removed := range []string{"<DeviceID>", "<SIPServerID>", "<SIPServerIP>", "<SIPServerPort>", "<DomainName>", "<Password>"} {
+		if strings.Count(text, removed) > map[string]int{"<DeviceID>": 1}[removed] {
+			t.Fatalf("2022 BasicParam contains removed %s: %s", removed, text)
+		}
+	}
+	if !strings.Contains(text, "<Name>IPC</Name>") || !strings.Contains(text, "<Expiration>3600</Expiration>") {
+		t.Fatalf("2022 BasicParam missing supported fields: %s", text)
+	}
+}
+
 func TestConfigDownloadFailureAndChildBasicParamDoNotChangeParentRuntime(t *testing.T) {
 	memory := newFlowMemory(gb10DeviceID)
 	memory.runtime.setGBVersion(GBVersion11)
@@ -384,7 +470,7 @@ func TestConfigDownloadFailureAndChildBasicParamDoNotChangeParentRuntime(t *test
 	api := &GB28181API{svr: &Server{memoryStorer: memory}}
 	for _, body := range []string{
 		`<Response><CmdType>ConfigDownload</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>ERROR</Result><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`,
-		`<Response><CmdType>ConfigDownload</CmdType><SN>2</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>OK</Result><BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`,
+		`<Response><CmdType>ConfigDownload</CmdType><SN>2</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>OK</Result><BasicParam><Name>IPC</Name><DeviceID>` + gb10ChannelID + `</DeviceID><SIPServerID>` + gb10PlatformID + `</SIPServerID><SIPServerIP>192.0.2.20</SIPServerIP><SIPServerPort>5060</SIPServerPort><DomainName>3402000000</DomainName><Expiration>3600</Expiration><Password>secret</Password><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam></Response>`,
 	} {
 		response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "config-download-no-parent-update", []byte(body), api.sipMessageConfigDownload)
 		assertFlowOK(t, response)
@@ -395,21 +481,33 @@ func TestConfigDownloadFailureAndChildBasicParamDoNotChangeParentRuntime(t *test
 	}
 }
 
-func TestConfigDownload30UsesStandardSnapShotConfigName(t *testing.T) {
+func TestConfigDownload30UsesStandardSnapShotResponseName(t *testing.T) {
 	canonical, ok := normalizeConfigTypes("snapshot/SnapShotConfig")
 	if !ok || canonical != "SnapShotConfig" {
 		t.Fatalf("snapshot config normalization = %q, %v", canonical, ok)
 	}
-	standard := decodeConfigDownloadState([]byte(`<Response><CmdType>ConfigDownload</CmdType><SN>10</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><SnapShotConfig><SnapNum>2</SnapNum><Interval>3</Interval><UploadURL>https://example.invalid/upload</UploadURL><SessionID>standard</SessionID></SnapShotConfig></Response>`))
+	standard := decodeConfigDownloadState([]byte(`<Response><CmdType>ConfigDownload</CmdType><SN>10</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><SnapShot><SnapNum>2</SnapNum><Interval>3</Interval><UploadURL>https://example.invalid/upload</UploadURL><SessionID>standard</SessionID></SnapShot></Response>`))
 	if standard == nil || standard.SnapShot == nil || standard.SnapShot.SnapNum != 2 || standard.SnapShot.SessionID != "standard" {
 		t.Fatalf("standard SnapShotConfig state = %+v", standard)
 	}
-	legacy := decodeConfigDownloadState([]byte(`<Response><CmdType>ConfigDownload</CmdType><SN>11</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><SnapShot><SnapNum>1</SnapNum><Interval>1</Interval><UploadURL>https://example.invalid/upload</UploadURL><SessionID>legacy</SessionID></SnapShot></Response>`))
+	legacy := decodeConfigDownloadState([]byte(`<Response><CmdType>ConfigDownload</CmdType><SN>11</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><SnapShotConfig><SnapNum>1</SnapNum><Interval>1</Interval><UploadURL>https://example.invalid/upload</UploadURL><SessionID>legacy</SessionID></SnapShotConfig></Response>`))
 	if legacy == nil || legacy.SnapShot == nil || legacy.SnapShot.SessionID != "legacy" {
 		t.Fatalf("legacy SnapShot state = %+v", legacy)
 	}
 	if types := configDownloadStateTypes(standard); len(types) != 1 || types[0] != "SnapShotConfig" {
 		t.Fatalf("snapshot config response types = %v", types)
+	}
+}
+
+func TestConfigDownload30AcceptsStandardSnapShotResponse(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	body := []byte(`<Response><CmdType>ConfigDownload</CmdType><SN>12</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><SnapShot><SnapNum>2</SnapNum><Interval>3</Interval><UploadURL>https://example.invalid/upload</UploadURL><SessionID>snapshot-session-0000000000000012</SessionID></SnapShot></Response>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "config-download-standard-snapshot", body, api.sipMessageConfigDownload)
+	assertFlowOK(t, response)
+	state, ok := api.GetQueryState(gb10DeviceID)
+	if !ok || state.ConfigDownload == nil || state.ConfigDownload.SnapShot == nil ||
+		state.ConfigDownload.SnapShot.SessionID != "snapshot-session-0000000000000012" {
+		t.Fatalf("standard SnapShot response state = %+v", state.ConfigDownload)
 	}
 }
 

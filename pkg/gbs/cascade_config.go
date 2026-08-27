@@ -138,6 +138,38 @@ func validateCascadeDeviceConfigRequest(request *DeviceConfigRequest, version GB
 	if !version.Capabilities().ConfigWrite {
 		return fmt.Errorf("DeviceConfig is not supported by negotiated protocol")
 	}
+	sections := []struct {
+		name    string
+		present bool
+	}{
+		{"BasicParam", request.BasicParam != nil},
+		{"VideoParamConfig", request.VideoParamConfig != nil},
+		{"AudioParamConfig", request.AudioParamConfig != nil},
+		{"SVACEncodeConfig", request.SVACEncodeConfig != nil},
+		{"SVACDecodeConfig", request.SVACDecodeConfig != nil},
+		{"VideoParamAttribute", request.VideoParamAttribute != nil},
+		{"VideoRecordPlan", request.VideoRecordPlan != nil},
+		{"VideoAlarmRecord", request.VideoAlarmRecord != nil},
+		{"PictureMask", request.PictureMask != nil},
+		{"FrameMirror", request.FrameMirror != nil},
+		{"AlarmReport", request.AlarmReport != nil},
+		{"OSDConfig", request.OSDConfig != nil},
+		{"SnapShotConfig", request.SnapShotConfig != nil},
+	}
+	for _, section := range sections {
+		if section.present && !deviceConfigSectionSupported(version, section.name) {
+			return fmt.Errorf("%s is not supported by %s", section.name, version.StandardName())
+		}
+	}
+	if request.BasicParam != nil {
+		if version == GBVersion11 && (strings.TrimSpace(request.BasicParam.Name) == "" || request.BasicParam.Expiration <= 0 ||
+			request.BasicParam.HeartBeatInterval <= 0 || request.BasicParam.HeartBeatCount <= 0) {
+			return fmt.Errorf("BasicParam requires name, expiration and heartbeat values for %s", version.StandardName())
+		}
+		if version != GBVersion11 && (request.BasicParam.Expiration < 0 || request.BasicParam.HeartBeatInterval < 0 || request.BasicParam.HeartBeatCount < 0) {
+			return fmt.Errorf("BasicParam values must not be negative")
+		}
+	}
 	extended := request.VideoParamAttribute != nil || request.VideoRecordPlan != nil || request.VideoAlarmRecord != nil ||
 		request.PictureMask != nil || request.FrameMirror != nil || request.AlarmReport != nil || request.OSDConfig != nil || request.SnapShotConfig != nil
 	if extended && !version.AtLeast(GBVersion30) {
@@ -158,8 +190,8 @@ func validateCascadeDeviceConfigPayload(request *DeviceConfigRequest) error {
 	if !legacy && !extended {
 		return fmt.Errorf("DeviceConfig requires at least one configuration section")
 	}
-	if request.BasicParam != nil && (request.BasicParam.Expiration <= 0 || request.BasicParam.HeartBeatInterval <= 0 || request.BasicParam.HeartBeatCount <= 0) {
-		return fmt.Errorf("BasicParam expiration, heartbeat interval and count must be positive")
+	if request.BasicParam != nil && (request.BasicParam.Expiration < 0 || request.BasicParam.HeartBeatInterval < 0 || request.BasicParam.HeartBeatCount < 0) {
+		return fmt.Errorf("BasicParam values must not be negative")
 	}
 	if request.VideoParamConfig != nil {
 		if err := validateVideoParamConfig(request.VideoParamConfig); err != nil {

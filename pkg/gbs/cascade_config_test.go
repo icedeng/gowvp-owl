@@ -15,7 +15,7 @@ import (
 func TestCascadeDeviceConfigVersionAndPayloadValidation(t *testing.T) {
 	base := DeviceConfigRequest{
 		XMLName: xml.Name{Local: "Control"}, CmdType: "DeviceConfig", SN: 1, DeviceID: testExposedChannelID,
-		BasicParam: &BasicParam{Expiration: 3600, HeartBeatInterval: 60, HeartBeatCount: 3},
+		BasicParam: &BasicParam{Name: "IPC", Expiration: 3600, HeartBeatInterval: 60, HeartBeatCount: 3},
 	}
 	if err := validateCascadeDeviceConfigRequest(&base, GBVersion10); err == nil {
 		t.Fatal("1.0 cascade DeviceConfig was accepted")
@@ -56,6 +56,20 @@ func TestCascadeDeviceConfigVersionAndPayloadValidation(t *testing.T) {
 	if err := validateCascadeDeviceConfigRequest(&invalid, GBVersion30); err == nil {
 		t.Fatal("invalid structured cascade DeviceConfig fragment was accepted")
 	}
+	for _, section := range []DeviceConfigRequest{
+		{PictureMask: &PictureMask{InnerXML: `<On>1</On><SumNum>1</SumNum>`}},
+		{FrameMirror: &FrameMirror{InnerXML: `4`}},
+		{AlarmReport: &AlarmReport{InnerXML: `<MotionDetection>1</MotionDetection>`}},
+	} {
+		invalid = base
+		invalid.BasicParam = nil
+		invalid.PictureMask = section.PictureMask
+		invalid.FrameMirror = section.FrameMirror
+		invalid.AlarmReport = section.AlarmReport
+		if err := validateCascadeDeviceConfigRequest(&invalid, GBVersion30); err == nil {
+			t.Fatalf("invalid structured cascade DeviceConfig section was accepted: %+v", section)
+		}
+	}
 }
 
 func TestCascadeDeviceConfigMapsTargetAndReturnsUpstreamResult(t *testing.T) {
@@ -83,7 +97,7 @@ func TestCascadeDeviceConfigMapsTargetAndReturnsUpstreamResult(t *testing.T) {
 	}
 	body, err := sip.XMLEncode(DeviceConfigRequest{
 		CmdType: "DeviceConfig", SN: 45, DeviceID: testExposedChannelID,
-		BasicParam: &BasicParam{Expiration: 3600, HeartBeatInterval: 60, HeartBeatCount: 3},
+		BasicParam: &BasicParam{Name: "IPC", Expiration: 3600, HeartBeatInterval: 60, HeartBeatCount: 3},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +137,7 @@ func TestCascadeMiddlewareAcceptsDeviceConfigAndDispatchesOnce(t *testing.T) {
 	}
 	body, err := sip.XMLEncode(DeviceConfigRequest{
 		CmdType: "DeviceConfig", SN: 46, DeviceID: testExposedChannelID,
-		BasicParam: &BasicParam{Expiration: 3600, HeartBeatInterval: 60, HeartBeatCount: 3},
+		BasicParam: &BasicParam{Name: "IPC", Expiration: 3600, HeartBeatInterval: 60, HeartBeatCount: 3},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +194,7 @@ func TestCascadeMiddlewareAcknowledgesThenRejectsDeviceConfigAfterVersionDowngra
 	}
 	body, err := sip.XMLEncode(DeviceConfigRequest{
 		CmdType: "DeviceConfig", SN: 47, DeviceID: testExposedChannelID,
-		BasicParam: &BasicParam{Expiration: 3600, HeartBeatInterval: 60, HeartBeatCount: 3},
+		BasicParam: &BasicParam{Name: "IPC", Expiration: 3600, HeartBeatInterval: 60, HeartBeatCount: 3},
 	})
 	if err != nil {
 		t.Fatal(err)
