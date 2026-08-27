@@ -242,8 +242,8 @@ func validateCascadeDeviceControl(request *deviceControlA23Request, upstream, do
 		if precise.Pan != nil && !validFiniteRange(*precise.Pan, 0, 360) {
 			return fmt.Errorf("PTZPreciseCtrl Pan must be in [0,360]")
 		}
-		if precise.Tilt != nil && !validFinite(*precise.Tilt) {
-			return fmt.Errorf("PTZPreciseCtrl Tilt must be finite")
+		if precise.Tilt != nil && !validFiniteRange(*precise.Tilt, -30, 90) {
+			return fmt.Errorf("PTZPreciseCtrl Tilt must be in [-30,90]")
 		}
 		if precise.Zoom != nil && !validFinite(*precise.Zoom) {
 			return fmt.Errorf("PTZPreciseCtrl Zoom must be finite")

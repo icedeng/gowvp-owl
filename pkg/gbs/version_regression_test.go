@@ -48,6 +48,8 @@ func TestDeviceControlStandardParameterRanges(t *testing.T) {
 		{PTZPrecise: &PTZPreciseParam{Pan: float64Pointer(-0.01)}},
 		{PTZPrecise: &PTZPreciseParam{Pan: float64Pointer(360.01)}},
 		{PTZPrecise: &PTZPreciseParam{Pan: float64Pointer(math.NaN())}},
+		{PTZPrecise: &PTZPreciseParam{Tilt: float64Pointer(-30.01)}},
+		{PTZPrecise: &PTZPreciseParam{Tilt: float64Pointer(90.01)}},
 		{PTZPrecise: &PTZPreciseParam{Tilt: float64Pointer(math.Inf(-1))}},
 		{PTZPrecise: &PTZPreciseParam{Zoom: float64Pointer(math.Inf(1))}},
 	} {
@@ -56,10 +58,14 @@ func TestDeviceControlStandardParameterRanges(t *testing.T) {
 		}
 	}
 	valid := &DeviceControlInput{PTZPrecise: &PTZPreciseParam{
-		Pan: float64Pointer(360), Tilt: float64Pointer(-45), Zoom: float64Pointer(1),
+		Pan: float64Pointer(360), Tilt: float64Pointer(-30), Zoom: float64Pointer(1),
 	}}
 	if err := api.fillDeviceControlRequest("device", deviceControlActionPTZPrecise, valid, &deviceControlA23Request{}); err != nil {
 		t.Fatalf("valid PTZPrecise boundary rejected: %v", err)
+	}
+	valid.PTZPrecise.Tilt = float64Pointer(90)
+	if err := api.fillDeviceControlRequest("device", deviceControlActionPTZPrecise, valid, &deviceControlA23Request{}); err != nil {
+		t.Fatalf("valid PTZPrecise upper tilt boundary rejected: %v", err)
 	}
 	for _, input := range []*DeviceControlInput{
 		{AlarmMethod: "8"},

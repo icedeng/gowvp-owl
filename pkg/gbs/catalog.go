@@ -259,7 +259,11 @@ func validateCatalogItemValues(item Channels, version GBProtocolVersion) error {
 	if item.SafetyWay != 0 && item.SafetyWay != 2 && item.SafetyWay != 3 && item.SafetyWay != 4 {
 		return fmt.Errorf("invalid Catalog item SafetyWay")
 	}
-	if item.RegisterWay < 0 || item.RegisterWay > 3 {
+	registerWayMaximum := 3
+	if version == GBVersion30 {
+		registerWayMaximum = 4
+	}
+	if item.RegisterWay < 0 || item.RegisterWay > registerWayMaximum {
 		return fmt.Errorf("invalid Catalog item RegisterWay")
 	}
 	if item.ErrCode < 0 {

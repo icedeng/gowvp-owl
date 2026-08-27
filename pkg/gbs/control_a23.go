@@ -464,8 +464,8 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		if in.PTZPrecise.Pan != nil && (!validFiniteRange(*in.PTZPrecise.Pan, 0, 360)) {
 			return fmt.Errorf("ptz_precise pan must be in [0,360]")
 		}
-		if in.PTZPrecise.Tilt != nil && !validFinite(*in.PTZPrecise.Tilt) {
-			return fmt.Errorf("ptz_precise tilt must be finite")
+		if in.PTZPrecise.Tilt != nil && !validFiniteRange(*in.PTZPrecise.Tilt, -30, 90) {
+			return fmt.Errorf("ptz_precise tilt must be in [-30,90]")
 		}
 		if in.PTZPrecise.Zoom != nil && !validFinite(*in.PTZPrecise.Zoom) {
 			return fmt.Errorf("ptz_precise zoom must be finite")

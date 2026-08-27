@@ -64,6 +64,18 @@ func TestValidateCascadeDeviceControlVersionAndScope(t *testing.T) {
 	if err := validateCascadeDeviceControl(&precise, GBVersion30, GBVersion30); err == nil {
 		t.Fatal("non-finite precise PTZ was accepted")
 	}
+	for _, tilt := range []float64{-30.01, 90.01} {
+		precise.PTZPreciseCtrl = &deviceControlA23PTZPrecise{Tilt: &tilt}
+		if err := validateCascadeDeviceControl(&precise, GBVersion30, GBVersion30); err == nil {
+			t.Fatalf("out-of-range precise PTZ tilt %v was accepted", tilt)
+		}
+	}
+	for _, tilt := range []float64{-30, 90} {
+		precise.PTZPreciseCtrl = &deviceControlA23PTZPrecise{Tilt: &tilt}
+		if err := validateCascadeDeviceControl(&precise, GBVersion30, GBVersion30); err != nil {
+			t.Fatalf("valid precise PTZ tilt %v was rejected: %v", tilt, err)
+		}
+	}
 	home := base
 	home.PTZCmd = ""
 	enabled := 1

@@ -270,6 +270,26 @@ func TestCatalogAcceptsValidOptionalItemValuesByVersion(t *testing.T) {
 	}
 }
 
+func TestCatalogRegisterWayByVersion(t *testing.T) {
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30} {
+		t.Run(string(version), func(t *testing.T) {
+			for _, value := range []int{0, 1, 2, 3} {
+				if err := validateCatalogItemValues(Channels{RegisterWay: value}, version); err != nil {
+					t.Fatalf("RegisterWay %d rejected: %v", value, err)
+				}
+			}
+			if err := validateCatalogItemValues(Channels{RegisterWay: 4}, version); (err == nil) != (version == GBVersion30) {
+				t.Fatalf("RegisterWay 4 validation error = %v", err)
+			}
+			for _, value := range []int{-1, 5} {
+				if err := validateCatalogItemValues(Channels{RegisterWay: value}, version); err == nil {
+					t.Fatalf("invalid RegisterWay %d accepted", value)
+				}
+			}
+		})
+	}
+}
+
 func TestCatalogResponseRejectsSiblingPendingTarget(t *testing.T) {
 	memory := newFlowMemory(gb10DeviceID)
 	firstChannelID := gb10ChannelID

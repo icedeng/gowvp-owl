@@ -42,7 +42,7 @@ go test ./... -count=1
 - MediaStatus/121 幂等收敛；
 - Catalog/RecordInfo 多响应乱序、重复、总数冲突、超时部分结果和同设备并发；
 - RecordInfo 响应包络、列表计数、条目非空名称、显式 `Secrecy=0/1`、可选 dateTime 起止时间、版本化 Type/FileSize/RecordLocation/StreamNumber、目标所有权和在途通道绑定；级联响应按上级版本裁剪新字段并映射 RecorderID/RecordLocation，非法分包不得进入聚合器，NVR 顶层父设备编码别名仍可映射到原查询通道；
-- Catalog 缺失/零值 SumNum、DeviceList Num、本包与通知总数、条目编码、已鉴权来源及父设备聚合目标；目录项的状态、0/1 属性、安全/注册方式、错误码、端口、有限坐标、证书时间和版本化摄像机属性枚举在聚合前校验，2011 不接受 2014 新增的 `Info/BusinessGroupID`；2014 未设置的 Info 字段不得输出零值，2022 多值 `PTZType`、`SupplyLightType=1/2/3/4/5/9`、新增 Info 字段及外层 `SecurityLevelCode/BusinessGroupID` 需正确持久化和级联，旧上级不得收到 2022 字段，2022 上级不得收到已删除的 2014 字段；通用查询相同 SN 的兄弟通道响应不得抢占等待；
+- Catalog 缺失/零值 SumNum、DeviceList Num、本包与通知总数、条目编码、已鉴权来源及父设备聚合目标；目录项的状态、0/1 属性、安全/注册方式、错误码、端口、有限坐标、证书时间和版本化摄像机属性枚举在聚合前校验，其中 `RegisterWay=4` 仅允许 2022，缺失零值继续兼容；2011 不接受 2014 新增的 `Info/BusinessGroupID`；2014 未设置的 Info 字段不得输出零值，2022 多值 `PTZType`、`SupplyLightType=1/2/3/4/5/9`、新增 Info 字段及外层 `SecurityLevelCode/BusinessGroupID` 需正确持久化和级联，旧上级不得收到 2022 字段，2022 上级不得收到已删除的 2014 字段；通用查询相同 SN 的兄弟通道响应不得抢占等待；
 - MobilePosition 的 2011/2014 版本门禁、2016 单点坐标及 2022 批量 `DeviceList` 解码；非法时间、坐标、方向、计数或目标不得写状态和转发；
 - 2022 升级、抓拍完成和实时视音频回传通知的固定 Notify 根、20 位目标及抓拍列表/文件标识完整性；
 - terminated NOTIFY 的设备、Call-ID 和双向 tag 对话绑定，以及伪造终止不得删除或重建下级订阅；
@@ -77,7 +77,7 @@ go test ./... -count=1
 - 3.0 ConfigDownload 使用标准 `SnapShotConfig`，响应解析兼容厂商旧节点 `SnapShot`；
 - 3.0 `DeviceUpgradeResult` 与 `UploadSnapShotFinished` 最终通知同时校验已鉴权设备、`SessionID` 和原目标通道，同一 NVR 的兄弟通道不能覆盖会话终态；
 - 3.0 `VideoUploadNotify` 校验固定命令类型、正 SN、设备编码、时间和有限经纬度，未知跨设备目标不能写入查询状态；
-- 2.0/3.0 HomePosition 及 3.0 PTZPreciseCtrl 按标准边界拒绝无效参数；PTZCmdParams 仅允许 3.0 且巡航轨迹名称不超过 32 字节；3.0 报警复位校验方式组合和按方式限定的报警类型，升级结果校验正 SN、结果枚举、固件和失败原因，抓拍完成通知校验正 SN、命令类型及最多 10 个文件标识；
+- 2.0/3.0 HomePosition 及 3.0 PTZPreciseCtrl 按标准边界拒绝无效参数，其中精准控制 Pan 为 `0..360`、Tilt 为 `-30..90`；PTZCmdParams 仅允许 3.0 且巡航轨迹名称不超过 32 字节；3.0 报警复位校验方式组合和按方式限定的报警类型，升级结果校验正 SN、结果枚举、固件和失败原因，抓拍完成通知校验正 SN、命令类型及最多 10 个文件标识；
 - A.4 ExtraInfo JSON 的整数、零值、数组和 20 位数值型编码保持原始精度；未知数值型对象编码同样拒绝转发；
 - 共享通道 PTZ、录像和版本化通道控制转发；设备级高影响控制不因共享单个通道而被级联放大；
 - 通用查询严格校验 `MESSAGE + Response`、订阅事件严格校验 `NOTIFY + Notify`，并校验正 SN、命令版本和目标所有权；NOTIFY 不能解除 MESSAGE 查询等待，2022 独立业务通知走专用包络，未知跨设备报文不能改变状态或解除等待；
