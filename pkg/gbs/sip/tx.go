@@ -12,7 +12,10 @@ import (
 	"unsafe"
 )
 
-const transactionIdleTimeout = 20 * time.Second
+const (
+	transactionIdleTimeout       = 20 * time.Second
+	serverTransactionIdleTimeout = 32 * time.Second
+)
 
 type transacionts struct {
 	txs    map[string]*Transaction
@@ -170,6 +173,20 @@ func (tx *Transaction) beginServerRequest() bool {
 	tx.serverMu.Unlock()
 	tx.markActive(1)
 	return first
+}
+
+func (tx *Transaction) idleTimeout() time.Duration {
+	if tx == nil {
+		return transactionIdleTimeout
+	}
+	tx.serverMu.RLock()
+	serverRequest := tx.serverRequest
+	tx.serverMu.RUnlock()
+	if serverRequest {
+		// RFC 3261 的服务端事务定时器 H/J 为 64*T1；默认 T1=500ms。
+		return serverTransactionIdleTimeout
+	}
+	return transactionIdleTimeout
 }
 
 func (tx *Transaction) cacheServerResponse(payload []byte, destination net.Addr) {
@@ -407,7 +424,7 @@ func (tx *Transaction) Key() string {
 
 func (tx *Transaction) watch() {
 	defer close(tx.watchDone)
-	timer := time.NewTimer(transactionIdleTimeout)
+	timer := time.NewTimer(tx.idleTimeout())
 	defer timer.Stop()
 	for {
 		select {
@@ -421,7 +438,7 @@ func (tx *Transaction) watch() {
 				default:
 				}
 			}
-			timer.Reset(transactionIdleTimeout)
+			timer.Reset(tx.idleTimeout())
 		case <-timer.C:
 			tx.Close()
 			// logrus.Traceln("watch closed tx", tx.key, time.Now().Format("2006-01-02 15:04:05"))

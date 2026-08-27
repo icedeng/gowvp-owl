@@ -51,6 +51,21 @@ func TestTransactionCloseIsIdempotentAndUnblocksWaiter(t *testing.T) {
 	}
 }
 
+func TestTransactionIdleTimeoutDependsOnRole(t *testing.T) {
+	tx := NewTransaction("role-timeout", nil)
+	t.Cleanup(tx.Close)
+
+	if got := tx.idleTimeout(); got != transactionIdleTimeout {
+		t.Fatalf("client transaction idle timeout = %s, want %s", got, transactionIdleTimeout)
+	}
+	if first := tx.beginServerRequest(); !first {
+		t.Fatal("first server request was reported as a retransmission")
+	}
+	if got := tx.idleTimeout(); got != serverTransactionIdleTimeout {
+		t.Fatalf("server transaction idle timeout = %s, want %s", got, serverTransactionIdleTimeout)
+	}
+}
+
 func TestTransactionStoreCloseReleasesAllTransactions(t *testing.T) {
 	store := newTestTransactions()
 	first := store.newTX("first", nil)
