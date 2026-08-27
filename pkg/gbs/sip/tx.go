@@ -35,6 +35,18 @@ func (txs *transacionts) newTX(key string, conn Connection) *Transaction {
 	return tx
 }
 
+func (txs *transacionts) newServerTX(key string, conn Connection) *Transaction {
+	txs.rwm.Lock()
+	if existing := txs.txs[key]; existing != nil {
+		txs.rwm.Unlock()
+		return existing
+	}
+	tx := newTransaction(key, conn, txs)
+	txs.txs[key] = tx
+	txs.rwm.Unlock()
+	return tx
+}
+
 func (txs *transacionts) newTXIfOpen(key string, conn Connection) *Transaction {
 	if txs == nil {
 		return nil
@@ -99,21 +111,25 @@ func (txs *transacionts) close() {
 
 // Transaction Transaction
 type Transaction struct {
-	connMu     sync.RWMutex
-	conn       Connection
-	securityMu sync.RWMutex
-	security   MessageSecurity
-	requestMu  sync.RWMutex
-	request    *Request
-	bindingMu  sync.RWMutex
-	binding    *responseTransactionBinding
-	key        string
-	resp       chan *Response
-	active     chan int
-	done       chan struct{}
-	owner      *transacionts
-	closeOnce  sync.Once
-	watchDone  chan struct{}
+	connMu            sync.RWMutex
+	conn              Connection
+	securityMu        sync.RWMutex
+	security          MessageSecurity
+	requestMu         sync.RWMutex
+	request           *Request
+	bindingMu         sync.RWMutex
+	binding           *responseTransactionBinding
+	serverMu          sync.RWMutex
+	serverRequest     bool
+	serverResponse    []byte
+	serverDestination net.Addr
+	key               string
+	resp              chan *Response
+	active            chan int
+	done              chan struct{}
+	owner             *transacionts
+	closeOnce         sync.Once
+	watchDone         chan struct{}
 }
 
 type responseTransactionBinding struct {
@@ -142,6 +158,58 @@ func (tx *Transaction) connection() Connection {
 	conn := tx.conn
 	tx.connMu.RUnlock()
 	return conn
+}
+
+func (tx *Transaction) beginServerRequest() bool {
+	if tx == nil {
+		return false
+	}
+	tx.serverMu.Lock()
+	first := !tx.serverRequest
+	tx.serverRequest = true
+	tx.serverMu.Unlock()
+	tx.markActive(1)
+	return first
+}
+
+func (tx *Transaction) cacheServerResponse(payload []byte, destination net.Addr) {
+	if tx == nil {
+		return
+	}
+	tx.serverMu.Lock()
+	cached := false
+	if tx.serverRequest {
+		tx.serverResponse = append(tx.serverResponse[:0], payload...)
+		tx.serverDestination = destination
+		cached = true
+	}
+	tx.serverMu.Unlock()
+	if cached {
+		tx.markActive(1)
+	}
+}
+
+func (tx *Transaction) replayServerResponse() bool {
+	if tx == nil {
+		return false
+	}
+	tx.serverMu.RLock()
+	payload := append([]byte(nil), tx.serverResponse...)
+	destination := tx.serverDestination
+	tx.serverMu.RUnlock()
+	if len(payload) == 0 {
+		return false
+	}
+	conn := tx.connection()
+	if conn == nil {
+		return false
+	}
+	logTraffic("out", conn.Network(), conn.LocalAddr(), destination, payload)
+	if _, err := conn.WriteTo(payload, destination); err != nil {
+		return false
+	}
+	tx.markActive(1)
+	return true
 }
 
 // SetMessageSecurity 为事务的出站消息签名，并校验该事务收到的响应。
@@ -483,6 +551,7 @@ func (tx *Transaction) Respond(res *Response) error {
 		}
 	}
 	payload := []byte(outbound.String())
+	tx.cacheServerResponse(payload, outbound.dest)
 	logTraffic("out", conn.Network(), conn.LocalAddr(), outbound.dest, payload)
 	_, err := conn.WriteTo(payload, outbound.dest)
 	return err
@@ -508,6 +577,22 @@ func (tx *Transaction) Request(req *Request) error {
 	// logrus.Traceln("send request,to:", req.dest.String(), "txkey:", tx.key, "message: \n", req.String())
 	_, err := conn.WriteTo(s, req.dest)
 	return err
+}
+
+func getServerTXKey(msg *Request) string {
+	base := getTXKey(msg)
+	via, ok := msg.ViaHop()
+	if !ok || via == nil {
+		return "server:" + transactionKeyPart(base)
+	}
+	return "server:" + transactionKeyPart(base) +
+		transactionKeyPart(strings.ToUpper(strings.TrimSpace(via.Transport))) +
+		transactionKeyPart(strings.ToLower(strings.TrimSpace(via.SentBy()))) +
+		transactionKeyPart(sipViaBranchValue(via))
+}
+
+func transactionKeyPart(value string) string {
+	return strconv.Itoa(len(value)) + ":" + value
 }
 
 func getTXKey(msg Message) (key string) {

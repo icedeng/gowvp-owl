@@ -2,9 +2,11 @@ package sip
 
 import (
 	"context"
+	"io"
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -159,6 +161,145 @@ func TestTransactionKeyFallsBackToCallIDWithoutCSeq(t *testing.T) {
 	}
 	if got := getTXKey(request); got != callID.String() {
 		t.Fatalf("legacy transaction key = %q, want %q", got, callID.String())
+	}
+}
+
+func TestServerTransactionReplaysResponseWithoutRepeatingHandler(t *testing.T) {
+	serverURI, err := ParseSipURI("sip:34020000002000000001@192.0.2.20:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &serverURI, Params: NewParams()})
+	defer server.Close()
+	connection := newServerTransactionCaptureConnection()
+	server.udpConn = connection
+	security, err := NewSignalDigestSecurity(SignalDigestOptions{
+		Seed: "shared-seed", Required: false,
+		Now: func() time.Time { return time.Date(2026, 8, 27, 5, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.SetRequestSecurityResolver(func(*Request) (MessageSecurity, error) { return security, nil })
+
+	var calls atomic.Int32
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	server.Handle(MethodOptions, func(ctx *Context) {
+		calls.Add(1)
+		started <- struct{}{}
+		<-release
+		ctx.String(200, "OK")
+	})
+
+	request := newSignalDigestTestRequest(t, MethodOptions, nil)
+	request.SetConnection(connection)
+	request.SetSource(connection.remote)
+	request.SetDestination(connection.local)
+	server.handlerRequest(request)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first request handler did not start")
+	}
+
+	retransmission := request.Clone().(*Request)
+	retransmission.SetConnection(connection)
+	retransmission.SetSource(connection.remote)
+	retransmission.SetDestination(connection.local)
+	server.handlerRequest(retransmission)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("handler calls before first response = %d, want 1", got)
+	}
+	if got := connection.payloadCount(); got != 0 {
+		t.Fatalf("response count before handler completion = %d, want 0", got)
+	}
+
+	close(release)
+	first := connection.waitPayload(t)
+	server.handlerRequest(retransmission)
+	second := connection.waitPayload(t)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("handler calls after retransmission = %d, want 1", got)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("retransmitted response changed:\nfirst=%s\nsecond=%s", first, second)
+	}
+	if !strings.Contains(string(first), "Date: 2026-08-27T13:00:00") || !strings.Contains(string(first), "Note: Digest nonce=") {
+		t.Fatalf("cached response is missing signal Digest: %s", first)
+	}
+
+	newTransaction := request.Clone().(*Request)
+	via, ok := newTransaction.ViaHop()
+	if !ok || via == nil {
+		t.Fatal("test request is missing Via")
+	}
+	via.Params.Add("branch", String{Str: GenerateBranch()})
+	newTransaction.SetConnection(connection)
+	newTransaction.SetSource(connection.remote)
+	newTransaction.SetDestination(connection.local)
+	server.handlerRequest(newTransaction)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("new Via transaction handler did not start")
+	}
+	connection.waitPayload(t)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("handler calls for distinct Via transaction = %d, want 2", got)
+	}
+}
+
+type serverTransactionCaptureConnection struct {
+	local, remote net.Addr
+	mu            sync.Mutex
+	payloads      [][]byte
+	writes        chan []byte
+}
+
+func newServerTransactionCaptureConnection() *serverTransactionCaptureConnection {
+	return &serverTransactionCaptureConnection{
+		local:  &net.UDPAddr{IP: net.ParseIP("192.0.2.20"), Port: 5060},
+		remote: &net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060},
+		writes: make(chan []byte, 8),
+	}
+}
+
+func (c *serverTransactionCaptureConnection) Read([]byte) (int, error) { return 0, io.EOF }
+func (c *serverTransactionCaptureConnection) Write(payload []byte) (int, error) {
+	return c.WriteTo(payload, c.remote)
+}
+func (c *serverTransactionCaptureConnection) Close() error                     { return nil }
+func (c *serverTransactionCaptureConnection) LocalAddr() net.Addr              { return c.local }
+func (c *serverTransactionCaptureConnection) RemoteAddr() net.Addr             { return c.remote }
+func (c *serverTransactionCaptureConnection) SetDeadline(time.Time) error      { return nil }
+func (c *serverTransactionCaptureConnection) SetReadDeadline(time.Time) error  { return nil }
+func (c *serverTransactionCaptureConnection) SetWriteDeadline(time.Time) error { return nil }
+func (c *serverTransactionCaptureConnection) Network() string                  { return "udp" }
+func (c *serverTransactionCaptureConnection) ReadFrom([]byte) (int, net.Addr, error) {
+	return 0, c.remote, io.EOF
+}
+func (c *serverTransactionCaptureConnection) WriteTo(payload []byte, _ net.Addr) (int, error) {
+	copyPayload := append([]byte(nil), payload...)
+	c.mu.Lock()
+	c.payloads = append(c.payloads, copyPayload)
+	c.mu.Unlock()
+	c.writes <- copyPayload
+	return len(payload), nil
+}
+func (c *serverTransactionCaptureConnection) payloadCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.payloads)
+}
+func (c *serverTransactionCaptureConnection) waitPayload(t *testing.T) []byte {
+	t.Helper()
+	select {
+	case payload := <-c.writes:
+		return payload
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SIP response")
+		return nil
 	}
 }
 

@@ -175,6 +175,14 @@ func (s *Server) mustTX(msg *Request) *Transaction {
 	return tx
 }
 
+func (s *Server) mustServerTX(msg *Request) *Transaction {
+	conn := msg.conn
+	if conn != nil && conn.Network() == "udp" {
+		conn = s.udpConn
+	}
+	return s.txs.newServerTX(getServerTXKey(msg), conn)
+}
+
 func (s *Server) UDPConn() Connection {
 	return s.udpConn
 }
@@ -766,7 +774,11 @@ func (s *Server) handlerRequest(msg *Request) {
 		_ = tx.Respond(response)
 		return
 	}
-	tx := s.mustTX(msg)
+	tx := s.mustServerTX(msg)
+	if !tx.beginServerRequest() {
+		tx.replayServerResponse()
+		return
+	}
 	var security MessageSecurity
 	if resolver := s.requestSecurityResolver(); resolver != nil {
 		resolved, err := resolver(msg)
