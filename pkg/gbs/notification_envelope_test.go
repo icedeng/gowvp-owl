@@ -5,8 +5,10 @@ import (
 	"encoding/xml"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gowvp/owl/internal/core/ipc"
+	"github.com/gowvp/owl/pkg/gbs/m"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 	"github.com/ixugo/goddd/pkg/conc"
 )
@@ -97,6 +99,71 @@ func TestAlarmRejectsInvalidEnvelopeBeforeStateAndCallback(t *testing.T) {
 	}
 	if state, ok := api.GetQueryState(gb10DeviceID); ok && len(state.AppendixA4) > 0 {
 		t.Fatalf("invalid Alarm changed Appendix A.4 state: %+v", state.AppendixA4)
+	}
+}
+
+func TestAlarmMessageSendsSeparateBusinessResponseByVersion(t *testing.T) {
+	previousConfig := config
+	config = &m.Config{NotifyMap: map[string]string{}}
+	t.Cleanup(func() { config = previousConfig })
+
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30} {
+		t.Run(string(version), func(t *testing.T) {
+			baseConn := newFlowConnection()
+			conn := &tcpFlowConnection{flowConnection: baseConn}
+			platform := mustFlowAddress(t, "sip:"+gb10PlatformID+"@3402000000")
+			device := mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000")
+			sipServer := sip.NewServer(platform)
+			memory := newFlowMemory(gb10DeviceID)
+			memory.runtime.setGBVersion(version)
+			memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+			memory.runtime.UpdateRuntime(func(current *Device) {
+				current.conn = conn
+				current.source = baseConn.remote
+				current.to = device
+			})
+			api := &GB28181API{}
+			server := &Server{Server: sipServer, gb: api, fromAddress: *platform, memoryStorer: memory}
+			api.svr = server
+
+			response := runFlowHandler(t, baseConn, api, sip.MethodMessage, "alarm-business-response-"+string(version), readGB10Fixture(t, "alarm-notify.xml"), api.sipMessageAlarm)
+			if !strings.Contains(response, "SIP/2.0 200 OK") || !strings.Contains(response, "Content-Length: 0") || strings.Contains(response, "<Response>") {
+				t.Fatalf("%s Alarm SIP acknowledgement must have an empty body:\n%s", version, response)
+			}
+			select {
+			case payload := <-baseConn.writes:
+				business := string(payload)
+				for _, required := range []string{
+					"MESSAGE ", "X-GB-Ver: " + string(version), "<Response>", "<CmdType>Alarm</CmdType>",
+					"<SN>4</SN>", "<DeviceID>" + gb10ChannelID + "</DeviceID>", "<Result>OK</Result>",
+				} {
+					if !strings.Contains(business, required) {
+						t.Fatalf("%s Alarm business response missing %q:\n%s", version, required, business)
+					}
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("%s Alarm business MESSAGE was not sent", version)
+			}
+			server.Close()
+		})
+	}
+}
+
+func TestAlarmNotifyDoesNotSendMessageBusinessResponse(t *testing.T) {
+	previousConfig := config
+	config = &m.Config{NotifyMap: map[string]string{}}
+	t.Cleanup(func() { config = previousConfig })
+
+	conn := newFlowConnection()
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	response := runFlowHandler(t, conn, api, sip.MethodNotify, "alarm-notify-no-business-response", readGB10Fixture(t, "alarm-notify.xml"), api.sipNotifyAlarm)
+	assertFlowOK(t, response)
+	select {
+	case payload := <-conn.writes:
+		t.Fatalf("Alarm NOTIFY produced an extra business MESSAGE:\n%s", payload)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

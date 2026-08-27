@@ -98,6 +98,11 @@ func TestAlarmRespondsBeforeSlowSubscriptionNotify(t *testing.T) {
 	server := &Server{Server: sipServer, fromAddress: *platform}
 	memory := newFlowMemory(gb10DeviceID)
 	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	memory.runtime.UpdateRuntime(func(current *Device) {
+		current.conn = conn
+		current.source = baseConn.remote
+		current.to = mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000")
+	})
 	server.memoryStorer = memory
 	api := &GB28181API{svr: server}
 	server.gb = api
@@ -132,13 +137,21 @@ func TestAlarmRespondsBeforeSlowSubscriptionNotify(t *testing.T) {
 	}
 	select {
 	case payload := <-baseConn.writes:
+		if !strings.HasPrefix(string(payload), "MESSAGE ") || !strings.Contains(string(payload), "<Response>") || !strings.Contains(string(payload), "<CmdType>Alarm</CmdType>") {
+			t.Fatalf("second Alarm write was not business response MESSAGE:\n%s", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Alarm business response MESSAGE was not sent")
+	}
+	select {
+	case payload := <-baseConn.writes:
 		if !strings.HasPrefix(string(payload), "NOTIFY ") {
-			t.Fatalf("second Alarm write was not subscription NOTIFY:\n%s", payload)
+			t.Fatalf("third Alarm write was not subscription NOTIFY:\n%s", payload)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Alarm subscription NOTIFY was not sent")
 	}
-	sipServer.Close()
+	server.Close()
 	select {
 	case <-done:
 	case <-time.After(time.Second):

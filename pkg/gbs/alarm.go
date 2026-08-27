@@ -3,7 +3,9 @@ package gbs
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +33,14 @@ type messageAlarm struct {
 			EventType *int `xml:"EventType"`
 		} `xml:"AlarmTypeParam"`
 	} `xml:"Info"`
+}
+
+type alarmBusinessResponse struct {
+	XMLName  xml.Name `xml:"Response"`
+	CmdType  string   `xml:"CmdType"`
+	SN       int      `xml:"SN"`
+	DeviceID string   `xml:"DeviceID"`
+	Result   string   `xml:"Result"`
 }
 
 // AlarmEvent 是系统内部统一的报警事件模型。
@@ -143,6 +153,9 @@ func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 	}
 	// 设备报警确认不应被数据库、业务回调或订阅方 NOTIFY 响应拖延。
 	ctx.String(200, "OK")
+	if sourceMethod == sip.MethodMessage {
+		g.sendAlarmBusinessResponse(ctx, msg)
+	}
 	if len(ext) > 0 {
 		g.persistAppendixA4Objects(deviceID, ext)
 	}
@@ -156,6 +169,42 @@ func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 	notify(notifyAlarm(event))
 	// 9.11 事件源侧：报警发生后，向订阅方发送 NOTIFY。
 	g.publishEventNotify("Alarm", deviceID, ctx.Request.Body())
+}
+
+// sendAlarmBusinessResponse 按 9.4 在空正文 SIP 200 之后发送独立的 MESSAGE/Response 业务应答。
+// 订阅产生的 NOTIFY Alarm 只需要 SIP 200，不进入该流程。
+func (g *GB28181API) sendAlarmBusinessResponse(ctx *sip.Context, alarm messageAlarm) {
+	if g == nil || ctx == nil || g.svr == nil || g.svr.memoryStorer == nil {
+		return
+	}
+	sourceID := strings.TrimSpace(ctx.DeviceID)
+	target, ok := g.svr.memoryStorer.Load(sourceID)
+	if !ok || target == nil {
+		slog.Warn("send Alarm business response failed", "device_id", sourceID, "sn", alarm.SN, "err", ErrDeviceNotExist)
+		return
+	}
+	body, err := sip.XMLEncode(alarmBusinessResponse{
+		CmdType: "Alarm", SN: alarm.SN, DeviceID: strings.TrimSpace(alarm.DeviceID), Result: "OK",
+	})
+	if err != nil {
+		slog.Warn("encode Alarm business response failed", "device_id", sourceID, "sn", alarm.SN, "err", err)
+		return
+	}
+	identityCtx := monitorUserIdentityContext(ctx)
+	tx, err := g.svr.wrapRequestContext(identityCtx, target, sip.MethodMessage, &sip.ContentTypeXML, body)
+	if err != nil {
+		slog.Warn("send Alarm business response failed", "device_id", sourceID, "sn", alarm.SN, "err", err)
+		return
+	}
+	if !g.startLifecycleTask(identityCtx, func(taskCtx context.Context) {
+		responseCtx, cancel := context.WithTimeout(taskCtx, 6*time.Second)
+		defer cancel()
+		if _, err := sipResponseContext(responseCtx, tx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Warn("wait Alarm business response SIP acknowledgement failed", "device_id", sourceID, "sn", alarm.SN, "err", err)
+		}
+	}) {
+		tx.Close()
+	}
 }
 
 func (g *GB28181API) validateAlarmEnvelope(ctx *sip.Context, msg *messageAlarm) error {
