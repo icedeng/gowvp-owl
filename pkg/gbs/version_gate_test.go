@@ -50,6 +50,18 @@ func TestVersionGatesFor2011AndSupplement(t *testing.T) {
 	}
 }
 
+func TestDeviceQueryRejectsBroadcastNotifyFlow(t *testing.T) {
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30} {
+		t.Run(version.StandardName(), func(t *testing.T) {
+			api, _ := newVersionGateAPI(version)
+			if _, err := api.resolveDeviceQueryCmdType("device", "broadcast", ""); err == nil ||
+				!strings.Contains(err.Error(), "unsupported device query action") {
+				t.Fatalf("broadcast query error = %v", err)
+			}
+		})
+	}
+}
+
 func TestPresetQuery11AcceptsSupplementSpelling(t *testing.T) {
 	api, _ := newVersionGateAPI(GBVersion11)
 	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}

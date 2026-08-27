@@ -13,7 +13,6 @@ import (
 
 const (
 	deviceQueryActionCatalog           = "catalog"
-	deviceQueryActionBroadcast         = "broadcast"
 	deviceQueryActionDeviceInfo        = "device_info"
 	deviceQueryActionDeviceStatus      = "device_status"
 	deviceQueryActionRecordInfo        = "record_info"
@@ -258,13 +257,6 @@ func (g *GB28181API) resolveDeviceQueryCmdType(deviceID, action, configType stri
 	switch action {
 	case deviceQueryActionCatalog:
 		return "Catalog", nil
-	case deviceQueryActionBroadcast:
-		if err := g.requireGBFeature(deviceID, "voice_broadcast", "语音广播查询", func(c GBCapabilities) bool {
-			return c.VoiceBroadcast
-		}); err != nil {
-			return "", err
-		}
-		return "Broadcast", nil
 	case deviceQueryActionDeviceInfo:
 		return "DeviceInfo", nil
 	case deviceQueryActionDeviceStatus:
