@@ -1195,7 +1195,8 @@ func (g *GB28181API) sipMessageVideoUploadNotify(ctx *sip.Context) {
 		ctx.String(400, "invalid VideoUploadNotify time")
 		return
 	}
-	if msg.Longitude != nil && !validFinite(*msg.Longitude) || msg.Latitude != nil && !validFinite(*msg.Latitude) {
+	if msg.Longitude != nil && !validFiniteRange(*msg.Longitude, -180, 180) ||
+		msg.Latitude != nil && !validFiniteRange(*msg.Latitude, -90, 90) {
 		ctx.String(400, "invalid VideoUploadNotify location")
 		return
 	}

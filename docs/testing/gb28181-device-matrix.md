@@ -103,6 +103,7 @@ AllowedAddressCIDRs = []
 - SDCardStatus/FormatSDCard；
 - ConfigDownload 抓拍配置使用标准 `SnapShotConfig` 节点，并记录厂商是否仅接受旧 `SnapShot` 别名；
 - `UploadSnapShotFinished` 的文件标识应为“20 位设备编码 + `02` + 17 位真实生成时间 + 2 位序号”，记录设备是否会产生非法日期时间；
+- `VideoUploadNotify` 拒绝超出 WGS-84 范围的经纬度；
 - 附录 A.4 扩展对象；
 - SIP-TLS（目标设备支持时）。
 - 广播/对讲沿用 `PT 8/PCMA/8000`，确认双向音频和停止清理。

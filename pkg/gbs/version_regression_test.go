@@ -490,6 +490,8 @@ func TestGB30VideoUploadNotifyRejectsSchemaAndTargetViolations(t *testing.T) {
 		{name: "missing device", body: `<Notify><CmdType>VideoUploadNotify</CmdType><SN>1</SN><Time>2026-08-25T08:48:00</Time></Notify>`},
 		{name: "invalid time", body: `<Notify><CmdType>VideoUploadNotify</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Time>not-a-time</Time></Notify>`},
 		{name: "non-finite longitude", body: `<Notify><CmdType>VideoUploadNotify</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Time>2026-08-25T08:48:00</Time><Longitude>NaN</Longitude></Notify>`},
+		{name: "longitude out of range", body: `<Notify><CmdType>VideoUploadNotify</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Time>2026-08-25T08:48:00</Time><Longitude>181</Longitude></Notify>`},
+		{name: "latitude out of range", body: `<Notify><CmdType>VideoUploadNotify</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Time>2026-08-25T08:48:00</Time><Latitude>-91</Latitude></Notify>`},
 		{name: "unknown target", body: `<Notify><CmdType>VideoUploadNotify</CmdType><SN>1</SN><DeviceID>34020000001320000009</DeviceID><Time>2026-08-25T08:48:00</Time></Notify>`},
 	}
 	for _, test := range tests {
