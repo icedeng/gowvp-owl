@@ -80,6 +80,7 @@ func TestAlarmRejectsInvalidEnvelopeBeforeStateAndCallback(t *testing.T) {
 		{name: "latitude out of range", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>2</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime><Latitude>-91</Latitude></Notify>`},
 		{name: "2011 alarm type extension", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>2</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime><Info><AlarmType>1</AlarmType></Info></Notify>`},
 		{name: "2011 event type extension", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>5</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime><Info><AlarmTypeParam><EventType>1</EventType></AlarmTypeParam></Info></Notify>`},
+		{name: "2011 Appendix A.4 extension", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>2</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime><Info><doorType><DeviceID>` + gb10ChannelID + `</DeviceID></doorType></Info></Notify>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

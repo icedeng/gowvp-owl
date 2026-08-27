@@ -407,7 +407,10 @@ func (g *GB28181API) decodeAndStoreQueryResult(deviceID, cmdType string, body []
 	if cmd == "" || len(body) == 0 || deviceID == "" {
 		return decodedDeviceQuery{}
 	}
-	result := decodedDeviceQuery{appendixA4: g.decodeAppendixA4Objects(cmd, body)}
+	result := decodedDeviceQuery{}
+	if g.getDeviceGBProtocolVersion(deviceID).AtLeast(GBVersion30) {
+		result.appendixA4 = g.decodeAppendixA4Objects(cmd, body)
+	}
 	if len(result.appendixA4) > 0 {
 		g.storeAppendixA4State(deviceID, result.appendixA4)
 	}

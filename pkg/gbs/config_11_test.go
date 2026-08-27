@@ -101,6 +101,7 @@ func TestDeviceConfigResponseRejectsInvalidEnvelopeBeforeStateAndWait(t *testing
 		{name: "missing result", body: `<Response><CmdType>DeviceConfig</CmdType><SN>31</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Response>`},
 		{name: "invalid result", body: `<Response><CmdType>DeviceConfig</CmdType><SN>31</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>SUCCESS</Result></Response>`},
 		{name: "unknown target", body: `<Response><CmdType>DeviceConfig</CmdType><SN>31</SN><DeviceID>34020000001320000009</DeviceID><Result>OK</Result></Response>`},
+		{name: "2014 Appendix A.4 extension", body: `<Response><CmdType>DeviceConfig</CmdType><SN>31</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><Info><doorType><DeviceID>` + gb10DeviceID + `</DeviceID></doorType></Info></Response>`},
 	}
 	for index, test := range tests {
 		if index == 1 {

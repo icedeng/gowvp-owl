@@ -220,6 +220,26 @@ func TestGB30AppendixA4ExtraInfoJSONPreservesNumbersAndArrays(t *testing.T) {
 	}
 }
 
+func TestAppendixA4Requires2022(t *testing.T) {
+	body := []byte(`<Notify><CmdType>Alarm</CmdType><Info><doorType><DeviceID>` + gb10DeviceID + `</DeviceID></doorType></Info></Notify>`)
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20} {
+		api, _ := newVersionGateAPI(version)
+		if objects, err := api.validateAndDecodeAppendixA4(gb10DeviceID, "Alarm", body); err == nil || len(objects) != 0 {
+			t.Fatalf("%s Appendix A.4 result = %+v, %v", version, objects, err)
+		}
+		decoded := api.decodeAndStoreQueryResult(gb10DeviceID, "Alarm", body)
+		if len(decoded.appendixA4) != 0 {
+			t.Fatalf("%s defensively stored Appendix A.4: %+v", version, decoded.appendixA4)
+		}
+	}
+
+	api, _ := newVersionGateAPI(GBVersion30)
+	objects, err := api.validateAndDecodeAppendixA4(gb10DeviceID, "Alarm", body)
+	if err != nil || len(objects) != 1 || objects[0].Type != "doorType" {
+		t.Fatalf("2022 Appendix A.4 result = %+v, %v", objects, err)
+	}
+}
+
 func TestGB30PTZPositionNotifyStoresStructuredState(t *testing.T) {
 	memory := newFlowMemory(gb10DeviceID)
 	memory.runtime.setGBVersion(GBVersion30)
@@ -360,6 +380,7 @@ func TestDeviceStatusResponseValidatesRequiredFieldsBeforeStateAndRuntime(t *tes
 		{name: "invalid result", body: `<Response><CmdType>DeviceStatus</CmdType><SN>81</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>SUCCESS</Result><Online>ONLINE</Online><Status>OK</Status></Response>`},
 		{name: "invalid online", body: `<Response><CmdType>DeviceStatus</CmdType><SN>81</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><Online>ON</Online><Status>OK</Status></Response>`},
 		{name: "invalid status", body: `<Response><CmdType>DeviceStatus</CmdType><SN>81</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><Online>ONLINE</Online><Status>ON</Status></Response>`},
+		{name: "2011 Appendix A.4 extension", body: `<Response><CmdType>DeviceStatus</CmdType><SN>81</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Info><doorType><DeviceID>` + gb10DeviceID + `</DeviceID></doorType></Info></Response>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

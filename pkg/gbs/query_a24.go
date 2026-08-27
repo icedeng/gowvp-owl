@@ -662,6 +662,10 @@ func (g *GB28181API) sipMessageQueryGeneric(ctx *sip.Context) {
 		return
 	}
 	deviceID := strings.TrimSpace(ctx.DeviceID)
+	if _, err := g.validateAndDecodeAppendixA4(deviceID, msg.CmdType, ctx.Request.Body()); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 	decoded := g.decodeAndStoreQueryResult(deviceID, msg.CmdType, ctx.Request.Body())
 	if strings.EqualFold(ctx.Request.Method(), sip.MethodMessage) {
 		g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)

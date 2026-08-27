@@ -104,6 +104,10 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 			return
 		}
 	}
+	if _, err := g.validateAndDecodeAppendixA4(ctx.DeviceID, msg.CmdType, ctx.Request.Body()); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 	isChannelResponse := msg.DeviceID != ctx.DeviceID
 
 	// 为什么: Result 非 OK 代表设备端查询失败，可选字段可能为空或旧值，不应覆盖数据库，避免清空已有厂商/型号等信息。

@@ -259,6 +259,10 @@ func (g *GB28181API) sipNotifyCatalog(ctx *sip.Context) {
 		ctx.String(400, "invalid catalog notify")
 		return
 	}
+	if _, err := g.validateAndDecodeAppendixA4(ctx.DeviceID, msg.CmdType, ctx.Request.Body()); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 	ctx.String(200, "OK")
 	g.publishEventNotify("Catalog", ctx.DeviceID, ctx.Request.Body())
 	if g.svr == nil || g.svr.memoryStorer == nil {
@@ -287,7 +291,11 @@ func (g *GB28181API) sipNotifyMobilePosition(ctx *sip.Context) {
 		ctx.String(400, err.Error())
 		return
 	}
-	extended := g.decodeAppendixA4Objects("MobilePosition", ctx.Request.Body())
+	extended, err := g.validateAndDecodeAppendixA4(deviceID, "MobilePosition", ctx.Request.Body())
+	if err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 	g.storeMobilePositionState(deviceID, position, positions)
 	if len(extended) > 0 {
 		g.storeAppendixA4State(deviceID, extended)

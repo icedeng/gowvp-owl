@@ -237,6 +237,7 @@ func TestMobilePositionRejectsInvalidNotificationBeforeState(t *testing.T) {
 		{name: "invalid latitude", version: GBVersion20, body: strings.Replace(valid, "30</Latitude>", "-91</Latitude>", 1)},
 		{name: "invalid direction", version: GBVersion20, body: strings.Replace(valid, "</Notify>", "<Direction>360</Direction></Notify>", 1)},
 		{name: "2016 batch", version: GBVersion20, body: strings.Replace(valid, "</Notify>", `<SumNum>0</SumNum><DeviceList Num="0"></DeviceList></Notify>`, 1)},
+		{name: "2016 Appendix A.4 extension", version: GBVersion20, body: strings.Replace(valid, "</Notify>", `<Info><doorType><DeviceID>`+gb10DeviceID+`</DeviceID></doorType></Info></Notify>`, 1)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

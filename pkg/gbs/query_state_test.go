@@ -124,6 +124,7 @@ func TestGenericQueryAcknowledgesBeforeSinglePersistence(t *testing.T) {
 		entered:    make(chan struct{}),
 		release:    make(chan struct{}),
 	}
+	memory.runtime.setGBVersion(GBVersion30)
 	api.svr = &Server{memoryStorer: memory}
 	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}
 	api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "DeviceStatus", 91), pending)
@@ -247,7 +248,7 @@ func TestAppendixA4HandlersAcknowledgeBeforePersistence(t *testing.T) {
 				release:      make(chan struct{}),
 			}
 			store := &queryTestStore{Storer: base.Store(), device: deviceStore}
-			api, _ := newVersionGateAPI(GBVersion11)
+			api, _ := newVersionGateAPI(GBVersion30)
 			api.core = ipc.NewAdapter(store, uniqueid.Core{})
 			conn := newFlowConnection()
 			request := newFlowRequest(t, conn, test.method, "appendix-a4-ack-"+test.name, test.body)
@@ -292,6 +293,65 @@ func TestAppendixA4HandlersAcknowledgeBeforePersistence(t *testing.T) {
 			}
 			if got := deviceStore.updates.Load(); got != 1 {
 				t.Fatalf("Appendix A.4 persistence updates = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestLegacyAppendixA4QueryHandlersRejectBeforeStateAndWait(t *testing.T) {
+	tests := []struct {
+		name    string
+		cmdType string
+		method  string
+		body    string
+		handler func(*GB28181API, *sip.Context)
+		wait    bool
+	}{
+		{
+			name: "DeviceInfo", cmdType: "DeviceInfo", method: sip.MethodMessage, wait: true,
+			body:    `<Response><CmdType>DeviceInfo</CmdType><SN>96</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>ERROR</Result><Info><doorType><DeviceID>` + gb10DeviceID + `</DeviceID></doorType></Info></Response>`,
+			handler: func(api *GB28181API, ctx *sip.Context) { api.sipMessageDeviceInfo(ctx) },
+		},
+		{
+			name: "ConfigDownload", cmdType: "ConfigDownload", method: sip.MethodMessage, wait: true,
+			body:    `<Response><CmdType>ConfigDownload</CmdType><SN>96</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>ERROR</Result><Info><doorType><DeviceID>` + gb10DeviceID + `</DeviceID></doorType></Info></Response>`,
+			handler: func(api *GB28181API, ctx *sip.Context) { api.sipMessageConfigDownload(ctx) },
+		},
+		{
+			name: "Catalog response", cmdType: "Catalog", method: sip.MethodMessage, wait: true,
+			body:    `<Response><CmdType>Catalog</CmdType><SN>96</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>0</SumNum><DeviceList Num="0"></DeviceList><Info><doorType><DeviceID>` + gb10DeviceID + `</DeviceID></doorType></Info></Response>`,
+			handler: func(api *GB28181API, ctx *sip.Context) { api.sipMessageCatalog(ctx) },
+		},
+		{
+			name: "Catalog notification", cmdType: "Catalog", method: sip.MethodNotify,
+			body:    `<Notify><CmdType>Catalog</CmdType><SN>96</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>0</SumNum><DeviceList Num="0"></DeviceList><Info><doorType><DeviceID>` + gb10DeviceID + `</DeviceID></doorType></Info></Notify>`,
+			handler: func(api *GB28181API, ctx *sip.Context) { api.sipNotifyCatalog(ctx) },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			api, _ := newVersionGateAPI(GBVersion20)
+			var pending *pendingQueryWait
+			if test.wait {
+				pending = &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}
+				api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, test.cmdType, 96), pending)
+			}
+			response := runFlowHandler(t, newFlowConnection(), api, test.method, "legacy-a4-"+test.name, []byte(test.body), func(ctx *sip.Context) {
+				test.handler(api, ctx)
+			})
+			if !strings.Contains(response, "SIP/2.0 400") {
+				t.Fatalf("legacy Appendix A.4 response = %s", response)
+			}
+			if _, ok := api.GetQueryState(gb10DeviceID); ok {
+				t.Fatal("legacy Appendix A.4 changed query state")
+			}
+			if pending != nil {
+				select {
+				case output := <-pending.wait:
+					t.Fatalf("legacy Appendix A.4 resolved query wait: %+v", output)
+				default:
+				}
 			}
 		})
 	}

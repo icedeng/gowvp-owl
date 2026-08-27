@@ -318,6 +318,11 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 			return
 		}
 	}
+	ext, err := g.validateAndDecodeAppendixA4(ctx.DeviceID, msg.CmdType, ctx.Request.Body())
+	if err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 	msg.RawXML = string(ctx.Request.Body())
 
 	state := &DeviceConfigState{
@@ -329,7 +334,6 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 		RawXML:   msg.RawXML,
 	}
 	g.storeDeviceConfigState(ctx.DeviceID, state)
-	ext := g.decodeAppendixA4Objects(msg.CmdType, ctx.Request.Body())
 	if len(ext) > 0 {
 		g.storeAppendixA4State(ctx.DeviceID, ext)
 	}
@@ -872,6 +876,10 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 			ctx.String(400, err.Error())
 			return
 		}
+	}
+	if _, err := g.validateAndDecodeAppendixA4(ctx.DeviceID, msg.CmdType, ctx.Request.Body()); err != nil {
+		ctx.String(400, err.Error())
+		return
 	}
 	if msg.BasicParam != nil && msg.DeviceID == strings.TrimSpace(ctx.DeviceID) && resultOK && msg.BasicParam.hasBothHeartbeatFields() {
 		ipc, ok := g.svr.memoryStorer.Load(ctx.DeviceID)

@@ -101,6 +101,11 @@ func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 		ctx.String(400, err.Error())
 		return
 	}
+	ext, err := g.validateAndDecodeAppendixA4(ctx.DeviceID, msg.CmdType, ctx.Request.Body())
+	if err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 
 	deviceID := strings.TrimSpace(ctx.DeviceID)
 	channelID := msg.DeviceID
@@ -133,7 +138,6 @@ func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 	}
 
 	// 抽取附录 A.4 扩展对象并先更新内存快照。
-	ext := g.decodeAppendixA4Objects(msg.CmdType, ctx.Request.Body())
 	if len(ext) > 0 {
 		g.storeAppendixA4State(deviceID, ext)
 	}

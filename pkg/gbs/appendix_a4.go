@@ -3,12 +3,25 @@ package gbs
 import (
 	"encoding/json"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+func (g *GB28181API) validateAndDecodeAppendixA4(deviceID, cmdType string, body []byte) ([]AppendixA4Object, error) {
+	objects := g.decodeAppendixA4Objects(cmdType, body)
+	if len(objects) == 0 {
+		return nil, nil
+	}
+	version := g.getDeviceGBProtocolVersion(deviceID)
+	if !version.AtLeast(GBVersion30) {
+		return nil, fmt.Errorf("Appendix A.4 requires %s", GBVersion30.StandardName())
+	}
+	return objects, nil
+}
 
 // AppendixA4Object 是附录 A.4 扩展对象的协议层模型。
 // 说明：

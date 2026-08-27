@@ -181,6 +181,10 @@ func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 		ctx.String(400, err.Error())
 		return
 	}
+	if _, err := g.validateAndDecodeAppendixA4(ctx.DeviceID, msg.CmdType, ctx.Request.Body()); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 
 	for index := range msg.Item {
 		msg.Item[index].DeviceID = msg.DeviceID
