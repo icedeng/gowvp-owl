@@ -1336,6 +1336,17 @@ func (m *CascadeManager) registeredWorkers(minimum GBProtocolVersion) []*cascade
 	return items
 }
 
+func (m *CascadeManager) workerByName(name string) (*cascadeWorker, bool) {
+	if m == nil {
+		return nil, false
+	}
+	name = strings.TrimSpace(name)
+	m.mu.RLock()
+	worker, ok := m.items[name]
+	m.mu.RUnlock()
+	return worker, ok && worker != nil
+}
+
 func (m *CascadeManager) matchRegistered(serverID string, source net.Addr, connections ...sip.Connection) (*cascadeWorker, bool) {
 	if m == nil || strings.TrimSpace(serverID) == "" || source == nil {
 		return nil, false

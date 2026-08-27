@@ -7,8 +7,9 @@ import (
 )
 
 var (
-	_ ipc.Storer                   = DB{}
-	_ ipc.GBTaskStateStoreProvider = DB{}
+	_ ipc.Storer                          = DB{}
+	_ ipc.GBTaskStateStoreProvider        = DB{}
+	_ ipc.GBCascadeTaskRouteStoreProvider = DB{}
 )
 
 // DB Related business namespaces
@@ -47,6 +48,10 @@ func (d DB) GBTaskState() *ipc.GBTaskStateStore {
 	return ipc.NewGBTaskStateStore(d.db)
 }
 
+func (d DB) GBCascadeTaskRoute() *ipc.GBCascadeTaskRouteStore {
+	return ipc.NewGBCascadeTaskRouteStore(d.db)
+}
+
 // AutoMigrate sync database
 func (d DB) AutoMigrate(ok bool) DB {
 	if !ok {
@@ -56,6 +61,7 @@ func (d DB) AutoMigrate(ok bool) DB {
 		new(ipc.Device),
 		new(ipc.Channel),
 		new(ipc.GBTaskStateRecord),
+		new(ipc.GBCascadeTaskRouteRecord),
 	); err != nil {
 		panic(err)
 	}

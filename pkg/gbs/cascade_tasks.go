@@ -32,6 +32,7 @@ type cascadeTaskRoute struct {
 	startErr            error
 	kind                string
 	worker              *cascadeWorker
+	upstreamPlatform    string
 	downstreamDeviceID  string
 	downstreamTargetID  string
 	exposedID           string
@@ -52,7 +53,11 @@ func cascadeTaskUpstreamRouteKey(kind string, worker *cascadeWorker, exposedID, 
 	if worker != nil {
 		name = worker.platform.name
 	}
-	return "upstream:" + strings.TrimSpace(kind) + ":" + strings.TrimSpace(name) + ":" + strings.TrimSpace(exposedID) + ":" + strings.TrimSpace(sessionID)
+	return cascadeTaskUpstreamRouteKeyByName(kind, name, exposedID, sessionID)
+}
+
+func cascadeTaskUpstreamRouteKeyByName(kind, platformName, exposedID, sessionID string) string {
+	return "upstream:" + strings.TrimSpace(kind) + ":" + strings.TrimSpace(platformName) + ":" + strings.TrimSpace(exposedID) + ":" + strings.TrimSpace(sessionID)
 }
 
 func cascadeTaskFingerprint(value []byte) string {
@@ -80,11 +85,18 @@ func (g *GB28181API) registerCascadeTaskRoute(ctx context.Context, kind string, 
 	upstreamKey := cascadeTaskUpstreamRouteKey(kind, worker, exposedID, sessionID)
 	if actual, loaded := g.cascadeTaskRoutes.Load(upstreamKey); loaded {
 		existing, ok := actual.(*cascadeTaskRoute)
-		if !ok || existing == nil || existing.worker != worker || existing.downstreamTargetID != strings.TrimSpace(channel.ChannelID) ||
-			existing.requestFingerprint != fingerprint {
+		if !ok || !existing.matchesUpstream(worker, channel, fingerprint) {
 			return nil, false, fmt.Errorf("cascade task session is already owned by another route")
 		}
 		return existing, false, nil
+	}
+	if restored, found, err := g.restoreCascadeTaskRouteByUpstreamLocked(ctx, kind, worker, exposedID, sessionID); err != nil {
+		return nil, false, err
+	} else if found {
+		if !restored.matchesUpstream(worker, channel, fingerprint) {
+			return nil, false, fmt.Errorf("cascade task session is already owned by another route")
+		}
+		return restored, false, nil
 	}
 	if g.cascadeTaskRouteCountLocked() >= maxCascadeTaskRoutes {
 		return nil, false, fmt.Errorf("cascade task route capacity exceeded")
@@ -92,31 +104,40 @@ func (g *GB28181API) registerCascadeTaskRoute(ctx context.Context, kind string, 
 	downstreamSessionID := sip.RandString(32)
 	localGatewayID, _ := ctx.Value(monitorUserIdentityGatewayContextKey{}).(string)
 	route := &cascadeTaskRoute{
-		kind: kind, worker: worker, downstreamDeviceID: strings.TrimSpace(channel.DeviceID),
+		kind: kind, worker: worker, upstreamPlatform: worker.platform.name, downstreamDeviceID: strings.TrimSpace(channel.DeviceID),
 		downstreamTargetID: strings.TrimSpace(channel.ChannelID), exposedID: exposedID,
 		upstreamSessionID: sessionID, downstreamSessionID: downstreamSessionID, requestFingerprint: fingerprint,
 		startDone: make(chan struct{}), createdAt: time.Now(),
 		identity: monitorUserIdentityFromContext(ctx), localGatewayID: strings.TrimSpace(localGatewayID),
 	}
 	downstreamKey := cascadeTaskRouteKey(kind, route.downstreamDeviceID, downstreamSessionID)
-	g.cascadeTaskRoutes.Store(downstreamKey, route)
-	actual, loaded := g.cascadeTaskRoutes.LoadOrStore(upstreamKey, route)
-	if loaded {
-		g.cascadeTaskRoutes.CompareAndDelete(downstreamKey, route)
-		existing, ok := actual.(*cascadeTaskRoute)
-		if !ok || existing == nil || existing.worker != worker || existing.downstreamTargetID != route.downstreamTargetID ||
-			existing.requestFingerprint != fingerprint {
-			return nil, false, fmt.Errorf("cascade task session is already owned by another route")
-		}
-		return existing, false, nil
-	}
 	if err := g.storeCascadeTaskState(ctx, route, initialState...); err != nil {
-		g.cascadeTaskRoutes.CompareAndDelete(downstreamKey, route)
-		g.cascadeTaskRoutes.CompareAndDelete(upstreamKey, route)
 		g.deleteCascadeTaskState(route)
 		return nil, false, err
 	}
+	if err := g.persistCascadeTaskRoute(ctx, route); err != nil {
+		g.deleteCascadeTaskState(route)
+		if deleteErr := g.deletePersistedCascadeTaskRoute(context.Background(), route); deleteErr != nil {
+			return nil, false, errors.Join(err, deleteErr)
+		}
+		return nil, false, err
+	}
+	// 路由及下游任务状态全部可靠落库后再发布内存索引，避免最终通知观察到半初始化路由。
+	g.cascadeTaskRoutes.Store(downstreamKey, route)
+	g.cascadeTaskRoutes.Store(upstreamKey, route)
 	return route, true, nil
+}
+
+func (route *cascadeTaskRoute) matchesUpstream(worker *cascadeWorker, channel *ipc.Channel, fingerprint string) bool {
+	if route == nil || worker == nil || channel == nil {
+		return false
+	}
+	if route.upstreamPlatform != worker.platform.name || route.downstreamTargetID != strings.TrimSpace(channel.ChannelID) ||
+		route.requestFingerprint != strings.TrimSpace(fingerprint) {
+		return false
+	}
+	// worker 为空仅用于已完成且从持久化恢复的幂等路由，不再依赖已删除的上级配置。
+	return route.worker == nil || route.worker == worker
 }
 
 func (g *GB28181API) deleteCascadeTaskState(route *cascadeTaskRoute) {
@@ -282,7 +303,7 @@ func (g *GB28181API) deleteCascadeTaskRoute(route *cascadeTaskRoute) {
 
 func (g *GB28181API) deleteCascadeTaskRouteLocked(route *cascadeTaskRoute) {
 	g.cascadeTaskRoutes.CompareAndDelete(cascadeTaskRouteKey(route.kind, route.downstreamDeviceID, route.downstreamSessionID), route)
-	g.cascadeTaskRoutes.CompareAndDelete(cascadeTaskUpstreamRouteKey(route.kind, route.worker, route.exposedID, route.upstreamSessionID), route)
+	g.cascadeTaskRoutes.CompareAndDelete(cascadeTaskUpstreamRouteKeyByName(route.kind, route.upstreamPlatform, route.exposedID, route.upstreamSessionID), route)
 }
 
 func (g *GB28181API) forwardCascadeTaskNotification(ctx context.Context, kind, deviceID, targetID, sessionID string, body []byte) (bool, error) {
@@ -292,7 +313,11 @@ func (g *GB28181API) forwardCascadeTaskNotification(ctx context.Context, kind, d
 	key := cascadeTaskRouteKey(kind, deviceID, sessionID)
 	value, ok := g.cascadeTaskRoutes.Load(key)
 	if !ok {
-		return false, nil
+		route, found, err := g.restoreCascadeTaskRouteByDownstream(ctx, kind, deviceID, sessionID)
+		if err != nil || !found {
+			return found, err
+		}
+		value = route
 	}
 	route, ok := value.(*cascadeTaskRoute)
 	if !ok || route == nil {
@@ -324,11 +349,139 @@ func (g *GB28181API) forwardCascadeTaskNotification(ctx context.Context, kind, d
 	if err := route.worker.sendMessage(identityCtx, rewritten); err != nil {
 		return true, err
 	}
+	persisted := route.persistentStateLocked()
+	persisted.Completed = true
+	if err := g.persistCascadeTaskRouteState(ctx, persisted); err != nil {
+		return true, err
+	}
 	route.completed = true
 	g.cascadeTaskRouteMu.Lock()
 	g.cascadeTaskRoutes.CompareAndDelete(cascadeTaskRouteKey(route.kind, route.downstreamDeviceID, route.downstreamSessionID), route)
 	g.cascadeTaskRouteMu.Unlock()
 	return true, nil
+}
+
+func (g *GB28181API) restoreCascadeTaskRouteByDownstream(ctx context.Context, kind, deviceID, sessionID string) (*cascadeTaskRoute, bool, error) {
+	if g == nil {
+		return nil, false, nil
+	}
+	g.cascadeTaskRouteMu.Lock()
+	defer g.cascadeTaskRouteMu.Unlock()
+	key := cascadeTaskRouteKey(kind, deviceID, sessionID)
+	if value, ok := g.cascadeTaskRoutes.Load(key); ok {
+		route, valid := value.(*cascadeTaskRoute)
+		if !valid || route == nil {
+			g.cascadeTaskRoutes.CompareAndDelete(key, value)
+			return nil, false, nil
+		}
+		return route, true, nil
+	}
+	state, found, err := g.loadCascadeTaskRouteStateByDownstream(ctx, kind, deviceID, sessionID)
+	if err != nil || !found {
+		return nil, found, err
+	}
+	if state.Kind != strings.TrimSpace(kind) || state.DownstreamDeviceID != strings.TrimSpace(deviceID) ||
+		state.DownstreamSessionID != strings.TrimSpace(sessionID) {
+		return nil, true, fmt.Errorf("persisted cascade task downstream identity mismatch")
+	}
+	return g.restoreCascadeTaskRouteStateLocked(ctx, state)
+}
+
+func (g *GB28181API) restoreCascadeTaskRouteByUpstreamLocked(ctx context.Context, kind string, worker *cascadeWorker, exposedID, sessionID string) (*cascadeTaskRoute, bool, error) {
+	if g == nil || worker == nil {
+		return nil, false, nil
+	}
+	state, found, err := g.loadCascadeTaskRouteStateByUpstream(ctx, kind, worker.platform.name, exposedID, sessionID)
+	if err != nil || !found {
+		return nil, found, err
+	}
+	if state.Kind != strings.TrimSpace(kind) || state.PlatformName != worker.platform.name ||
+		state.ExposedID != strings.TrimSpace(exposedID) || state.UpstreamSessionID != strings.TrimSpace(sessionID) {
+		return nil, true, fmt.Errorf("persisted cascade task upstream identity mismatch")
+	}
+	return g.restoreCascadeTaskRouteStateLocked(ctx, state)
+}
+
+// restoreCascadeTaskRouteStateLocked 在 cascadeTaskRouteMu 持有期间恢复双向索引。
+func (g *GB28181API) restoreCascadeTaskRouteStateLocked(ctx context.Context, state cascadeTaskRoutePersistentState) (*cascadeTaskRoute, bool, error) {
+	if runtimeStateExpired(state.CreatedAt, time.Now(), cascadeTaskRouteTTL) {
+		route := &cascadeTaskRoute{
+			kind: state.Kind, downstreamDeviceID: state.DownstreamDeviceID, downstreamSessionID: state.DownstreamSessionID,
+		}
+		if err := g.deletePersistedCascadeTaskRoute(ctx, route); err != nil {
+			return nil, true, err
+		}
+		return nil, false, nil
+	}
+	identity := state.Identity.clone()
+	localGatewayID := strings.TrimSpace(state.LocalGatewayID)
+	var worker *cascadeWorker
+	if !state.Completed {
+		if g.svr == nil || g.svr.cascade == nil {
+			return nil, true, fmt.Errorf("cascade manager is unavailable for persisted task route")
+		}
+		var ok bool
+		worker, ok = g.svr.cascade.workerByName(state.PlatformName)
+		if !ok {
+			return nil, true, fmt.Errorf("persisted cascade task upstream %q is unavailable", state.PlatformName)
+		}
+		if !worker.protocolVersion().AtLeast(GBVersion30) {
+			return nil, true, fmt.Errorf("persisted cascade task upstream no longer supports protocol 3.0")
+		}
+		if worker.platform.channelIDMap[state.DownstreamTargetID] != state.ExposedID {
+			return nil, true, fmt.Errorf("persisted cascade task channel mapping changed")
+		}
+		if identity != nil {
+			policy := worker.platform.monitorUserIdentity
+			if policy == nil {
+				return nil, true, fmt.Errorf("persisted cascade task identity policy is unavailable")
+			}
+			if err := policy.validateInbound(identity); err != nil {
+				return nil, true, fmt.Errorf("persisted cascade task identity is no longer authorized: %w", err)
+			}
+			localGatewayID = policy.localGatewayID
+		}
+	}
+	route := &cascadeTaskRoute{
+		kind: state.Kind, worker: worker, upstreamPlatform: state.PlatformName, downstreamDeviceID: state.DownstreamDeviceID,
+		downstreamTargetID: state.DownstreamTargetID, exposedID: state.ExposedID,
+		upstreamSessionID: state.UpstreamSessionID, downstreamSessionID: state.DownstreamSessionID,
+		requestFingerprint: state.RequestFingerprint, identity: identity, localGatewayID: localGatewayID,
+		createdAt: state.CreatedAt, completed: state.Completed, startDone: make(chan struct{}),
+		startResult: state.StartResult,
+	}
+	if state.StartError != "" {
+		route.startErr = errors.New(state.StartError)
+	}
+	if state.StartFinished {
+		close(route.startDone)
+	} else {
+		route.startResult = "ERROR"
+		route.startErr = errors.New("cascade task start was interrupted by restart")
+		close(route.startDone)
+	}
+	downstreamKey := cascadeTaskRouteKey(route.kind, route.downstreamDeviceID, route.downstreamSessionID)
+	upstreamKey := cascadeTaskUpstreamRouteKeyByName(route.kind, route.upstreamPlatform, route.exposedID, route.upstreamSessionID)
+	downstreamLoaded := false
+	if actual, loaded := g.cascadeTaskRoutes.LoadOrStore(downstreamKey, route); loaded {
+		downstreamLoaded = true
+		existing, valid := actual.(*cascadeTaskRoute)
+		if !valid || existing == nil {
+			return nil, true, fmt.Errorf("invalid restored cascade task downstream route")
+		}
+		if existing.upstreamPlatform != state.PlatformName || existing.exposedID != state.ExposedID ||
+			existing.upstreamSessionID != state.UpstreamSessionID || existing.requestFingerprint != state.RequestFingerprint {
+			return nil, true, fmt.Errorf("persisted cascade task downstream route conflicts with runtime state")
+		}
+		route = existing
+	}
+	if actual, loaded := g.cascadeTaskRoutes.LoadOrStore(upstreamKey, route); loaded && actual != route {
+		if !downstreamLoaded {
+			g.cascadeTaskRoutes.CompareAndDelete(downstreamKey, route)
+		}
+		return nil, true, fmt.Errorf("persisted cascade task upstream route conflicts with runtime state")
+	}
+	return route, true, nil
 }
 
 func rewriteCascadeTaskFields(body []byte, route *cascadeTaskRoute, snapshot bool) ([]byte, error) {

@@ -47,6 +47,12 @@ func (d *Device) Delete(ctx context.Context, dev *ipc.Device, opts ...orm.QueryO
 			}
 			return tx.Where("device_id = ?", dev.DeviceID).Delete(new(ipc.GBTaskStateRecord)).Error
 		},
+		func(tx *gorm.DB) error {
+			if !tx.Migrator().HasTable(new(ipc.GBCascadeTaskRouteRecord)) {
+				return nil
+			}
+			return tx.Where("downstream_device_id = ?", dev.DeviceID).Delete(new(ipc.GBCascadeTaskRouteRecord)).Error
+		},
 	); err != nil {
 		return err
 	}

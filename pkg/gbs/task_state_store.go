@@ -85,12 +85,13 @@ func (g *GB28181API) deleteTaskState(ctx context.Context, kind, deviceID, sessio
 }
 
 func (g *GB28181API) cleanupTaskStates(now time.Time) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	g.cleanupPersistedCascadeTaskRoutes(now)
 	store := g.taskStateStorer()
 	if store == nil {
 		return
-	}
-	if now.IsZero() {
-		now = time.Now()
 	}
 	ctx, cancel := taskStateContext(context.Background())
 	err := store.CleanupGBTaskStates(ctx, gbTaskKindUpgrade, now.Add(-upgradeStateTTL), maxUpgradeStates)

@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -123,6 +124,32 @@ func TestCascadeTaskRouteForwardsAndRewritesFinalNotification(t *testing.T) {
 	assertCascadeTaskBody(t, request, "UploadSnapShotFinished", testExposedChannelID, snapshotSession)
 	if !strings.Contains(string(request.Body()), testExposedChannelID+"02"+strings.Repeat("1", 19)) {
 		t.Fatalf("snapshot file id was not rewritten: %s", request.Body())
+	}
+}
+
+func TestCascadeTaskRoutePersistenceFailureDoesNotPublishRoute(t *testing.T) {
+	store := &failingCascadeTaskRouteMemory{persistentTaskMemory: newPersistentTaskMemory(GBVersion30)}
+	api := &GB28181API{svr: &Server{memoryStorer: store}}
+	worker := newCascadeWorker(nil, testSharedCascadePlatform(t))
+	worker.effective = GBVersion30
+	channel := &ipc.Channel{DeviceID: gb10DeviceID, ChannelID: testCascadeChannelID}
+
+	if _, created, err := api.registerCascadeTaskRoute(
+		t.Context(), cascadeTaskUpgrade, worker, channel, testExposedChannelID,
+		"upgrade-session-route-save-failure-01", "upgrade-request",
+	); !errors.Is(err, errCascadeTaskRouteSave) || created {
+		t.Fatalf("register route with persistence failure = created %v, err %v", created, err)
+	}
+	if count := api.cascadeTaskRouteCount(); count != 0 {
+		t.Fatalf("failed persistent route published %d runtime routes", count)
+	}
+	store.mu.Lock()
+	taskStates := len(store.records)
+	downstreamRoutes := len(store.downstreamRoutes)
+	upstreamRoutes := len(store.upstreamRoutes)
+	store.mu.Unlock()
+	if taskStates != 0 || downstreamRoutes != 0 || upstreamRoutes != 0 {
+		t.Fatalf("failed persistent route left task=%d downstream=%d upstream=%d records", taskStates, downstreamRoutes, upstreamRoutes)
 	}
 }
 
@@ -351,6 +378,118 @@ func TestCascadeCompletedTaskRetainsUpstreamDeduplication(t *testing.T) {
 	}
 	if _, _, err := api.registerCascadeTaskRoute(t.Context(), cascadeTaskUpgrade, worker, channel, testExposedChannelID, sessionID, "changed-request"); err == nil {
 		t.Fatal("same session with changed task payload was accepted")
+	}
+}
+
+func TestCascadeTaskRouteRestoresBothIndexesAfterRestart(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		kind         string
+		upstreamID   string
+		fingerprint  string
+		initialState any
+		body         func(string) []byte
+	}{
+		{
+			name: "upgrade", kind: cascadeTaskUpgrade,
+			upstreamID: "upgrade-session-restart-000000001", fingerprint: "upgrade-request-restart",
+			initialState: UpgradeState{Firmware: "V3"},
+			body: func(sessionID string) []byte {
+				return []byte(`<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>120</SN><DeviceID>` + testCascadeChannelID +
+					`</DeviceID><SessionID>` + sessionID + `</SessionID><UpgradeResult>OK</UpgradeResult><Firmware>V3</Firmware></Notify>`)
+			},
+		},
+		{
+			name: "snapshot", kind: cascadeTaskSnapshot,
+			upstreamID: "snapshot-session-restart-00000001", fingerprint: "snapshot-request-restart",
+			initialState: SnapshotState{ExpectedCount: 1},
+			body: func(sessionID string) []byte {
+				return []byte(`<Notify><CmdType>UploadSnapShotFinished</CmdType><SN>121</SN><DeviceID>` + testCascadeChannelID +
+					`</DeviceID><SessionID>` + sessionID + `</SessionID><SnapShotList><SnapShotFileID>` +
+					testCascadeChannelID + `022026082508150000001</SnapShotFileID></SnapShotList></Notify>`)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := newPersistentTaskMemory(GBVersion30)
+			store.device.Channels.Store(testCascadeChannelID, &Channel{ChannelID: testCascadeChannelID, device: store.device})
+			platform := testSharedCascadePlatform(t)
+			firstWorker := newCascadeWorker(nil, platform)
+			firstWorker.effective = GBVersion30
+			first := &GB28181API{svr: &Server{memoryStorer: store}}
+			channel := &ipc.Channel{DeviceID: gb10DeviceID, ChannelID: testCascadeChannelID}
+			route, created, err := first.registerCascadeTaskRoute(
+				t.Context(), test.kind, firstWorker, channel, testExposedChannelID,
+				test.upstreamID, test.fingerprint, test.initialState,
+			)
+			if err != nil || !created {
+				t.Fatalf("register persistent route = created %v, err %v", created, err)
+			}
+			if _, err := route.finishStart("OK", nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := first.persistCascadeTaskRoute(t.Context(), route); err != nil {
+				t.Fatal(err)
+			}
+			if err := first.finishCascadeTaskState(t.Context(), route, "OK", nil); err != nil {
+				t.Fatal(err)
+			}
+
+			forwardedBodies := make(chan string, 1)
+			restartedWorker := newCascadeWorker(nil, platform)
+			restartedWorker.effective = GBVersion30
+			restartedWorker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+				forwardedBodies <- string(request.Body())
+				return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+			}
+			restartedServer := &Server{memoryStorer: store}
+			restartedManager := NewCascadeManager(restartedServer)
+			restartedManager.items[platform.name] = restartedWorker
+			restartedServer.cascade = restartedManager
+			restarted := &GB28181API{svr: restartedServer}
+			restartedServer.gb = restarted
+
+			restored, created, err := restarted.registerCascadeTaskRoute(
+				t.Context(), test.kind, restartedWorker, channel, testExposedChannelID,
+				test.upstreamID, test.fingerprint, test.initialState,
+			)
+			if err != nil || created || restored.downstreamSessionID != route.downstreamSessionID {
+				t.Fatalf("restore upstream route = %+v, created %v, err %v", restored, created, err)
+			}
+			if result, err := restored.waitStart(t.Context()); err != nil || result != "OK" {
+				t.Fatalf("restored start result = %q, %v", result, err)
+			}
+			body := test.body(route.downstreamSessionID)
+			if forwarded, err := restarted.forwardCascadeTaskNotification(
+				t.Context(), test.kind, gb10DeviceID, testCascadeChannelID, route.downstreamSessionID, body,
+			); err != nil || !forwarded {
+				t.Fatalf("restored final forwarding = %v, %v", forwarded, err)
+			}
+			forwarded := <-forwardedBodies
+			if !strings.Contains(forwarded, test.upstreamID) || !strings.Contains(forwarded, testExposedChannelID) ||
+				strings.Contains(forwarded, route.downstreamSessionID) || strings.Contains(forwarded, testCascadeChannelID) {
+				t.Fatalf("restored final notification was not rewritten: %s", forwarded)
+			}
+
+			// 已完成路由只用于幂等确认，不应因当前上级配置已删除而拒绝下级重传。
+			duplicateServer := &Server{memoryStorer: store}
+			duplicateAPI := &GB28181API{svr: duplicateServer}
+			duplicateServer.gb = duplicateAPI
+			if forwarded, err := duplicateAPI.forwardCascadeTaskNotification(
+				t.Context(), test.kind, gb10DeviceID, testCascadeChannelID, route.downstreamSessionID, body,
+			); err != nil || !forwarded {
+				t.Fatalf("completed route duplicate without upstream config = %v, err %v", forwarded, err)
+			}
+			retryWorker := newCascadeWorker(nil, platform)
+			retryWorker.effective = GBVersion30
+			retried, created, err := duplicateAPI.registerCascadeTaskRoute(
+				t.Context(), test.kind, retryWorker, channel, testExposedChannelID,
+				test.upstreamID, test.fingerprint, test.initialState,
+			)
+			if err != nil || created || retried.downstreamSessionID != route.downstreamSessionID {
+				t.Fatalf("completed route upstream retry = %+v, created %v, err %v", retried, created, err)
+			}
+		})
 	}
 }
 

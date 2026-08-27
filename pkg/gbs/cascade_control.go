@@ -65,7 +65,12 @@ func (g *GB28181API) forwardCascadeDeviceControl(worker *cascadeWorker, body []b
 			if route != nil {
 				if created {
 					result, err = route.finishStart(result, err)
-					if stateErr := g.finishCascadeTaskState(ctx, route, result, err); stateErr != nil && err == nil {
+					startErr := err
+					routeErr := g.persistCascadeTaskRoute(ctx, route)
+					stateErr := g.finishCascadeTaskState(ctx, route, result, startErr)
+					if routeErr != nil && err == nil {
+						err = routeErr
+					} else if stateErr != nil && err == nil {
 						err = stateErr
 					}
 				} else if route.isCompleted() {

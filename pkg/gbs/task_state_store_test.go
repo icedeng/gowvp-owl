@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -10,17 +11,22 @@ import (
 )
 
 var errTaskStateSave = errors.New("task state save failed")
+var errCascadeTaskRouteSave = errors.New("cascade task route save failed")
 
 type persistentTaskMemory struct {
 	*versionGateMemory
-	mu      sync.Mutex
-	records map[string][]byte
+	mu               sync.Mutex
+	records          map[string][]byte
+	downstreamRoutes map[string][]byte
+	upstreamRoutes   map[string][]byte
 }
 
 func newPersistentTaskMemory(version GBProtocolVersion) *persistentTaskMemory {
 	return &persistentTaskMemory{
 		versionGateMemory: &versionGateMemory{device: &Device{IsOnline: true, gbVersion: string(version)}},
 		records:           make(map[string][]byte),
+		downstreamRoutes:  make(map[string][]byte),
+		upstreamRoutes:    make(map[string][]byte),
 	}
 }
 
@@ -63,6 +69,72 @@ func (m *persistentTaskMemory) CleanupGBTaskStates(context.Context, string, time
 	return nil
 }
 
+func persistentCascadeDownstreamKey(kind, deviceID, sessionID string) string {
+	return fmt.Sprintf("%s\x00%s\x00%s", kind, deviceID, sessionID)
+}
+
+func persistentCascadeUpstreamKey(kind, platformName, exposedID, sessionID string) string {
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%s", kind, platformName, exposedID, sessionID)
+}
+
+func (m *persistentTaskMemory) SaveGBCascadeTaskRoute(
+	ctx context.Context,
+	kind, platformName, downstreamDeviceID, downstreamSessionID, exposedID, upstreamSessionID string,
+	payload []byte,
+	_ time.Time,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.downstreamRoutes[persistentCascadeDownstreamKey(kind, downstreamDeviceID, downstreamSessionID)] = append([]byte(nil), payload...)
+	m.upstreamRoutes[persistentCascadeUpstreamKey(kind, platformName, exposedID, upstreamSessionID)] = append([]byte(nil), payload...)
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *persistentTaskMemory) LoadGBCascadeTaskRouteByDownstream(ctx context.Context, kind, deviceID, sessionID string) ([]byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	m.mu.Lock()
+	payload, ok := m.downstreamRoutes[persistentCascadeDownstreamKey(kind, deviceID, sessionID)]
+	payload = append([]byte(nil), payload...)
+	m.mu.Unlock()
+	return payload, ok, nil
+}
+
+func (m *persistentTaskMemory) LoadGBCascadeTaskRouteByUpstream(ctx context.Context, kind, platformName, exposedID, sessionID string) ([]byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	m.mu.Lock()
+	payload, ok := m.upstreamRoutes[persistentCascadeUpstreamKey(kind, platformName, exposedID, sessionID)]
+	payload = append([]byte(nil), payload...)
+	m.mu.Unlock()
+	return payload, ok, nil
+}
+
+func (m *persistentTaskMemory) DeleteGBCascadeTaskRoute(ctx context.Context, kind, deviceID, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	downstreamKey := persistentCascadeDownstreamKey(kind, deviceID, sessionID)
+	m.mu.Lock()
+	payload := m.downstreamRoutes[downstreamKey]
+	delete(m.downstreamRoutes, downstreamKey)
+	var state cascadeTaskRoutePersistentState
+	if json.Unmarshal(payload, &state) == nil {
+		delete(m.upstreamRoutes, persistentCascadeUpstreamKey(state.Kind, state.PlatformName, state.ExposedID, state.UpstreamSessionID))
+	}
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *persistentTaskMemory) CleanupGBCascadeTaskRoutes(context.Context, time.Time, int) error {
+	return nil
+}
+
 type failingTaskMemory struct {
 	*persistentTaskMemory
 }
@@ -76,6 +148,19 @@ type unavailableTaskMemory struct {
 }
 
 func (*unavailableTaskMemory) GBTaskStateAvailable() bool { return false }
+
+type failingCascadeTaskRouteMemory struct {
+	*persistentTaskMemory
+}
+
+func (*failingCascadeTaskRouteMemory) SaveGBCascadeTaskRoute(
+	context.Context,
+	string, string, string, string, string, string,
+	[]byte,
+	time.Time,
+) error {
+	return errCascadeTaskRouteSave
+}
 
 func TestTaskStatePersistenceFailureDoesNotCommitMemory(t *testing.T) {
 	store := &failingTaskMemory{persistentTaskMemory: newPersistentTaskMemory(GBVersion30)}
