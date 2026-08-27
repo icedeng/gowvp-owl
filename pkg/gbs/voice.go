@@ -688,33 +688,26 @@ func (g *GB28181API) findBroadcastSession(deviceID string) *broadcastSession {
 	return matched
 }
 
-func (g *GB28181API) findBroadcastSessionForInvite(deviceID, subject string) *broadcastSession {
-	receiverID := broadcastReceiverIDFromSubject(subject)
-	if receiverID != "" {
-		value, ok := g.broadcastSessions.Load(receiverID)
+func (g *GB28181API) findBroadcastSessionForInvite(deviceID string, request *sip.Request) (*broadcastSession, error) {
+	subject, err := optionalGBInviteSubject(request)
+	if err != nil {
+		return g.findBroadcastSession(deviceID), err
+	}
+	if subject != nil {
+		value, ok := g.broadcastSessions.Load(subject.ReceiverID)
 		if !ok {
-			return nil
+			return nil, nil
 		}
 		session, _ := value.(*broadcastSession)
 		if session == nil || strings.TrimSpace(session.DeviceID) != strings.TrimSpace(deviceID) {
-			return nil
+			return nil, nil
 		}
-		return session
+		if err := validateGBInviteSubject(subject, session.SourceID, session.ChannelID, 0); err != nil {
+			return session, err
+		}
+		return session, nil
 	}
-	return g.findBroadcastSession(deviceID)
-}
-
-func broadcastReceiverIDFromSubject(subject string) string {
-	_, receiver, ok := strings.Cut(strings.TrimSpace(subject), ",")
-	if !ok {
-		return ""
-	}
-	receiverID, _, _ := strings.Cut(strings.TrimSpace(receiver), ":")
-	receiverID = strings.TrimSpace(receiverID)
-	if filterUnknowDevices(receiverID) != nil {
-		return ""
-	}
-	return receiverID
+	return g.findBroadcastSession(deviceID), nil
 }
 
 func parseBroadcastPayload(media *sdp.Media, version GBProtocolVersion) (payload int, mapping string, rtpType int, err error) {

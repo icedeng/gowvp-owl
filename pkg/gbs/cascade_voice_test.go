@@ -402,15 +402,24 @@ func TestCascadeBroadcastRejectsUnsharedTarget(t *testing.T) {
 
 func TestCascadeBroadcastInviteSelectsSessionBySubjectReceiver(t *testing.T) {
 	api := &GB28181API{}
-	first := &broadcastSession{DeviceID: gb10DeviceID, ChannelID: testCascadeChannelID}
-	second := &broadcastSession{DeviceID: gb10DeviceID, ChannelID: "34020000001320000012"}
+	first := &broadcastSession{DeviceID: gb10DeviceID, ChannelID: testCascadeChannelID, SourceID: gb10PlatformID}
+	second := &broadcastSession{DeviceID: gb10DeviceID, ChannelID: "34020000001320000012", SourceID: gb10PlatformID}
 	api.broadcastSessions.Store(first.ChannelID, first)
 	api.broadcastSessions.Store(second.ChannelID, second)
-	if got := api.findBroadcastSessionForInvite(gb10DeviceID, gb10DeviceID+":1,"+second.ChannelID+":0"); got != second {
+	request := newFlowRequest(t, newFlowConnection(), sip.MethodInvite, "broadcast-subject", []byte("offer"))
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: gb10PlatformID + ":voice-1," + second.ChannelID + ":speaker-1"})
+	if got, err := api.findBroadcastSessionForInvite(gb10DeviceID, request); err != nil || got != second {
 		t.Fatalf("selected Broadcast session = %p, want %p", got, second)
 	}
-	if got := api.findBroadcastSessionForInvite(gb10DeviceID, gb10DeviceID+":1,34020000001320000099:0"); got != nil {
+	request.RemoveHeader("Subject")
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: gb10PlatformID + ":voice-1,34020000001320000099:speaker-1"})
+	if got, err := api.findBroadcastSessionForInvite(gb10DeviceID, request); err != nil || got != nil {
 		t.Fatalf("unknown Subject receiver selected session: %+v", got)
+	}
+	request.RemoveHeader("Subject")
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: gb10DeviceID + ":voice-1," + second.ChannelID + ":speaker-1"})
+	if got, err := api.findBroadcastSessionForInvite(gb10DeviceID, request); got != second || err == nil || !strings.Contains(err.Error(), "media source") {
+		t.Fatalf("mismatched Subject result = %+v, %v", got, err)
 	}
 }
 

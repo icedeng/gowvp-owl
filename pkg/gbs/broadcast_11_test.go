@@ -192,6 +192,42 @@ func TestBroadcastReceiverInviteRejectsInvalidSDP(t *testing.T) {
 	}
 }
 
+func TestBroadcastReceiverInviteRejectsMismatchedSubject(t *testing.T) {
+	conn := newFlowConnection()
+	media := &fakeRTPMediaService{startPort: 30000}
+	api := &GB28181API{cfg: &conf.SIP{ID: gb10PlatformID, Domain: "3402000000"}, sms: media, streams: &conc.Map[string, *Streams]{}}
+	session := &broadcastSession{
+		DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, SourceID: gb10PlatformID,
+		SourceVHost: defaultBroadcastVHost, SourceApp: defaultBroadcastApp, SourceStream: "microphone",
+		SMS: &sms.MediaServer{SDPIP: "192.0.2.20"}, Stream: &Streams{}, ready: make(chan error, 1), Version: GBVersion11,
+	}
+	api.broadcastSessions.Store(gb10ChannelID, session)
+	body := []byte("v=0\r\no=" + gb10ChannelID + " 0 0 IN IP4 192.0.2.10\r\ns=Play\r\nc=IN IP4 192.0.2.30\r\nt=0 0\r\nm=audio 8000 RTP/AVP 96\r\na=recvonly\r\na=rtpmap:96 PS/90000\r\n")
+	request := newFlowRequest(t, conn, sip.MethodInvite, "broadcast-invalid-subject", body)
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: gb10DeviceID + ":voice-1," + gb10ChannelID + ":speaker-1"})
+	api.sipInviteGeneric(&sip.Context{
+		Request: request, Tx: sip.NewTransaction("broadcast-invalid-subject", conn),
+		DeviceID: gb10DeviceID, Source: conn.remote, To: mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000"),
+	})
+	response := string(<-flowResponse(t, conn))
+	if !strings.Contains(response, "SIP/2.0 400") || !strings.Contains(response, "does not match media source") {
+		t.Fatalf("unexpected response:\n%s", response)
+	}
+	select {
+	case err := <-session.ready:
+		if err == nil || !strings.Contains(err.Error(), "media source") {
+			t.Fatalf("unexpected completion error: %v", err)
+		}
+	default:
+		t.Fatal("invalid Subject did not fail waiting Broadcast session")
+	}
+	media.mu.Lock()
+	defer media.mu.Unlock()
+	if media.startCalls != 0 {
+		t.Fatalf("invalid Subject started RTP %d times", media.startCalls)
+	}
+}
+
 func TestBroadcastReceiverInviteUsesPCMAFor2016And2022(t *testing.T) {
 	for _, version := range []GBProtocolVersion{GBVersion20, GBVersion30} {
 		t.Run(string(version), func(t *testing.T) {

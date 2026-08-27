@@ -60,6 +60,99 @@ func cascadeHistoryOfferSDP(mode, protocol, address, setup string, start, end in
 		"f=v/2/5/25/1/0\r\n")
 }
 
+func TestGBInviteSubjectValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		senderID   string
+		receiverID string
+		prefix     byte
+		wantError  string
+	}{
+		{name: "live", value: testExposedChannelID + ":0100000011," + gb10PlatformID + ":window-live", senderID: testExposedChannelID, receiverID: gb10PlatformID, prefix: '0'},
+		{name: "history", value: testExposedChannelID + ":1100000011," + gb10PlatformID + ":window-history", senderID: testExposedChannelID, receiverID: gb10PlatformID, prefix: '1'},
+		{name: "broadcast sequence has no video prefix rule", value: gb10PlatformID + ":voice-1," + testCascadeChannelID + ":speaker-1", senderID: gb10PlatformID, receiverID: testCascadeChannelID},
+		{name: "malformed", value: testExposedChannelID + ":0100000011", wantError: "must use"},
+		{name: "invalid sender id", value: "sender:0100000011," + gb10PlatformID + ":window", wantError: "sender id"},
+		{name: "empty sender sequence", value: testExposedChannelID + ":," + gb10PlatformID + ":window", wantError: "sender sequence"},
+		{name: "long sender sequence", value: testExposedChannelID + ":123456789012345678901," + gb10PlatformID + ":window", wantError: "1 to 20"},
+		{name: "invalid receiver id", value: testExposedChannelID + ":0100000011,receiver:window", wantError: "receiver id"},
+		{name: "empty receiver sequence", value: testExposedChannelID + ":0100000011," + gb10PlatformID + ":", wantError: "receiver sequence"},
+		{name: "sender mismatch", value: gb10DeviceID + ":0100000011," + gb10PlatformID + ":window", senderID: testExposedChannelID, receiverID: gb10PlatformID, prefix: '0', wantError: "does not match media source"},
+		{name: "receiver mismatch", value: testExposedChannelID + ":0100000011," + gb10DeviceID + ":window", senderID: testExposedChannelID, receiverID: gb10PlatformID, prefix: '0', wantError: "does not match media receiver"},
+		{name: "live prefix", value: testExposedChannelID + ":1100000011," + gb10PlatformID + ":window", senderID: testExposedChannelID, receiverID: gb10PlatformID, prefix: '0', wantError: "start with 0"},
+		{name: "history prefix", value: testExposedChannelID + ":0100000011," + gb10PlatformID + ":window", senderID: testExposedChannelID, receiverID: gb10PlatformID, prefix: '1', wantError: "start with 1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			subject, err := parseGBInviteSubject(test.value)
+			if err == nil {
+				err = validateGBInviteSubject(subject, test.senderID, test.receiverID, test.prefix)
+			}
+			if test.wantError == "" && err != nil {
+				t.Fatal(err)
+			}
+			if test.wantError != "" && (err == nil || !strings.Contains(err.Error(), test.wantError)) {
+				t.Fatalf("error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestOptionalGBInviteSubjectAllowsMissingAndRejectsDuplicates(t *testing.T) {
+	request := newFlowRequest(t, newFlowConnection(), sip.MethodInvite, "subject-header", []byte("offer"))
+	if subject, err := optionalGBInviteSubject(request); err != nil || subject != nil {
+		t.Fatalf("missing Subject = %+v, %v", subject, err)
+	}
+	value := testExposedChannelID + ":0100000011," + gb10PlatformID + ":window"
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: value})
+	if subject, err := optionalGBInviteSubject(request); err != nil || subject == nil || subject.ReceiverID != gb10PlatformID {
+		t.Fatalf("valid Subject = %+v, %v", subject, err)
+	}
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: value})
+	if _, err := optionalGBInviteSubject(request); err == nil || !strings.Contains(err.Error(), "multiple") {
+		t.Fatalf("duplicate Subject error = %v", err)
+	}
+}
+
+func TestCascadeInviteRejectsMismatchedSubjectBeforeStartingMedia(t *testing.T) {
+	connection := newFlowConnection()
+	connection.remote = &net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060}
+	platform := testSharedCascadePlatform(t)
+	worker := newCascadeWorker(nil, platform)
+	remote := mustFlowAddress(t, "sip:"+gb10PlatformID+"@remote.example")
+	local := mustFlowAddress(t, "sip:"+testExposedChannelID+"@local.example")
+	callID := sip.CallID("cascade-invalid-subject")
+	request := sip.NewRequest("", sip.MethodInvite, local.URI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetFrom(remote).SetTo(local).SetMethod(sip.MethodInvite).SetCallID(&callID).
+			SetContentType(&sip.ContentTypeSDP).
+			AddVia(&sip.ViaHop{Host: "192.0.2.30", Port: sip.NewPort(5060), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()})}).Build(),
+		cascadeOfferSDP("RTP/AVP", "192.0.2.30", ""))
+	request.SetConnection(connection)
+	request.SetSource(connection.remote)
+	request.SetDestination(connection.local)
+	request.AppendHeader(&sip.GenericHeader{HeaderName: "Subject", Contents: testExposedChannelID + ":0100000011," + gb10DeviceID + ":window"})
+
+	api := &GB28181API{}
+	api.sipInviteCascade(&sip.Context{
+		Request: request, Tx: sip.NewTransaction("cascade-invalid-subject", connection),
+		DeviceID: gb10PlatformID, Source: connection.remote, To: local, Log: slog.Default(),
+	}, string(callID), worker)
+
+	select {
+	case payload := <-connection.writes:
+		response := string(payload)
+		if !strings.Contains(response, "SIP/2.0 400") || !strings.Contains(response, "does not match media receiver") {
+			t.Fatalf("invalid Subject response:\n%s", response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("invalid Subject response timeout")
+	}
+	if _, ok := api.inviteDialogs.Load(string(callID)); ok {
+		t.Fatal("invalid Subject created cascade dialog")
+	}
+}
+
 func TestParseCascadeVideoOfferByProtocolVersion(t *testing.T) {
 	platform := testSharedCascadePlatform(t)
 	offer, err := parseCascadeVideoOffer(cascadeOfferSDP("RTP/AVP", "192.0.2.30", ""), GBVersion10, platform)
@@ -1140,6 +1233,10 @@ func TestCascadeRealtimeInviteEstablishesAndReleasesB2BUA(t *testing.T) {
 	request.AppendHeader(&sip.GenericHeader{
 		HeaderName: cascadePreferredPathHeader,
 		Contents:   worker.platform.localID + "-" + testCascadePathC + "-" + testCascadePathE,
+	})
+	request.AppendHeader(&sip.GenericHeader{
+		HeaderName: "Subject",
+		Contents:   testExposedChannelID + ":0100000011," + gb10PlatformID + ":window-live",
 	})
 	api.sipInviteCascade(&sip.Context{
 		Request: request, Tx: sip.NewTransaction("cascade-live-invite", connection),

@@ -278,6 +278,18 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 		respondCascadeInviteStatus(ctx, worker, http.StatusNotAcceptable, err.Error())
 		return
 	}
+	subject, err := optionalGBInviteSubject(ctx.Request)
+	if err == nil {
+		prefix := byte('0')
+		if offer.Mode != historyModePlay {
+			prefix = '1'
+		}
+		err = validateGBInviteSubject(subject, exposedID, worker.platform.serverID, prefix)
+	}
+	if err != nil {
+		respondCascadeInviteStatus(ctx, worker, http.StatusBadRequest, err.Error())
+		return
+	}
 	offer.PreferredPath = preferredPath
 	if offer.Mode != historyModePlay && !cascadeHistoryURIMatches(offer.URI, exposedID) {
 		respondCascadeInviteStatus(ctx, worker, http.StatusNotAcceptable, "cascade history SDP URI does not match requested channel")

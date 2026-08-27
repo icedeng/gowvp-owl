@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
 	"github.com/gowvp/owl/pkg/zlm"
@@ -48,6 +49,79 @@ type inboundInviteDialog struct {
 
 const pendingInviteDialogTTL = 10 * time.Minute
 
+type gbInviteSubject struct {
+	SenderID         string
+	SenderSequence   string
+	ReceiverID       string
+	ReceiverSequence string
+}
+
+func optionalGBInviteSubject(request *sip.Request) (*gbInviteSubject, error) {
+	if request == nil {
+		return nil, fmt.Errorf("INVITE request is nil")
+	}
+	headers := request.GetHeaders("Subject")
+	if len(headers) == 0 {
+		// 兼容未携带 Subject 的存量设备和上级平台；一旦携带则按附录 K/L 严格校验。
+		return nil, nil
+	}
+	if len(headers) != 1 {
+		return nil, fmt.Errorf("multiple Subject headers")
+	}
+	value := headers[0].String()
+	_, value, ok := strings.Cut(value, ":")
+	if !ok {
+		return nil, fmt.Errorf("invalid Subject header")
+	}
+	return parseGBInviteSubject(strings.TrimSpace(value))
+}
+
+func parseGBInviteSubject(value string) (*gbInviteSubject, error) {
+	parts := strings.Split(value, ",")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("Subject must use senderID:senderSequence,receiverID:receiverSequence")
+	}
+	sender := strings.Split(parts[0], ":")
+	receiver := strings.Split(parts[1], ":")
+	if len(sender) != 2 || len(receiver) != 2 {
+		return nil, fmt.Errorf("Subject must use senderID:senderSequence,receiverID:receiverSequence")
+	}
+	return &gbInviteSubject{
+		SenderID:         strings.TrimSpace(sender[0]),
+		SenderSequence:   strings.TrimSpace(sender[1]),
+		ReceiverID:       strings.TrimSpace(receiver[0]),
+		ReceiverSequence: strings.TrimSpace(receiver[1]),
+	}, nil
+}
+
+func validateGBInviteSubject(subject *gbInviteSubject, senderID, receiverID string, senderSequencePrefix byte) error {
+	if subject == nil {
+		return nil
+	}
+	if !isGBDeviceIdentifier(subject.SenderID) {
+		return fmt.Errorf("Subject sender id must be 20 ASCII digits")
+	}
+	if subject.SenderSequence == "" || !utf8.ValidString(subject.SenderSequence) || utf8.RuneCountInString(subject.SenderSequence) > 20 {
+		return fmt.Errorf("Subject sender sequence must contain 1 to 20 characters")
+	}
+	if !isGBDeviceIdentifier(subject.ReceiverID) {
+		return fmt.Errorf("Subject receiver id must be 20 ASCII digits")
+	}
+	if subject.ReceiverSequence == "" || !utf8.ValidString(subject.ReceiverSequence) {
+		return fmt.Errorf("Subject receiver sequence is required")
+	}
+	if senderID = strings.TrimSpace(senderID); senderID != "" && subject.SenderID != senderID {
+		return fmt.Errorf("Subject sender id does not match media source %s", senderID)
+	}
+	if receiverID = strings.TrimSpace(receiverID); receiverID != "" && subject.ReceiverID != receiverID {
+		return fmt.Errorf("Subject receiver id does not match media receiver %s", receiverID)
+	}
+	if senderSequencePrefix != 0 && subject.SenderSequence[0] != senderSequencePrefix {
+		return fmt.Errorf("Subject sender sequence must start with %c", senderSequencePrefix)
+	}
+	return nil
+}
+
 // sipInviteGeneric 处理入向 INVITE。
 // 2014+ 广播由接收者主动 INVITE 语音源；已注册上级的媒体请求进入级联 B2BUA。
 // 其他未识别的入向媒体会话明确拒绝，避免回显 offer 使对端误判媒体已经建立。
@@ -64,7 +138,15 @@ func (g *GB28181API) sipInviteGeneric(ctx *sip.Context) {
 		}
 	}
 
-	if session := g.findBroadcastSessionForInvite(ctx.DeviceID, ctx.GetHeader("Subject")); session != nil {
+	session, err := g.findBroadcastSessionForInvite(ctx.DeviceID, ctx.Request)
+	if err != nil {
+		ctx.String(http.StatusBadRequest, err.Error())
+		if session != nil {
+			session.complete(err)
+		}
+		return
+	}
+	if session != nil {
 		g.sipInviteBroadcast(ctx, callID, session)
 		return
 	}
