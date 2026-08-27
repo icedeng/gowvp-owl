@@ -117,7 +117,9 @@ type SVACDecodeConfig struct {
 	InnerXML string `xml:",innerxml" json:"inner_xml"`
 }
 type VideoParamAttribute struct {
-	InnerXML string `xml:",innerxml" json:"inner_xml"`
+	Num        int    `xml:"Num,attr" json:"num"`
+	InnerXML   string `xml:",innerxml" json:"inner_xml"`
+	numPresent bool
 }
 type VideoRecordPlan struct {
 	InnerXML string `xml:",innerxml" json:"inner_xml"`
@@ -449,6 +451,18 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 		if err := validateDeviceConfigXMLFragment(section.name, section.value); err != nil {
 			return nil, err
 		}
+		if section.name == "VideoParamAttribute" {
+			config := *in.VideoParamAttribute
+			if err := validateVideoParamAttribute30(&config, false); err != nil {
+				return nil, err
+			}
+			request.VideoParamAttribute = &config
+			configured = true
+			continue
+		}
+		if err := validateDeviceConfig30Fragment(section.name, section.value); err != nil {
+			return nil, err
+		}
 		section.set(section.value)
 		configured = true
 	}
@@ -635,6 +649,58 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 	}
 
 	resultOK := strings.EqualFold(msg.Result, "OK")
+	if resultOK {
+		sections := []struct {
+			name    string
+			value   string
+			present bool
+		}{
+			{"VideoParamAttribute", innerXML(msg.VideoParamAttribute), msg.VideoParamAttribute != nil},
+			{"VideoRecordPlan", innerXML(msg.VideoRecordPlan), msg.VideoRecordPlan != nil},
+			{"VideoAlarmRecord", innerXML(msg.VideoAlarmRecord), msg.VideoAlarmRecord != nil},
+			{"PictureMask", innerXML(msg.PictureMask), msg.PictureMask != nil},
+			{"FrameMirror", innerXML(msg.FrameMirror), msg.FrameMirror != nil},
+			{"AlarmReport", innerXML(msg.AlarmReport), msg.AlarmReport != nil},
+			{"OSDConfig", innerXML(msg.OSDConfig), msg.OSDConfig != nil},
+		}
+		for _, section := range sections {
+			if !section.present {
+				continue
+			}
+			if err := g.requireGBVersionAtLeast(ctx.DeviceID, gbVersion2022, "配置查询应答("+section.name+")"); err != nil {
+				ctx.String(400, err.Error())
+				return
+			}
+			if err := validateDeviceConfigXMLFragment(section.name, section.value); err != nil {
+				ctx.String(400, err.Error())
+				return
+			}
+			if section.name == "VideoParamAttribute" {
+				if err := validateVideoParamAttribute30(msg.VideoParamAttribute, true); err != nil {
+					ctx.String(400, err.Error())
+					return
+				}
+				continue
+			}
+			if err := validateDeviceConfig30Fragment(section.name, section.value); err != nil {
+				ctx.String(400, err.Error())
+				return
+			}
+		}
+		for _, snapshot := range []*SnapShot{msg.SnapShotConfig, msg.SnapShot} {
+			if snapshot == nil {
+				continue
+			}
+			if err := g.requireGBVersionAtLeast(ctx.DeviceID, gbVersion2022, "配置查询应答(SnapShotConfig)"); err != nil {
+				ctx.String(400, err.Error())
+				return
+			}
+			if err := validateSnapshotConfig(snapshot); err != nil {
+				ctx.String(400, err.Error())
+				return
+			}
+		}
+	}
 	if resultOK && msg.BasicParam != nil {
 		if msg.BasicParam.HeartBeatInterval <= 0 || msg.BasicParam.HeartBeatInterval > math.MaxUint16 ||
 			msg.BasicParam.HeartBeatCount <= 0 || msg.BasicParam.HeartBeatCount > math.MaxUint16 {

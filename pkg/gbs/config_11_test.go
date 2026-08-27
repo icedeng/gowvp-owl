@@ -173,7 +173,7 @@ func TestDeviceConfig30WritesAll2022Sections(t *testing.T) {
 	request, err := api.buildDeviceConfigRequest("device", nil, &DeviceConfigInput{
 		DeviceID:            "device",
 		VideoParamAttribute: &VideoParamAttribute{InnerXML: `<Item><StreamNumber>0</StreamNumber><VideoFormat>H.265</VideoFormat><Resolution>1920x1080</Resolution><FrameRate>25</FrameRate><BitRateType>1</BitRateType></Item>`},
-		VideoRecordPlan:     &VideoRecordPlan{InnerXML: `<RecordPlan>1</RecordPlan>`},
+		VideoRecordPlan:     &VideoRecordPlan{InnerXML: `<RecordEnable>1</RecordEnable><RecordScheduleSumNum>1</RecordScheduleSumNum><RecordSchedule><WeekDayNum>1</WeekDayNum><TimeSegmentSumNum>1</TimeSegmentSumNum><TimeSegment><StartHour>0</StartHour><StartMin>0</StartMin><StartSec>0</StartSec><StopHour>23</StopHour><StopMin>59</StopMin><StopSec>59</StopSec></TimeSegment></RecordSchedule><StreamNumber>0</StreamNumber>`},
 		VideoAlarmRecord:    &VideoAlarmRecord{InnerXML: `<RecordEnable>1</RecordEnable><StreamNumber>0</StreamNumber>`},
 		PictureMask:         &PictureMask{InnerXML: `<Enable>1</Enable><SumNum>0</SumNum>`},
 		FrameMirror:         &FrameMirror{InnerXML: `1`},
@@ -194,7 +194,7 @@ func TestDeviceConfig30WritesAll2022Sections(t *testing.T) {
 	}
 	text := string(body)
 	for _, required := range []string{
-		"<VideoParamAttribute>", "<VideoRecordPlan>", "<VideoAlarmRecord>", "<PictureMask>",
+		`<VideoParamAttribute Num="1">`, "<VideoRecordPlan>", "<VideoAlarmRecord>", "<PictureMask>",
 		"<FrameMirror>1</FrameMirror>", "<AlarmReport>", "<OSDConfig>", "<SnapShotConfig>",
 		"<SessionID>snapshot-session-0000000000000001</SessionID>",
 	} {
@@ -219,6 +219,57 @@ func TestDeviceConfig2022SectionsAreVersionGatedAndValidated(t *testing.T) {
 	input.SnapShotConfig = &SnapShot{SnapNum: 11, Interval: 0, SessionID: "short"}
 	if _, err := api.buildDeviceConfigRequest("device", nil, input); err == nil {
 		t.Fatal("invalid SnapShotConfig was accepted")
+	}
+}
+
+func TestDeviceConfig30RejectsInvalidStructuredSections(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	tests := []struct {
+		name  string
+		input *DeviceConfigInput
+	}{
+		{name: "video attribute missing Num fields", input: &DeviceConfigInput{DeviceID: "device", VideoParamAttribute: &VideoParamAttribute{InnerXML: `<Item><StreamNumber>0</StreamNumber></Item>`}}},
+		{name: "video attribute stream range", input: &DeviceConfigInput{DeviceID: "device", VideoParamAttribute: &VideoParamAttribute{InnerXML: `<Item><StreamNumber>3</StreamNumber><VideoFormat>H.265</VideoFormat><Resolution>1080P</Resolution><FrameRate>25</FrameRate><BitRateType>1</BitRateType></Item>`}}},
+		{name: "record plan missing fields", input: &DeviceConfigInput{DeviceID: "device", VideoRecordPlan: &VideoRecordPlan{InnerXML: `<RecordPlan>1</RecordPlan>`}}},
+		{name: "record plan bad time", input: &DeviceConfigInput{DeviceID: "device", VideoRecordPlan: &VideoRecordPlan{InnerXML: `<RecordEnable>1</RecordEnable><RecordScheduleSumNum>1</RecordScheduleSumNum><RecordSchedule><WeekDayNum>1</WeekDayNum><TimeSegmentSumNum>1</TimeSegmentSumNum><TimeSegment><StartHour>24</StartHour><StartMin>0</StartMin><StartSec>0</StartSec><StopHour>23</StopHour><StopMin>59</StopMin><StopSec>59</StopSec></TimeSegment></RecordSchedule><StreamNumber>0</StreamNumber>`}}},
+		{name: "alarm recording enum", input: &DeviceConfigInput{DeviceID: "device", VideoAlarmRecord: &VideoAlarmRecord{InnerXML: `<RecordEnable>2</RecordEnable><StreamNumber>0</StreamNumber>`}}},
+		{name: "osd count mismatch", input: &DeviceConfigInput{DeviceID: "device", OSDConfig: &OSDConfig{InnerXML: `<Length>1920</Length><Width>1080</Width><TimeX>0</TimeX><TimeY>0</TimeY><SumNum>1</SumNum>`}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := api.buildDeviceConfigRequest("device", nil, test.input); err == nil {
+				t.Fatal("invalid 2022 DeviceConfig section was accepted")
+			}
+		})
+	}
+}
+
+func TestConfigDownload30RejectsInvalidStructuredSectionBeforeStateAndWait(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1), targetID: "device"}
+	api.pendingDeviceQuery.Store(buildPendingQueryKey("device", CMDTypeConfigDownload, 81), pending)
+	defer api.pendingDeviceQuery.Delete(buildPendingQueryKey("device", CMDTypeConfigDownload, 81))
+	body := []byte(`<Response><CmdType>ConfigDownload</CmdType><SN>81</SN><DeviceID>device</DeviceID><Result>OK</Result><VideoRecordPlan><RecordEnable>1</RecordEnable><RecordScheduleSumNum>1</RecordScheduleSumNum><StreamNumber>0</StreamNumber></VideoRecordPlan></Response>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "config-download-invalid-2022-section", body, api.sipMessageConfigDownload)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("invalid ConfigDownload response = %s", response)
+	}
+	select {
+	case output := <-pending.wait:
+		t.Fatalf("invalid ConfigDownload resolved pending query: %+v", output)
+	default:
+	}
+	if state, ok := api.GetQueryState("device"); ok && state.ConfigDownload != nil {
+		t.Fatalf("invalid ConfigDownload changed query state: %+v", state.ConfigDownload)
+	}
+}
+
+func TestConfigDownload11Rejects2022Section(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion11)
+	body := []byte(`<Response><CmdType>ConfigDownload</CmdType><SN>82</SN><DeviceID>device</DeviceID><Result>OK</Result><FrameMirror>1</FrameMirror></Response>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "config-download-2022-section-on-2014", body, api.sipMessageConfigDownload)
+	if !strings.Contains(response, "SIP/2.0 400") {
+		t.Fatalf("2014 accepted 2022 ConfigDownload section: %s", response)
 	}
 }
 

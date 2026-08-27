@@ -50,6 +50,12 @@ func TestCascadeDeviceConfigVersionAndPayloadValidation(t *testing.T) {
 	if err := validateCascadeDeviceConfigRequest(&invalid, GBVersion30); err == nil {
 		t.Fatal("unsafe cascade DeviceConfig fragment was accepted")
 	}
+	invalid = extended
+	invalid.FrameMirror = nil
+	invalid.VideoAlarmRecord = &VideoAlarmRecord{InnerXML: `<RecordEnable>2</RecordEnable><StreamNumber>0</StreamNumber>`}
+	if err := validateCascadeDeviceConfigRequest(&invalid, GBVersion30); err == nil {
+		t.Fatal("invalid structured cascade DeviceConfig fragment was accepted")
+	}
 }
 
 func TestCascadeDeviceConfigMapsTargetAndReturnsUpstreamResult(t *testing.T) {

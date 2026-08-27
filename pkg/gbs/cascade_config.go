@@ -191,6 +191,15 @@ func validateCascadeDeviceConfigPayload(request *DeviceConfigRequest) error {
 			if err := validateDeviceConfigXMLFragment(fragment.name, fragment.value); err != nil {
 				return err
 			}
+			if fragment.name == "VideoParamAttribute" {
+				if err := validateVideoParamAttribute30(request.VideoParamAttribute, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := validateDeviceConfig30Fragment(fragment.name, fragment.value); err != nil {
+				return err
+			}
 		}
 	}
 	if request.SnapShotConfig != nil {

@@ -93,6 +93,7 @@ go test ./... -count=1
 - ConfigDownload 成功 BasicParam 的心跳间隔/次数仅允许 `1..65535`；缺失、非正或溢出值不得被截断、修正或静默忽略，也不得改运行态、写状态或解除等待；失败响应和子通道 BasicParam 不得改写父设备心跳运行态；
 - DeviceConfig/ConfigDownload 缺失或非法 `Result` 不得写状态、改运行态或解除等待；DeviceConfig 响应必须匹配原目标通道，兄弟通道复用 SN 不得抢占配置或抓拍等待；
 - DeviceConfig 非法版本、根、命令、SN 或目标不得写状态、附录 A.4 或解除等待；
+- 2022 DeviceConfig/ConfigDownload 的 OSD、视频参数属性、录像计划和报警录像配置必须校验必填字段、声明计数、列表上限、0/1 枚举、0~2 码流编号、周/时分秒范围及 OSD 文字长度；本地下发的 `VideoParamAttribute Num` 必须与 Item 数一致，非法本地或级联请求不得发往设备，非法查询应答不得写状态或解除等待；
 - Catalog 非法根、命令、SN、非 20 位顶层目标、负 SumNum 或非法目录项值不得进入多响应聚合、写入目录或解除查询等待；稀疏厂商目录仍允许省略可兼容字段；
 - 四版本历史级联 `INVITE→ACK→INFO→BYE` 完整对话、媒体启动/释放和 MANSRTSP/RTSP 转换；
 - SIP 响应添加 To-tag 时不得修改原请求；级联 INVITE 缓存响应只对 CSeq、Request-URI、顶层 Via 均一致的原事务重传复用，相同 Call-ID/tag 的另一事务返回 491 且不得获得原 200/SDP；
