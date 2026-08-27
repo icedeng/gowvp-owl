@@ -70,7 +70,7 @@ go test ./... -count=1
 - 共享通道 DeviceInfo、DeviceStatus 和 RecordInfo 查询，录像响应分包并映射为上级可见编码；NVR 代表已知子通道返回 DeviceInfo 时只更新子通道元数据，Channel/MaxCamera/MaxAlarm 计数须非负，2014 新增 DeviceName 不得向 2011 透传；
 - 上级 Query 请求的固定根、正 SN、20 位目标、命令白名单及专属载荷校验；RecordInfo 缺失/倒置时间、MobilePosition 负间隔和 CruiseTrackQuery 缺失/越界 Number 必须在启动下级任务前拒绝；
 - 共享通道 1.1 PresetQuery、2.0 HomePositionQuery/MobilePosition、3.0 PTZPosition/SDCardStatus 查询转发；2014 设备查询和级联响应必须发 `PersetQuery`，2016/2022 必须发 `PresetQuery`，入站兼容两种拼写；上下级 SN 转换、DeviceID/ParentID 安全映射、未知编码拒绝、下级失败业务应答及多上级响应隔离；
-- 3.0 附录 A.4 扩展对象按 Catalog/RecordInfo ExtraInfo、Alarm/MobilePosition 嵌套对象和 DeviceStatus 响应的真实承载路径级联；RecordInfo 分包扩展随查询生命周期聚合、超时/发送失败/完成/停服均清理，并只在级联首包输出；共享对象递归编码映射，未知 20 位对象编码整条拒绝，且 1.0/1.1/2.0 不输出 3.0 ExtraInfo；1.0/1.1/2.0 入站携带 `doorType`、`detectorType`、`ExtraInfo/ExtralInfo` 等 A.4 对象时，必须在目录或录像聚合、状态更新、等待解除、持久化、回调和订阅转发前返回 400，通用解码层也不得保存；
+- 3.0 附录 A.4 扩展对象按 Catalog/RecordInfo ExtraInfo、Alarm/MobilePosition 嵌套对象和 DeviceStatus 响应的真实承载路径级联；RecordInfo 分包扩展随查询生命周期聚合、超时/发送失败/完成/停服均清理，并只在级联首包输出；共享对象递归编码映射，未知 20 位对象编码整条拒绝，且 1.0/1.1/2.0 不输出 3.0 ExtraInfo；1.0/1.1/2.0 入站携带 `doorType`、`detectorType`、`ExtraInfo/ExtralInfo` 等 A.4 对象时，必须在目录或录像聚合、状态更新、等待解除、持久化、回调和订阅转发前返回 400，通用解码层也不得保存；3.0 查询只复用首次版本校验后的 A.4 结构化结果，处理期间设备运行态消失不得触发版本回退重解码或丢失扩展；
 - 3.0 PTZ 精准位置变化事件订阅/通知及级联；1.0/1.1/2.0 版本门禁，通知通道编码映射和非共享通道隔离；上级 Catalog/Alarm/MobilePosition/PTZPosition 订阅自动建立下级订阅并覆盖续订、退订、引用计数、过期和上级移除清理；Catalog 会订阅承载共享通道的下级 NVR，并在目录快照变化后为新增或迁移通道补订阅；
 - 3.0 CruiseTrackListQuery/CruiseTrackQuery 的请求、结构化响应、轨迹编号参数和安全级联；
 - 3.0 附录 H `X-PreferredPath` 首跳消费/剩余路径转发和 `X-RoutePath` 响应前置；平台编码、重复路径、错误首跳、下级确认不匹配及路由环拒绝；不同指定路径的实时、回放和下载媒体源隔离及正确释放；

@@ -877,7 +877,8 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 			return
 		}
 	}
-	if _, err := g.validateAndDecodeAppendixA4(ctx.DeviceID, msg.CmdType, ctx.Request.Body()); err != nil {
+	extended, err := g.validateAndDecodeAppendixA4(ctx.DeviceID, msg.CmdType, ctx.Request.Body())
+	if err != nil {
 		ctx.String(400, err.Error())
 		return
 	}
@@ -898,7 +899,7 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 	}
 
 	// 命中通用查询等待队列（A.2.4 ConfigDownload 查询等待）。
-	decoded := g.decodeAndStoreQueryResult(ctx.DeviceID, msg.CmdType, ctx.Request.Body())
+	decoded := g.decodeAndStoreQueryResult(ctx.DeviceID, msg.CmdType, ctx.Request.Body(), extended)
 	g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
 	ctx.String(200, "OK")
 	g.persistDecodedQuery(ctx.DeviceID, msg.CmdType, decoded)

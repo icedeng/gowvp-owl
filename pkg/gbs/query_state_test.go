@@ -208,38 +208,47 @@ func TestGenericQueryAcknowledgesBeforeSinglePersistence(t *testing.T) {
 
 func TestConfigDownloadAcknowledgesWhenRuntimeDisappears(t *testing.T) {
 	tests := []struct {
-		version GBProtocolVersion
-		param   string
+		version            GBProtocolVersion
+		param              string
+		extra              string
+		loadsBeforeMissing int32
+		wantAppendixA4     bool
 	}{
 		{
-			version: GBVersion11,
+			version:            GBVersion11,
+			loadsBeforeMissing: 2,
 			param: `<BasicParam><Name>IPC</Name><DeviceID>` + gb10DeviceID + `</DeviceID>` +
 				`<SIPServerID>` + gb10PlatformID + `</SIPServerID><SIPServerIP>192.0.2.20</SIPServerIP>` +
 				`<SIPServerPort>5060</SIPServerPort><DomainName>3402000000</DomainName><Expiration>3600</Expiration>` +
 				`<Password>secret</Password><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam>`,
 		},
 		{
-			version: GBVersion20,
+			version:            GBVersion20,
+			loadsBeforeMissing: 2,
 			param: `<BasicParam><Name>IPC</Name><Expiration>3600</Expiration>` +
 				`<HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam>`,
 		},
 		{
-			version: GBVersion30,
-			param:   `<BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam>`,
+			version:            GBVersion30,
+			loadsBeforeMissing: 3,
+			param:              `<BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam>`,
+			extra:              `<ExtraInfo>{"type":"doorType","DeviceID":"` + gb10DeviceID + `"}</ExtraInfo>`,
+			wantAppendixA4:     true,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(string(test.version), func(t *testing.T) {
+			adapter, _, _ := newCascadeMediaCore(t)
 			memory := &disappearingConfigMemory{
 				versionGateMemory:  &versionGateMemory{device: &Device{IsOnline: true, gbVersion: string(test.version)}},
-				loadsBeforeMissing: 2,
+				loadsBeforeMissing: test.loadsBeforeMissing,
 			}
-			api := &GB28181API{svr: &Server{memoryStorer: memory}}
+			api := &GB28181API{svr: &Server{memoryStorer: memory}, core: adapter}
 			pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}
 			api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "ConfigDownload", 92), pending)
 			body := []byte(`<Response><CmdType>ConfigDownload</CmdType><SN>92</SN><DeviceID>` + gb10DeviceID +
-				`</DeviceID><Result>OK</Result>` + test.param + `</Response>`)
+				`</DeviceID><Result>OK</Result>` + test.param + test.extra + `</Response>`)
 
 			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "config-runtime-disappears", body, api.sipMessageConfigDownload)
 			assertFlowOK(t, response)
@@ -251,8 +260,12 @@ func TestConfigDownloadAcknowledgesWhenRuntimeDisappears(t *testing.T) {
 			default:
 				t.Fatal("ConfigDownload runtime disappearance left query waiting")
 			}
-			if _, ok := api.GetQueryState(gb10DeviceID); !ok {
+			state, ok := api.GetQueryState(gb10DeviceID)
+			if !ok {
 				t.Fatal("ConfigDownload runtime disappearance discarded validated response state")
+			}
+			if test.wantAppendixA4 && (len(state.AppendixA4) != 1 || state.AppendixA4[0].Type != "doorType") {
+				t.Fatalf("ConfigDownload runtime disappearance lost validated Appendix A.4: %+v", state.AppendixA4)
 			}
 		})
 	}

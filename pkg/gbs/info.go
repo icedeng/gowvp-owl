@@ -104,7 +104,8 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 			return
 		}
 	}
-	if _, err := g.validateAndDecodeAppendixA4(ctx.DeviceID, msg.CmdType, ctx.Request.Body()); err != nil {
+	extended, err := g.validateAndDecodeAppendixA4(ctx.DeviceID, msg.CmdType, ctx.Request.Body())
+	if err != nil {
 		ctx.String(400, err.Error())
 		return
 	}
@@ -114,7 +115,7 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 	if !strings.EqualFold(msg.Result, "OK") {
 		ctx.Log.Warn("sipMessageDeviceInfo result not ok", "result", msg.Result, "sn", msg.SN)
 		stateDeviceID := firstNonEmpty(msg.DeviceID, ctx.DeviceID)
-		decoded := g.decodeAndStoreQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body())
+		decoded := g.decodeAndStoreQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body(), extended)
 		g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
 		ctx.String(200, "OK")
 		g.persistDecodedQuery(stateDeviceID, msg.CmdType, decoded)
@@ -171,7 +172,7 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 
 	// 命中通用查询等待队列（A.2.4 DeviceInfo 查询等待）。
 	stateDeviceID := firstNonEmpty(msg.DeviceID, ctx.DeviceID)
-	decoded := g.decodeAndStoreQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body())
+	decoded := g.decodeAndStoreQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body(), extended)
 	g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
 	ctx.String(200, "OK")
 	if err := persist(); err != nil {
