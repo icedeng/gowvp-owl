@@ -206,6 +206,71 @@ func TestGenericQueryAcknowledgesBeforeSinglePersistence(t *testing.T) {
 	}
 }
 
+func TestConfigDownloadAcknowledgesWhenRuntimeDisappears(t *testing.T) {
+	tests := []struct {
+		version GBProtocolVersion
+		param   string
+	}{
+		{
+			version: GBVersion11,
+			param: `<BasicParam><Name>IPC</Name><DeviceID>` + gb10DeviceID + `</DeviceID>` +
+				`<SIPServerID>` + gb10PlatformID + `</SIPServerID><SIPServerIP>192.0.2.20</SIPServerIP>` +
+				`<SIPServerPort>5060</SIPServerPort><DomainName>3402000000</DomainName><Expiration>3600</Expiration>` +
+				`<Password>secret</Password><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam>`,
+		},
+		{
+			version: GBVersion20,
+			param: `<BasicParam><Name>IPC</Name><Expiration>3600</Expiration>` +
+				`<HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam>`,
+		},
+		{
+			version: GBVersion30,
+			param:   `<BasicParam><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam>`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(string(test.version), func(t *testing.T) {
+			memory := &disappearingConfigMemory{
+				versionGateMemory:  &versionGateMemory{device: &Device{IsOnline: true, gbVersion: string(test.version)}},
+				loadsBeforeMissing: 2,
+			}
+			api := &GB28181API{svr: &Server{memoryStorer: memory}}
+			pending := &pendingQueryWait{wait: make(chan *DeviceQueryOutput, 1)}
+			api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, "ConfigDownload", 92), pending)
+			body := []byte(`<Response><CmdType>ConfigDownload</CmdType><SN>92</SN><DeviceID>` + gb10DeviceID +
+				`</DeviceID><Result>OK</Result>` + test.param + `</Response>`)
+
+			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "config-runtime-disappears", body, api.sipMessageConfigDownload)
+			assertFlowOK(t, response)
+			select {
+			case output := <-pending.wait:
+				if output == nil || output.Result != "OK" || output.CmdType != "ConfigDownload" {
+					t.Fatalf("ConfigDownload output = %+v", output)
+				}
+			default:
+				t.Fatal("ConfigDownload runtime disappearance left query waiting")
+			}
+			if _, ok := api.GetQueryState(gb10DeviceID); !ok {
+				t.Fatal("ConfigDownload runtime disappearance discarded validated response state")
+			}
+		})
+	}
+}
+
+type disappearingConfigMemory struct {
+	*versionGateMemory
+	loads              atomic.Int32
+	loadsBeforeMissing int32
+}
+
+func (m *disappearingConfigMemory) Load(deviceID string) (*Device, bool) {
+	if m.loads.Add(1) > m.loadsBeforeMissing {
+		return nil, false
+	}
+	return m.versionGateMemory.Load(deviceID)
+}
+
 func TestAppendixA4HandlersAcknowledgeBeforePersistence(t *testing.T) {
 	previousConfig := config
 	config = &m.Config{NotifyMap: map[string]string{}}

@@ -885,17 +885,16 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 		ipc, ok := g.svr.memoryStorer.Load(ctx.DeviceID)
 		if !ok {
 			ctx.Log.Debug("sipMessageConfigDownload", "deviceID", ctx.DeviceID, "err", "device offline")
-			return
+		} else {
+			// 计算设备离线超时时间
+			interval := uint16(msg.BasicParam.HeartBeatInterval) // nolint:gosec -- 上方已限制为 uint16 范围
+			timeout := uint16(msg.BasicParam.HeartBeatCount)     // nolint:gosec -- 上方已限制为 uint16 范围
+			ipc.UpdateRuntime(func(device *Device) {
+				device.keepaliveInterval = interval
+				device.keepaliveTimeout = timeout
+			})
+			ctx.Log.Debug("sipMessageConfigDownload update", "deviceID", ctx.DeviceID, "keepaliveInterval", interval, "keepaliveTimeout", timeout)
 		}
-
-		// 计算设备离线超时时间
-		interval := uint16(msg.BasicParam.HeartBeatInterval) // nolint:gosec -- 上方已限制为 uint16 范围
-		timeout := uint16(msg.BasicParam.HeartBeatCount)     // nolint:gosec -- 上方已限制为 uint16 范围
-		ipc.UpdateRuntime(func(device *Device) {
-			device.keepaliveInterval = interval
-			device.keepaliveTimeout = timeout
-		})
-		ctx.Log.Debug("sipMessageConfigDownload update", "deviceID", ctx.DeviceID, "keepaliveInterval", interval, "keepaliveTimeout", timeout)
 	}
 
 	// 命中通用查询等待队列（A.2.4 ConfigDownload 查询等待）。
