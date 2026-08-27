@@ -78,6 +78,8 @@ func TestCascadeRegisterDigestAndVersionNegotiation(t *testing.T) {
 				HeaderName: "WWW-Authenticate",
 				Contents:   `Digest realm="3402000000",qop="auth",nonce="cascade-nonce",opaque="registrar-token"`,
 			})
+			version := sip.XGBVer("1.1")
+			response.AppendHeader(&version)
 			return response, nil
 		}
 		response := sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil)
@@ -92,6 +94,9 @@ func TestCascadeRegisterDigestAndVersionNegotiation(t *testing.T) {
 	}
 	if len(requests) != 2 {
 		t.Fatalf("REGISTER request count = %d", len(requests))
+	}
+	if headers := requests[1].GetHeaders("X-GB-Ver"); len(headers) != 1 || !strings.Contains(headers[0].String(), "1.1") {
+		t.Fatalf("authenticated REGISTER X-GB-Ver = %v; want negotiated 1.1 from 401", headers)
 	}
 	firstCallID, _ := requests[0].CallID()
 	secondCallID, _ := requests[1].CallID()

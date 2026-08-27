@@ -508,12 +508,18 @@ func (w *cascadeWorker) register(ctx context.Context, expires int) error {
 	redirects := 0
 	authAttempts := 0
 	certificateChallengeCompleted := false
+	effective := w.protocolVersion()
 	for {
 		var err error
 		response, err = w.exchange(ctx, request)
 		if err != nil {
 			return fmt.Errorf("cascade REGISTER: %w", err)
 		}
+		// 附录 I 要求 REGISTER 的成功和失败响应都携带版本号；认证重试必须立即使用已获知的较低版本。
+		effective = negotiateCascadeVersion(effective, response)
+		w.mu.Lock()
+		w.effective = effective
+		w.mu.Unlock()
 		switch response.StatusCode() {
 		case http.StatusMovedPermanently, http.StatusFound:
 			if redirects >= maxCascadeRegisterRedirects {
@@ -575,7 +581,6 @@ func (w *cascadeWorker) register(ctx context.Context, expires int) error {
 	if w.platform.registerCertificateAuth != nil && w.platform.registerCertificateAuth.required && !certificateChallengeCompleted {
 		return fmt.Errorf("cascade REGISTER certificate authentication required but upstream returned success without Asymmetric challenge")
 	}
-	effective := negotiateCascadeVersion(w.platform.version, response)
 	accepted, err := cascadeAcceptedExpires(response, expires)
 	if err != nil {
 		return err

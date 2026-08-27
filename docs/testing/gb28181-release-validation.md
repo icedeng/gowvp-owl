@@ -28,7 +28,7 @@ go test ./... -count=1
 - 2xx ACK 必须复用 INVITE CSeq、生成新 branch，并按响应 `Record-Route` 构造宽松/严格路由；新 Via 不得回送 `received` 或有值 `rport`。3xx～6xx INVITE 最终响应必须自动发送复用原 Request-URI、Route、Via branch 和数字 CSeq 的事务内 ACK；等待 INVITE 取消/超时必须发送同样绑定原事务的 CANCEL。连续及并发 INFO/BYE 的本地 SIP CSeq 必须唯一递增，TCP 重连不得覆盖既有对话路由目标；
 - SIP UDP/TCP/TLS 监听器、活动连接、parser/handler、请求处理器和事务 watcher 在关闭时全部等待退出；关闭后拒绝新连接、新 handler 和出向请求。GB 全局生命周期门禁还会拒绝停服起点后的 REGISTER/MESSAGE/NOTIFY/SUBSCRIBE/INVITE 等新业务，并等待此前已接纳请求；两阶段关闭先取消业务，再关闭 SIP 解除事务等待，最后清理 GB 会话，避免清理后状态复写和关闭互锁。GB 离线检查、订阅、INVITE 对话与运行状态 cleaner 同样随服务生命周期停止；
 - REGISTER 同时携带 Contact `expires` 与全局 `Expires` 时，以 Contact 绑定参数为准，包括 `expires=0` 注销语义；
-- 版本解析、协商、持久化、手动覆盖和下行版本；
+- 版本解析、协商、持久化、手动覆盖和下行版本；REGISTER 的 200/401/其他失败响应均携带平台 `X-GB-Ver`，级联认证重试从 401 起采用已获知的较低版本，同一注册握手只降不升；
 - 1.0 功能门禁、直播/回放/下载 SDP golden；
 - 1.0 REGISTER、Keepalive、Catalog、RecordInfo、Alarm 模拟流程，以及平台主动点播使用的 UDP SDP golden；
 - RecordInfo 四版本响应字段和值域：仅 2011 文件项兼容 `all`；2014 补充文件明确要求返回文件项携带具体录像类型，2014/2016/2022 文件项仅允许 `time/alarm/manual`。查询请求中的 `Type=all` 与响应文件项约束分开处理，非法版本字段不得进入多响应聚合；
