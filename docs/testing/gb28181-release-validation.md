@@ -88,7 +88,7 @@ go test ./... -count=1
 - DeviceStatus 缺失或非法 Result、Online、Status 枚举不得写状态或解除等待；可选 Encode/Record、DeviceTime 及四版本 Alarmstatus 计数、设备编码、枚举和版本字段名同样必须在副作用前校验；失败结果及子通道状态不得改写父设备在线运行态；
 - DeviceControl 与 Broadcast 非法根、固定命令、SN、结果枚举、未知目标或不匹配在途请求目标不得解除业务等待；
 - Keepalive 非法根、命令、SN、源设备、状态枚举或故障设备编码不得补载设备、改在线态、写查询状态或触发 Catalog；空 Status 及 ON/OFF 兼容路径须保留；
-- Alarm 非法根、命令、SN、目标、级别、方式、时间或非有限经纬度不得写附录 A.4、触发业务回调或向订阅方转发；
+- Alarm 非法根、命令、SN、目标、级别、方式、时间或非有限经纬度不得写附录 A.4、触发业务回调或向订阅方转发；2011/2014 不得接受 2016 新增的 AlarmType 和 AlarmTypeParam/EventType，2016/2022 的 EventType 仅允许方式 5、类型 6、值 1/2；
 - MediaStatus 非法根、命令、SN、设备、空通知类型或活动会话目标不匹配不得结束任务；未知类型及已清理会话重复 121 应保持 200 幂等确认；
 - ConfigDownload 的 BasicParam 按版本校验字段存在性：2014 十项必填、2016 四项必填、2022 四项可选；出现的心跳间隔/次数仅允许 `1..65535`，且只有两项同时出现才更新运行态。非法值不得被截断、修正或静默忽略，也不得改运行态、写状态或解除等待；失败响应和子通道 BasicParam 不得改写父设备心跳运行态；
 - DeviceConfig/ConfigDownload 缺失或非法 `Result` 不得写状态、改运行态或解除等待；DeviceConfig 响应必须匹配原目标通道，兄弟通道复用 SN 不得抢占配置或抓拍等待；

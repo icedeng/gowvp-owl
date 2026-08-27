@@ -78,6 +78,8 @@ func TestAlarmRejectsInvalidEnvelopeBeforeStateAndCallback(t *testing.T) {
 		{name: "invalid coordinate", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>2</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime><Longitude>NaN</Longitude></Notify>`},
 		{name: "longitude out of range", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>2</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime><Longitude>181</Longitude></Notify>`},
 		{name: "latitude out of range", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>2</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime><Latitude>-91</Latitude></Notify>`},
+		{name: "2011 alarm type extension", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>2</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime><Info><AlarmType>1</AlarmType></Info></Notify>`},
+		{name: "2011 event type extension", body: `<Notify><CmdType>Alarm</CmdType><SN>1</SN><DeviceID>` + gb10ChannelID + `</DeviceID><AlarmPriority>1</AlarmPriority><AlarmMethod>5</AlarmMethod><AlarmTime>2026-08-26T01:00:00</AlarmTime><Info><AlarmTypeParam><EventType>1</EventType></AlarmTypeParam></Info></Notify>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -106,7 +108,9 @@ func TestAlarmTypeAndEventTypeRulesByVersion(t *testing.T) {
 		eventType *int
 		wantErr   bool
 	}{
-		{name: "2011 ignores later type extension", version: GBVersion10, method: "2", alarmType: "vendor"},
+		{name: "2011 rejects later type extension", version: GBVersion10, method: "2", alarmType: "1", wantErr: true},
+		{name: "2014 rejects later type extension", version: GBVersion11, method: "2", alarmType: "1", wantErr: true},
+		{name: "2014 rejects later event extension", version: GBVersion11, method: "5", eventType: intPointer(1), wantErr: true},
 		{name: "2016 device alarm boundary", version: GBVersion20, method: "2", alarmType: "5"},
 		{name: "2016 invalid device alarm type", version: GBVersion20, method: "2", alarmType: "6", wantErr: true},
 		{name: "2016 video alarm boundary", version: GBVersion20, method: "5", alarmType: "12"},

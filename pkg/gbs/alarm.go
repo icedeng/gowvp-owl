@@ -195,10 +195,14 @@ func (g *GB28181API) validateAlarmEnvelope(ctx *sip.Context, msg *messageAlarm) 
 		alarmType = infoAlarmType
 	}
 	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
+	eventType := msg.Info.AlarmTypeParam.EventType
+	if !version.AtLeast(GBVersion20) && (alarmType != "" || eventType != nil) {
+		return fmt.Errorf("Alarm type extension requires %s or later", GBVersion20.StandardName())
+	}
 	if err := validateAlarmTypeForMethod(version, method, alarmType); err != nil {
 		return err
 	}
-	if eventType := msg.Info.AlarmTypeParam.EventType; eventType != nil && version.AtLeast(GBVersion20) {
+	if eventType != nil {
 		if method != "5" || alarmType != "6" || (*eventType != 1 && *eventType != 2) {
 			return fmt.Errorf("invalid Alarm EventType")
 		}
