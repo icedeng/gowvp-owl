@@ -279,16 +279,23 @@ func validateCatalogItemValues(item Channels, version GBProtocolVersion) error {
 		return fmt.Errorf("Catalog item EndTime must be dateTime")
 	}
 	securityLevelCode := strings.ToUpper(strings.TrimSpace(item.SecurityLevelCode))
-	if version != GBVersion30 && securityLevelCode != "" {
+	if version != GBVersion30 && (item.hasSecurityLevelCode || securityLevelCode != "") {
 		return fmt.Errorf("Catalog item SecurityLevelCode requires protocol 3.0")
 	}
 	if version == GBVersion30 && securityLevelCode != "" && securityLevelCode != "A" && securityLevelCode != "B" && securityLevelCode != "C" {
 		return fmt.Errorf("invalid Catalog item SecurityLevelCode")
 	}
 	info := item.Info
-	businessGroupID := firstNonEmpty(strings.TrimSpace(item.BusinessGroupID), strings.TrimSpace(info.BusinessGroupID))
-	if version == GBVersion10 && businessGroupID != "" {
+	outerBusinessGroupID := strings.TrimSpace(item.BusinessGroupID)
+	innerBusinessGroupID := strings.TrimSpace(info.BusinessGroupID)
+	if version == GBVersion10 && (item.hasBusinessGroupID || info.hasBusinessGroupID || outerBusinessGroupID != "" || innerBusinessGroupID != "") {
 		return fmt.Errorf("Catalog item BusinessGroupID requires protocol 1.1")
+	}
+	if (version == GBVersion11 || version == GBVersion20) && (item.hasBusinessGroupID || outerBusinessGroupID != "") {
+		return fmt.Errorf("Catalog item outer BusinessGroupID requires protocol 3.0")
+	}
+	if version == GBVersion30 && (info.hasBusinessGroupID || innerBusinessGroupID != "") {
+		return fmt.Errorf("Catalog item Info BusinessGroupID is not supported by protocol 3.0")
 	}
 	if !version.AtLeast(GBVersion11) && (info.XMLName.Local != "" || strings.TrimSpace(info.RawXML) != "" || info.PTZType != 0 || strings.TrimSpace(info.PTZTypeList) != "" || info.PositionType != 0 || info.RoomType != 0 || info.UseType != 0 || info.SupplyLightType != 0 || info.DirectionType != 0 || strings.TrimSpace(info.Resolution) != "" || strings.TrimSpace(info.BusinessGroupID) != "") {
 		return fmt.Errorf("Catalog item Info requires protocol 1.1")
@@ -299,6 +306,14 @@ func validateCatalogItemValues(item Channels, version GBProtocolVersion) error {
 	if version != GBVersion30 && hasCatalog30Info(info) {
 		return fmt.Errorf("Catalog item Info extension requires protocol 3.0")
 	}
+	if version == GBVersion30 {
+		if item.hasOwner || item.Owner != "" || item.hasSafetyWay || item.SafetyWay != 0 || item.hasCertNum || item.CertNum != "" || item.hasCertifiable || item.Certifiable != 0 || item.hasErrCode || item.ErrCode != 0 || item.hasEndTime || item.EndTime != "" {
+			return fmt.Errorf("Catalog item contains fields removed by protocol 3.0")
+		}
+		if info.hasPositionType || info.PositionType != 0 || info.hasUseType || info.UseType != 0 {
+			return fmt.Errorf("Catalog item Info contains fields removed by protocol 3.0")
+		}
+	}
 	if info.PositionType < 0 || info.PositionType > 10 || info.RoomType < 0 || info.RoomType > 2 || info.UseType < 0 || info.UseType > 3 || !validCatalogSupplyLightType(info.SupplyLightType, version) || info.DirectionType < 0 || info.DirectionType > 8 {
 		return fmt.Errorf("invalid Catalog item Info value")
 	}
@@ -306,6 +321,10 @@ func validateCatalogItemValues(item Channels, version GBProtocolVersion) error {
 		if err := validateCatalog30Info(info); err != nil {
 			return err
 		}
+	}
+	businessGroupID := innerBusinessGroupID
+	if version == GBVersion30 {
+		businessGroupID = outerBusinessGroupID
 	}
 	if businessGroupID != "" {
 		if !version.AtLeast(GBVersion11) || !isGBDeviceIdentifier(businessGroupID) {
@@ -318,6 +337,9 @@ func validateCatalogItemValues(item Channels, version GBProtocolVersion) error {
 func validateCatalog30Info(info CatalogItemInfo) error {
 	if !validSlashSeparatedIntegers(info.PhotoelectricImagingType, 1, map[int]struct{}{1: {}, 2: {}, 3: {}, 4: {}, 5: {}, 9: {}}) {
 		return fmt.Errorf("invalid Catalog item PhotoelectricImagingType")
+	}
+	if !validOptionalDecimalLength(info.CapturePositionType, 7) || !validOptionalDecimalLength(info.GrassrootsCode, 6) {
+		return fmt.Errorf("invalid Catalog item position code")
 	}
 	if !validSlashSeparatedIntegers(info.StreamNumberList, 0, map[int]struct{}{0: {}, 1: {}, 2: {}}) || !validSlashSeparatedIntegers(info.DownloadSpeed, 1, nil) {
 		return fmt.Errorf("invalid Catalog item stream or download list")
@@ -347,6 +369,11 @@ func validateCatalog30Info(info CatalogItemInfo) error {
 		return fmt.Errorf("invalid Catalog item RecordSaveDays")
 	}
 	return nil
+}
+
+func validOptionalDecimalLength(value string, length int) bool {
+	value = strings.TrimSpace(value)
+	return value == "" || len(value) == length && allDecimalDigits(value)
 }
 
 func validCatalogMobileDeviceType(value int) bool {
@@ -443,7 +470,7 @@ func validCatalogSupplyLightType(value int, version GBProtocolVersion) bool {
 		return true
 	}
 	if version == GBVersion30 {
-		return value >= 1 && value <= 5 || value == 9
+		return value >= 1 && value <= 4 || value == 9
 	}
 	return value >= 1 && value <= 3
 }
@@ -462,7 +489,7 @@ func validateCatalogPTZType(info CatalogItemInfo, version GBProtocolVersion) err
 	}
 	maximum := 4
 	if version == GBVersion30 {
-		maximum = 6
+		maximum = 7
 	}
 	for _, part := range parts {
 		item, err := strconv.Atoi(strings.TrimSpace(part))

@@ -536,6 +536,15 @@ type Channels struct {
 	Active int64  `json:"active"  gorm:"column:active"`
 	URIStr string ` json:"uri"  gorm:"column:uri"`
 
+	hasOwner             bool
+	hasSafetyWay         bool
+	hasCertNum           bool
+	hasCertifiable       bool
+	hasErrCode           bool
+	hasEndTime           bool
+	hasSecurityLevelCode bool
+	hasBusinessGroupID   bool
+
 	// 视频编码格式
 	VF string ` json:"vf"  gorm:"column:vf"`
 	// 视频高
@@ -550,6 +559,50 @@ type Channels struct {
 	URL string `json:"url"  gorm:"column:url"`
 
 	addr *sip.Address `gorm:"-"`
+}
+
+func (c *Channels) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
+	type channelsAlias Channels
+	var value struct {
+		channelsAlias
+		Owner             *string `xml:"Owner"`
+		SafetyWay         *int    `xml:"SafetyWay"`
+		CertNum           *string `xml:"CertNum"`
+		Certifiable       *int    `xml:"Certifiable"`
+		ErrCode           *int    `xml:"ErrCode"`
+		EndTime           *string `xml:"EndTime"`
+		SecurityLevelCode *string `xml:"SecurityLevelCode"`
+		BusinessGroupID   *string `xml:"BusinessGroupID"`
+	}
+	if err := decoder.DecodeElement(&value, &start); err != nil {
+		return err
+	}
+	*c = Channels(value.channelsAlias)
+	if value.Owner != nil {
+		c.Owner, c.hasOwner = *value.Owner, true
+	}
+	if value.SafetyWay != nil {
+		c.SafetyWay, c.hasSafetyWay = *value.SafetyWay, true
+	}
+	if value.CertNum != nil {
+		c.CertNum, c.hasCertNum = *value.CertNum, true
+	}
+	if value.Certifiable != nil {
+		c.Certifiable, c.hasCertifiable = *value.Certifiable, true
+	}
+	if value.ErrCode != nil {
+		c.ErrCode, c.hasErrCode = *value.ErrCode, true
+	}
+	if value.EndTime != nil {
+		c.EndTime, c.hasEndTime = *value.EndTime, true
+	}
+	if value.SecurityLevelCode != nil {
+		c.SecurityLevelCode, c.hasSecurityLevelCode = *value.SecurityLevelCode, true
+	}
+	if value.BusinessGroupID != nil {
+		c.BusinessGroupID, c.hasBusinessGroupID = *value.BusinessGroupID, true
+	}
+	return nil
 }
 
 // CatalogItemInfo 是 2014 修改补充文件新增的目录项摄像机属性。
@@ -587,6 +640,9 @@ type CatalogItemInfo struct {
 	IndustrialClassification string   `xml:"IndustrialClassification" json:"industrial_classification,omitempty"`
 	BusinessGroupID          string   `xml:"BusinessGroupID" json:"business_group_id"`
 	RawXML                   string   `xml:",innerxml" json:"-"`
+	hasPositionType          bool
+	hasUseType               bool
+	hasBusinessGroupID       bool
 }
 
 func (i *CatalogItemInfo) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
@@ -594,9 +650,9 @@ func (i *CatalogItemInfo) UnmarshalXML(decoder *xml.Decoder, start xml.StartElem
 		PTZType                  string  `xml:"PTZType"`
 		PhotoelectricImagingType string  `xml:"PhotoelectricImagingType"`
 		CapturePositionType      string  `xml:"CapturePositionType"`
-		PositionType             int     `xml:"PositionType"`
+		PositionType             *int    `xml:"PositionType"`
 		RoomType                 int     `xml:"RoomType"`
-		UseType                  int     `xml:"UseType"`
+		UseType                  *int    `xml:"UseType"`
 		SupplyLightType          int     `xml:"SupplyLightType"`
 		DirectionType            int     `xml:"DirectionType"`
 		Resolution               string  `xml:"Resolution"`
@@ -620,7 +676,7 @@ func (i *CatalogItemInfo) UnmarshalXML(decoder *xml.Decoder, start xml.StartElem
 		ContactInfo              string  `xml:"ContactInfo"`
 		RecordSaveDays           int     `xml:"RecordSaveDays"`
 		IndustrialClassification string  `xml:"IndustrialClassification"`
-		BusinessGroupID          string  `xml:"BusinessGroupID"`
+		BusinessGroupID          *string `xml:"BusinessGroupID"`
 		RawXML                   string  `xml:",innerxml"`
 	}
 	if err := decoder.DecodeElement(&value, &start); err != nil {
@@ -631,9 +687,7 @@ func (i *CatalogItemInfo) UnmarshalXML(decoder *xml.Decoder, start xml.StartElem
 		PTZTypeList:              strings.TrimSpace(value.PTZType),
 		PhotoelectricImagingType: strings.TrimSpace(value.PhotoelectricImagingType),
 		CapturePositionType:      strings.TrimSpace(value.CapturePositionType),
-		PositionType:             value.PositionType,
 		RoomType:                 value.RoomType,
-		UseType:                  value.UseType,
 		SupplyLightType:          value.SupplyLightType,
 		DirectionType:            value.DirectionType,
 		Resolution:               value.Resolution,
@@ -657,8 +711,16 @@ func (i *CatalogItemInfo) UnmarshalXML(decoder *xml.Decoder, start xml.StartElem
 		ContactInfo:              strings.TrimSpace(value.ContactInfo),
 		RecordSaveDays:           value.RecordSaveDays,
 		IndustrialClassification: strings.TrimSpace(value.IndustrialClassification),
-		BusinessGroupID:          value.BusinessGroupID,
 		RawXML:                   value.RawXML,
+	}
+	if value.PositionType != nil {
+		i.PositionType, i.hasPositionType = *value.PositionType, true
+	}
+	if value.UseType != nil {
+		i.UseType, i.hasUseType = *value.UseType, true
+	}
+	if value.BusinessGroupID != nil {
+		i.BusinessGroupID, i.hasBusinessGroupID = *value.BusinessGroupID, true
 	}
 	if i.PTZTypeList == "" {
 		return nil

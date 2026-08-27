@@ -42,7 +42,7 @@ go test ./... -count=1
 - MediaStatus/121 幂等收敛；
 - Catalog/RecordInfo 多响应乱序、重复、总数冲突、超时部分结果和同设备并发；
 - RecordInfo 响应包络、列表计数、条目非空名称、显式 `Secrecy=0/1`、可选 dateTime 起止时间、版本化 Type/FileSize/RecordLocation/StreamNumber、目标所有权和在途通道绑定；级联响应按上级版本裁剪新字段并映射 RecorderID/RecordLocation，非法分包不得进入聚合器，NVR 顶层父设备编码别名仍可映射到原查询通道；
-- Catalog 缺失/零值 SumNum、DeviceList Num、本包与通知总数、条目编码、已鉴权来源及父设备聚合目标；目录项的状态、0/1 属性、安全/注册方式、错误码、端口、有限坐标、证书时间和版本化摄像机属性枚举在聚合前校验，其中 `RegisterWay=4` 仅允许 2022，缺失零值继续兼容；2011 不接受 2014 新增的 `Info/BusinessGroupID`；2014 未设置的 Info 字段不得输出零值，2022 多值 `PTZType`、`SupplyLightType=1/2/3/4/5/9`、新增 Info 字段及外层 `SecurityLevelCode/BusinessGroupID` 需正确持久化和级联，旧上级不得收到 2022 字段，2022 上级不得收到已删除的 2014 字段；通用查询相同 SN 的兄弟通道响应不得抢占等待；
+- Catalog 缺失/零值 SumNum、DeviceList Num、本包与通知总数、条目编码、已鉴权来源及父设备聚合目标；目录项的状态、0/1 属性、安全/注册方式、错误码、端口、有限坐标、证书时间和版本化摄像机属性枚举在聚合前校验，其中 `RegisterWay=4` 仅允许 2022，缺失零值继续兼容；2011 不接受 2014 新增的 `Info/BusinessGroupID`；2014 未设置的 Info 字段不得输出零值，2022 多值 `PTZType=1..7`、`SupplyLightType=1/2/3/4/9`、7 位 `CapturePositionType`、6 位 `GrassrootsCode`、新增 Info 字段及外层 `SecurityLevelCode/BusinessGroupID` 需正确持久化和级联，2022 入站不得接受已删除的 `Owner/SafetyWay/CertNum/Certifiable/ErrCode/EndTime/PositionType/UseType/Info.BusinessGroupID`，旧上级不得收到 2022 字段；通用查询相同 SN 的兄弟通道响应不得抢占等待；
 - MobilePosition 的 2011/2014 版本门禁、2016 单点坐标及 2022 批量 `DeviceList` 解码；非法时间、坐标、方向、计数或目标不得写状态和转发；
 - 2022 升级、抓拍完成和实时视音频回传通知的固定 Notify 根、20 位目标及抓拍列表/文件标识完整性；
 - terminated NOTIFY 的设备、Call-ID 和双向 tag 对话绑定，以及伪造终止不得删除或重建下级订阅；

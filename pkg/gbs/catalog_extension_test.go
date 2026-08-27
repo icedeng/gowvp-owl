@@ -58,7 +58,7 @@ func TestCatalog11ExtensionMapping(t *testing.T) {
 }
 
 func TestCatalog30AcceptsMultiValuePTZType(t *testing.T) {
-	body := []byte(`<Response><CmdType>Catalog</CmdType><SN>30</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>1</SumNum><DeviceList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><SecurityLevelCode>B</SecurityLevelCode><BusinessGroupID>34020000002150000001</BusinessGroupID><Info><PTZType>1/2</PTZType><PhotoelectricImagingType>1/9</PhotoelectricImagingType><CapturePositionType>01</CapturePositionType><SupplyLightType>9</SupplyLightType><StreamNumberList>0/1/2</StreamNumberList><DownloadSpeed>1/2/4</DownloadSpeed><SVCSpaceSupportMode>3</SVCSpaceSupportMode><SVCTimeSupportMode>2</SVCTimeSupportMode><SSVCRatioSupportList>4:3/2:1</SSVCRatioSupportList><MobileDeviceType>5</MobileDeviceType><HorizontalFieldAngle>120</HorizontalFieldAngle><VerticalFieldAngle>90</VerticalFieldAngle><MaxViewDistance>500</MaxViewDistance><GrassrootsCode>340200</GrassrootsCode><PointType>2</PointType><PointCommonName>North Gate</PointCommonName><MAC>AA-BB-CC-DD-EE-FF</MAC><FunctionType>01/99</FunctionType><EncodeType>H.265</EncodeType><InstallTime>2026-08-25T10:00:00+08:00</InstallTime><ManagementUnit>Unit A</ManagementUnit><ContactInfo>0571-12345678</ContactInfo><RecordSaveDays>30</RecordSaveDays><IndustrialClassification>A01</IndustrialClassification><VendorCapability>enabled</VendorCapability></Info></Item></DeviceList></Response>`)
+	body := []byte(`<Response><CmdType>Catalog</CmdType><SN>30</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>1</SumNum><DeviceList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><SecurityLevelCode>B</SecurityLevelCode><BusinessGroupID>34020000002150000001</BusinessGroupID><Info><PTZType>1/2</PTZType><PhotoelectricImagingType>1/9</PhotoelectricImagingType><CapturePositionType>0010100</CapturePositionType><SupplyLightType>9</SupplyLightType><StreamNumberList>0/1/2</StreamNumberList><DownloadSpeed>1/2/4</DownloadSpeed><SVCSpaceSupportMode>3</SVCSpaceSupportMode><SVCTimeSupportMode>2</SVCTimeSupportMode><SSVCRatioSupportList>4:3/2:1</SSVCRatioSupportList><MobileDeviceType>5</MobileDeviceType><HorizontalFieldAngle>120</HorizontalFieldAngle><VerticalFieldAngle>90</VerticalFieldAngle><MaxViewDistance>500</MaxViewDistance><GrassrootsCode>340200</GrassrootsCode><PointType>2</PointType><PointCommonName>North Gate</PointCommonName><MAC>AA-BB-CC-DD-EE-FF</MAC><FunctionType>01/99</FunctionType><EncodeType>H.265</EncodeType><InstallTime>2026-08-25T10:00:00+08:00</InstallTime><ManagementUnit>Unit A</ManagementUnit><ContactInfo>0571-12345678</ContactInfo><RecordSaveDays>30</RecordSaveDays><IndustrialClassification>A01</IndustrialClassification><VendorCapability>enabled</VendorCapability></Info></Item></DeviceList></Response>`)
 	var response MessageDeviceListResponse
 	if err := sip.XMLDecode(body, &response); err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestCatalog30AcceptsMultiValuePTZType(t *testing.T) {
 	if ext.GBCatalog == nil || ext.GBCatalog.PTZType != 1 || ext.GBCatalog.PTZTypeList != "1/2" || ext.GBCatalog.SecurityLevelCode != "B" || ext.GBCatalog.BusinessGroupID != response.Item[0].BusinessGroupID || ext.GBCatalog.StreamNumberList != "0/1/2" || ext.GBCatalog.RecordSaveDays != 30 {
 		t.Fatalf("2022 Catalog extension = %+v", ext.GBCatalog)
 	}
-	for _, invalid := range []int{6, 7, 8} {
+	for _, invalid := range []int{5, 6, 7, 8} {
 		item := response.Item[0]
 		item.Info.SupplyLightType = invalid
 		if err := validateCatalogItemValues(item, GBVersion30); err == nil {
@@ -257,15 +257,82 @@ func TestCatalog10RejectsEmptyCatalogInfoFromXML(t *testing.T) {
 func TestCatalogAcceptsValidOptionalItemValuesByVersion(t *testing.T) {
 	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30} {
 		item := Channels{
-			ChannelID: gb10ChannelID, Status: "off", Parental: 1, SafetyWay: 4, RegisterWay: 3,
-			Certifiable: 1, ErrCode: 1, Secrecy: 1, Port: 65535,
-			EndTime: "2026-08-25T10:00:00+08:00", Longitude: 120.1, Latitude: 30.2,
+			ChannelID: gb10ChannelID, Status: "off", Parental: 1, RegisterWay: 3,
+			Secrecy: 1, Port: 65535, Longitude: 120.1, Latitude: 30.2,
 		}
-		if version.AtLeast(GBVersion11) {
+		if version != GBVersion30 {
+			item.SafetyWay = 4
+			item.Certifiable = 1
+			item.ErrCode = 1
+			item.EndTime = "2026-08-25T10:00:00+08:00"
+		}
+		if version == GBVersion11 || version == GBVersion20 {
 			item.Info = CatalogItemInfo{PTZType: 1, PositionType: 1, BusinessGroupID: gb10DeviceID}
+		} else if version == GBVersion30 {
+			item.Info = CatalogItemInfo{PTZType: 1}
+			item.BusinessGroupID = gb10DeviceID
 		}
 		if err := validateCatalogItemValues(item, version); err != nil {
 			t.Fatalf("valid %s Catalog item rejected: %v", version, err)
+		}
+	}
+}
+
+func TestCatalog30UsesVersionSpecificInfoEnums(t *testing.T) {
+	for _, value := range []string{"1", "7", "1/7"} {
+		if err := validateCatalogItemValues(Channels{Info: CatalogItemInfo{PTZTypeList: value}}, GBVersion30); err != nil {
+			t.Fatalf("2022 PTZType %q rejected: %v", value, err)
+		}
+	}
+	if err := validateCatalogItemValues(Channels{Info: CatalogItemInfo{PTZTypeList: "7"}}, GBVersion20); err == nil {
+		t.Fatal("2016 accepted PTZType 7")
+	}
+	for _, value := range []int{1, 2, 3, 4, 9} {
+		if err := validateCatalogItemValues(Channels{Info: CatalogItemInfo{SupplyLightType: value}}, GBVersion30); err != nil {
+			t.Fatalf("2022 SupplyLightType %d rejected: %v", value, err)
+		}
+	}
+	if err := validateCatalogItemValues(Channels{Info: CatalogItemInfo{SupplyLightType: 5}}, GBVersion30); err == nil {
+		t.Fatal("2022 accepted undefined SupplyLightType 5")
+	}
+	for _, info := range []CatalogItemInfo{
+		{CapturePositionType: "001010"}, {CapturePositionType: "001010A"},
+		{GrassrootsCode: "34020"}, {GrassrootsCode: "34020A"},
+	} {
+		if err := validateCatalogItemValues(Channels{Info: info}, GBVersion30); err == nil {
+			t.Fatalf("2022 accepted invalid position code: %+v", info)
+		}
+	}
+	if err := validateCatalogItemValues(Channels{Info: CatalogItemInfo{CapturePositionType: "0010100", GrassrootsCode: "340200"}}, GBVersion30); err != nil {
+		t.Fatalf("2022 rejected valid position codes: %v", err)
+	}
+}
+
+func TestCatalogRejectsFieldsOutsideVersionSchema(t *testing.T) {
+	decodeItem := func(t *testing.T, fields string) Channels {
+		t.Helper()
+		body := []byte(`<Response><CmdType>Catalog</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID><SumNum>1</SumNum><DeviceList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID>` + fields + `</Item></DeviceList></Response>`)
+		var response MessageDeviceListResponse
+		if err := sip.XMLDecode(body, &response); err != nil || len(response.Item) != 1 {
+			t.Fatalf("decode Catalog item: items=%d err=%v", len(response.Item), err)
+		}
+		return response.Item[0]
+	}
+
+	for _, field := range []string{
+		`<Owner></Owner>`, `<SafetyWay>0</SafetyWay>`, `<CertNum></CertNum>`, `<Certifiable>0</Certifiable>`,
+		`<ErrCode>0</ErrCode>`, `<EndTime></EndTime>`, `<Info><PositionType>0</PositionType></Info>`,
+		`<Info><UseType>0</UseType></Info>`, `<Info><BusinessGroupID></BusinessGroupID></Info>`,
+	} {
+		if err := validateCatalogItemValues(decodeItem(t, field), GBVersion30); err == nil {
+			t.Fatalf("2022 accepted removed Catalog field %s", field)
+		}
+	}
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20} {
+		for _, field := range []string{`<SecurityLevelCode></SecurityLevelCode>`, `<BusinessGroupID></BusinessGroupID>`} {
+			if err := validateCatalogItemValues(decodeItem(t, field), version); err == nil {
+				t.Fatalf("%s accepted 2022 Catalog field %s", version, field)
+			}
 		}
 	}
 }
