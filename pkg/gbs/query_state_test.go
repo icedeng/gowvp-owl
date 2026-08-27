@@ -237,6 +237,16 @@ func TestAppendixA4HandlersAcknowledgeBeforePersistence(t *testing.T) {
 				api.handleDeviceConfig(ctx)
 			},
 		},
+		{
+			name:   "RecordInfo",
+			method: sip.MethodMessage,
+			body: []byte(`<Response><CmdType>RecordInfo</CmdType><SN>94</SN><DeviceID>` + gb10DeviceID +
+				`</DeviceID><Name>camera</Name><SumNum>0</SumNum><ExtraInfo>{"type":"doorType","DeviceID":"` + gb10DeviceID +
+				`"}</ExtraInfo></Response>`),
+			handler: func(api *GB28181API, ctx *sip.Context) {
+				api.sipMessageRecordInfo(ctx)
+			},
+		},
 	}
 
 	for _, test := range tests {

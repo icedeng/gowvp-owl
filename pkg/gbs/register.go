@@ -58,6 +58,9 @@ type GB28181API struct {
 	recordResponses  *multiResponseCollector[RecordItem]
 	// key=deviceID:SN，映射到 RecordInfo 的通道聚合键，兼容设备回写设备 ID。
 	recordResponseAliases sync.Map
+	// recordResponseExtra 保存同一 RecordInfo 分包查询中的 2022 ExtraInfo。
+	recordResponseExtraMu sync.Mutex
+	recordResponseExtra   map[string][]string
 	// REGISTER Digest nonce 由服务端签发并绑定设备和源 IP，避免接受任意或永久可重放的 nonce。
 	registerNonceMu sync.Mutex
 	registerNonces  map[string]registerNonceState
@@ -127,6 +130,7 @@ type GB28181API struct {
 	cascadeStopHistory     func(context.Context, *StopHistoryInput) error
 	cascadeControlHistory  func(context.Context, *ControlHistoryInput) error
 	cascadeQueryRecords    func(context.Context, *RecordQueryInput) ([]RecordItem, error)
+	cascadeRecordResult    func(context.Context, *RecordQueryInput) (recordQueryResult, error)
 	cascadeDeviceQuery     func(context.Context, *DeviceQueryInput) (*DeviceQueryOutput, error)
 	cascadeDeviceControl   func(context.Context, *ipc.Channel, *deviceControlA23Request) (string, error)
 	cascadeDeviceConfig    func(context.Context, *ipc.Channel, *DeviceConfigRequest) (string, error)
@@ -172,6 +176,7 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 		recordResponses: newMultiResponseCollector(func(item RecordItem) string {
 			return item.DeviceID + "\x00" + item.FilePath + "\x00" + item.StartTime + "\x00" + item.EndTime
 		}),
+		recordResponseExtra:  make(map[string][]string),
 		registerNonces:       make(map[string]registerNonceState),
 		messageNonces:        make(map[string]messageNonceState),
 		streams:              &conc.Map[string, *Streams]{},

@@ -9,18 +9,77 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func (g *GB28181API) validateAndDecodeAppendixA4(deviceID, cmdType string, body []byte) ([]AppendixA4Object, error) {
-	objects := g.decodeAppendixA4Objects(cmdType, body)
-	if len(objects) == 0 {
+	present, err := inspectAppendixA4Payload(body)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
 		return nil, nil
 	}
+	objects := g.decodeAppendixA4Objects(cmdType, body)
 	version := g.getDeviceGBProtocolVersion(deviceID)
 	if !version.AtLeast(GBVersion30) {
 		return nil, fmt.Errorf("Appendix A.4 requires %s", GBVersion30.StandardName())
 	}
 	return objects, nil
+}
+
+func inspectAppendixA4Payload(body []byte) (bool, error) {
+	if len(body) == 0 {
+		return false, nil
+	}
+	var root a4XMLNode
+	if err := xml.Unmarshal(body, &root); err != nil {
+		return false, nil
+	}
+	return inspectAppendixA4Node(root)
+}
+
+func inspectAppendixA4Node(node a4XMLNode) (bool, error) {
+	name := strings.TrimSpace(node.XMLName.Local)
+	present := isAppendixA4Type(name)
+	if strings.EqualFold(name, "ExtraInfo") || strings.EqualFold(name, "ExtralInfo") {
+		present = true
+		if len(node.Children) > 0 {
+			return true, fmt.Errorf("Appendix A.4 %s must contain simple text", name)
+		}
+		if utf8.RuneCountInString(node.Content) > 1024 {
+			return true, fmt.Errorf("Appendix A.4 %s exceeds 1024 characters", name)
+		}
+	}
+	for _, child := range node.Children {
+		childPresent, err := inspectAppendixA4Node(child)
+		if err != nil {
+			return true, err
+		}
+		present = present || childPresent
+	}
+	return present, nil
+}
+
+func appendixA4ExtraInfoValues(objects []AppendixA4Object) []string {
+	values := make([]string, 0, len(objects))
+	seen := make(map[string]struct{}, len(objects))
+	for _, object := range objects {
+		path := strings.TrimSpace(object.Path)
+		if !strings.HasSuffix(strings.ToLower(path), "/extrainfo") && !strings.HasSuffix(strings.ToLower(path), "/extralinfo") {
+			continue
+		}
+		value := strings.TrimSpace(object.Fields["value"])
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
 }
 
 // AppendixA4Object 是附录 A.4 扩展对象的协议层模型。

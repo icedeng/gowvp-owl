@@ -238,6 +238,38 @@ func TestAppendixA4Requires2022(t *testing.T) {
 	if err != nil || len(objects) != 1 || objects[0].Type != "doorType" {
 		t.Fatalf("2022 Appendix A.4 result = %+v, %v", objects, err)
 	}
+
+	empty := []byte(`<Response><CmdType>RecordInfo</CmdType><ExtraInfo></ExtraInfo></Response>`)
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20} {
+		legacy, _ := newVersionGateAPI(version)
+		if _, err := legacy.validateAndDecodeAppendixA4(gb10DeviceID, "RecordInfo", empty); err == nil {
+			t.Fatalf("%s accepted empty 2022 ExtraInfo", version)
+		}
+	}
+	if objects, err := api.validateAndDecodeAppendixA4(gb10DeviceID, "RecordInfo", empty); err != nil || len(objects) != 0 {
+		t.Fatalf("2022 empty ExtraInfo result = %+v, %v", objects, err)
+	}
+}
+
+func TestAppendixA4ExtraInfoSchemaLimits(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	for _, test := range []struct {
+		name    string
+		content string
+		wantErr bool
+	}{
+		{name: "1024 characters", content: strings.Repeat("门", 1024)},
+		{name: "1025 characters", content: strings.Repeat("门", 1025), wantErr: true},
+		{name: "nested element", content: "<Value>door</Value>", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(`<Response><CmdType>RecordInfo</CmdType><ExtraInfo>` + test.content + `</ExtraInfo></Response>`)
+			_, err := api.validateAndDecodeAppendixA4(gb10DeviceID, "RecordInfo", body)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateAndDecodeAppendixA4() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
 }
 
 func TestGB30PTZPositionNotifyStoresStructuredState(t *testing.T) {

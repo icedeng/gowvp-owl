@@ -1008,6 +1008,81 @@ func TestCascadeRecordInfoQueriesSharedChannelAndMapsResponse(t *testing.T) {
 	}
 }
 
+func TestCascadeRecordInfoMapsAppendixA4ExtraInfo(t *testing.T) {
+	adapter, _, channel := newCascadeMediaCore(t)
+	platform := testSharedCascadePlatform(t)
+	platform.version = GBVersion30
+	platform.localID = gb10PlatformID
+	worker := newCascadeWorker(nil, platform)
+	var body string
+	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+		body = string(request.Body())
+		return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+	}
+	values, err := rewriteCascadeRecordExtraInfo([]string{
+		`{"type":"doorType","DeviceID":"` + channel.ChannelID + `","ParentID":"` + channel.DeviceID + `"}`,
+	}, platform, channel.ChannelID, channel.DeviceID, testExposedChannelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &GB28181API{core: adapter}
+	if err := api.sendCascadeRecordItems(t.Context(), worker, cascadeQueryEnvelope{
+		CmdType: "RecordInfo", SN: 189, DeviceID: testExposedChannelID,
+	}, nil, "camera", values); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, "<ExtraInfo>") || !strings.Contains(body, testExposedChannelID) || !strings.Contains(body, platform.localID) ||
+		strings.Contains(body, channel.ChannelID) || strings.Contains(body, channel.DeviceID) {
+		t.Fatalf("cascade RecordInfo ExtraInfo = %s", body)
+	}
+
+	legacy := platform
+	legacy.version = GBVersion20
+	if values, err := rewriteCascadeRecordExtraInfo([]string{`{"type":"doorType"}`}, legacy, channel.ChannelID, channel.DeviceID, testExposedChannelID); err != nil || len(values) != 0 {
+		t.Fatalf("legacy RecordInfo ExtraInfo = %+v, %v", values, err)
+	}
+	if _, err := rewriteCascadeRecordExtraInfo([]string{
+		`{"type":"doorType","DeviceID":"34020000001320000099"}`,
+	}, platform, channel.ChannelID, channel.DeviceID, testExposedChannelID); err == nil {
+		t.Fatal("unknown RecordInfo ExtraInfo identifier was accepted")
+	}
+}
+
+func TestCascadeRecordInfoRewriteFailureReturnsBusinessError(t *testing.T) {
+	adapter, _, _ := newCascadeMediaCore(t)
+	server := &Server{}
+	api := &GB28181API{core: adapter, svr: server}
+	server.gb = api
+	platform := testSharedCascadePlatform(t)
+	platform.version = GBVersion30
+	worker := newCascadeWorker(server, platform)
+	requests := make([]*sip.Request, 0, 1)
+	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+		requests = append(requests, request)
+		return sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil), nil
+	}
+	api.cascadeRecordResult = func(_ context.Context, _ *RecordQueryInput) (recordQueryResult, error) {
+		return recordQueryResult{ExtraInfo: []string{
+			`{"type":"doorType","DeviceID":"34020000001320000099"}`,
+		}}, nil
+	}
+
+	err := api.respondCascadeRecordInfo(t.Context(), worker, cascadeQueryEnvelope{
+		CmdType: "RecordInfo", SN: 190, DeviceID: testExposedChannelID,
+		StartTime: "2024-04-01T00:00:00", EndTime: "2024-04-01T01:00:00", Type: "ALL",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("RecordInfo rewrite failure responses = %d, want 1", len(requests))
+	}
+	body := string(requests[0].Body())
+	if !strings.Contains(body, "<Result>ERROR</Result>") || !strings.Contains(body, "<DeviceID>"+testExposedChannelID+"</DeviceID>") {
+		t.Fatalf("RecordInfo rewrite failure response = %s", body)
+	}
+}
+
 func TestCascadeRecordInfoPreservesTypeForAllVersions(t *testing.T) {
 	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20, GBVersion30} {
 		t.Run(string(version), func(t *testing.T) {
@@ -1131,7 +1206,7 @@ func TestCascadeEmptyCatalogAndRecordInfoUseVersionedLists(t *testing.T) {
 	}
 	if err := api.sendCascadeRecordItems(t.Context(), worker, cascadeQueryEnvelope{
 		CmdType: "RecordInfo", SN: 91, DeviceID: testExposedChannelID,
-	}, nil, ""); err != nil {
+	}, nil, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(bodies) != 3 {

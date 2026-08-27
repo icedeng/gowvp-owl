@@ -29,6 +29,7 @@ func TestRecordInfoRejectsInvalidEnvelopeBeforeCollector(t *testing.T) {
 		{name: "empty item name", body: `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Name> </Name><Secrecy>0</Secrecy></Item></RecordList></Response>`},
 		{name: "missing item secrecy", body: `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Name>record</Name></Item></RecordList></Response>`},
 		{name: "invalid item secrecy", body: `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>1</SumNum><RecordList Num="1"><Item><DeviceID>` + gb10ChannelID + `</DeviceID><Name>record</Name><Secrecy>2</Secrecy></Item></RecordList></Response>`},
+		{name: "2011 Appendix A.4 ExtraInfo", body: `<Response><CmdType>RecordInfo</CmdType><SN>3</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>0</SumNum><ExtraInfo>{"type":"doorType","DeviceID":"` + gb10ChannelID + `"}</ExtraInfo></Response>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -49,6 +50,33 @@ func TestRecordInfoRejectsInvalidEnvelopeBeforeCollector(t *testing.T) {
 				t.Fatalf("invalid RecordInfo changed collector: %+v", result)
 			}
 		})
+	}
+}
+
+func TestRecordInfo2022CollectsAppendixA4ExtraInfo(t *testing.T) {
+	base, _, _ := newCascadeMediaCore(t)
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.setGBVersion(GBVersion30)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	collector := newMultiResponseCollector(func(item RecordItem) string { return item.DeviceID + item.FilePath })
+	key := buildMultiResponseKey(gb10ChannelID, "RecordInfo", 8)
+	collector.Start(key)
+	api := &GB28181API{core: base, svr: &Server{memoryStorer: memory}, recordResponses: collector}
+	api.startRecordResponseExtra(key)
+	body := `<Response><CmdType>RecordInfo</CmdType><SN>8</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Name>camera</Name><SumNum>0</SumNum><ExtraInfo>{"type":"doorType","DeviceID":"` + gb10ChannelID + `"}</ExtraInfo></Response>`
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "record-2022-extra-info", []byte(body), api.sipMessageRecordInfo)
+	assertFlowOK(t, response)
+	result := collector.Wait(t.Context(), key)
+	if !result.Complete || result.Expected != 0 {
+		t.Fatalf("RecordInfo collector result = %+v", result)
+	}
+	values := api.takeRecordResponseExtra(key)
+	if len(values) != 1 || !strings.Contains(values[0], `"type":"doorType"`) {
+		t.Fatalf("RecordInfo ExtraInfo = %+v", values)
+	}
+	state, ok := api.GetQueryState(gb10DeviceID)
+	if !ok || len(state.AppendixA4) != 1 || state.AppendixA4[0].Type != "doorType" {
+		t.Fatalf("RecordInfo Appendix A.4 state = %+v", state)
 	}
 }
 

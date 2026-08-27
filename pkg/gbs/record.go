@@ -35,29 +35,39 @@ func (g *GB28181API) QueryRecordList(ctx context.Context, in *RecordQueryInput) 
 }
 
 func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput) ([]RecordItem, error) {
+	result, err := g.queryRecordResult(ctx, in)
+	return result.Items, err
+}
+
+type recordQueryResult struct {
+	Items     []RecordItem
+	ExtraInfo []string
+}
+
+func (g *GB28181API) queryRecordResult(ctx context.Context, in *RecordQueryInput) (recordQueryResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return recordQueryResult{}, err
 	}
 	if in == nil || in.DeviceID == "" || in.ChannelID == "" {
-		return nil, errors.New("invalid record query input")
+		return recordQueryResult{}, errors.New("invalid record query input")
 	}
 	if in.Start <= 0 || in.End <= in.Start {
-		return nil, errors.New("invalid record query time range")
+		return recordQueryResult{}, errors.New("invalid record query time range")
 	}
 
 	ipc, ok := g.svr.memoryStorer.Load(in.DeviceID)
 	if !ok || !ipc.IsOnlineNow() {
-		return nil, ErrDeviceOffline
+		return recordQueryResult{}, ErrDeviceOffline
 	}
 	ch, ok := g.svr.memoryStorer.GetChannel(in.DeviceID, in.ChannelID)
 	if !ok {
-		return nil, ErrChannelNotExist
+		return recordQueryResult{}, ErrChannelNotExist
 	}
 	if err := validateRecordQueryFilters(g.getDeviceGBProtocolVersion(in.DeviceID), in); err != nil {
-		return nil, err
+		return recordQueryResult{}, err
 	}
 	recordType, _ := normalizeRecordQueryType(in.Type)
 	alarmMethod, _ := formatAlarmMethodFilter(g.getDeviceGBProtocolVersion(in.DeviceID), in.AlarmMethod)
@@ -69,6 +79,8 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 	sn := g.nextQuerySN()
 	recordKey := buildMultiResponseKey(in.ChannelID, "RecordInfo", sn)
 	g.recordResponses.Start(recordKey)
+	g.startRecordResponseExtra(recordKey)
+	defer g.clearRecordResponseExtra(recordKey)
 	aliasKey := buildMultiResponseKey(in.DeviceID, "RecordInfo", sn)
 	g.recordResponseAliases.Store(aliasKey, recordKey)
 	defer g.recordResponseAliases.Delete(aliasKey)
@@ -82,22 +94,24 @@ func (g *GB28181API) queryRecordItems(ctx context.Context, in *RecordQueryInput)
 	}))
 	if err != nil {
 		g.recordResponses.Cancel(recordKey)
-		return nil, err
+		return recordQueryResult{}, err
 	}
 	if _, err = sipResponseContext(ctx, tx); err != nil {
 		g.recordResponses.Cancel(recordKey)
-		return nil, err
+		return recordQueryResult{}, err
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, in.Timeout)
 	defer cancel()
 	result := g.recordResponses.Wait(waitCtx, recordKey)
+	extraInfo := g.takeRecordResponseExtra(recordKey)
 	if g.serviceStopped() {
-		return nil, ErrServiceStopped
+		return recordQueryResult{}, ErrServiceStopped
 	}
 	if !result.Complete && ctx.Err() != nil {
-		return nil, ctx.Err()
+		return recordQueryResult{}, ctx.Err()
 	}
-	return recordQueryItemsResult(result)
+	items, err := recordQueryItemsResult(result)
+	return recordQueryResult{Items: items, ExtraInfo: extraInfo}, err
 }
 
 func validateRecordQueryFilters(version GBProtocolVersion, in *RecordQueryInput) error {
@@ -273,11 +287,90 @@ func (g *GB28181API) sipMessageRecordInfo(ctx *sip.Context) {
 		ctx.String(400, err.Error())
 		return
 	}
+	extended, err := g.validateAndDecodeAppendixA4(ctx.DeviceID, message.CmdType, ctx.Request.Body())
+	if err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
+	if len(extended) > 0 {
+		g.storeAppendixA4State(ctx.DeviceID, extended)
+	}
 	if g.recordResponses != nil && recordKey != "" {
-		g.recordResponses.Add(recordKey, message.SumNum, message.Item)
+		g.appendRecordResponseExtra(recordKey, appendixA4ExtraInfoValues(extended))
+		if !g.recordResponses.Add(recordKey, message.SumNum, message.Item) {
+			g.clearRecordResponseExtra(recordKey)
+		}
 	}
 
 	ctx.String(200, "OK")
+	if len(extended) > 0 {
+		g.persistAppendixA4Objects(ctx.DeviceID, extended)
+	}
+}
+
+func (g *GB28181API) startRecordResponseExtra(key string) {
+	if g == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	g.recordResponseExtraMu.Lock()
+	if g.recordResponseExtra == nil {
+		g.recordResponseExtra = make(map[string][]string)
+	}
+	g.recordResponseExtra[key] = nil
+	g.recordResponseExtraMu.Unlock()
+}
+
+func (g *GB28181API) appendRecordResponseExtra(key string, values []string) {
+	if g == nil || strings.TrimSpace(key) == "" || len(values) == 0 {
+		return
+	}
+	g.recordResponseExtraMu.Lock()
+	if g.recordResponseExtra == nil {
+		g.recordResponseExtra = make(map[string][]string)
+	}
+	existing := g.recordResponseExtra[key]
+	seen := make(map[string]struct{}, len(existing)+len(values))
+	for _, value := range existing {
+		seen[value] = struct{}{}
+	}
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		existing = append(existing, value)
+	}
+	g.recordResponseExtra[key] = existing
+	g.recordResponseExtraMu.Unlock()
+}
+
+func (g *GB28181API) takeRecordResponseExtra(key string) []string {
+	if g == nil || strings.TrimSpace(key) == "" {
+		return nil
+	}
+	g.recordResponseExtraMu.Lock()
+	values := append([]string(nil), g.recordResponseExtra[key]...)
+	delete(g.recordResponseExtra, key)
+	g.recordResponseExtraMu.Unlock()
+	return values
+}
+
+func (g *GB28181API) clearRecordResponseExtra(key string) {
+	if g == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	g.recordResponseExtraMu.Lock()
+	delete(g.recordResponseExtra, key)
+	g.recordResponseExtraMu.Unlock()
+}
+
+func (g *GB28181API) clearAllRecordResponseExtra() {
+	if g == nil {
+		return
+	}
+	g.recordResponseExtraMu.Lock()
+	g.recordResponseExtra = make(map[string][]string)
+	g.recordResponseExtraMu.Unlock()
 }
 
 func (g *GB28181API) recordResponseTarget(ctx *sip.Context, message *MessageRecordInfoResponse) (string, string) {

@@ -1091,6 +1091,7 @@ func (g *GB28181API) close() {
 		g.pendingBroadcast.Clear()
 		g.cascadeTaskRoutes.Clear()
 		g.recordResponseAliases.Clear()
+		g.clearAllRecordResponseExtra()
 		g.eventSubscribers.Clear()
 		g.outgoingSubscriptions.Clear()
 		g.closeCascadeDownstreamSubscriptions()

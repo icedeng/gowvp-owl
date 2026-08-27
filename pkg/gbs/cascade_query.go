@@ -194,6 +194,7 @@ type cascadeRecordInfoResponse struct {
 	Name       string                 `xml:"Name"`
 	SumNum     int                    `xml:"SumNum"`
 	RecordList *cascadeRecordInfoList `xml:"RecordList,omitempty"`
+	ExtraInfo  []string               `xml:"ExtraInfo,omitempty"`
 }
 
 type cascadeRecordInfoList struct {
@@ -1076,7 +1077,7 @@ func (g *GB28181API) respondCascadeDeviceStatus(ctx context.Context, worker *cas
 func (g *GB28181API) respondCascadeRecordInfo(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope) error {
 	localChannelID := worker.platform.exposedChannelMap[query.DeviceID]
 	if localChannelID == "" {
-		return g.sendCascadeRecordItems(ctx, worker, query, nil, "")
+		return g.sendCascadeRecordItems(ctx, worker, query, nil, "", nil)
 	}
 	channel, err := g.loadCascadeExposedChannel(ctx, worker.platform, query.DeviceID)
 	if err != nil {
@@ -1085,7 +1086,7 @@ func (g *GB28181API) respondCascadeRecordInfo(ctx context.Context, worker *casca
 	startAt, startErr := sip.ParseGBTime("2006-01-02T15:04:05", strings.TrimSpace(query.StartTime))
 	endAt, endErr := sip.ParseGBTime("2006-01-02T15:04:05", strings.TrimSpace(query.EndTime))
 	if startErr != nil || endErr != nil || !endAt.After(startAt) {
-		return g.sendCascadeRecordItems(ctx, worker, query, nil, channel.Name)
+		return g.sendCascadeRecordItems(ctx, worker, query, nil, channel.Name, nil)
 	}
 	recordQuery := &RecordQueryInput{
 		DeviceID: channel.DeviceID, ChannelID: localChannelID,
@@ -1096,21 +1097,31 @@ func (g *GB28181API) respondCascadeRecordInfo(ctx context.Context, worker *casca
 		return sendCascadeQueryError(ctx, worker, query)
 	}
 	recordQuery.Type, _ = normalizeRecordQueryType(recordQuery.Type)
-	queryRecords := g.queryRecordItems
-	if g.cascadeQueryRecords != nil {
-		queryRecords = g.cascadeQueryRecords
+	var result recordQueryResult
+	var queryErr error
+	if g.cascadeRecordResult != nil {
+		result, queryErr = g.cascadeRecordResult(ctx, recordQuery)
+	} else if g.cascadeQueryRecords != nil {
+		result.Items, queryErr = g.cascadeQueryRecords(ctx, recordQuery)
+	} else {
+		result, queryErr = g.queryRecordResult(ctx, recordQuery)
 	}
-	items, err := queryRecords(ctx, recordQuery)
-	if err != nil {
-		slog.Warn("query cascade RecordInfo failed", "upstream", worker.platform.name, "channel", localChannelID, "err", err)
-		items = nil
+	if queryErr != nil {
+		slog.Warn("query cascade RecordInfo failed", "upstream", worker.platform.name, "channel", localChannelID, "err", queryErr)
+		result = recordQueryResult{}
 	}
+	items := result.Items
 	for index := range items {
 		items[index].DeviceID = query.DeviceID
 		items[index].RecorderID = cascadeRecordDeviceID(worker.platform, items[index].RecorderID, localChannelID, channel.DeviceID, query.DeviceID)
 		items[index].RecordLocation = cascadeRecordDeviceID(worker.platform, items[index].RecordLocation, localChannelID, channel.DeviceID, query.DeviceID)
 	}
-	return g.sendCascadeRecordItems(ctx, worker, query, items, firstNonEmpty(channel.Name, query.DeviceID))
+	extraInfo, err := rewriteCascadeRecordExtraInfo(result.ExtraInfo, worker.platform, localChannelID, channel.DeviceID, query.DeviceID)
+	if err != nil {
+		slog.Warn("rewrite cascade RecordInfo ExtraInfo failed", "upstream", worker.platform.name, "channel", localChannelID, "err", err)
+		return sendCascadeQueryError(ctx, worker, query)
+	}
+	return g.sendCascadeRecordItems(ctx, worker, query, items, firstNonEmpty(channel.Name, query.DeviceID), extraInfo)
 }
 
 func cascadeRecordDeviceID(platform cascadePlatform, value, localChannelID, localDeviceID, exposedID string) string {
@@ -1127,19 +1138,49 @@ func cascadeRecordDeviceID(platform cascadePlatform, value, localChannelID, loca
 	return ""
 }
 
-func (g *GB28181API) sendCascadeRecordItems(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope, items []RecordItem, name string) error {
+func rewriteCascadeRecordExtraInfo(values []string, platform cascadePlatform, localChannelID, localDeviceID, exposedID string) ([]string, error) {
+	if !platform.version.AtLeast(GBVersion30) || len(values) == 0 {
+		return nil, nil
+	}
+	mappingPlatform := withCascadeIdentifierMapping(platform, localDeviceID, platform.localID)
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		rewritten, err := rewriteCascadeOpaqueIdentifiers(value, "ExtraInfo", mappingPlatform, localChannelID, exposedID)
+		if err != nil {
+			return nil, err
+		}
+		rewritten = strings.TrimSpace(rewritten)
+		if rewritten == "" || utf8.RuneCountInString(rewritten) > 1024 {
+			return nil, fmt.Errorf("invalid RecordInfo ExtraInfo")
+		}
+		if _, ok := seen[rewritten]; ok {
+			continue
+		}
+		seen[rewritten] = struct{}{}
+		out = append(out, rewritten)
+	}
+	return out, nil
+}
+
+func (g *GB28181API) sendCascadeRecordItems(ctx context.Context, worker *cascadeWorker, query cascadeQueryEnvelope, items []RecordItem, name string, extraInfo []string) error {
 	name = firstNonEmpty(strings.TrimSpace(name), strings.TrimSpace(query.DeviceID))
 	if len(items) == 0 {
 		return sendCascadeXML(ctx, worker, cascadeRecordInfoResponse{
 			CmdType: "RecordInfo", SN: query.SN, DeviceID: query.DeviceID, Name: name,
+			ExtraInfo: append([]string(nil), extraInfo...),
 		})
 	}
 	items = recordItemsForVersion(items, worker.protocolVersion())
 	for start := 0; start < len(items); start += cascadeCatalogChunkSize {
 		end := min(start+cascadeCatalogChunkSize, len(items))
+		var responseExtraInfo []string
+		if start == 0 {
+			responseExtraInfo = append([]string(nil), extraInfo...)
+		}
 		if err := sendCascadeXML(ctx, worker, cascadeRecordInfoResponse{
 			CmdType: "RecordInfo", SN: query.SN, DeviceID: query.DeviceID, Name: name, SumNum: len(items),
-			RecordList: &cascadeRecordInfoList{Num: end - start, Items: items[start:end]},
+			RecordList: &cascadeRecordInfoList{Num: end - start, Items: items[start:end]}, ExtraInfo: responseExtraInfo,
 		}); err != nil {
 			return err
 		}

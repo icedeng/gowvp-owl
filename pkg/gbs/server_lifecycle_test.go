@@ -561,6 +561,8 @@ func TestCloseCancelsPendingWorkAndClearsRuntimeIndexes(t *testing.T) {
 	api.pendingDeviceConfig.Store("config", &pendingDeviceConfig{})
 	api.pendingBroadcast.Store("broadcast", &pendingBroadcastResponse{})
 	api.recordResponseAliases.Store("alias", "record")
+	api.startRecordResponseExtra("record")
+	api.appendRecordResponseExtra("record", []string{`{"type":"doorType"}`})
 	api.eventSubscribers.Store("event", &eventSubscription{})
 	api.outgoingSubscriptions.Store("outgoing", &outgoingSubscriptionDialog{})
 
@@ -589,6 +591,12 @@ func TestCloseCancelsPendingWorkAndClearsRuntimeIndexes(t *testing.T) {
 		if count := syncMapLen(values); count != 0 {
 			t.Errorf("%s entries survived close: %d", name, count)
 		}
+	}
+	api.recordResponseExtraMu.Lock()
+	extraCount := len(api.recordResponseExtra)
+	api.recordResponseExtraMu.Unlock()
+	if extraCount != 0 {
+		t.Errorf("record response ExtraInfo entries survived close: %d", extraCount)
 	}
 }
 
