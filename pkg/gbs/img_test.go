@@ -104,6 +104,7 @@ func TestSnapshotFinishedRejectsSchemaViolations(t *testing.T) {
 		{name: "wrong command", sn: "1", cmdType: "Catalog"},
 		{name: "missing list", sn: "1", cmdType: "UploadSnapShotFinished", files: "__NO_LIST__"},
 		{name: "invalid file", sn: "1", cmdType: "UploadSnapShotFinished", files: `<SnapShotFileID>bad</SnapShotFileID>`},
+		{name: "invalid file timestamp", sn: "1", cmdType: "UploadSnapShotFinished", files: `<SnapShotFileID>` + gb10DeviceID + `022026132508150000001</SnapShotFileID>`},
 		{name: "too many files", sn: "1", cmdType: "UploadSnapShotFinished", files: strings.Repeat("<SnapShotFileID>"+fileID+"</SnapShotFileID>", 11)},
 	}
 	for _, test := range tests {

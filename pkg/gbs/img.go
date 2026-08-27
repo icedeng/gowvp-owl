@@ -379,7 +379,9 @@ func validSnapshotFileID(value, deviceID string) bool {
 			return false
 		}
 	}
-	return true
+	// 表 4 的第 23~39 位是精确到毫秒的生成时间，不能只校验为数字。
+	_, err := sip.ParseGBTime("20060102150405.000", value[22:36]+"."+value[36:39])
+	return err == nil
 }
 
 // buildSnapshotUploadURL 生成抓拍回传地址，避免硬编码固定地址。
