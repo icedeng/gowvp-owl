@@ -980,6 +980,39 @@ func TestCatalogSubscriptionResponse10IncludesBusinessAck(t *testing.T) {
 	}
 }
 
+func TestAlarmSubscriptionBusinessResponseVersionMatrix(t *testing.T) {
+	tests := []struct {
+		version GBProtocolVersion
+		wantXML bool
+	}{
+		{version: GBVersion10, wantXML: true},
+		{version: GBVersion11, wantXML: true},
+		{version: GBVersion20, wantXML: true},
+		{version: GBVersion30, wantXML: false},
+	}
+	for _, test := range tests {
+		t.Run(string(test.version), func(t *testing.T) {
+			api := &GB28181API{}
+			conn := newFlowConnection()
+			body := []byte(`<?xml version="1.0"?><Query><CmdType>Alarm</CmdType><SN>52</SN><DeviceID>` + gb10DeviceID + `</DeviceID></Query>`)
+			req := newFlowRequest(t, conn, sip.MethodSubscribe, "subscribe-alarm-"+string(test.version), body)
+			req.AppendHeader(&sip.GenericHeader{HeaderName: "Event", Contents: "presence"})
+			req.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "90"})
+			ctx := &sip.Context{
+				Request: req, Tx: sip.NewTransaction("subscribe-alarm-tx-"+string(test.version), conn), DeviceID: gb10PlatformID,
+				Source: conn.remote, To: mustFlowAddress(t, "sip:"+gb10PlatformID+"@3402000000"), XGBVer: string(test.version),
+			}
+			api.sipSubscribeEvent(ctx)
+			response := <-flowResponse(t, conn)
+			hasXML := strings.Contains(response, "<Response>") && strings.Contains(response, "<CmdType>Alarm</CmdType>") &&
+				strings.Contains(response, "<SN>52</SN>") && strings.Contains(response, "<Result>OK</Result>")
+			if hasXML != test.wantXML {
+				t.Fatalf("%s Alarm SUBSCRIBE XML response = %v, want %v:\n%s", test.version, hasXML, test.wantXML, response)
+			}
+		})
+	}
+}
+
 func flowResponse(t *testing.T, conn *flowConnection) <-chan string {
 	t.Helper()
 	out := make(chan string, 1)

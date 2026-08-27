@@ -721,7 +721,7 @@ func cascadeSubscriptionTargetAllowed(platform cascadePlatform, cmdType, deviceI
 
 func (g *GB28181API) respondSubscribeOK(ctx *sip.Context, req subscribeEventRequest, eventValue string, expires int, cascade *cascadeWorker, version GBProtocolVersion) (*sip.Response, *sip.Address) {
 	var body []byte
-	if version == GBVersion10 {
+	if shouldIncludeSubscribeBusinessResponse(version, req.CmdType) {
 		body, _ = sip.XMLEncode(struct {
 			XMLName  xml.Name `xml:"Response"`
 			CmdType  string   `xml:"CmdType"`
@@ -753,6 +753,15 @@ func (g *GB28181API) respondSubscribeOK(ctx *sip.Context, req subscribeEventRequ
 	}
 	_ = ctx.Tx.Respond(response)
 	return response, contact
+}
+
+// shouldIncludeSubscribeBusinessResponse 保留旧版报警订阅要求的 MANSCDP 业务应答。
+// 2022 仅规定 SUBSCRIBE 请求体，成功响应不再要求携带该 XML；2011 的目录订阅兼容行为保持不变。
+func shouldIncludeSubscribeBusinessResponse(version GBProtocolVersion, cmdType string) bool {
+	if version == GBVersion10 {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(cmdType), "Alarm") && (version == GBVersion11 || version == GBVersion20)
 }
 
 func normalizeSubscribeCmdType(value string) (string, bool) {
