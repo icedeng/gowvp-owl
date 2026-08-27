@@ -98,6 +98,7 @@ AllowedAddressCIDRs = []
 ### 3.0
 
 - H.265、设备升级、抓拍；
+- 升级/抓拍命令受理后、最终通知前重启 Owl，确认原 `SessionID` 仍能恢复目标和终态；伪造的未知 `SessionID` 必须拒绝。级联场景还要确认最终通知仍回到原上级；
 - 精确 PTZ、PTZPosition；
 - PTZ 精准位置变化 SUBSCRIBE/NOTIFY，确认 2.0 及更早档案不会发送该订阅；
 - CruiseTrackListQuery/CruiseTrackQuery，核对 0/1 轨迹编号、预置位、停留时间和速度；

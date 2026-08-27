@@ -60,7 +60,7 @@ func cascadeTaskFingerprint(value []byte) string {
 	return fmt.Sprintf("%x", digest[:])
 }
 
-func (g *GB28181API) registerCascadeTaskRoute(ctx context.Context, kind string, worker *cascadeWorker, channel *ipc.Channel, exposedID, sessionID, fingerprint string) (*cascadeTaskRoute, bool, error) {
+func (g *GB28181API) registerCascadeTaskRoute(ctx context.Context, kind string, worker *cascadeWorker, channel *ipc.Channel, exposedID, sessionID, fingerprint string, initialState ...any) (*cascadeTaskRoute, bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -110,7 +110,97 @@ func (g *GB28181API) registerCascadeTaskRoute(ctx context.Context, kind string, 
 		}
 		return existing, false, nil
 	}
+	if err := g.storeCascadeTaskState(ctx, route, initialState...); err != nil {
+		g.cascadeTaskRoutes.CompareAndDelete(downstreamKey, route)
+		g.cascadeTaskRoutes.CompareAndDelete(upstreamKey, route)
+		g.deleteCascadeTaskState(route)
+		return nil, false, err
+	}
 	return route, true, nil
+}
+
+func (g *GB28181API) deleteCascadeTaskState(route *cascadeTaskRoute) {
+	if g == nil || route == nil {
+		return
+	}
+	switch route.kind {
+	case cascadeTaskUpgrade:
+		g.deleteUpgradeState(context.Background(), route.downstreamDeviceID, route.downstreamSessionID)
+	case cascadeTaskSnapshot:
+		g.deleteSnapshotState(route.downstreamDeviceID, route.downstreamSessionID)
+	}
+}
+
+func (g *GB28181API) finishCascadeTaskState(ctx context.Context, route *cascadeTaskRoute, result string, taskErr error) error {
+	if g == nil || route == nil {
+		return nil
+	}
+	accepted := taskErr == nil && strings.EqualFold(strings.TrimSpace(result), "OK")
+	switch route.kind {
+	case cascadeTaskUpgrade:
+		state, ok, err := g.loadUpgradeState(ctx, route.downstreamDeviceID, route.downstreamSessionID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("cascade upgrade task state not found")
+		}
+		state.Result = strings.ToUpper(strings.TrimSpace(result))
+		if accepted {
+			state.Status = "accepted"
+		} else {
+			state.Status = "rejected"
+		}
+		state.UpdatedAt = time.Now()
+		return g.storeUpgradeStateContext(ctx, state)
+	case cascadeTaskSnapshot:
+		status := "rejected"
+		if accepted {
+			status = "accepted"
+		}
+		_, ok, err := g.transitionSnapshotStateContext(ctx, route.downstreamDeviceID, route.downstreamSessionID, status)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("cascade snapshot task state not found")
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func (g *GB28181API) storeCascadeTaskState(ctx context.Context, route *cascadeTaskRoute, initialState ...any) error {
+	if g == nil || route == nil {
+		return fmt.Errorf("cascade task state is unavailable")
+	}
+	switch route.kind {
+	case cascadeTaskUpgrade:
+		state := UpgradeState{}
+		if len(initialState) > 0 {
+			state, _ = initialState[0].(UpgradeState)
+		}
+		state.DeviceID = route.downstreamDeviceID
+		state.ChannelID = route.downstreamTargetID
+		state.SessionID = route.downstreamSessionID
+		state.Status = "pending"
+		state.UpdatedAt = route.createdAt
+		return g.storeUpgradeStateContext(ctx, state)
+	case cascadeTaskSnapshot:
+		state := SnapshotState{}
+		if len(initialState) > 0 {
+			state, _ = initialState[0].(SnapshotState)
+		}
+		state.DeviceID = route.downstreamDeviceID
+		state.ChannelID = route.downstreamTargetID
+		state.SessionID = route.downstreamSessionID
+		state.Status = "pending"
+		state.UpdatedAt = route.createdAt
+		return g.storeSnapshotStateContext(ctx, state)
+	default:
+		return fmt.Errorf("unsupported cascade task kind %q", route.kind)
+	}
 }
 
 func (g *GB28181API) cascadeTaskRouteCount() int {

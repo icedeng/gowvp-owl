@@ -49,6 +49,9 @@ func TestCascadeUpgradeAndSnapshotMapIndependentDownstreamSessions(t *testing.T)
 	if downstreamUpgrade == "" || downstreamUpgrade == upstreamUpgrade {
 		t.Fatalf("downstream upgrade session = %q", downstreamUpgrade)
 	}
+	if state, ok := api.UpgradeState(gb10DeviceID, downstreamUpgrade); !ok || state.Status != "accepted" || state.ChannelID != channel.ChannelID || state.Firmware != "V3" {
+		t.Fatalf("cascade upgrade state = %+v, %v", state, ok)
+	}
 
 	upstreamSnapshot := "snapshot-session-0000000000000100"
 	var downstreamSnapshot string
@@ -69,6 +72,9 @@ func TestCascadeUpgradeAndSnapshotMapIndependentDownstreamSessions(t *testing.T)
 	api.forwardCascadeDeviceConfig(worker, snapshotBody, t.Context())
 	if downstreamSnapshot == "" || downstreamSnapshot == upstreamSnapshot || downstreamSnapshot == downstreamUpgrade {
 		t.Fatalf("downstream snapshot session = %q, upgrade = %q", downstreamSnapshot, downstreamUpgrade)
+	}
+	if state, ok := api.SnapshotState(gb10DeviceID, downstreamSnapshot); !ok || state.Status != "accepted" || state.ChannelID != channel.ChannelID || state.ExpectedCount != 1 {
+		t.Fatalf("cascade snapshot state = %+v, %v", state, ok)
 	}
 }
 

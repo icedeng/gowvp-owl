@@ -76,6 +76,43 @@ func TestSnapshotFinishedDetectsPartialFailure(t *testing.T) {
 	}
 }
 
+func TestSnapshotFinishedRestoresTrackedSessionAfterRestart(t *testing.T) {
+	store := newPersistentTaskMemory(GBVersion30)
+	sessionID := "snapshot-session-restart-000000001"
+	first := &GB28181API{svr: &Server{memoryStorer: store}}
+	if err := first.storeSnapshotStateContext(t.Context(), SnapshotState{
+		DeviceID: gb10DeviceID, ChannelID: gb10DeviceID, CoverKey: "restart-cover", SessionID: sessionID,
+		Status: "accepted", ExpectedCount: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	api := &GB28181API{svr: &Server{memoryStorer: store}}
+	body := []byte(`<Notify><CmdType>UploadSnapShotFinished</CmdType><SN>104</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><SnapShotList>` +
+		`<SnapShotFileID>` + gb10DeviceID + `022026082508150000001</SnapShotFileID>` +
+		`</SnapShotList></Notify>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "snapshot-restart", body, api.sipMessageSnapshotFinished)
+	assertFlowOK(t, response)
+	state, ok := api.SnapshotState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "completed" || state.CoverKey != "restart-cover" || len(state.FileIDs) != 1 {
+		t.Fatalf("restored snapshot state = %+v, %v", state, ok)
+	}
+}
+
+func TestSnapshotFinishedRejectsUnknownSession(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	sessionID := "snapshot-session-unknown-0000000001"
+	body := []byte(`<Notify><CmdType>UploadSnapShotFinished</CmdType><SN>104</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><SnapShotList/></Notify>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "snapshot-unknown", body, api.sipMessageSnapshotFinished)
+	if !strings.Contains(response, "SIP/2.0 400 UploadSnapShotFinished session not found") {
+		t.Fatalf("unknown snapshot session response = %s", response)
+	}
+	if _, ok := api.SnapshotState(gb10DeviceID, sessionID); ok {
+		t.Fatal("unknown snapshot notification created state")
+	}
+}
+
 func TestSnapshotFinishedRequires2022(t *testing.T) {
 	api, _ := newVersionGateAPI(GBVersion20)
 	body := []byte(`<Notify><CmdType>UploadSnapShotFinished</CmdType><SN>104</SN><DeviceID>` + gb10DeviceID +

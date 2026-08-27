@@ -48,9 +48,17 @@ func TestDeviceUpgradeResultCompletesTrackedSession(t *testing.T) {
 	}
 }
 
-func TestDeviceUpgradeResultStoresFailureAfterRestart(t *testing.T) {
-	api, _ := newVersionGateAPI(GBVersion30)
+func TestDeviceUpgradeResultRestoresTrackedSessionAfterRestart(t *testing.T) {
+	store := newPersistentTaskMemory(GBVersion30)
 	sessionID := "upgrade-session-0000000000000002"
+	first := &GB28181API{svr: &Server{memoryStorer: store}}
+	if err := first.storeUpgradeStateContext(t.Context(), UpgradeState{
+		DeviceID: gb10DeviceID, ChannelID: gb10DeviceID, SessionID: sessionID,
+		Status: "accepted", Firmware: "V1.2.3",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	api := &GB28181API{svr: &Server{memoryStorer: store}}
 	body := []byte(`<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>93</SN><DeviceID>` + gb10DeviceID +
 		`</DeviceID><SessionID>` + sessionID + `</SessionID><UpgradeResult>ERROR</UpgradeResult>` +
 		`<Firmware>V1.2.3</Firmware><UpgradeFailedReason>02</UpgradeFailedReason></Notify>`)
@@ -60,6 +68,21 @@ func TestDeviceUpgradeResultStoresFailureAfterRestart(t *testing.T) {
 	state, ok := api.UpgradeState(gb10DeviceID, sessionID)
 	if !ok || state.Status != "failed" || state.FailedReason != "02" {
 		t.Fatalf("upgrade failure state = %+v, %v", state, ok)
+	}
+}
+
+func TestDeviceUpgradeResultRejectsUnknownSession(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	sessionID := "upgrade-session-unknown-00000000001"
+	body := []byte(`<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>93</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><UpgradeResult>ERROR</UpgradeResult>` +
+		`<Firmware>V1.2.3</Firmware><UpgradeFailedReason>02</UpgradeFailedReason></Notify>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "upgrade-unknown", body, api.sipMessageDeviceUpgradeResult)
+	if !strings.Contains(response, "SIP/2.0 400 DeviceUpgradeResult session not found") {
+		t.Fatalf("unknown upgrade session response = %s", response)
+	}
+	if _, ok := api.UpgradeState(gb10DeviceID, sessionID); ok {
+		t.Fatal("unknown upgrade notification created state")
 	}
 }
 

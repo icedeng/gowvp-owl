@@ -218,6 +218,7 @@ func (g *GB28181API) cleanupRuntimeStates(now time.Time) {
 	g.cleanupQueryStates(now)
 	g.cleanupUpgradeStates(now)
 	g.cleanupSnapshotStates(now)
+	g.cleanupTaskStates(now)
 	g.cleanupCascadeTaskRoutes(now)
 }
 

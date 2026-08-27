@@ -6,7 +6,10 @@ import (
 	"gorm.io/gorm"
 )
 
-var _ ipc.Storer = DB{}
+var (
+	_ ipc.Storer                   = DB{}
+	_ ipc.GBTaskStateStoreProvider = DB{}
+)
 
 // DB Related business namespaces
 type DB struct {
@@ -40,6 +43,10 @@ func (d DB) DeviceHistory() *ipc.DeviceHistoryStore {
 	return ipc.NewDeviceHistoryStore(d.db, ipc.DeviceHistoryConfig{}, false)
 }
 
+func (d DB) GBTaskState() *ipc.GBTaskStateStore {
+	return ipc.NewGBTaskStateStore(d.db)
+}
+
 // AutoMigrate sync database
 func (d DB) AutoMigrate(ok bool) DB {
 	if !ok {
@@ -48,6 +55,7 @@ func (d DB) AutoMigrate(ok bool) DB {
 	if err := d.db.AutoMigrate(
 		new(ipc.Device),
 		new(ipc.Channel),
+		new(ipc.GBTaskStateRecord),
 	); err != nil {
 		panic(err)
 	}

@@ -80,7 +80,7 @@ go test ./... -count=1
 - 3.0 CruiseTrackListQuery/CruiseTrackQuery 的请求、结构化响应、轨迹编号参数和安全级联；
 - 3.0 附录 H `X-PreferredPath` 首跳消费/剩余路径转发和 `X-RoutePath` 响应前置；平台编码、重复路径、错误首跳、下级确认不匹配及路由环拒绝；不同指定路径的实时、回放和下载媒体源隔离及正确释放；
 - 3.0 DeviceConfig 命令使用 `SnapShotConfig`，ConfigDownload 查询应答使用标准 `SnapShot`，响应解析继续兼容厂商沿用的 `SnapShotConfig`；
-- 3.0 `DeviceUpgradeResult` 与 `UploadSnapShotFinished` 最终通知同时校验已鉴权设备、`SessionID` 和原目标通道，同一 NVR 的兄弟通道不能覆盖会话终态；
+- 3.0 `DeviceUpgradeResult` 与 `UploadSnapShotFinished` 最终通知同时校验已鉴权设备、`SessionID` 和原目标通道，同一 NVR 的兄弟通道不能覆盖会话终态；命令受理后、最终通知前重启进程，直连及级联下游会话必须从 `gb_task_states` 恢复，未知会话不得自行建档；级联最终通知还必须恢复并回送原发起上级；
 - 3.0 `VideoUploadNotify` 校验固定命令类型、正 SN、设备编码、时间和有限经纬度，未知跨设备目标不能写入查询状态；
 - 2.0/3.0 HomePosition 及 3.0 PTZPreciseCtrl 按标准边界拒绝无效参数，其中精准控制 Pan 为 `0..360`、Tilt 为 `-30..90`；PTZCmdParams 仅允许 3.0 且巡航轨迹名称不超过 32 字节；3.0 报警复位校验方式组合和按方式限定的报警类型，升级结果校验正 SN、结果枚举、固件和失败原因，抓拍完成通知校验正 SN、命令类型及最多 10 个文件标识；
 - A.4 ExtraInfo JSON 的整数、零值、数组和 20 位数值型编码保持原始精度；未知数值型对象编码同样拒绝转发；

@@ -2,9 +2,11 @@ package gbs
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -85,6 +87,11 @@ func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOut
 	if err != nil {
 		return nil, err
 	}
+	if _, exists, err := g.loadUpgradeState(ctx, in.DeviceID, sessionID); err != nil {
+		return nil, err
+	} else if exists {
+		return nil, errors.New("upgrade session_id already exists")
+	}
 
 	ipc, ok := g.svr.memoryStorer.Load(in.DeviceID)
 	if !ok || !ipc.IsOnlineNow() {
@@ -111,6 +118,14 @@ func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOut
 	if err != nil {
 		return nil, err
 	}
+	pendingState := UpgradeState{
+		SN: sn, DeviceID: in.DeviceID, ChannelID: in.ChannelID, SessionID: sessionID,
+		Status: "pending", Firmware: strings.TrimSpace(in.Firmware), UpdatedAt: time.Now(),
+	}
+	if err := g.storeUpgradeStateContext(ctx, pendingState); err != nil {
+		g.deleteUpgradeState(context.Background(), in.DeviceID, sessionID)
+		return nil, err
+	}
 
 	waitKey := fmt.Sprintf("%s:%d", in.DeviceID, sn)
 	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1), targetID: in.ChannelID}
@@ -119,9 +134,13 @@ func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOut
 
 	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
+		g.deleteUpgradeState(context.Background(), in.DeviceID, sessionID)
 		return nil, err
 	}
 	if _, err = sipResponseContext(ctx, tx); err != nil {
+		pendingState.Status = "response_timeout"
+		pendingState.UpdatedAt = time.Now()
+		_ = g.storeUpgradeStateContext(context.Background(), pendingState)
 		return nil, err
 	}
 
@@ -130,25 +149,36 @@ func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOut
 	select {
 	case resp := <-pending.wait:
 		result := strings.ToUpper(strings.TrimSpace(resp.Result))
+		pendingState.Result = result
+		pendingState.UpdatedAt = time.Now()
 		if result != "OK" {
-			g.storeUpgradeState(UpgradeState{
-				SN: sn, DeviceID: in.DeviceID, ChannelID: in.ChannelID, SessionID: sessionID,
-				Status: "rejected", Result: result, Firmware: strings.TrimSpace(in.Firmware), UpdatedAt: time.Now(),
-			})
+			pendingState.Status = "rejected"
+			if err := g.storeUpgradeStateContext(context.Background(), pendingState); err != nil {
+				return nil, err
+			}
 			return nil, fmt.Errorf("device upgrade failed: %s", resp.Result)
 		}
-		g.storeUpgradeState(UpgradeState{
-			SN: sn, DeviceID: in.DeviceID, ChannelID: in.ChannelID, SessionID: sessionID,
-			Status: "accepted", Result: result, Firmware: strings.TrimSpace(in.Firmware), UpdatedAt: time.Now(),
-		})
+		pendingState.Status = "accepted"
+		if err := g.storeUpgradeStateContext(context.Background(), pendingState); err != nil {
+			return nil, err
+		}
 		return &UpgradeOutput{
 			SN: sn, DeviceID: in.DeviceID, Channel: in.ChannelID, SessionID: sessionID, Result: result,
 		}, nil
 	case <-timer.C:
+		pendingState.Status = "response_timeout"
+		pendingState.UpdatedAt = time.Now()
+		_ = g.storeUpgradeStateContext(context.Background(), pendingState)
 		return nil, errors.New("wait device upgrade response timeout")
 	case <-ctx.Done():
+		pendingState.Status = "cancelled"
+		pendingState.UpdatedAt = time.Now()
+		_ = g.storeUpgradeStateContext(context.Background(), pendingState)
 		return nil, ctx.Err()
 	case <-g.serviceDone():
+		pendingState.Status = "cancelled"
+		pendingState.UpdatedAt = time.Now()
+		_ = g.storeUpgradeStateContext(context.Background(), pendingState)
 		return nil, ErrServiceStopped
 	}
 }
@@ -180,24 +210,48 @@ func upgradeStateKey(deviceID, sessionID string) string {
 }
 
 func (g *GB28181API) storeUpgradeState(state UpgradeState) {
-	if g == nil || strings.TrimSpace(state.DeviceID) == "" || strings.TrimSpace(state.SessionID) == "" {
-		return
+	if err := g.storeUpgradeStateContext(context.Background(), state); err != nil {
+		slog.Error("store upgrade state", "device_id", state.DeviceID, "session_id", state.SessionID, "err", err)
+	}
+}
+
+func (g *GB28181API) storeUpgradeStateContext(ctx context.Context, state UpgradeState) error {
+	state.DeviceID = strings.TrimSpace(state.DeviceID)
+	state.ChannelID = strings.TrimSpace(state.ChannelID)
+	state.SessionID = strings.TrimSpace(state.SessionID)
+	if g == nil || state.DeviceID == "" || state.SessionID == "" {
+		return errors.New("invalid upgrade state")
 	}
 	if state.UpdatedAt.IsZero() {
 		state.UpdatedAt = time.Now()
 	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("encode upgrade state: %w", err)
+	}
+	persisted, persistedOK, err := g.loadUpgradeState(ctx, state.DeviceID, state.SessionID)
+	if err != nil {
+		return err
+	}
 	g.upgradeStateMu.Lock()
+	defer g.upgradeStateMu.Unlock()
 	if g.upgradeStates == nil {
 		g.upgradeStates = make(map[string]UpgradeState)
 	}
 	key := upgradeStateKey(state.DeviceID, state.SessionID)
-	if current, ok := g.upgradeStates[key]; ok {
+	current, ok := g.upgradeStates[key]
+	if !ok && persistedOK {
+		current, ok = persisted, true
+	}
+	if ok {
 		// DeviceUpgradeResult 是标准定义的最终通知，优先级高于控制应答。
 		// 防止通知先到、迟到的 accepted/rejected 再覆盖 completed/failed。
 		if isUpgradeFinal(current.Status) && !isUpgradeFinal(state.Status) {
-			g.upgradeStateMu.Unlock()
-			return
+			return nil
 		}
+	}
+	if err := g.saveTaskState(ctx, gbTaskKindUpgrade, state.DeviceID, state.SessionID, payload, state.UpdatedAt); err != nil {
+		return err
 	}
 	g.upgradeStates[key] = state
 	if len(g.upgradeStates) > maxUpgradeStates {
@@ -211,7 +265,7 @@ func (g *GB28181API) storeUpgradeState(state UpgradeState) {
 		}
 		delete(g.upgradeStates, oldestKey)
 	}
-	g.upgradeStateMu.Unlock()
+	return nil
 }
 
 func isUpgradeFinal(status string) bool {
@@ -220,18 +274,73 @@ func isUpgradeFinal(status string) bool {
 
 // UpgradeState 返回指定设备和会话的最新升级状态。
 func (g *GB28181API) UpgradeState(deviceID, sessionID string) (UpgradeState, bool) {
-	if g == nil {
-		return UpgradeState{}, false
-	}
-	g.upgradeStateMu.Lock()
-	defer g.upgradeStateMu.Unlock()
-	key := upgradeStateKey(deviceID, sessionID)
-	state, ok := g.upgradeStates[key]
-	if ok && runtimeStateExpired(state.UpdatedAt, time.Now(), upgradeStateTTL) {
-		delete(g.upgradeStates, key)
+	state, ok, err := g.loadUpgradeState(context.Background(), deviceID, sessionID)
+	if err != nil {
+		slog.Error("load upgrade state", "device_id", deviceID, "session_id", sessionID, "err", err)
 		return UpgradeState{}, false
 	}
 	return state, ok
+}
+
+func (g *GB28181API) loadUpgradeState(ctx context.Context, deviceID, sessionID string) (UpgradeState, bool, error) {
+	if g == nil {
+		return UpgradeState{}, false, nil
+	}
+	key := upgradeStateKey(deviceID, sessionID)
+	g.upgradeStateMu.RLock()
+	state, ok := g.upgradeStates[key]
+	g.upgradeStateMu.RUnlock()
+	if ok && runtimeStateExpired(state.UpdatedAt, time.Now(), upgradeStateTTL) {
+		g.upgradeStateMu.Lock()
+		delete(g.upgradeStates, key)
+		g.upgradeStateMu.Unlock()
+		if err := g.deleteTaskState(ctx, gbTaskKindUpgrade, deviceID, sessionID); err != nil {
+			return UpgradeState{}, false, err
+		}
+		return UpgradeState{}, false, nil
+	}
+	if ok {
+		return state, true, nil
+	}
+	payload, found, err := g.loadTaskState(ctx, gbTaskKindUpgrade, strings.TrimSpace(deviceID), strings.TrimSpace(sessionID))
+	if err != nil || !found {
+		return UpgradeState{}, false, err
+	}
+	if err := json.Unmarshal(payload, &state); err != nil {
+		return UpgradeState{}, false, fmt.Errorf("decode upgrade state: %w", err)
+	}
+	if upgradeStateKey(state.DeviceID, state.SessionID) != key {
+		return UpgradeState{}, false, errors.New("persisted upgrade state identity mismatch")
+	}
+	if runtimeStateExpired(state.UpdatedAt, time.Now(), upgradeStateTTL) {
+		if err := g.deleteTaskState(ctx, gbTaskKindUpgrade, deviceID, sessionID); err != nil {
+			return UpgradeState{}, false, err
+		}
+		return UpgradeState{}, false, nil
+	}
+	g.upgradeStateMu.Lock()
+	if g.upgradeStates == nil {
+		g.upgradeStates = make(map[string]UpgradeState)
+	}
+	if current, exists := g.upgradeStates[key]; exists {
+		state = current
+	} else {
+		g.upgradeStates[key] = state
+	}
+	g.upgradeStateMu.Unlock()
+	return state, true, nil
+}
+
+func (g *GB28181API) deleteUpgradeState(ctx context.Context, deviceID, sessionID string) {
+	if g == nil {
+		return
+	}
+	g.upgradeStateMu.Lock()
+	delete(g.upgradeStates, upgradeStateKey(deviceID, sessionID))
+	g.upgradeStateMu.Unlock()
+	if err := g.deleteTaskState(ctx, gbTaskKindUpgrade, deviceID, sessionID); err != nil {
+		slog.Error("delete upgrade state", "device_id", deviceID, "session_id", sessionID, "err", err)
+	}
 }
 
 func (g *GB28181API) cleanupUpgradeStates(now time.Time) {
@@ -277,13 +386,18 @@ func (g *GB28181API) sipMessageDeviceUpgradeResult(ctx *sip.Context) {
 			return
 		}
 	}
-	state, ok := g.UpgradeState(ctx.DeviceID, msg.SessionID)
-	if ok && strings.TrimSpace(state.ChannelID) != "" && strings.TrimSpace(state.ChannelID) != msg.DeviceID {
-		ctx.String(400, "DeviceUpgradeResult session target mismatch")
+	state, ok, err := g.loadUpgradeState(context.Background(), ctx.DeviceID, msg.SessionID)
+	if err != nil {
+		ctx.String(500, "load DeviceUpgradeResult session failed")
 		return
 	}
 	if !ok {
-		state = UpgradeState{DeviceID: ctx.DeviceID, ChannelID: msg.DeviceID, SessionID: msg.SessionID}
+		ctx.String(400, "DeviceUpgradeResult session not found")
+		return
+	}
+	if ok && strings.TrimSpace(state.ChannelID) != "" && strings.TrimSpace(state.ChannelID) != msg.DeviceID {
+		ctx.String(400, "DeviceUpgradeResult session target mismatch")
+		return
 	}
 	state.SN = msg.SN
 	state.Result = msg.Result
@@ -295,7 +409,10 @@ func (g *GB28181API) sipMessageDeviceUpgradeResult(ctx *sip.Context) {
 	} else {
 		state.Status = "failed"
 	}
-	g.storeUpgradeState(state)
+	if err := g.storeUpgradeStateContext(context.Background(), state); err != nil {
+		ctx.String(500, "store DeviceUpgradeResult failed")
+		return
+	}
 	if forwarded, err := g.forwardCascadeTaskNotification(context.Background(), cascadeTaskUpgrade, ctx.DeviceID, msg.DeviceID, msg.SessionID, ctx.Request.Body()); forwarded && err != nil {
 		ctx.String(502, "forward DeviceUpgradeResult failed")
 		return

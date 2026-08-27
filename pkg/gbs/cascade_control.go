@@ -45,7 +45,9 @@ func (g *GB28181API) forwardCascadeDeviceControl(worker *cascadeWorker, body []b
 			var created bool
 			if request.DeviceUpgrade != nil {
 				fingerprint := cascadeUpgradeFingerprint(request.DeviceUpgrade)
-				route, created, err = g.registerCascadeTaskRoute(ctx, cascadeTaskUpgrade, worker, channel, request.DeviceID, request.DeviceUpgrade.SessionID, fingerprint)
+				route, created, err = g.registerCascadeTaskRoute(ctx, cascadeTaskUpgrade, worker, channel, request.DeviceID, request.DeviceUpgrade.SessionID, fingerprint, UpgradeState{
+					Firmware: strings.TrimSpace(request.DeviceUpgrade.Firmware),
+				})
 				if err == nil {
 					request.DeviceUpgrade.SessionID = route.downstreamSessionID
 				}
@@ -63,6 +65,9 @@ func (g *GB28181API) forwardCascadeDeviceControl(worker *cascadeWorker, body []b
 			if route != nil {
 				if created {
 					result, err = route.finishStart(result, err)
+					if stateErr := g.finishCascadeTaskState(ctx, route, result, err); stateErr != nil && err == nil {
+						err = stateErr
+					}
 				} else if route.isCompleted() {
 					result, err = ptzResultOK, nil
 				}

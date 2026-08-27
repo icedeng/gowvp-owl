@@ -43,7 +43,9 @@ func (g *GB28181API) forwardCascadeDeviceConfig(worker *cascadeWorker, body []by
 			if fingerprintErr != nil {
 				err = fingerprintErr
 			} else {
-				route, created, err = g.registerCascadeTaskRoute(ctx, cascadeTaskSnapshot, worker, channel, request.DeviceID, request.SnapShotConfig.SessionID, fingerprint)
+				route, created, err = g.registerCascadeTaskRoute(ctx, cascadeTaskSnapshot, worker, channel, request.DeviceID, request.SnapShotConfig.SessionID, fingerprint, SnapshotState{
+					ExpectedCount: request.SnapShotConfig.SnapNum,
+				})
 			}
 			if err == nil {
 				request.SnapShotConfig.SessionID = route.downstreamSessionID
@@ -62,6 +64,9 @@ func (g *GB28181API) forwardCascadeDeviceConfig(worker *cascadeWorker, body []by
 		if route != nil {
 			if created {
 				result, err = route.finishStart(result, err)
+				if stateErr := g.finishCascadeTaskState(ctx, route, result, err); stateErr != nil && err == nil {
+					err = stateErr
+				}
 			} else if route.isCompleted() {
 				result, err = "OK", nil
 			}
