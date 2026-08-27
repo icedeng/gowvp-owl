@@ -137,11 +137,25 @@ func TestCascadeBroadcastBuildsUpstreamSourceAndDownstreamSession(t *testing.T) 
 	inviteBody := string(upstreamInvite.Body())
 	for _, expected := range []string{
 		"m=audio 30000 RTP/AVP 96", "a=recvonly", "a=rtpmap:96 PS/90000",
-		"Subject: " + upstreamSourceID + ":", "," + testExposedChannelID + ":0",
+		"Subject: " + upstreamSourceID + ":", "," + testExposedChannelID + ":",
 	} {
 		if !strings.Contains(upstreamInvite.String(), expected) && !strings.Contains(inviteBody, expected) {
 			t.Fatalf("upstream source INVITE missing %q:\n%s", expected, upstreamInvite.String())
 		}
+	}
+	subjectHeaders := upstreamInvite.GetHeaders("Subject")
+	if len(subjectHeaders) != 1 {
+		t.Fatalf("upstream source INVITE Subject = %v", subjectHeaders)
+	}
+	subject := strings.TrimSpace(strings.TrimPrefix(subjectHeaders[0].String(), "Subject:"))
+	parts := strings.Split(subject, ",")
+	if len(parts) != 2 {
+		t.Fatalf("upstream source INVITE Subject = %q", subject)
+	}
+	sender := strings.SplitN(parts[0], ":", 2)
+	receiver := strings.SplitN(parts[1], ":", 2)
+	if len(sender) != 2 || len(receiver) != 2 || sender[1] == "" || sender[1] != receiver[1] {
+		t.Fatalf("upstream source INVITE Subject sequences = %q", subject)
 	}
 	if upstreamACK == nil || upstreamACK.Method() != sip.MethodACK {
 		t.Fatalf("upstream source ACK = %#v", upstreamACK)

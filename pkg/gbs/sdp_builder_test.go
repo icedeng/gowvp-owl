@@ -223,10 +223,21 @@ func TestBuildGBSDP30DoesNotLockAudioToG711(t *testing.T) {
 }
 
 func TestBuildGBInviteSubject(t *testing.T) {
-	got := buildGBInviteSubject("34020000001320000002", "0100000001", "34020000002000000001")
-	want := "34020000001320000002:0100000001,34020000002000000001:0"
-	if got != want {
-		t.Fatalf("buildGBInviteSubject() = %q, want %q", got, want)
+	tests := []struct {
+		name     string
+		sequence string
+	}{
+		{name: "live", sequence: "0100000001"},
+		{name: "history", sequence: "1100000002"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := buildGBInviteSubject("34020000001320000002", test.sequence, "34020000002000000001")
+			want := "34020000001320000002:" + test.sequence + ",34020000002000000001:" + test.sequence
+			if got != want {
+				t.Fatalf("buildGBInviteSubject() = %q, want %q", got, want)
+			}
+		})
 	}
 }
 

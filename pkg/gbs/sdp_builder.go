@@ -170,7 +170,8 @@ func buildGBSDP(in gbSDPInput) ([]byte, error) {
 }
 
 func buildGBInviteSubject(sourceID, sourceSequence, receiverID string) string {
-	return fmt.Sprintf("%s:%s,%s:0", sourceID, sourceSequence, receiverID)
+	// 附录 L 要求接收方序列号在同一接收者端同时不重复；发送方序列号本身就是当前媒体会话的唯一标识。
+	return fmt.Sprintf("%s:%s,%s:%s", sourceID, sourceSequence, receiverID, sourceSequence)
 }
 
 func validGBSSRC(value string) bool {
