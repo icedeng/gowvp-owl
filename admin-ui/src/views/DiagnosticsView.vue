@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { RouterLink, useRoute } from "vue-router";
 import {
   Activity,
   CheckCircle2,
@@ -40,28 +40,83 @@ const selected = computed(
     devices.value.find((item) => item.id === selectedId.value) ||
     devices.value[0]
 );
-const capabilities = computed(
-  () => new Set(selected.value?.ext?.gb_version_capabilities || [])
+const capabilityDefinitions = [
+  ["BasicParam 查询", "2014+", "config_query"],
+  ["BasicParam 写入", "2014+", "config_write"],
+  ["目录扩展字段", "2014+", "catalog_extension"],
+  ["目录订阅", "2011+", "directory_notify"],
+  ["多响应消息", "2014+", "multi_response"],
+  ["媒体结束通知", "2011+", "media_status"],
+  ["语音广播", "2014+", "voice_broadcast"],
+  ["语音对讲", "2011+（标准双流程为 2016+）", "voice_intercom"],
+  ["RTP over TCP", "2016+", "rtp_over_tcp"],
+  ["直接 TCP 下载", "仅 2014", "direct_tcp_download"],
+  ["下载倍速", "2014+", "download_speed"],
+  ["强制关键帧", "2016+", "iframe_control"],
+  ["拉框缩放", "2014+", "drag_zoom_control"],
+  ["预置位查询", "2014+", "preset_query"],
+  ["移动位置订阅", "2016+", "mobile_position"],
+  ["PTZ 精准位置", "仅 2022", "ptz_position"],
+  ["看守位控制", "2016+", "home_position"],
+  ["看守位查询", "仅 2022", "home_position_query"],
+  ["巡航轨迹查询", "仅 2022", "cruise_track_query"],
+  ["存储卡管理", "仅 2022", "sdcard"],
+  ["H.265 视频", "仅 2022", "h265"],
+  ["AAC 音频", "仅 2022", "aac"],
+  ["设备抓拍", "仅 2022", "snapshot"],
+  ["设备升级", "仅 2022", "upgrade"],
+  ["目标跟踪", "仅 2022", "target_track"],
+] as const;
+const fallbackCapabilitiesByVersion: Record<string, ReadonlySet<string>> = {
+  "1.0": new Set(["directory_notify", "media_status", "voice_intercom"]),
+  "1.1": new Set([
+    "config_query", "config_write", "catalog_extension", "directory_notify", "multi_response", "media_status",
+    "voice_broadcast", "voice_intercom", "direct_tcp_download", "download_speed", "drag_zoom_control", "preset_query",
+  ]),
+  "2.0": new Set([
+    "config_query", "config_write", "catalog_extension", "directory_notify", "multi_response", "media_status",
+    "voice_broadcast", "voice_intercom", "rtp_over_tcp", "download_speed", "iframe_control",
+    "drag_zoom_control", "preset_query", "mobile_position", "home_position",
+  ]),
+  "3.0": new Set([
+    "config_query", "config_write", "catalog_extension", "directory_notify", "multi_response", "media_status",
+    "voice_broadcast", "voice_intercom", "rtp_over_tcp", "download_speed", "iframe_control",
+    "drag_zoom_control", "preset_query", "mobile_position", "ptz_position", "home_position",
+    "home_position_query", "cruise_track_query", "sdcard", "h265", "aac", "snapshot", "upgrade", "target_track",
+  ]),
+};
+const protocolProfile = computed(() => {
+  const value = selected.value?.ext?.gb_effective_version || selected.value?.ext?.gb_version || "";
+  switch (String(value).trim()) {
+    case "1.0": case "2011": return "1.0";
+    case "1.1": case "2014": case "2011-supplement-2014": return "1.1";
+    case "2.0": case "2016": return "2.0";
+    case "3.0": case "2022": return "3.0";
+    default: return "";
+  }
+});
+const declaredCapabilities = computed<string[] | undefined>(() => {
+  const value = selected.value?.ext?.gb_version_capabilities;
+  return Array.isArray(value) ? value : undefined;
+});
+const capabilities = computed(() =>
+  new Set(declaredCapabilities.value || fallbackCapabilitiesByVersion[protocolProfile.value] || [])
+);
+const disabledCapabilities = computed(
+  () => new Set(selected.value?.ext?.gb_disabled_capabilities || [])
 );
 const matrix = computed(() =>
-  [
-    ["目录订阅", "2011+", "directory_notify"],
-    ["媒体结束通知", "2011+", "media_status"],
-    ["BasicParam", "2014+", "config_query"],
-    ["预置位查询", "2014+", "preset_query"],
-    ["语音广播", "2014+", "voice_broadcast"],
-    ["语音对讲", "2016+", "voice_intercom"],
-    ["强制关键帧", "2016+", "iframe_control"],
-    ["移动位置订阅", "2016+", "mobile_position"],
-    ["PTZ 精准位置订阅", "2022", "ptz_position"],
-    ["巡航轨迹查询", "2022", "cruise_track_query"],
-    ["存储卡管理", "2022", "sdcard"],
-    ["设备抓拍", "2022", "snapshot"],
-    ["设备升级", "2022", "upgrade"],
-  ].map(([name, version, key]) => ({
+  capabilityDefinitions.map(([name, version, key]) => ({
     name,
     version,
-    supported: capabilities.value.has(key) || capabilities.value.has(name),
+    state: disabledCapabilities.value.has(key)
+      ? "disabled"
+      : capabilities.value.has(key) ? "supported" : "unavailable",
+    label: disabledCapabilities.value.has(key)
+      ? "已禁用"
+      : capabilities.value.has(key)
+        ? declaredCapabilities.value ? "已声明" : "按版本支持"
+        : declaredCapabilities.value ? "未声明" : "不支持",
   }))
 );
 const registerRate = computed(() =>
@@ -206,7 +261,9 @@ onBeforeUnmount(() => window.clearTimeout(deviceSearchTimer));
           集中检查 GB 版本、能力矩阵、运行指标、最近不支持命令与探测结果。
         </p>
       </div>
-          <button
+      <div class="head-actions">
+        <RouterLink class="btn" to="/gb28181-capabilities"><ShieldCheck />四版本能力</RouterLink>
+        <button
             class="btn btn-primary"
             :disabled="running || !selected || !selected.is_online"
             :title="selected && !selected.is_online ? '设备离线时无法执行能力探测' : undefined"
@@ -216,6 +273,7 @@ onBeforeUnmount(() => window.clearTimeout(deviceSearchTimer));
           running ? "正在探测…" : "执行能力探测"
         }}
       </button>
+      </div>
     </header>
     <div v-if="loadError" class="warning-box mb-4" role="alert">
       <ShieldAlert /><span>{{ loadError }}</span
@@ -270,7 +328,7 @@ onBeforeUnmount(() => window.clearTimeout(deviceSearchTimer));
         当前环境没有 GB28181 设备。
       </div>
     </section>
-    <section class="grid three-col mb-4">
+    <section class="grid four-col mb-4">
       <article class="card card-pad">
         <div class="card-head">
           <div>
@@ -310,14 +368,36 @@ onBeforeUnmount(() => window.clearTimeout(deviceSearchTimer));
           {{ metricsAvailable ? `${metrics.direct_tcp_completed || 0} 完成 · ${metrics.direct_tcp_failed || 0} 失败` : "指标暂不可用" }}
         </p>
       </article>
+      <article class="card card-pad">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">附录 G 接入</h2>
+            <p class="card-sub">进程累计请求与当前在途</p>
+          </div>
+          <ShieldCheck />
+        </div>
+        <div class="metric-value">{{ metricsAvailable ? metrics.annex_g_inbound_accepted || 0 : "—" }}</div>
+        <p class="section-note mt-2">
+          {{ metricsAvailable ? `${metrics.annex_g_inbound_requests || 0} 请求 · ${metrics.annex_g_inbound_rejected || 0} 拒绝 · ${metrics.annex_g_inbound_rate_limited || 0} 限流 · ${metrics.annex_g_business_failures || 0} 业务失败 · ${metrics.annex_g_pending || 0} 在途` : "指标暂不可用" }}
+        </p>
+      </article>
     </section>
-    <section class="grid equal-col">
+    <section class="card card-pad verification-gates mb-4">
+      <div class="card-head"><div><h2 class="card-title">生产验收阶段门</h2><p class="card-sub">自动化证据之外，以下项目必须在目标环境留存真实结果。</p></div><ShieldAlert /></div>
+      <div class="gate-grid">
+        <div><span class="protocol-tag amber">媒体</span><strong>RTP / RTCP 抓包</strong><small>四版本 UDP、2016/2022 TCP、SSRC 与来源地址隔离。</small><RouterLink to="/media-servers">查看媒体边界</RouterLink></div>
+        <div><span class="protocol-tag amber">级联</span><strong>真实上下级与三级路径</strong><small>注册、订阅、查询、控制、媒体与报警全链路。</small><RouterLink to="/sip-settings#upstreams">查看上级配置</RouterLink></div>
+        <div><span class="protocol-tag amber">安全</span><strong>证书与信令摘要</strong><small>真实 CA/CRL、Date + Note 算法、编码与独立 seed。</small><RouterLink to="/sip-settings#security">查看安全配置</RouterLink></div>
+        <div><span class="protocol-tag amber">外部系统</span><strong>附录 G 互通与性能</strong><small>接处警、卡口、城市信息系统以及限流和审计。</small><RouterLink to="/gb28181-capabilities">查看业务审计</RouterLink></div>
+      </div>
+    </section>
+    <section class="grid equal-col diagnostics-comparison">
       <article class="card table-card">
         <div class="card-head">
           <div>
             <h2 class="card-title">版本能力矩阵</h2>
             <p class="card-sub">
-              来源：{{ selected?.ext?.gb_version_source || "未记录" }}
+              来源：{{ declaredCapabilities ? selected?.ext?.gb_version_source || "设备档案" : "按有效版本档案回退" }}
             </p>
           </div>
           <ShieldCheck />
@@ -338,9 +418,9 @@ onBeforeUnmount(() => window.clearTimeout(deviceSearchTimer));
                 <td>
                   <span
                     class="status"
-                    :class="row.supported ? 'online' : 'offline'"
-                    ><CheckCircle2 v-if="row.supported" /><XCircle v-else />{{
-                      row.supported ? "支持" : "未声明"
+                    :class="row.state === 'supported' ? 'online' : row.state === 'disabled' ? 'warning' : 'offline'"
+                    ><CheckCircle2 v-if="row.state === 'supported'" /><ShieldAlert v-else-if="row.state === 'disabled'" /><XCircle v-else />{{
+                      row.label
                     }}</span
                   >
                 </td>
@@ -381,6 +461,19 @@ onBeforeUnmount(() => window.clearTimeout(deviceSearchTimer));
             <dd>{{ selected?.ext?.gb_manual_version || "未设置" }}</dd>
           </div>
           <div>
+            <dt>版本更新时间</dt>
+            <dd>{{ selected?.ext?.gb_version_updated_at ? formatDate(selected.ext.gb_version_updated_at * 1000) : "—" }}</dd>
+          </div>
+          <div>
+            <dt>REGISTER 绑定</dt>
+            <dd>
+              <span
+                class="status"
+                :class="selected?.is_online ? 'online' : selected?.ext?.gb_registration_closed === false ? 'warning' : 'offline'"
+              >{{ selected?.is_online ? "有效" : selected?.ext?.gb_registration_closed === true ? "已关闭" : selected?.ext?.gb_registration_closed === false ? "有效但离线" : "未知" }}</span>
+            </dd>
+          </div>
+          <div>
             <dt>最后不支持命令</dt>
             <dd>
               {{ selected?.ext?.gb_last_unsupported_command || "暂无记录" }}
@@ -403,3 +496,12 @@ onBeforeUnmount(() => window.clearTimeout(deviceSearchTimer));
     </section>
   </main>
 </template>
+
+<style scoped>
+.diagnostics-comparison { align-items: start; }
+.gate-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.gate-grid > div { min-width: 0; padding: 11px; background: #f8fafc; border: 1px solid var(--line); border-radius: 8px; }
+.gate-grid strong, .gate-grid small, .gate-grid a { display: block; }.gate-grid strong { margin-top: 9px; color: var(--ink); font-size: 12px; }.gate-grid small { min-height: 3.2em; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.55; }.gate-grid a { margin-top: 9px; color: var(--blue); font-size: 11px; font-weight: 700; }
+@media (max-width: 920px) { .gate-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .gate-grid { grid-template-columns: 1fr; }.gate-grid small { min-height: 0; } }
+</style>

@@ -33,6 +33,7 @@ type StatisticKind = "heartbeat" | "register";
 const ui = useUiStore();
 const query = ref("");
 const status = ref("all");
+const version = ref("all");
 const addOpen = ref(false);
 const accessOpen = ref(false);
 const accessLoading = ref(false);
@@ -73,7 +74,7 @@ const pageCount = computed(() =>
   Math.max(1, Math.ceil(total.value / PAGE_SIZE))
 );
 const pagedRows = computed(() => rows.value);
-const hasFilters = computed(() => Boolean(query.value || status.value !== "all"));
+const hasFilters = computed(() => Boolean(query.value || status.value !== "all" || version.value !== "all"));
 const statisticTitle = computed(() =>
   statisticKind.value === "heartbeat" ? "心跳记录" : "注册记录"
 );
@@ -81,7 +82,30 @@ const statisticTitle = computed(() =>
 function resetFilters() {
   query.value = "";
   status.value = "all";
+  version.value = "all";
   currentPage.value = 1;
+}
+
+function protocolVersion(device: ApiDevice) {
+  const value = String(device.ext?.gb_effective_version || device.ext?.gb_version || "").trim().toLowerCase();
+  if (value === "2011" || value === "1.0") return "1.0";
+  if (value === "2014" || value === "1.1" || value === "2011-supplement-2014") return "1.1";
+  if (value === "2016" || value === "2.0") return "2.0";
+  if (value === "2022" || value === "3.0") return "3.0";
+  return "";
+}
+
+function registrationState(device: ApiDevice) {
+  if (device.is_online) {
+    return { label: "在线", tone: "online", note: "注册绑定有效" };
+  }
+  if (device.ext?.gb_registration_closed === true) {
+    return { label: "绑定已关闭", tone: "offline", note: "设备已注销或 REGISTER 有效期已结束" };
+  }
+  if (device.ext?.gb_registration_closed === false) {
+    return { label: "状态离线", tone: "warning", note: "注册绑定仍有效" };
+  }
+  return { label: "离线", tone: "offline", note: "旧档案未记录绑定状态" };
 }
 
 function deviceAddress(device: ApiDevice) {
@@ -129,7 +153,8 @@ function matchesFilters(device: ApiDevice) {
     (status.value === "online"
       ? device.is_online === true
       : device.is_online !== true);
-  return text.includes(query.value.trim().toLowerCase()) && matchStatus;
+  const matchVersion = version.value === "all" || protocolVersion(device) === version.value;
+  return text.includes(query.value.trim().toLowerCase()) && matchStatus && matchVersion;
 }
 
 async function probeServerFilters() {
@@ -174,7 +199,7 @@ async function load(refreshSummary = false) {
       }
     }
 
-    if (supportsServerFilters.value) {
+    if (supportsServerFilters.value && version.value === "all") {
       const response = await api.devices({
         page: currentPage.value,
         size: PAGE_SIZE,
@@ -187,8 +212,8 @@ async function load(refreshSummary = false) {
       rows.value = (response.data?.items || []).filter(isGbDevice);
       total.value = Number(response.data?.total ?? rows.value.length);
     } else {
-      if (!legacyRows.value.length || refreshSummary) {
-        const data = await collectPages(api.devices);
+      if (!legacyRows.value.length || refreshSummary || version.value !== "all") {
+        const data = await collectPages(api.devices, { type: "GB28181" });
         if (sequence !== loadSequence) return;
         legacyRows.value = data.items.filter(isGbDevice);
         deviceTotal.value = legacyRows.value.length;
@@ -272,7 +297,7 @@ async function addDevice() {
 
 onMounted(() => load(true));
 onBeforeUnmount(() => window.clearTimeout(searchTimer));
-watch([query, status], () => {
+watch([query, status, version], () => {
   currentPage.value = 1;
   window.clearTimeout(searchTimer);
   searchTimer = window.setTimeout(() => void load(), 280);
@@ -340,6 +365,13 @@ watch([query, status], () => {
           <option value="online">在线</option>
           <option value="offline">离线</option>
         </select>
+        <select v-model="version" class="select" aria-label="按协议版本筛选">
+          <option value="all">全部版本</option>
+          <option value="1.0">2011（1.0）</option>
+          <option value="1.1">2014（1.1）</option>
+          <option value="2.0">2016（2.0）</option>
+          <option value="3.0">2022（3.0）</option>
+        </select>
         <button
           v-if="hasFilters"
           type="button"
@@ -391,8 +423,11 @@ watch([query, status], () => {
               </td>
               <td data-label="通道数">{{ device.channels || device.children?.length || 0 }} 路</td>
               <td data-label="状态">
-                <span class="status" :class="device.is_online ? 'online' : 'offline'">
-                  {{ device.is_online ? "在线" : "离线" }}
+                <span class="stacked-value">
+                  <span class="status" :class="registrationState(device).tone">
+                    {{ registrationState(device).label }}
+                  </span>
+                  <small>{{ registrationState(device).note }}</small>
                 </span>
               </td>
               <td data-label="统计">

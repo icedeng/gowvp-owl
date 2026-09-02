@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Activity, Camera, CircleGauge, Film, MonitorCog, RadioTower, Search, Server, Siren, Truck, Video } from '@lucide/vue'
+import { Activity, Camera, CircleGauge, Film, MonitorCog, RadioTower, Search, Server, ShieldEllipsis, Siren, Truck, Video } from '@lucide/vue'
 import { useUiStore } from '../stores/ui'
 
 const ui = useUiStore()
@@ -23,6 +23,7 @@ const items = [
   { label: '检查媒体节点', hint: '平台运维', path: '/media-servers', icon: Server },
   { label: '查看系统状态', hint: '资源与 API 指标', path: '/system-status', icon: Activity },
   { label: '调整播放器参数', hint: '协议 / 解码 / 缓冲', path: '/player-settings', icon: MonitorCog },
+  { label: '查看国标能力', hint: '2011 / 2014 / 2016 / 2022', path: '/gb28181-capabilities', icon: ShieldEllipsis },
 ]
 const filtered = computed(() => items.filter((item) => `${item.label}${item.hint}`.toLowerCase().includes(query.value.toLowerCase())))
 

@@ -1,9 +1,9 @@
 import { http } from './http'
 import type {
   ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord,
-  ApiChannel as Channel, DeviceExt, GbMetrics, HealthInfo, MediaServer, MonthlyStats,
-  CascadePlatformStatus, PlayResult, SipAccessInfo, SipConfig, TimelineRange, VersionCheck, Zone,
-  ResourceStats,
+  ApiChannel as Channel, DeviceExt, GbMetrics, GBHistoryDownloadState, GBHistoryStartOutput, GBOperationOutput, GBSnapshotState, GBSubscriptionState, GBUpgradeOutput, GBUpgradeState, HealthInfo, MediaServer, MonthlyStats,
+  CascadePlatformStatus, PlayResult, SipAccessInfo, SipConfig, SipSecretStatus, TimelineRange, VersionCheck, Zone,
+  ResourceStats, SnapshotRefreshOutput, AnnexGAlarmAudit, AnnexGDefenceAudit, AnnexGDefenceState, AnnexGAuditPage,
 } from '../types/api'
 
 export type ListParams = Record<string, string | number | boolean | undefined>
@@ -86,9 +86,12 @@ export const api = {
   deviceHistory: (id: string, kind: 'heartbeat' | 'register', params?: ListParams) => http.get<ApiPage<DeviceHistoryRecord>>(`/devices/${encodeURIComponent(id)}/history`, { params: { ...params, kind } }),
   timeSync: (id: string) => http.post(`/devices/${encodeURIComponent(id)}/time_sync`),
   subscribe: (id: string, body: Record<string, unknown>) => http.post(`/devices/${encodeURIComponent(id)}/subscribe`, body),
+  subscriptionStates: (id: string) => http.get<{ items?: GBSubscriptionState[]; total?: number }>(`/devices/${encodeURIComponent(id)}/subscriptions`),
   optionsProbe: (id: string, body: Record<string, unknown> = {}) => http.post(`/devices/${encodeURIComponent(id)}/options_probe`, body),
   devicePtzProbe: (id: string, body: Record<string, unknown> = {}) => http.post(`/devices/${encodeURIComponent(id)}/ptz_probe`, body),
   gbConfig: (id: string, body: Record<string, unknown>) => http.post(`/devices/${encodeURIComponent(id)}/gb/config`, body),
+  gbControl: (id: string, body: Record<string, unknown>) => http.post<GBOperationOutput>(`/devices/${encodeURIComponent(id)}/gb/control`, body),
+  gbQuery: (id: string, body: Record<string, unknown>) => http.post<GBOperationOutput>(`/devices/${encodeURIComponent(id)}/gb/query`, body),
   gbDiagnostics: (id: string) => http.get<Record<string, unknown>>(`/devices/${encodeURIComponent(id)}/gb/diagnostics`),
   gbA4Snapshot: (id: string, params?: ListParams) => http.get<Record<string, unknown>>(`/devices/${encodeURIComponent(id)}/gb/a4_snapshot`, { params }),
 
@@ -103,7 +106,8 @@ export const api = {
   editChannel: (id: string, body: Record<string, unknown>) => http.put<ApiChannel>(`/channels/${encodeURIComponent(id)}`, body),
   deleteChannel: (id: string) => http.delete<ApiChannel>(`/channels/${encodeURIComponent(id)}`),
   play: (id: string) => http.post<PlayResult>(`/channels/${encodeURIComponent(id)}/play`),
-  snapshot: (id: string, body: Record<string, unknown> = {}) => http.post<{ link?: string; method?: string }>(`/channels/${encodeURIComponent(id)}/snapshot`, body),
+  snapshot: (id: string, body: Record<string, unknown> = {}) => http.post<SnapshotRefreshOutput>(`/channels/${encodeURIComponent(id)}/snapshot`, body),
+  snapshotState: (id: string, sessionId: string) => http.get<GBSnapshotState>(`/channels/${encodeURIComponent(id)}/snapshot/${encodeURIComponent(sessionId)}/status`),
   snapshotImage: (id: string, cacheBust?: number) => withQuery(
     withToken(apiUrl(`/channels/${encodeURIComponent(id)}/snapshot`)),
     cacheBust ? { t: cacheBust } : undefined,
@@ -117,11 +121,15 @@ export const api = {
   addZone: (id: string, body: Zone) => http.post<{ items?: Zone[] }>(`/channels/${encodeURIComponent(id)}/zones`, body),
   voiceStart: (id: string, body: Record<string, unknown> = {}) => http.post(`/channels/${encodeURIComponent(id)}/voice/start`, body),
   voiceStop: (id: string, body: Record<string, unknown> = {}) => http.post(`/channels/${encodeURIComponent(id)}/voice/stop`, body),
-  historyStart: (id: string, body: Record<string, unknown>) => http.post(`/channels/${encodeURIComponent(id)}/history/start`, body),
+  historyStart: (id: string, body: Record<string, unknown>) => http.post<GBHistoryStartOutput>(`/channels/${encodeURIComponent(id)}/history/start`, body),
   historyStop: (id: string, body: Record<string, unknown>) => http.post(`/channels/${encodeURIComponent(id)}/history/stop`, body),
   historyControl: (id: string, body: Record<string, unknown>) => http.post(`/channels/${encodeURIComponent(id)}/history/control`, body),
-  historyStatus: (id: string) => http.get(`/channels/${encodeURIComponent(id)}/history/status`),
+  historyStatus: (id: string) => http.get<GBHistoryDownloadState>(`/channels/${encodeURIComponent(id)}/history/status`),
+  directDownloadState: (sessionId: string) => http.get<GBHistoryDownloadState>(`/gb28181/downloads/${encodeURIComponent(sessionId)}`),
+  cancelDirectDownload: (sessionId: string) => http.delete(`/gb28181/downloads/${encodeURIComponent(sessionId)}`),
   queryDeviceRecords: (id: string, body: Record<string, unknown>) => http.post<Record<string, unknown>>(`/channels/${encodeURIComponent(id)}/records/query`, body),
+  upgradeDevice: (id: string, body: Record<string, unknown>) => http.post<GBUpgradeOutput>(`/channels/${encodeURIComponent(id)}/upgrade`, body),
+  upgradeDeviceState: (id: string, sessionId: string) => http.get<GBUpgradeState>(`/channels/${encodeURIComponent(id)}/upgrade/${encodeURIComponent(sessionId)}`),
 
   events: (params?: ListParams) => http.get<ApiPage<ApiEvent>>('/events', { params }),
   event: (id: number | string) => http.get<ApiEvent>(`/events/${id}`),
@@ -138,9 +146,12 @@ export const api = {
 
   mediaServers: (params?: ListParams) => http.get<ApiPage<MediaServer>>('/media_servers', { params }),
   editMediaServer: (id: string, body: Record<string, unknown>) => http.put<MediaServer>(`/media_servers/${encodeURIComponent(id)}`, body),
-  configInfo: () => http.get<{ sip?: SipConfig; access_info?: SipAccessInfo }>('/configs/info'),
+  configInfo: () => http.get<{ sip?: SipConfig; sip_secrets?: SipSecretStatus; access_info?: SipAccessInfo }>('/configs/info'),
   updateSip: (body: SipConfig) => http.put('/configs/info/sip', body),
   cascadeStatuses: () => http.get<{ items?: CascadePlatformStatus[] }>('/gb28181/cascade/status'),
+  annexGAlarms: (params?: ListParams) => http.get<AnnexGAuditPage<AnnexGAlarmAudit>>('/gb28181/annex-g/alarms', { params }),
+  annexGDefences: (params?: ListParams) => http.get<AnnexGAuditPage<AnnexGDefenceState>>('/gb28181/annex-g/defences', { params }),
+  annexGDefenceAudits: (params?: ListParams) => http.get<AnnexGAuditPage<AnnexGDefenceAudit>>('/gb28181/annex-g/defence-audits', { params }),
 }
 
 export function apiUrl(path: string) {

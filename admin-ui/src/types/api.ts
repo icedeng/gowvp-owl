@@ -19,6 +19,7 @@ export interface DeviceExt {
   gb_last_unsupported_command?: string
   gb_last_unsupported_version?: string
   gb_last_unsupported_updated_at?: number
+  gb_registration_closed?: boolean
   enabled_ai?: boolean
   record_mode?: 'always' | 'ai' | 'none' | string
   zones?: Zone[]
@@ -65,7 +66,6 @@ export interface ApiDevice {
   keepalives?: number
   expires?: number
   channels?: number
-  password?: string
   username?: string
   created_at?: string
   updated_at?: string
@@ -104,6 +104,109 @@ export interface ApiChannel {
   has_recording?: boolean
   ptz_capable?: boolean
   ptz_verified?: boolean
+}
+
+export interface GBOperationOutput {
+  sn?: number
+  cmd_type?: string
+  device_id?: string
+  target_id?: string
+  result?: string
+  xml?: string
+  data?: unknown
+  appendix_a4?: unknown[]
+  incomplete?: Record<string, unknown>
+}
+
+export interface GBSubscriptionState {
+  device_id: string
+  target_id: string
+  event: 'alarm' | 'catalog' | 'mobile_position' | 'ptz_position' | string
+  status: 'active' | 'refreshing' | 'recovering' | 'blocked' | 'terminating' | 'expired' | string
+  expires: number
+  expires_at?: string
+  refresh_at?: string
+  persisted?: boolean
+  updated_at?: string
+  next_attempt_at?: string
+  last_error?: string
+  retry_blocked?: boolean
+  termination_reason?: string
+  refreshing?: boolean
+  cancel_pending?: boolean
+  notify_cseq?: number
+  notify_expires_at?: string
+  start_alarm_priority?: string
+  end_alarm_priority?: string
+  alarm_method?: string
+  alarm_type?: string
+  start_alarm_time?: string
+  end_alarm_time?: string
+  start_time?: string
+  end_time?: string
+  interval?: number
+}
+
+export interface GBUpgradeOutput {
+  sn?: number
+  device_id?: string
+  channel_id?: string
+  session_id: string
+  result?: string
+}
+
+export interface GBUpgradeState extends GBUpgradeOutput {
+  status: string
+  firmware?: string
+  failed_reason?: string
+  updated_at?: string
+}
+
+export interface GBSnapshotState {
+  device_id?: string
+  channel_id?: string
+  cover_key?: string
+  session_id: string
+  status: string
+  expected_count?: number
+  received_count?: number
+  file_ids?: string[]
+  updated_at?: string
+}
+
+export interface SnapshotRefreshOutput {
+  link?: string
+  method?: string
+  attempts?: string[]
+  session_id?: string
+}
+
+export interface GBHistoryDownloadState {
+  session_id: string
+  device_id?: string
+  channel_id?: string
+  transport?: 'rtp' | 'direct_tcp' | string
+  status: string
+  received?: number
+  file_size?: number
+  file_size_known?: boolean
+  bytes_speed?: number
+  progress_percent?: number
+  progress_known?: boolean
+  approximate?: boolean
+  size_verified?: boolean
+  output?: string
+  sha256?: string
+  started_at?: string
+  updated_at?: string
+  completed_at?: string
+  end_reason?: string
+  error?: string
+}
+
+export interface GBHistoryStartOutput {
+  msg?: string
+  download?: GBHistoryDownloadState
 }
 
 export interface ApiEvent {
@@ -195,21 +298,116 @@ export interface SipConfig {
   tls_key?: string
   tls_client_ca?: string
   tls_require_client_cert?: boolean
-  register_certificate_auth?: {
-    enabled?: boolean
-    required?: boolean
-    platform_cert?: string
-    platform_key?: string
-    device_ca?: string
-    crl?: string
-    device_certificates?: Record<string, string>
-  }
+  register_redirect?: string
+  register_certificate_auth?: SipRegisterCertificateAuth
+  signal_digest?: SipSignalDigest
   strict_source_check?: boolean
   require_message_auth?: boolean
   ptz_weak_confirm?: boolean
   device_history?: { max_records?: number; max_days?: number }
-  direct_tcp_download?: Record<string, unknown>
+  direct_tcp_download?: SipDirectTcpDownload
+  annex_g?: SipAnnexG
+  // GB/T 28181 9.4 本域接警 SIP 客户端，默认关闭。
+  alarm_receivers?: SipAlarmReceiver[]
   upstreams?: SipUpstream[]
+  secret_clears?: SipSecretClearInput
+}
+
+export type DurationValue = number | string
+
+export interface SipRegisterCertificateAuth {
+  enabled?: boolean
+  required?: boolean
+  platform_cert?: string
+  platform_key?: string
+  device_ca?: string
+  crl?: string
+  device_certificates?: Record<string, string>
+}
+
+export interface SipSignalDigest {
+  enabled?: boolean
+  required?: boolean
+  seed?: string
+  algorithm?: 'MD5' | 'SHA-1' | 'SHA-256' | 'SM3' | string
+  encoding?: 'base64' | 'hex' | string
+  accept_legacy_hex?: boolean
+  window?: DurationValue
+}
+
+export interface SipDirectTcpDownload {
+  enabled?: boolean
+  cascade_relay_enabled?: boolean
+  device_allowlist?: string[]
+  storage_dir?: string
+  retain_days?: number
+  offer_port?: number
+  relay_listen_ip?: string
+  relay_advertise_ip?: string
+  relay_port_start?: number
+  relay_port_end?: number
+  max_file_size?: number
+  global_concurrency?: number
+  device_concurrency?: number
+  dial_timeout?: DurationValue
+  first_byte_timeout?: DurationValue
+  idle_timeout?: DurationValue
+  total_timeout?: DurationValue
+  allow_address_mismatch?: boolean
+  allowed_address_cidrs?: string[]
+}
+
+export interface SipAnnexGSystem {
+  id: string
+  role: 'emergency_command_system' | 'tollgate_system' | 'city_information_system' | string
+  version: '1.0' | '1.1' | '2.0' | string
+  password?: string
+  signal_digest_seed?: string
+  realm?: string
+  address: string
+  transport?: 'udp' | 'tcp' | 'tls' | string
+  source_cidrs?: string[]
+  allow_insecure_transport?: boolean
+  tls_ca?: string
+  tls_server_name?: string
+  tls_cert?: string
+  tls_key?: string
+}
+
+export interface SipAnnexG {
+  enabled?: boolean
+  max_send_records?: number
+  inbound_rate?: number
+  inbound_burst?: number
+  pending_ttl?: DurationValue
+  max_pending?: number
+  systems?: SipAnnexGSystem[]
+}
+
+export interface SipSecretClearInput {
+  signal_digest_seed?: boolean
+  upstream_passwords?: string[]
+  upstream_signal_digest_seeds?: string[]
+  annex_g_passwords?: string[]
+  annex_g_signal_digest_seeds?: string[]
+}
+
+export interface SipPeerSecretStatus {
+  password_configured?: boolean
+  signal_digest_seed_configured?: boolean
+}
+
+export interface SipSecretStatus {
+  signal_digest_seed_configured?: boolean
+  upstreams?: Record<string, SipPeerSecretStatus>
+  annex_g_systems?: Record<string, SipPeerSecretStatus>
+}
+
+export interface SipAlarmReceiver {
+  name: string
+  enabled: boolean
+  device_id: string
+  source_ids?: string[]
 }
 
 export interface SipUpstream {
@@ -258,6 +456,7 @@ export interface SipUpstream {
   version: "1.0" | "1.1" | "2.0" | "3.0"
   expires: number
   keepalive_interval: number
+  alarm_dispatch_enabled?: boolean
   shared_channels?: string[]
   channel_id_map?: Record<string, string>
   media_allowed_cidrs?: string[]
@@ -329,6 +528,49 @@ export interface GbMetrics {
   direct_tcp_failed?: number
   direct_tcp_cancelled?: number
   direct_tcp_bytes?: number
+  annex_g_inbound_requests?: number
+  annex_g_inbound_accepted?: number
+  annex_g_inbound_rejected?: number
+  annex_g_inbound_rate_limited?: number
+  annex_g_business_failures?: number
+  annex_g_pending?: number
+}
+
+export interface AnnexGAlarmAudit {
+  id: number
+  kind: 'mp' | 'ecs' | 'tgs' | string
+  alarm_no?: string
+  alarm_time?: string
+  device_id?: string
+  alarm_class?: string
+  alarm_priority?: string
+  alarm_method?: string
+  alarm_address?: string
+  tollgate_id?: string
+  car_plate?: string
+  plate_type?: string
+  payload?: Record<string, unknown>
+  created_at?: string
+}
+
+export interface AnnexGDefenceState {
+  id: number
+  tollgate_id?: string
+  car_plate?: string
+  plate_type?: string
+  defence_type?: string
+  active?: boolean
+  defence_time?: string
+  updated_at?: string
+}
+
+export interface AnnexGDefenceAudit extends AnnexGDefenceState {
+  created_at?: string
+}
+
+export interface AnnexGAuditPage<T> extends ApiPage<T> {
+  page?: number
+  page_size?: number
 }
 
 export interface VersionCheck {

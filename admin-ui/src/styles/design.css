@@ -593,6 +593,21 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .channel-recording-summary small { color: var(--muted); font-size: 10px; }
 .channel-recording-summary strong { margin-top: 5px; overflow: hidden; color: var(--ink-strong); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .channel-recording-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 14px; }
+.history-session-card { grid-column: 1 / -1; }
+.history-session-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.history-session-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.history-control-panel { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: 10px; padding: 12px; margin-top: 14px; background: var(--panel-2); border-radius: 9px; }
+.history-progress { padding: 13px; margin-top: 14px; background: #f8fafc; border: 1px solid var(--line); border-radius: 9px; }
+.history-progress-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.history-progress-head strong, .history-progress-head small { display: block; }
+.history-progress-head small { margin-top: 3px; color: var(--muted); overflow-wrap: anywhere; }
+.history-progress-track { height: 7px; margin: 12px 0; overflow: hidden; background: #e6ebf2; border-radius: 999px; }
+.history-progress-track > span { display: block; height: 100%; background: var(--blue); border-radius: inherit; transform-origin: left center; transition: transform .2s ease-out; }
+.history-progress dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.history-progress dl > div { min-width: 0; padding: 8px 10px; background: white; border-radius: 7px; }
+.history-progress dt { color: var(--muted); font-size: 10px; }
+.history-progress dd { margin-top: 4px; color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; }
+.history-output { margin-top: 10px; color: var(--muted); overflow-wrap: anywhere; }
 .channel-recording-list { display: grid; }
 .channel-recording-list > div { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); }
 .channel-recording-list > div:last-child { border-bottom: 0; }
@@ -641,6 +656,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .device-pulse-lead small { margin-top: 4px; color: #b5c5d9; font-size: 11px; }
 .pulse-led { width: 9px; height: 9px; flex: 0 0 auto; margin: 0 !important; overflow: visible !important; background: #45d59c; border-radius: 50%; box-shadow: 0 0 0 5px rgba(69, 213, 156, .13); }
 .device-pulse-lead.offline .pulse-led { background: #ef6b72; box-shadow: 0 0 0 5px rgba(239, 107, 114, .13); }
+.device-pulse-lead.warning .pulse-led { background: #f0a43b; box-shadow: 0 0 0 5px rgba(240, 164, 59, .14); }
 .device-workbench { display: grid; grid-template-columns: 230px minmax(0, 1fr); align-items: start; gap: var(--detail-gap); }
 .device-workbench-nav { position: sticky; top: 78px; display: grid; gap: 10px; }
 .detail-task-nav { padding: 7px; }
@@ -928,6 +944,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .channel-live-grid > .channel-control-stack { grid-column: 2; grid-template-columns: 1fr; }
   .channel-recording-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .channel-recording-grid > article:last-child { grid-column: 1 / -1; }
+  .history-session-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .history-control-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 900px) {
@@ -984,6 +1002,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .channel-ai-summary { position: static; }
   .channel-recording-grid { grid-template-columns: 1fr; }
   .channel-recording-grid > article:last-child { grid-column: auto; }
+  .history-session-card { grid-column: auto; }
+  .history-session-fields, .history-control-panel, .history-progress dl { grid-template-columns: 1fr; }
   .channel-detail-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 

@@ -1,7 +1,13 @@
+import { nextTick } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 
 const router = createRouter({
   history: createWebHashHistory(),
+  scrollBehavior(to, _from, savedPosition) {
+    if (savedPosition) return savedPosition
+    if (to.hash) return { el: to.hash, top: 80 }
+    return { top: 0 }
+  },
   routes: [
     { path: '/login', name: 'login', component: () => import('../views/LoginView.vue'), meta: { public: true } },
     {
@@ -25,6 +31,7 @@ const router = createRouter({
         { path: 'system-status', name: 'system-status', component: () => import('../views/SystemStatusView.vue'), meta: { title: '系统状态', group: '平台运维' } },
         { path: 'player-settings', name: 'player-settings', component: () => import('../views/PlayerSettingsView.vue'), meta: { title: '播放器设置', group: '平台运维' } },
         { path: 'sip-settings', name: 'sip-settings', component: () => import('../views/SipSettingsView.vue'), meta: { title: 'SIP 设置', group: '平台运维' } },
+        { path: 'gb28181-capabilities', name: 'gb28181-capabilities', component: () => import('../views/GBProtocolCapabilitiesView.vue'), meta: { title: '国标能力', group: '平台运维' } },
         { path: 'diagnostics', name: 'diagnostics', component: () => import('../views/DiagnosticsView.vue'), meta: { title: '协议诊断', group: '平台运维' } },
         { path: 'upgrade', name: 'upgrade', component: () => import('../views/UpgradeView.vue'), meta: { title: '版本升级', group: '平台运维' } },
         { path: 'account', name: 'account', component: () => import('../views/AccountView.vue'), meta: { title: '账号安全', group: '个人设置' } },
@@ -39,6 +46,17 @@ router.beforeEach((to) => {
   if (!to.meta.public && !authenticated) return { name: 'login', query: { redirect: to.fullPath } }
   if (to.name === 'login' && authenticated) return { name: 'overview' }
   return true
+})
+
+router.afterEach(async (to) => {
+  if (!to.hash) return
+  await nextTick()
+  requestAnimationFrame(() => {
+    const target = document.getElementById(to.hash.slice(1))
+    if (!target) return
+    if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1')
+    target.focus({ preventScroll: true })
+  })
 })
 
 export default router

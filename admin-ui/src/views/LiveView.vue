@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import {
   Aperture,
   Camera,
@@ -26,6 +26,7 @@ import StreamPlayer from "../components/StreamPlayer.vue";
 
 const ui = useUiStore();
 const route = useRoute();
+const router = useRouter();
 const selected = ref("");
 const layout = ref("4");
 const muted = ref(false);
@@ -266,6 +267,11 @@ async function snapshot() {
   } finally {
     actionLoading.value = "";
   }
+}
+
+function openVoiceControls() {
+  if (!selectedChannel.value) return;
+  void router.push({ name: "channel-detail", params: { id: selectedChannel.value.id } });
 }
 
 async function toggleAI() {
@@ -721,13 +727,9 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
                     selectedChannel?.id
                 ) !== 'GB28181'
               "
-              @click="
-                action('开始对讲', () =>
-                  api.voiceStart(selectedChannel!.id, { mode: 'talk' })
-                )
-              "
+              @click="openVoiceControls"
             >
-              <Mic />对讲
+              <Mic />配置语音
             </button>
           </div>
           <label class="toggle-row"

@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview"
   },
