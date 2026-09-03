@@ -1,11 +1,15 @@
 package gbs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +20,11 @@ import (
 const (
 	maxSnapshotStates = 1024
 	snapshotStateTTL  = 7 * 24 * time.Hour
+)
+
+var (
+	ErrSnapshotSessionNotFound  = errors.New("snapshot session not found")
+	ErrSnapshotCoverKeyMismatch = errors.New("snapshot cover key mismatch")
 )
 
 type SnapshotState struct {
@@ -85,15 +94,25 @@ func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetI
 		target = channel
 	}
 
-	sn := int32(g.nextControlSN())
+	sn, waitKey, pending, releaseOperation := g.reservePendingDeviceConfig(ctx, deviceID, targetID)
+	defer releaseOperation()
+	defer g.pendingDeviceConfig.CompareAndDelete(waitKey, pending)
 	sessionID := sip.RandString(32)
 	initialState := SnapshotState{
 		DeviceID: deviceID, ChannelID: targetID, CoverKey: coverKey, SessionID: sessionID,
 		Status: "pending", ExpectedCount: 1, UpdatedAt: time.Now(),
 	}
-	if err := g.storeSnapshotStateContext(ctx, initialState); err != nil {
-		g.deleteSnapshotState(deviceID, sessionID)
-		return nil, err
+	var stateErr error
+	if !pending.operation.Deliver(func() {
+		stateErr = g.storeSnapshotStateContext(ctx, initialState)
+	}) {
+		return nil, pending.operation.Cause()
+	}
+	if stateErr != nil {
+		if deleteErr := g.deleteSnapshotStateContext(g.serviceContext(), deviceID, sessionID); deleteErr != nil {
+			return nil, errors.Join(stateErr, deleteErr)
+		}
+		return nil, stateErr
 	}
 	body := NewDeviceConfig(targetID).SetSN(sn).SetSnapShotConfig(&SnapShot{
 		SnapNum:   1,
@@ -102,19 +121,21 @@ func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetI
 		SessionID: sessionID,
 	}).Marshal()
 
-	waitKey := buildPendingDeviceConfigKey(deviceID, int(sn))
-	pending := &pendingDeviceConfig{wait: make(chan *DeviceConfigResponse, 1), targetID: targetID}
-	g.pendingDeviceConfig.Store(waitKey, pending)
-	defer g.pendingDeviceConfig.Delete(waitKey)
-
-	tx, err := g.svr.wrapRequestContext(ctx, target, sip.MethodMessage, &sip.ContentTypeXML, body)
+	requestCtx := pending.operation.Context(ctx)
+	tx, err := g.svr.wrapRequestContext(requestCtx, target, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
-		g.deleteSnapshotState(deviceID, sessionID)
+		err = pending.operation.ErrorOr(err)
+		if deleteErr := g.deleteSnapshotStateContext(g.serviceContext(), deviceID, sessionID); deleteErr != nil {
+			return nil, errors.Join(err, deleteErr)
+		}
 		return nil, err
 	}
-	if _, err = sipResponseContext(ctx, tx); err != nil {
-		g.transitionSnapshotState(deviceID, sessionID, "failed")
-		return nil, err
+	if _, err = sipResponseContext(requestCtx, tx); err != nil {
+		cause := pending.operation.ErrorOr(err)
+		if errors.Is(cause, ErrDeviceNotExist) {
+			return nil, g.persistSnapshotCancellationError(deviceID, sessionID, cause)
+		}
+		return nil, g.persistSnapshotOutcomeError(deviceID, sessionID, "failed", cause)
 	}
 
 	timer := time.NewTimer(8 * time.Second)
@@ -122,7 +143,16 @@ func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetI
 	select {
 	case resp := <-pending.wait:
 		if strings.EqualFold(strings.TrimSpace(resp.Result), "OK") {
-			state, exists, stateErr := g.transitionSnapshotStateContext(context.Background(), deviceID, sessionID, "accepted")
+			var (
+				state    SnapshotState
+				exists   bool
+				stateErr error
+			)
+			if !pending.operation.Deliver(func() {
+				state, exists, stateErr = g.transitionSnapshotStateContext(g.taskPersistenceContext(), deviceID, sessionID, "accepted")
+			}) {
+				return nil, g.persistSnapshotCancellationError(deviceID, sessionID, pending.operation.Cause())
+			}
 			if stateErr != nil {
 				return nil, stateErr
 			}
@@ -131,18 +161,42 @@ func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetI
 			}
 			return &state, nil
 		}
-		g.transitionSnapshotState(deviceID, sessionID, "rejected")
-		return nil, fmt.Errorf("snapshot config failed: %s", resp.Result)
+		return nil, g.persistSnapshotOperationOutcome(pending.operation, deviceID, sessionID, "rejected", fmt.Errorf("snapshot config failed: %s", resp.Result))
 	case <-g.serviceDone():
-		g.transitionSnapshotState(deviceID, sessionID, "cancelled")
-		return nil, ErrServiceStopped
-	case <-ctx.Done():
-		g.transitionSnapshotState(deviceID, sessionID, "cancelled")
-		return nil, ctx.Err()
+		return nil, g.persistSnapshotOutcomeError(deviceID, sessionID, "cancelled", ErrServiceStopped)
+	case <-pending.operation.Done():
+		return nil, g.persistSnapshotCancellationError(deviceID, sessionID, pending.operation.Cause())
 	case <-timer.C:
-		g.transitionSnapshotState(deviceID, sessionID, "response_timeout")
-		return nil, fmt.Errorf("wait snapshot response timeout")
+		return nil, g.persistSnapshotOperationOutcome(pending.operation, deviceID, sessionID, "response_timeout", errors.New("wait snapshot response timeout"))
 	}
+}
+
+func (g *GB28181API) persistSnapshotOperationOutcome(operation *pendingDeviceOperation, deviceID, sessionID, status string, cause error) error {
+	var result error
+	if operation.Deliver(func() {
+		result = g.persistSnapshotOutcomeError(deviceID, sessionID, status, cause)
+	}) {
+		return result
+	}
+	return g.persistSnapshotCancellationError(deviceID, sessionID, operation.Cause())
+}
+
+func (g *GB28181API) persistSnapshotCancellationError(deviceID, sessionID string, cause error) error {
+	if errors.Is(cause, ErrDeviceNotExist) {
+		if err := g.deleteSnapshotStateContext(g.serviceContext(), deviceID, sessionID); err != nil {
+			return errors.Join(cause, err)
+		}
+		return cause
+	}
+	return g.persistSnapshotOutcomeError(deviceID, sessionID, "cancelled", cause)
+}
+
+func (g *GB28181API) persistSnapshotOutcomeError(deviceID, sessionID, status string, cause error) error {
+	_, _, err := g.transitionSnapshotStateContext(g.taskPersistenceContext(), deviceID, sessionID, status)
+	if err != nil {
+		return errors.Join(cause, err)
+	}
+	return cause
 }
 
 func snapshotStateKey(deviceID, sessionID string) string {
@@ -222,15 +276,22 @@ func (g *GB28181API) storeSnapshotStateMemoryLocked(state SnapshotState) {
 }
 
 func (g *GB28181API) deleteSnapshotState(deviceID, sessionID string) {
-	if g == nil {
-		return
-	}
-	g.snapshotStateMu.Lock()
-	delete(g.snapshotStates, snapshotStateKey(deviceID, sessionID))
-	g.snapshotStateMu.Unlock()
-	if err := g.deleteTaskState(context.Background(), gbTaskKindSnapshot, deviceID, sessionID); err != nil {
+	if err := g.deleteSnapshotStateContext(context.Background(), deviceID, sessionID); err != nil {
 		slog.Error("delete snapshot state", "device_id", deviceID, "session_id", sessionID, "err", err)
 	}
+}
+
+func (g *GB28181API) deleteSnapshotStateContext(ctx context.Context, deviceID, sessionID string) error {
+	if g == nil {
+		return nil
+	}
+	g.snapshotStateMu.Lock()
+	defer g.snapshotStateMu.Unlock()
+	if err := g.deleteTaskState(ctx, gbTaskKindSnapshot, deviceID, sessionID); err != nil {
+		return err
+	}
+	delete(g.snapshotStates, snapshotStateKey(deviceID, sessionID))
+	return nil
 }
 
 func (g *GB28181API) transitionSnapshotState(deviceID, sessionID, status string) (SnapshotState, bool) {
@@ -277,12 +338,23 @@ func (g *GB28181API) transitionSnapshotStateContext(ctx context.Context, deviceI
 }
 
 func (g *GB28181API) SnapshotState(deviceID, sessionID string) (SnapshotState, bool) {
-	state, ok, err := g.loadSnapshotState(context.Background(), deviceID, sessionID)
+	state, ok, err := g.SnapshotStateContext(context.Background(), deviceID, sessionID)
 	if err != nil {
 		slog.Error("load snapshot state", "device_id", deviceID, "session_id", sessionID, "err", err)
 		return SnapshotState{}, false
 	}
 	return state, ok
+}
+
+// SnapshotStateContext 返回抓拍状态，并保留持久化读取错误供 API 层区分故障与会话不存在。
+func (g *GB28181API) SnapshotStateContext(ctx context.Context, deviceID, sessionID string) (SnapshotState, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return SnapshotState{}, false, err
+	}
+	return g.loadSnapshotState(ctx, deviceID, sessionID)
 }
 
 func (g *GB28181API) loadSnapshotState(ctx context.Context, deviceID, sessionID string) (SnapshotState, bool, error) {
@@ -294,27 +366,26 @@ func (g *GB28181API) loadSnapshotState(ctx context.Context, deviceID, sessionID 
 	state, ok := g.snapshotStates[key]
 	g.snapshotStateMu.RUnlock()
 	if ok && runtimeStateExpired(state.UpdatedAt, time.Now(), snapshotStateTTL) {
-		g.snapshotStateMu.Lock()
-		delete(g.snapshotStates, key)
-		g.snapshotStateMu.Unlock()
-		if err := g.deleteTaskState(ctx, gbTaskKindSnapshot, deviceID, sessionID); err != nil {
+		if err := g.deleteSnapshotStateContext(ctx, deviceID, sessionID); err != nil {
 			return SnapshotState{}, false, err
 		}
 		return SnapshotState{}, false, nil
 	}
 	if !ok {
-		payload, found, err := g.loadTaskState(ctx, gbTaskKindSnapshot, strings.TrimSpace(deviceID), strings.TrimSpace(sessionID))
+		deviceID = strings.TrimSpace(deviceID)
+		sessionID = strings.TrimSpace(sessionID)
+		payload, found, err := g.loadTaskState(ctx, gbTaskKindSnapshot, deviceID, sessionID)
 		if err != nil || !found {
 			return SnapshotState{}, false, err
 		}
 		if err := json.Unmarshal(payload, &state); err != nil {
-			return SnapshotState{}, false, fmt.Errorf("decode snapshot state: %w", err)
+			return g.quarantineSnapshotState(ctx, deviceID, sessionID, payload, fmt.Errorf("decode snapshot state: %w", err))
 		}
-		if snapshotStateKey(state.DeviceID, state.SessionID) != key {
-			return SnapshotState{}, false, fmt.Errorf("persisted snapshot state identity mismatch")
+		if err := validatePersistedSnapshotState(state, deviceID, sessionID, time.Now()); err != nil {
+			return g.quarantineSnapshotState(ctx, deviceID, sessionID, payload, err)
 		}
 		if runtimeStateExpired(state.UpdatedAt, time.Now(), snapshotStateTTL) {
-			if err := g.deleteTaskState(ctx, gbTaskKindSnapshot, deviceID, sessionID); err != nil {
+			if err := g.deleteSnapshotStateContext(ctx, deviceID, sessionID); err != nil {
 				return SnapshotState{}, false, err
 			}
 			return SnapshotState{}, false, nil
@@ -333,6 +404,71 @@ func (g *GB28181API) loadSnapshotState(ctx context.Context, deviceID, sessionID 
 	}
 	state.FileIDs = append([]string(nil), state.FileIDs...)
 	return state, ok, nil
+}
+
+func validatePersistedSnapshotState(state SnapshotState, deviceID, sessionID string, now time.Time) error {
+	if snapshotStateKey(state.DeviceID, state.SessionID) != snapshotStateKey(deviceID, sessionID) {
+		return errors.New("persisted snapshot state identity mismatch")
+	}
+	if !isGBDeviceIdentifier(strings.TrimSpace(state.DeviceID)) ||
+		(strings.TrimSpace(state.ChannelID) != "" && !isGBDeviceIdentifier(strings.TrimSpace(state.ChannelID))) ||
+		validateGBSessionID(strings.TrimSpace(state.SessionID)) != nil {
+		return errors.New("persisted snapshot state contains invalid identifiers")
+	}
+	switch state.Status {
+	case "pending", "accepted", "uploading", "response_timeout", "cancelled", "completed", "failed", "partial_failed", "rejected":
+	default:
+		return fmt.Errorf("persisted snapshot state has invalid status %q", state.Status)
+	}
+	if state.ExpectedCount < 0 || state.ExpectedCount > 10 || state.ReceivedCount < 0 ||
+		(state.ExpectedCount > 0 && state.ReceivedCount > state.ExpectedCount) || len(state.FileIDs) > 10 {
+		return errors.New("persisted snapshot state contains invalid counters")
+	}
+	if state.UpdatedAt.IsZero() || state.UpdatedAt.After(now.Add(5*time.Minute)) {
+		return errors.New("persisted snapshot state has invalid update time")
+	}
+	seen := make(map[string]struct{}, len(state.FileIDs))
+	targetID := strings.TrimSpace(state.ChannelID)
+	if targetID == "" {
+		targetID = strings.TrimSpace(state.DeviceID)
+	}
+	for _, fileID := range state.FileIDs {
+		fileID = strings.TrimSpace(fileID)
+		if !validSnapshotFileID(fileID, targetID) {
+			return errors.New("persisted snapshot state contains an invalid file identifier")
+		}
+		if _, duplicate := seen[fileID]; duplicate {
+			return errors.New("persisted snapshot state contains duplicate file identifiers")
+		}
+		seen[fileID] = struct{}{}
+	}
+	return nil
+}
+
+func (g *GB28181API) quarantineSnapshotState(ctx context.Context, deviceID, sessionID string, invalidPayload []byte, cause error) (SnapshotState, bool, error) {
+	slog.Warn("remove invalid persisted snapshot state", "device_id", deviceID, "session_id", sessionID, "err", cause)
+	key := snapshotStateKey(deviceID, sessionID)
+	g.snapshotStateMu.Lock()
+	defer g.snapshotStateMu.Unlock()
+	if current, ok := g.snapshotStates[key]; ok {
+		current.FileIDs = append([]string(nil), current.FileIDs...)
+		return current, true, nil
+	}
+	currentPayload, found, err := g.loadTaskState(ctx, gbTaskKindSnapshot, deviceID, sessionID)
+	if err != nil {
+		return SnapshotState{}, false, errors.Join(cause, err)
+	}
+	if !found {
+		return SnapshotState{}, false, nil
+	}
+	if !bytes.Equal(currentPayload, invalidPayload) {
+		return SnapshotState{}, false, fmt.Errorf("persisted snapshot state changed while quarantining: %w", cause)
+	}
+	if err := g.deleteTaskState(ctx, gbTaskKindSnapshot, deviceID, sessionID); err != nil {
+		return SnapshotState{}, false, errors.Join(cause, err)
+	}
+	delete(g.snapshotStates, key)
+	return SnapshotState{}, false, nil
 }
 
 func (g *GB28181API) persistSnapshotState(ctx context.Context, state SnapshotState) error {
@@ -361,51 +497,91 @@ func (g *GB28181API) cleanupSnapshotStates(now time.Time) {
 
 // ValidateSnapshotUpload 校验公开上传回调只能写入平台已创建的抓拍会话。
 func (g *GB28181API) ValidateSnapshotUpload(deviceID, coverKey, sessionID string) error {
-	state, ok := g.SnapshotState(deviceID, sessionID)
-	if !ok {
-		return fmt.Errorf("snapshot session not found")
+	return g.ValidateSnapshotUploadContext(context.Background(), deviceID, coverKey, sessionID)
+}
+
+// ValidateSnapshotUploadContext 区分无效会话与任务存储故障，避免把可重试故障误报为客户端错误。
+func (g *GB28181API) ValidateSnapshotUploadContext(ctx context.Context, deviceID, coverKey, sessionID string) error {
+	if g == nil {
+		return errors.New("GB28181 server is unavailable")
 	}
-	if state.CoverKey != "" && strings.TrimSpace(coverKey) != state.CoverKey {
-		return fmt.Errorf("snapshot cover key mismatch")
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	deviceID = strings.TrimSpace(deviceID)
+	coverKey = strings.TrimSpace(coverKey)
+	sessionID = strings.TrimSpace(sessionID)
+	state, ok, err := g.loadSnapshotState(ctx, deviceID, sessionID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrSnapshotSessionNotFound
+	}
+	if state.CoverKey != "" && coverKey != state.CoverKey {
+		return ErrSnapshotCoverKeyMismatch
 	}
 	return nil
 }
 
 func (g *GB28181API) MarkSnapshotUploaded(deviceID, sessionID string) {
-	if g == nil {
-		return
+	if err := g.MarkSnapshotUploadedContext(g.taskPersistenceContext(), deviceID, sessionID); err != nil {
+		slog.Error("mark snapshot uploaded", "device_id", deviceID, "session_id", sessionID, "err", err)
 	}
-	if _, ok, err := g.loadSnapshotState(context.Background(), deviceID, sessionID); err != nil || !ok {
-		if err != nil {
-			slog.Error("load snapshot state before upload", "device_id", deviceID, "session_id", sessionID, "err", err)
-		}
-		return
+}
+
+// MarkSnapshotUploadedContext 在持久化成功后提交抓拍上传计数，调用方可据此决定是否确认上传成功。
+func (g *GB28181API) MarkSnapshotUploadedContext(ctx context.Context, deviceID, sessionID string) error {
+	if g == nil {
+		return errors.New("GB28181 server is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	deviceID = strings.TrimSpace(deviceID)
+	sessionID = strings.TrimSpace(sessionID)
+	if deviceID == "" || sessionID == "" {
+		return errors.New("snapshot device_id and session_id are required")
+	}
+	if _, ok, err := g.loadSnapshotState(ctx, deviceID, sessionID); err != nil {
+		return err
+	} else if !ok {
+		return ErrSnapshotSessionNotFound
 	}
 	key := snapshotStateKey(deviceID, sessionID)
 	now := time.Now()
 	g.snapshotStateMu.Lock()
+	defer g.snapshotStateMu.Unlock()
 	state, ok := g.snapshotStates[key]
 	if !ok {
-		g.snapshotStateMu.Unlock()
-		return
+		return ErrSnapshotSessionNotFound
 	}
 	if runtimeStateExpired(state.UpdatedAt, now, snapshotStateTTL) {
 		delete(g.snapshotStates, key)
-		g.snapshotStateMu.Unlock()
-		return
+		return errors.New("snapshot session expired")
+	}
+	// 设备可能在 HTTP 应答丢失后重传同一张图片。抓拍状态没有从上传请求中
+	// 获得标准文件标识时，以请求张数为上限保持计数幂等；完成通知仍以设备
+	// 提供的 SnapShotFileID 列表判定最终结果。
+	if state.ExpectedCount > 0 && state.ReceivedCount >= state.ExpectedCount {
+		return nil
 	}
 	state.ReceivedCount++
 	if !isSnapshotTerminal(state.Status) {
 		state.Status = "uploading"
 	}
 	state.UpdatedAt = now
-	if err := g.persistSnapshotState(context.Background(), state); err != nil {
-		slog.Error("persist uploaded snapshot state", "device_id", deviceID, "session_id", sessionID, "err", err)
-		g.snapshotStateMu.Unlock()
-		return
+	if err := g.persistSnapshotState(ctx, state); err != nil {
+		return err
 	}
 	g.storeSnapshotStateMemoryLocked(state)
-	g.snapshotStateMu.Unlock()
+	return nil
 }
 
 func isSnapshotTerminal(status string) bool {
@@ -419,6 +595,9 @@ func isSnapshotTerminal(status string) bool {
 
 // sipMessageSnapshotFinished 处理 2022 A.2.5.7 图像抓拍传输完成通知。
 func (g *GB28181API) sipMessageSnapshotFinished(ctx *sip.Context) {
+	if !requireMessageNotification(ctx, "UploadSnapShotFinished") {
+		return
+	}
 	if err := g.requireGBVersionAtLeast(ctx.DeviceID, gbVersion2022, "图像抓拍完成通知(A.2.5.7)"); err != nil {
 		ctx.String(400, err.Error())
 		return
@@ -426,6 +605,10 @@ func (g *GB28181API) sipMessageSnapshotFinished(ctx *sip.Context) {
 	var msg snapshotFinishedNotify
 	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
 		ctx.String(400, ErrXMLDecode.Error())
+		return
+	}
+	if err := validateSnapshotFinishedStructure(ctx.Request.Body()); err != nil {
+		ctx.String(400, err.Error())
 		return
 	}
 	msg.DeviceID = strings.TrimSpace(msg.DeviceID)
@@ -454,7 +637,25 @@ func (g *GB28181API) sipMessageSnapshotFinished(ctx *sip.Context) {
 			fileIDs = append(fileIDs, fileID)
 		}
 	}
-	state, ok, err := g.loadSnapshotState(context.Background(), ctx.DeviceID, msg.SessionID)
+	binding, hasBinding := admittedInboundRegistrationBinding(ctx)
+	var unlockCommit func()
+	var err error
+	if hasBinding {
+		unlockCommit, err = g.lockInboundDeviceStateCommit(ctx.DeviceID, binding)
+	} else {
+		unlockCommit, err = g.lockInboundDeviceStateCommit(ctx.DeviceID)
+	}
+	if err != nil {
+		if errors.Is(err, errInboundDeviceGenerationChanged) {
+			ctx.String(200, "OK")
+			return
+		}
+		ctx.String(403, err.Error())
+		return
+	}
+	defer unlockCommit()
+	requestCtx := g.serviceContext()
+	state, ok, err := g.loadSnapshotState(requestCtx, ctx.DeviceID, msg.SessionID)
 	if err != nil {
 		ctx.String(500, "load UploadSnapShotFinished session failed")
 		return
@@ -477,28 +678,60 @@ func (g *GB28181API) sipMessageSnapshotFinished(ctx *sip.Context) {
 		ctx.String(400, "UploadSnapShotFinished session not found")
 		return
 	}
-	state.FileIDs = fileIDs
-	state.UpdatedAt = now
+	candidate := state
+	candidate.FileIDs = fileIDs
+	candidate.UpdatedAt = now
 	switch {
-	case len(state.FileIDs) == 0:
-		state.Status = "failed"
-	case state.ExpectedCount > 0 && len(state.FileIDs) < state.ExpectedCount:
-		state.Status = "partial_failed"
+	case len(candidate.FileIDs) == 0:
+		candidate.Status = "failed"
+	case candidate.ExpectedCount > 0 && len(candidate.FileIDs) < candidate.ExpectedCount:
+		candidate.Status = "partial_failed"
 	default:
-		state.Status = "completed"
+		candidate.Status = "completed"
 	}
-	if err := g.persistSnapshotState(context.Background(), state); err != nil {
+	if isSnapshotTerminal(state.Status) {
+		if !sameSnapshotFinalOutcome(state, candidate) {
+			g.snapshotStateMu.Unlock()
+			ctx.String(409, "UploadSnapShotFinished conflicts with completed session")
+			return
+		}
+		g.snapshotStateMu.Unlock()
+	} else if err := g.persistSnapshotState(requestCtx, candidate); err != nil {
 		g.snapshotStateMu.Unlock()
 		ctx.String(500, "store UploadSnapShotFinished failed")
 		return
+	} else {
+		g.storeSnapshotStateMemoryLocked(candidate)
+		g.snapshotStateMu.Unlock()
 	}
-	g.storeSnapshotStateMemoryLocked(state)
-	g.snapshotStateMu.Unlock()
-	if forwarded, err := g.forwardCascadeTaskNotification(context.Background(), cascadeTaskSnapshot, ctx.DeviceID, msg.DeviceID, msg.SessionID, ctx.Request.Body()); forwarded && err != nil {
+	if forwarded, err := g.forwardCascadeTaskNotification(requestCtx, cascadeTaskSnapshot, ctx.DeviceID, msg.DeviceID, msg.SessionID, ctx.Request.Body()); forwarded && err != nil {
 		ctx.String(502, "forward UploadSnapShotFinished failed")
 		return
 	}
-	ctx.String(200, "OK")
+	respondErr := ctx.RespondString(200, "OK")
+	ctx.Abort()
+	if respondErr != nil {
+		// 最终状态和级联转发必须先可靠完成，才能决定 200/5xx；
+		// 写失败保留幂等终态，等待同一 SIP 事务重新进入 handler。
+		slog.Error("acknowledge UploadSnapShotFinished failed", "device_id", ctx.DeviceID, "session_id", msg.SessionID, "err", respondErr)
+	}
+}
+
+func sameSnapshotFinalOutcome(current, candidate SnapshotState) bool {
+	if current.Status != candidate.Status || len(current.FileIDs) != len(candidate.FileIDs) {
+		return false
+	}
+	counts := make(map[string]int, len(current.FileIDs))
+	for _, fileID := range current.FileIDs {
+		counts[fileID]++
+	}
+	for _, fileID := range candidate.FileIDs {
+		if counts[fileID] == 0 {
+			return false
+		}
+		counts[fileID]--
+	}
+	return true
 }
 
 func validSnapshotFileID(value, deviceID string) bool {
@@ -535,7 +768,7 @@ func (g *GB28181API) buildSnapshotUploadURL(deviceID, coverKey, sessionID string
 		if strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://") {
 			return strings.TrimRight(host, "/") + path
 		}
-		return fmt.Sprintf("http://%s:%d%s", host, port, path)
+		return "http://" + net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port)) + path
 	}
 	return "http://127.0.0.1:15123" + path
 }

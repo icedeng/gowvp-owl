@@ -3,6 +3,7 @@ package gbs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -19,9 +20,15 @@ type gbCascadeTaskRouteStorer interface {
 	CleanupGBCascadeTaskRoutes(context.Context, time.Time, int) error
 }
 
+type gbCascadeTaskRouteUpstreamDeleter interface {
+	DeleteGBCascadeTaskRouteByUpstream(context.Context, string, string, string, string) error
+}
+
 type gbCascadeTaskRouteAvailability interface {
 	GBCascadeTaskRouteAvailable() bool
 }
+
+var errUnsupportedCascadeTaskRouteSchema = errors.New("unsupported persisted cascade task route schema")
 
 type cascadeTaskRoutePersistentState struct {
 	SchemaVersion       int                  `json:"schema_version"`
@@ -64,13 +71,14 @@ func (route *cascadeTaskRoute) persistentState() cascadeTaskRoutePersistentState
 }
 
 func (route *cascadeTaskRoute) persistentStateLocked() cascadeTaskRoutePersistentState {
+	updatedAt := route.lastUpdatedAt()
 	state := cascadeTaskRoutePersistentState{
 		SchemaVersion: cascadeTaskRouteSchemaVersion,
 		Kind:          route.kind, DownstreamDeviceID: route.downstreamDeviceID,
 		DownstreamTargetID: route.downstreamTargetID, ExposedID: route.exposedID,
 		UpstreamSessionID: route.upstreamSessionID, DownstreamSessionID: route.downstreamSessionID,
 		RequestFingerprint: route.requestFingerprint, Identity: route.identity.clone(),
-		LocalGatewayID: route.localGatewayID, CreatedAt: route.createdAt, UpdatedAt: time.Now(),
+		LocalGatewayID: route.localGatewayID, CreatedAt: route.createdAt, UpdatedAt: updatedAt,
 		StartResult: route.startResult, Completed: route.completed,
 	}
 	state.PlatformName = route.upstreamPlatform
@@ -91,7 +99,20 @@ func (route *cascadeTaskRoute) persistentStateLocked() cascadeTaskRoutePersisten
 }
 
 func (g *GB28181API) persistCascadeTaskRoute(ctx context.Context, route *cascadeTaskRoute) error {
-	return g.persistCascadeTaskRouteState(ctx, route.persistentState())
+	if route == nil {
+		return nil
+	}
+	// 与最终通知持有同一把锁直到数据库写入结束，防止较早的 pending
+	// 快照在 completed 墓碑之后迟到落库并把终态回退。
+	route.notifyMu.Lock()
+	defer route.notifyMu.Unlock()
+	state := route.persistentStateLocked()
+	state.UpdatedAt = time.Now()
+	if err := g.persistCascadeTaskRouteState(ctx, state); err != nil {
+		return err
+	}
+	route.setUpdatedAt(state.UpdatedAt)
+	return nil
 }
 
 func (g *GB28181API) persistCascadeTaskRouteState(ctx context.Context, state cascadeTaskRoutePersistentState) error {
@@ -110,7 +131,7 @@ func (g *GB28181API) persistCascadeTaskRouteState(ctx context.Context, state cas
 	defer cancel()
 	if err := store.SaveGBCascadeTaskRoute(
 		storeCtx, state.Kind, state.PlatformName, state.DownstreamDeviceID, state.DownstreamSessionID,
-		state.ExposedID, state.UpstreamSessionID, payload, state.CreatedAt,
+		state.ExposedID, state.UpstreamSessionID, payload, state.UpdatedAt,
 	); err != nil {
 		return fmt.Errorf("save cascade task route: %w", err)
 	}
@@ -124,8 +145,18 @@ func (g *GB28181API) loadCascadeTaskRouteStateByDownstream(ctx context.Context, 
 	}
 	storeCtx, cancel := taskStateContext(ctx)
 	defer cancel()
-	payload, ok, err := store.LoadGBCascadeTaskRouteByDownstream(storeCtx, kind, strings.TrimSpace(deviceID), strings.TrimSpace(sessionID))
-	return decodeCascadeTaskRouteState(payload, ok, err)
+	deviceID = strings.TrimSpace(deviceID)
+	sessionID = strings.TrimSpace(sessionID)
+	payload, ok, err := store.LoadGBCascadeTaskRouteByDownstream(storeCtx, kind, deviceID, sessionID)
+	state, found, decodeErr := decodeCascadeTaskRouteState(payload, ok, err)
+	if decodeErr == nil || !found || errors.Is(decodeErr, errUnsupportedCascadeTaskRouteSchema) {
+		return state, found, decodeErr
+	}
+	if deleteErr := store.DeleteGBCascadeTaskRoute(storeCtx, kind, deviceID, sessionID); deleteErr != nil {
+		return cascadeTaskRoutePersistentState{}, true, errors.Join(decodeErr, fmt.Errorf("delete invalid cascade task route: %w", deleteErr))
+	}
+	slog.Warn("removed invalid persisted cascade task route", "direction", "downstream", "kind", kind, "device_id", deviceID, "session_id", sessionID, "err", decodeErr)
+	return cascadeTaskRoutePersistentState{}, false, nil
 }
 
 func (g *GB28181API) loadCascadeTaskRouteStateByUpstream(ctx context.Context, kind, platformName, exposedID, sessionID string) (cascadeTaskRoutePersistentState, bool, error) {
@@ -135,10 +166,25 @@ func (g *GB28181API) loadCascadeTaskRouteStateByUpstream(ctx context.Context, ki
 	}
 	storeCtx, cancel := taskStateContext(ctx)
 	defer cancel()
+	platformName = strings.TrimSpace(platformName)
+	exposedID = strings.TrimSpace(exposedID)
+	sessionID = strings.TrimSpace(sessionID)
 	payload, ok, err := store.LoadGBCascadeTaskRouteByUpstream(
-		storeCtx, kind, strings.TrimSpace(platformName), strings.TrimSpace(exposedID), strings.TrimSpace(sessionID),
+		storeCtx, kind, platformName, exposedID, sessionID,
 	)
-	return decodeCascadeTaskRouteState(payload, ok, err)
+	state, found, decodeErr := decodeCascadeTaskRouteState(payload, ok, err)
+	if decodeErr == nil || !found || errors.Is(decodeErr, errUnsupportedCascadeTaskRouteSchema) {
+		return state, found, decodeErr
+	}
+	deleter, ok := store.(gbCascadeTaskRouteUpstreamDeleter)
+	if !ok {
+		return cascadeTaskRoutePersistentState{}, true, fmt.Errorf("delete cascade task route by upstream identity is unavailable")
+	}
+	if deleteErr := deleter.DeleteGBCascadeTaskRouteByUpstream(storeCtx, kind, platformName, exposedID, sessionID); deleteErr != nil {
+		return cascadeTaskRoutePersistentState{}, true, errors.Join(decodeErr, fmt.Errorf("delete invalid cascade task route: %w", deleteErr))
+	}
+	slog.Warn("removed invalid persisted cascade task route", "direction", "upstream", "kind", kind, "platform", platformName, "session_id", sessionID, "err", decodeErr)
+	return cascadeTaskRoutePersistentState{}, false, nil
 }
 
 func decodeCascadeTaskRouteState(payload []byte, found bool, loadErr error) (cascadeTaskRoutePersistentState, bool, error) {
@@ -159,12 +205,19 @@ func decodeCascadeTaskRouteState(payload []byte, found bool, loadErr error) (cas
 }
 
 func validateCascadeTaskRoutePersistentState(state cascadeTaskRoutePersistentState) error {
-	if state.SchemaVersion != cascadeTaskRouteSchemaVersion ||
-		(state.Kind != cascadeTaskUpgrade && state.Kind != cascadeTaskSnapshot) ||
+	if state.SchemaVersion > cascadeTaskRouteSchemaVersion {
+		return fmt.Errorf("%w: %d", errUnsupportedCascadeTaskRouteSchema, state.SchemaVersion)
+	}
+	if state.SchemaVersion != cascadeTaskRouteSchemaVersion {
+		return fmt.Errorf("invalid persisted cascade task route schema: %d", state.SchemaVersion)
+	}
+	latestAllowed := time.Now().Add(5 * time.Minute)
+	if (state.Kind != cascadeTaskUpgrade && state.Kind != cascadeTaskSnapshot) ||
 		strings.TrimSpace(state.PlatformName) == "" || !isGBDeviceIdentifier(state.DownstreamDeviceID) ||
 		!isGBDeviceIdentifier(state.DownstreamTargetID) || !isGBDeviceIdentifier(state.ExposedID) ||
 		validateGBSessionID(state.UpstreamSessionID) != nil || validateGBSessionID(state.DownstreamSessionID) != nil ||
-		strings.TrimSpace(state.RequestFingerprint) == "" || state.CreatedAt.IsZero() {
+		strings.TrimSpace(state.RequestFingerprint) == "" || state.CreatedAt.IsZero() || state.CreatedAt.After(latestAllowed) ||
+		(!state.UpdatedAt.IsZero() && (state.UpdatedAt.Before(state.CreatedAt) || state.UpdatedAt.After(latestAllowed))) {
 		return fmt.Errorf("invalid persisted cascade task route")
 	}
 	if state.Identity != nil {
@@ -185,6 +238,25 @@ func (g *GB28181API) deletePersistedCascadeTaskRoute(ctx context.Context, route 
 	defer cancel()
 	if err := store.DeleteGBCascadeTaskRoute(storeCtx, route.kind, route.downstreamDeviceID, route.downstreamSessionID); err != nil {
 		return fmt.Errorf("delete cascade task route: %w", err)
+	}
+	return nil
+}
+
+func (g *GB28181API) deletePersistedCascadeTaskRouteByUpstream(ctx context.Context, kind, platformName, exposedID, sessionID string) error {
+	store := g.cascadeTaskRouteStorer()
+	if store == nil {
+		return nil
+	}
+	storeCtx, cancel := taskStateContext(ctx)
+	defer cancel()
+	deleter, ok := store.(gbCascadeTaskRouteUpstreamDeleter)
+	if !ok {
+		return fmt.Errorf("delete cascade task route by upstream identity is unavailable")
+	}
+	if err := deleter.DeleteGBCascadeTaskRouteByUpstream(
+		storeCtx, kind, strings.TrimSpace(platformName), strings.TrimSpace(exposedID), strings.TrimSpace(sessionID),
+	); err != nil {
+		return fmt.Errorf("delete cascade task route by upstream identity: %w", err)
 	}
 	return nil
 }

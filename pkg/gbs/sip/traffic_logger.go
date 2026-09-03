@@ -71,6 +71,17 @@ func SetTrafficLogger(logger *TrafficLogger) (previous *TrafficLogger) {
 	return previous
 }
 
+// CompareAndSwapTrafficLogger 仅在全局日志器仍为 old 时替换，避免旧 Server 清理新代次日志器。
+func CompareAndSwapTrafficLogger(old, new *TrafficLogger) bool {
+	trafficLoggerMu.Lock()
+	defer trafficLoggerMu.Unlock()
+	if trafficLogger != old {
+		return false
+	}
+	trafficLogger = new
+	return true
+}
+
 func (l *TrafficLogger) Close() error {
 	if l == nil {
 		return nil

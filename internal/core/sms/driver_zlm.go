@@ -45,12 +45,13 @@ type ZLMDriver struct {
 func (d *ZLMDriver) GetStreamLiveAddr(ctx context.Context, ms *MediaServer, httpPrefix, host, app, stream, token string) StreamLiveAddr {
 	var out StreamLiveAddr
 	out.Label = "ZLM"
+	mediaRoute := MediaServerProxyRoute(ms.ID)
 	wsPrefix := strings.Replace(strings.Replace(httpPrefix, "https", "wss", 1), "http", "ws", 1)
-	out.WSFLV = fmt.Sprintf("%s/proxy/sms/%s/%s.live.flv?token=%s", wsPrefix, app, stream, token)
-	out.FLV = fmt.Sprintf("%s/proxy/sms/%s/%s.live.flv?token=%s", httpPrefix, app, stream, token)
-	out.HLS = fmt.Sprintf("%s/proxy/sms/%s/%s/hls.fmp4.m3u8?token=%s", httpPrefix, app, stream, token)
+	out.WSFLV = fmt.Sprintf("%s/proxy/sms/%s/%s/%s.live.flv?token=%s", wsPrefix, mediaRoute, app, stream, token)
+	out.FLV = fmt.Sprintf("%s/proxy/sms/%s/%s/%s.live.flv?token=%s", httpPrefix, mediaRoute, app, stream, token)
+	out.HLS = fmt.Sprintf("%s/proxy/sms/%s/%s/%s/hls.fmp4.m3u8?token=%s", httpPrefix, mediaRoute, app, stream, token)
 	rtcPrefix := strings.Replace(strings.Replace(httpPrefix, "https", "webrtc", 1), "http", "webrtc", 1)
-	out.WebRTC = fmt.Sprintf("%s/proxy/sms/index/api/webrtc?app=%s&stream=%s&type=play&token=%s", rtcPrefix, app, stream, token)
+	out.WebRTC = fmt.Sprintf("%s/proxy/sms/%s/index/api/webrtc?app=%s&stream=%s&type=play&token=%s", rtcPrefix, mediaRoute, app, stream, token)
 	out.RTMP = fmt.Sprintf("rtmp://%s:%d/%s/%s", host, ms.Ports.RTMP, app, stream)
 	out.RTSP = fmt.Sprintf("rtsp://%s:%d/%s/%s", host, ms.Ports.RTSP, app, stream)
 	return out
@@ -261,27 +262,32 @@ func (d *ZLMDriver) Ping(ctx context.Context, ms *MediaServer) error {
 
 func (d *ZLMDriver) OpenRTPServer(ctx context.Context, ms *MediaServer, req *zlm.OpenRTPServerRequest) (*zlm.OpenRTPServerResponse, error) {
 	engine := d.withConfig(ms)
-	return engine.OpenRTPServer(*req)
+	return engine.OpenRTPServerContext(ctx, *req)
+}
+
+func (d *ZLMDriver) ConnectRTPServer(ctx context.Context, ms *MediaServer, req *zlm.ConnectRTPServerRequest) (*zlm.ConnectRTPServerResponse, error) {
+	engine := d.withConfig(ms)
+	return engine.ConnectRTPServerContext(ctx, *req)
 }
 
 func (d *ZLMDriver) CloseRTPServer(ctx context.Context, ms *MediaServer, req *zlm.CloseRTPServerRequest) (*zlm.CloseRTPServerResponse, error) {
 	engine := d.withConfig(ms)
-	return engine.CloseRTPServer(*req)
+	return engine.CloseRTPServerContext(ctx, *req)
 }
 
 func (d *ZLMDriver) StartSendRTP(ctx context.Context, ms *MediaServer, req *zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error) {
 	engine := d.withConfig(ms)
-	return engine.StartSendRTP(*req)
+	return engine.StartSendRTPContext(ctx, *req)
 }
 
 func (d *ZLMDriver) StartSendRTPTalk(ctx context.Context, ms *MediaServer, req *zlm.StartSendRTPTalkRequest) (*zlm.StartSendRTPResponse, error) {
 	engine := d.withConfig(ms)
-	return engine.StartSendRTPTalk(*req)
+	return engine.StartSendRTPTalkContext(ctx, *req)
 }
 
 func (d *ZLMDriver) StopSendRTP(ctx context.Context, ms *MediaServer, req *zlm.StopSendRTPRequest) (*zlm.StopSendRTPResponse, error) {
 	engine := d.withConfig(ms)
-	return engine.StopSendRTP(*req)
+	return engine.StopSendRTPContext(ctx, *req)
 }
 
 func (d *ZLMDriver) CloseStreams(ctx context.Context, ms *MediaServer, req *zlm.CloseStreamsRequest) (*zlm.CloseStreamsResponse, error) {
@@ -316,7 +322,7 @@ func (d *ZLMDriver) GetSnapshot(ctx context.Context, ms *MediaServer, req *GetSn
 // GetMediaInfo 获取指定流的详细音视频轨道信息
 func (d *ZLMDriver) GetMediaInfo(ctx context.Context, ms *MediaServer, app, stream string) ([]zlm.MediaItem, error) {
 	engine := d.withConfig(ms)
-	resp, err := engine.GetMediaInfo(zlm.GetMediaInfoRequest{
+	resp, err := engine.GetMediaInfoContext(ctx, zlm.GetMediaInfoRequest{
 		Schema: "rtsp",
 		Vhost:  "__defaultVhost__",
 		App:    app,

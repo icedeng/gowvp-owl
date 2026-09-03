@@ -95,6 +95,16 @@ function protocolVersion(device: ApiDevice) {
   return "";
 }
 
+function protocolVersionLabel(device: ApiDevice) {
+  const version = protocolVersion(device);
+  return ({
+    "1.0": "2011",
+    "1.1": "2014",
+    "2.0": "2016",
+    "3.0": "2022",
+  } as Record<string, string>)[version] || "待识别";
+}
+
 function registrationState(device: ApiDevice) {
   if (device.is_online) {
     return { label: "在线", tone: "online", note: "注册绑定有效" };
@@ -449,7 +459,10 @@ watch([query, status, version], () => {
                 </div>
               </td>
               <td data-label="协议版本">
-                <strong>{{ device.ext?.gb_effective_version || device.ext?.gb_version || "—" }}</strong>
+                <strong>{{ protocolVersionLabel(device) }}</strong>
+                <small v-if="device.ext?.gb_effective_version || device.ext?.gb_version" class="mono block">
+                  {{ device.ext?.gb_effective_version || device.ext?.gb_version }}
+                </small>
                 <small v-if="device.ext?.gb_version_source" class="block text-slate-500">
                   {{ device.ext.gb_version_source }}
                 </small>

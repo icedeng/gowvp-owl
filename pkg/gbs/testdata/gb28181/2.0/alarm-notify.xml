@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Notify>
+  <CmdType>Alarm</CmdType>
+  <SN>4</SN>
+  <DeviceID>34020000001320000002</DeviceID>
+  <AlarmPriority>1</AlarmPriority>
+  <AlarmMethod>2</AlarmMethod>
+  <AlarmTime>2024-04-01T00:30:00</AlarmTime>
+  <AlarmDescription>2016 motion detected</AlarmDescription>
+  <Longitude>116.391</Longitude>
+  <Latitude>39.907</Latitude>
+  <Info>
+    <AlarmType>1</AlarmType>
+  </Info>
+</Notify>

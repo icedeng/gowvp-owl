@@ -111,6 +111,15 @@ func (s *GBCascadeTaskRouteStore) Delete(ctx context.Context, kind, deviceID, se
 		Delete(new(GBCascadeTaskRouteRecord)).Error
 }
 
+func (s *GBCascadeTaskRouteStore) DeleteUpstream(ctx context.Context, kind, platformName, exposedID, sessionID string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.WithContext(ctx).
+		Where("upstream_key = ?", GBCascadeTaskUpstreamKey(kind, platformName, exposedID, sessionID)).
+		Delete(new(GBCascadeTaskRouteRecord)).Error
+}
+
 // Cleanup 删除过期路由，并只保留最近 limit 条。
 func (s *GBCascadeTaskRouteStore) Cleanup(ctx context.Context, cutoff time.Time, limit int) error {
 	if s == nil || s.db == nil {
@@ -125,16 +134,14 @@ func (s *GBCascadeTaskRouteStore) Cleanup(ctx context.Context, cutoff time.Time,
 		if limit <= 0 {
 			return nil
 		}
-		var overflow []uint64
-		if err := tx.Model(new(GBCascadeTaskRouteRecord)).
+		candidates := tx.Model(new(GBCascadeTaskRouteRecord)).
+			Select("id").
 			Order("updated_at DESC, id DESC").
-			Offset(limit).
-			Pluck("id", &overflow).Error; err != nil {
-			return err
-		}
-		if len(overflow) == 0 {
-			return nil
-		}
-		return tx.Where("id IN ?", overflow).Delete(new(GBCascadeTaskRouteRecord)).Error
+			Offset(limit)
+		overflow := tx.Table("(?) AS gb_cascade_task_route_overflow", candidates).Select("id")
+		// 容量裁剪使用单条语句按当前排序删除，不能让查询后刚刷新的
+		// 活跃路由仍被陈旧 overflow ID 集合删除。派生表也避免 MySQL
+		// 拒绝从正在修改的目标表直接读取。
+		return tx.Where("id IN (?)", overflow).Delete(new(GBCascadeTaskRouteRecord)).Error
 	})
 }

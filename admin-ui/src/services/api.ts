@@ -104,6 +104,7 @@ export const api = {
   },
   addChannel: (body: Record<string, unknown>) => http.post<ApiChannel>('/channels', body),
   editChannel: (id: string, body: Record<string, unknown>) => http.put<ApiChannel>(`/channels/${encodeURIComponent(id)}`, body),
+  bindChannelMediaServer: (id: string, mediaServerId: string) => http.put<ApiChannel>(`/channels/${encodeURIComponent(id)}/media_server`, { media_server_id: mediaServerId }),
   deleteChannel: (id: string) => http.delete<ApiChannel>(`/channels/${encodeURIComponent(id)}`),
   play: (id: string) => http.post<PlayResult>(`/channels/${encodeURIComponent(id)}/play`),
   snapshot: (id: string, body: Record<string, unknown> = {}) => http.post<SnapshotRefreshOutput>(`/channels/${encodeURIComponent(id)}/snapshot`, body),

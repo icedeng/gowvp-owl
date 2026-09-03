@@ -1,5 +1,7 @@
 package zlm
 
+import "context"
+
 const (
 	startRecordPath  = "/index/api/startRecord"
 	stopRecordPath   = "/index/api/stopRecord"
@@ -82,7 +84,7 @@ func (e *Engine) StopRecord(req StopRecordRequest) (*StopRecordResponse, error) 
 
 // MediaTrack 流的音视频轨道信息
 type MediaTrack struct {
-	CodecID     int     `json:"codec_id"`      // H264=0, H265=1, AAC=2, G711A=3, G711U=4
+	CodecID     int     `json:"codec_id"`      // H264=0, H265=1, AAC=2, G711A=3, G711U=4, SVACA=17, G722=18, G723=19, G729=21
 	CodecIDName string  `json:"codec_id_name"` // 编码类型名称
 	CodecType   int     `json:"codec_type"`    // Video=0, Audio=1
 	Ready       bool    `json:"ready"`         // 轨道是否就绪
@@ -153,6 +155,10 @@ type GetMediaInfoResponse struct {
 // GetMediaInfo 获取指定流的详细信息（音视频编码、分辨率、帧率等）
 // 基于 getMediaList 接口带精确参数过滤单条流
 func (e *Engine) GetMediaInfo(req GetMediaInfoRequest) (*GetMediaInfoResponse, error) {
+	return e.GetMediaInfoContext(context.Background(), req)
+}
+
+func (e *Engine) GetMediaInfoContext(ctx context.Context, req GetMediaInfoRequest) (*GetMediaInfoResponse, error) {
 	data := map[string]any{
 		"schema": req.Schema,
 		"vhost":  req.Vhost,
@@ -160,7 +166,7 @@ func (e *Engine) GetMediaInfo(req GetMediaInfoRequest) (*GetMediaInfoResponse, e
 		"stream": req.Stream,
 	}
 	var resp GetMediaInfoResponse
-	if err := e.post(getMediaListPath, data, &resp); err != nil {
+	if err := e.postContext(ctx, getMediaListPath, data, &resp); err != nil {
 		return nil, err
 	}
 	if err := e.ErrHandle(resp.Code, resp.Msg); err != nil {

@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -14,6 +15,20 @@ import (
 
 // Streams Streams
 type Streams struct {
+	// historyControlMu 串行化同一历史会话的 INFO 控制，保证 2022 Range-only
+	// 命令读取到的是前一个已成功命令提交的 Scale。
+	historyControlMu sync.Mutex
+	historyState     historyControlState
+	// lifecycleMu 串行化异步媒体完成与启动状态提交，避免终态被迟到的启动写回覆盖。
+	lifecycleMu sync.Mutex
+	// cleanupMu 串行化 BYE 与 RTP 接收端口清理；成功步骤会被记住，失败步骤允许重试。
+	cleanupMu     sync.Mutex
+	dialogStopped bool
+	// dialogCleanupDeferred 表示级联已转发 MediaStatus，需等待最后一个上级 BYE 后再结束下级对话。
+	dialogCleanupDeferred bool
+	rtpClosed             bool
+	// cleanupRequested 允许活动判断在外部清理阻塞时无锁读取终止态。
+	cleanupRequested atomic.Bool
 	// 0  直播 1 历史
 	T int `json:"t" gorm:"column:t"`
 	// 设备ID
@@ -58,17 +73,99 @@ type Streams struct {
 	// ---
 	S, E        time.Time        `json:"-" gorm:"-"`
 	ssrc        string           // 国标ssrc 10进制字符串
+	ssrcRelease func()           // 仅在 SIP/RTP 资源均清理完成后释放当前 SSRC 代次
 	mediaServer *sms.MediaServer `json:"-" gorm:"-"`
 	sessionKey  string           // 内部会话键；级联历史会话用于隔离同通道的不同时间范围
 	Ext         int64            `json:"-" gorm:"-"` // 流等待过期时间
 	Resp        *sip.Response    `json:"-" gorm:"-"`
 }
 
-func (s *Streams) nextCSeq() uint32 {
-	if s == nil {
-		return 0
+func (s *Streams) bindSSRCReservation(ssrc string, release func()) error {
+	if s == nil || release == nil {
+		return fmt.Errorf("invalid GB28181 SSRC reservation")
 	}
-	return atomic.AddUint32(&s.CseqNo, 1)
+	s.cleanupMu.Lock()
+	if s.cleanupRequested.Load() {
+		s.cleanupMu.Unlock()
+		release()
+		return fmt.Errorf("GB28181 media session stopped before SSRC reservation was bound")
+	}
+	if s.ssrcRelease != nil {
+		s.cleanupMu.Unlock()
+		release()
+		return fmt.Errorf("GB28181 media session already owns an SSRC reservation")
+	}
+	s.ssrc = ssrc
+	s.ssrcRelease = release
+	s.cleanupMu.Unlock()
+	return nil
+}
+
+func (s *Streams) releaseSSRCReservation() {
+	if s == nil {
+		return
+	}
+	s.cleanupMu.Lock()
+	release := s.ssrcRelease
+	s.ssrcRelease = nil
+	s.cleanupMu.Unlock()
+	if release != nil {
+		release()
+	}
+}
+
+func (s *Streams) nextCSeq() (uint32, error) {
+	if s == nil {
+		return 0, fmt.Errorf("stream is unavailable")
+	}
+	for {
+		current := atomic.LoadUint32(&s.CseqNo)
+		next, err := sip.NextCSeq(current)
+		if err != nil {
+			return 0, fmt.Errorf("stream CSeq: %w", err)
+		}
+		if atomic.CompareAndSwapUint32(&s.CseqNo, current, next) {
+			return next, nil
+		}
+	}
+}
+
+// commitChannelStreamStart 把启动态提交与同一流的异步终止串行化。
+// 若终止路径已经摘除该对象，启动方只承认会话曾成功建立，不能重新写回活动状态。
+func (g *GB28181API) commitChannelStreamStart(ctx context.Context, key string, stream *Streams) (bool, error) {
+	if g == nil || g.streams == nil || stream == nil {
+		return false, nil
+	}
+	stream.lifecycleMu.Lock()
+	defer stream.lifecycleMu.Unlock()
+	current, ok := g.streams.Load(key)
+	if !ok || current != stream {
+		return false, nil
+	}
+	return true, g.persistChannelActive(ctx, stream.DeviceID, stream.ChannelID)
+}
+
+func (g *GB28181API) compareAndDeleteChannelStream(key string, stream *Streams) bool {
+	if g == nil || g.streams == nil || stream == nil {
+		return false
+	}
+	stream.lifecycleMu.Lock()
+	defer stream.lifecycleMu.Unlock()
+	return g.streams.CompareAndDelete(key, stream)
+}
+
+func (g *GB28181API) loadAndDeleteChannelStream(key string) (*Streams, bool) {
+	if g == nil || g.streams == nil {
+		return nil, false
+	}
+	stream, ok := g.streams.Load(key)
+	if !ok || stream == nil {
+		return stream, ok && g.streams.CompareAndDelete(key, stream)
+	}
+	if !g.compareAndDeleteChannelStream(key, stream) {
+		return nil, false
+	}
+	return stream, true
 }
 
 // 当前系统中存在的流列表
@@ -77,20 +174,27 @@ type streamsList struct {
 	Response *sync.Map
 	// key=channelid value={Play}  当前设备直播信息，防止重复直播
 	Succ *sync.Map
-	ssrc uint32
 }
 
 var StreamList streamsList
 
-func (g *GB28181API) getSSRC(t int) (string, error) {
-	if t != 0 && t != 1 {
-		return "", fmt.Errorf("invalid GB28181 SSRC stream type %d", t)
-	}
-	cfg := g.configSnapshot()
-	if cfg == nil {
-		return "", fmt.Errorf("GB28181 SIP configuration is unavailable")
-	}
-	domain := strings.TrimSpace(cfg.GetDomain())
+const gbSSRCSuffixCount = 10000
+
+type ssrcDomainState struct {
+	next  uint16
+	inUse map[uint16]uint64
+}
+
+type ssrcAllocator struct {
+	mu         sync.Mutex
+	domains    map[string]*ssrcDomainState
+	generation uint64
+}
+
+var processSSRCAllocator ssrcAllocator
+
+func validateSSRCDomain(domain string) (string, error) {
+	domain = strings.TrimSpace(domain)
 	if len(domain) != 10 {
 		return "", fmt.Errorf("GB28181 SIP domain must be a 10-digit code, got %q", domain)
 	}
@@ -99,10 +203,81 @@ func (g *GB28181API) getSSRC(t int) (string, error) {
 			return "", fmt.Errorf("GB28181 SIP domain must be a 10-digit code, got %q", domain)
 		}
 	}
-	v := atomic.AddUint32(&StreamList.ssrc, 1)
-	ssrc := v % 9000
-	key := fmt.Sprintf("%d%s%04d", t, domain[3:8], ssrc)
-	return key, nil
+	return domain, nil
+}
+
+// reserve 在同一 SIP 监控域内跨实时/历史媒体共享后四位，满足标准的不重复要求。
+// release 绑定分配代次且幂等，迟到的旧会话清理不会释放后来复用的同一后四位。
+func (a *ssrcAllocator) reserve(domain string, streamType int) (string, func(), error) {
+	if a == nil {
+		return "", nil, fmt.Errorf("GB28181 SSRC allocator is unavailable")
+	}
+	if streamType != 0 && streamType != 1 {
+		return "", nil, fmt.Errorf("invalid GB28181 SSRC stream type %d", streamType)
+	}
+	validatedDomain, err := validateSSRCDomain(domain)
+	if err != nil {
+		return "", nil, err
+	}
+
+	a.mu.Lock()
+	if a.domains == nil {
+		a.domains = make(map[string]*ssrcDomainState)
+	}
+	state := a.domains[validatedDomain]
+	if state == nil {
+		state = &ssrcDomainState{inUse: make(map[uint16]uint64)}
+		a.domains[validatedDomain] = state
+	}
+	if len(state.inUse) >= gbSSRCSuffixCount {
+		a.mu.Unlock()
+		return "", nil, fmt.Errorf("GB28181 SSRC space exhausted for SIP domain %s", validatedDomain)
+	}
+
+	var suffix uint16
+	found := false
+	for offset := 0; offset < gbSSRCSuffixCount; offset++ {
+		candidate := uint16((int(state.next) + offset) % gbSSRCSuffixCount)
+		if _, exists := state.inUse[candidate]; exists {
+			continue
+		}
+		suffix = candidate
+		found = true
+		break
+	}
+	if !found {
+		a.mu.Unlock()
+		return "", nil, fmt.Errorf("GB28181 SSRC space exhausted for SIP domain %s", validatedDomain)
+	}
+	a.generation++
+	if a.generation == 0 {
+		a.generation++
+	}
+	generation := a.generation
+	state.inUse[suffix] = generation
+	state.next = uint16((int(suffix) + 1) % gbSSRCSuffixCount)
+	a.mu.Unlock()
+
+	ssrc := fmt.Sprintf("%d%s%04d", streamType, validatedDomain[3:8], suffix)
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			a.mu.Lock()
+			if current := a.domains[validatedDomain]; current != nil && current.inUse[suffix] == generation {
+				delete(current.inUse, suffix)
+			}
+			a.mu.Unlock()
+		})
+	}
+	return ssrc, release, nil
+}
+
+func (g *GB28181API) reserveSSRC(streamType int) (string, func(), error) {
+	cfg := g.configSnapshot()
+	if cfg == nil {
+		return "", nil, fmt.Errorf("GB28181 SIP configuration is unavailable")
+	}
+	return processSSRCAllocator.reserve(cfg.GetDomain(), streamType)
 }
 
 // 定时检查未关闭的流
@@ -115,7 +290,8 @@ func CheckStreams() {
 	for {
 		streams := []Streams{}
 		// db.FindT(db.DBClient, new(Streams), &streams, db.M{"status=?": 0, "streamtype=?": "push"}, "", skip, 100, false)
-		for _, stream := range streams {
+		for index := range streams {
+			stream := &streams[index]
 			// logrus.Debugln("checkStreamStreamID", stream.StreamID, stream.DeviceID)
 			if p, ok := StreamList.Response.Load(stream.StreamID); ok {
 				streamActive := p.(*Streams)
@@ -164,11 +340,15 @@ func CheckStreams() {
 			// 	_serverDevices.addr.Params.Add(k, sip.String{Str: v.(string)})
 			// }
 			callid := sip.CallID(stream.CallID)
-			stream.CseqNo++
+			cseq, err := stream.nextCSeq()
+			if err != nil {
+				stream.Msg = err.Error()
+				continue
+			}
 
 			hb := sip.NewHeaderBuilder().SetToWithParam(channel.addr).SetFrom(_serverDevices.addr).AddVia(&sip.ViaHop{
 				Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
-			}).SetContentType(&sip.ContentTypeSDP).SetMethod(sip.MethodBYE).SetContact(_serverDevices.addr).SetCallID(&callid).SetSeqNo(uint(stream.CseqNo)).SetXGBVerValue("1.0")
+			}).SetContentType(&sip.ContentTypeSDP).SetMethod(sip.MethodBYE).SetContact(_serverDevices.addr).SetCallID(&callid).SetSeqNo(uint(cseq)).SetXGBVerValue("1.0")
 			req := sip.NewRequest("", sip.MethodBYE, channel.addr.URI, sip.DefaultSipVersion, hb.Build(), nil)
 			req.SetDestination(device.source)
 			req.SetRecipient(channel.addr.URI)
@@ -182,7 +362,7 @@ func CheckStreams() {
 				stream.Msg = "SIP server is unavailable"
 				continue
 			}
-			tx, err := server.Request(req)
+			tx, err := server.requestDialog(server.dialogTarget(stream.DeviceID, stream.ChannelID), req)
 			if err != nil {
 				// logrus.Warningln("checkStreamClosedFail", stream.StreamID, err)
 				stream.Msg = err.Error()

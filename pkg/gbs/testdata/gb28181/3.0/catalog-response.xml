@@ -10,11 +10,9 @@
       <Name>Fixture Camera</Name>
       <Manufacturer>Fixture</Manufacturer>
       <Model>Model-1</Model>
-      <Owner>Fixture</Owner>
       <CivilCode>340200</CivilCode>
       <Address>Fixture Address</Address>
       <Parental>0</Parental>
-      <SafetyWay>0</SafetyWay>
       <RegisterWay>1</RegisterWay>
       <Secrecy>0</Secrecy>
       <Status>ON</Status>
@@ -23,7 +21,8 @@
       <Port>5060</Port>
       <Longitude>116.397</Longitude>
       <Latitude>39.908</Latitude>
-      <Info><PTZType>1</PTZType><BusinessGroupID>34020000002150000001</BusinessGroupID></Info>
+      <BusinessGroupID>34020000002150000001</BusinessGroupID>
+      <Info><PTZType>1</PTZType><GrassrootsCode>000000</GrassrootsCode><PointType>2</PointType></Info>
     </Item>
   </DeviceList>
 </Response>

@@ -7,6 +7,7 @@
 package app
 
 import (
+	"context"
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/internal/core/metadata/metadataapi"
 	"github.com/gowvp/owl/internal/data"
@@ -19,7 +20,7 @@ import (
 
 // Injectors from wire.go:
 
-func wireApp(bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error) {
+func wireApp(ctx context.Context, bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error) {
 	db, err := data.SetupDB(bc)
 	if err != nil {
 		return nil, nil, err
@@ -34,13 +35,13 @@ func wireApp(bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error)
 	storer := api.NewIPCStore(db, bc)
 	uniqueidCore := api.NewUniqueID(db)
 	adapter := api.NewGBAdapter(storer, uniqueidCore)
-	server, cleanup2, err := gbs.NewServer(bc, adapter, smsCore)
+	recordingStorer := api.NewRecordingStore(db)
+	server, cleanup2, err := gbs.NewServerWithStoresContext(ctx, bc, adapter, smsCore, db, recordingStorer)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
 	ipcBundle := api.NewIPCCoreWithProtocols(storer, uniqueidCore, adapter, smsCore, server, bc)
-	recordingStorer := api.NewRecordingStore(db)
 	smsProvider := api.NewSMSProviderAdapter(smsCore)
 	ipcProvider := api.NewIPCProviderAdapter(ipcBundle)
 	playProvider := api.NewPlayProviderAdapter(smsCore)

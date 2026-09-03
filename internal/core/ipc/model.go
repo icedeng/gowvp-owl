@@ -70,10 +70,20 @@ type DeviceExt struct {
 	GBLastUnsupportedCommand   string   `json:"gb_last_unsupported_command,omitempty"`
 	GBLastUnsupportedVersion   string   `json:"gb_last_unsupported_version,omitempty"`
 	GBLastUnsupportedUpdatedAt int64    `json:"gb_last_unsupported_updated_at,omitempty"`
-	Zones                      []Zone   `json:"zones"`             // 区域
-	EnabledAI                  bool     `json:"enabled_ai"`        // 是否启用 AI
-	AnalysisInterval           float32  `json:"analysis_interval"` // AI 分析间隔（秒），0 表示使用默认值
-	PTZVerified                bool     `json:"ptz_verified"`      // 是否已通过实际命令验证支持 PTZ
+	// GBRegistrationClosed 区分 REGISTER 绑定关闭与有效绑定内的 DeviceStatus 离线。
+	// 指针用于兼容升级前仅有 IsOnline 的历史记录。
+	GBRegistrationClosed *bool `json:"gb_registration_closed,omitempty"`
+	// GBRegisterCallID/GBRegisterCSeq 保存最后一次已提交绑定更新的 SIP 顺序。
+	// 指纹和响应时间用于在进程重启或多实例收到精确重传时复用原成功响应。
+	GBRegisterCallID             string  `json:"gb_register_call_id,omitempty" swaggerignore:"true"`
+	GBRegisterCSeq               uint32  `json:"gb_register_cseq,omitempty" swaggerignore:"true"`
+	GBRegisterRequestFingerprint string  `json:"gb_register_request_fingerprint,omitempty" swaggerignore:"true"`
+	GBRegisterResponseDate       string  `json:"gb_register_response_date,omitempty" swaggerignore:"true"`
+	GBRegisterResponseConfirmed  bool    `json:"gb_register_response_confirmed,omitempty" swaggerignore:"true"`
+	Zones                        []Zone  `json:"zones"`             // 区域
+	EnabledAI                    bool    `json:"enabled_ai"`        // 是否启用 AI
+	AnalysisInterval             float32 `json:"analysis_interval"` // AI 分析间隔（秒），0 表示使用默认值
+	PTZVerified                  bool    `json:"ptz_verified"`      // 是否已通过实际命令验证支持 PTZ
 	// GBAppendixA4 保存 GB/T 28181-2022 附录 A.4 扩展对象最新快照（结构化落库）。
 	GBAppendixA4 []GBAppendixA4Object `json:"gb_appendix_a4"`
 	// GBCatalog 保存 GB/T 28181 目录项扩展和原始 XML，兼容 2014 及厂商私有字段。
@@ -174,13 +184,28 @@ func (e *DeviceExt) IsNoneRecord() bool {
 	return e.GetRecordMode() == "none"
 }
 
+// MarshalJSON 隐藏仅供 registrar 持久化使用的内部事务元数据。
+// 数据库序列化由 Value 使用无方法别名完成，仍保留这些字段用于重启和多实例幂等。
+func (i DeviceExt) MarshalJSON() ([]byte, error) {
+	type publicDeviceExt DeviceExt
+	public := publicDeviceExt(i)
+	public.GBRegisterCallID = ""
+	public.GBRegisterCSeq = 0
+	public.GBRegisterRequestFingerprint = ""
+	public.GBRegisterResponseDate = ""
+	public.GBRegisterResponseConfirmed = false
+	return json.Marshal(public)
+}
+
 // Scan implements orm.Scaner.
 func (i *DeviceExt) Scan(input any) error {
 	return orm.JSONUnmarshal(input, i)
 }
 
 func (i DeviceExt) Value() (driver.Value, error) {
-	return json.Marshal(i)
+	// 避免调用 MarshalJSON；数据库必须保存 REGISTER 幂等状态。
+	type persistentDeviceExt DeviceExt
+	return json.Marshal(persistentDeviceExt(i))
 }
 
 type Zone struct {

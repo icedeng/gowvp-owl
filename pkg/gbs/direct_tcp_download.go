@@ -46,14 +46,15 @@ type DirectTCPDownloadOptions struct {
 
 // DirectTCPDownloadRequest 描述一个由设备作为 TCP 服务端的文件下载任务。
 type DirectTCPDownloadRequest struct {
-	SessionID     string
-	DeviceID      string
-	ChannelID     string
-	Address       string
-	RegisteredIP  net.IP
-	FileSize      int64
-	FileSizeKnown bool
-	OnFinish      func(DirectTCPDownloadState)
+	SessionID           string
+	DeviceID            string
+	ChannelID           string
+	Address             string
+	RegisteredIP        net.IP
+	FileSize            int64
+	FileSizeKnown       bool
+	MediaStatusDisabled bool
+	OnFinish            func(DirectTCPDownloadState)
 }
 
 // DirectTCPDownloadState 是可通过管理接口查询的下载快照。
@@ -216,6 +217,57 @@ func (m *DirectTCPDownloadManager) Reconfigure(opts DirectTCPDownloadOptions) {
 	m.mu.Unlock()
 }
 
+// reserveRelay 为附录 O 级联中继预留与设备直连下载共享的并发额度。
+// 返回的策略是预留时快照；活动中继不受随后热更新影响。
+func (m *DirectTCPDownloadManager) reserveRelay(deviceID string) (DirectTCPDownloadOptions, func(), error) {
+	if m == nil {
+		return DirectTCPDownloadOptions{}, nil, errors.New("direct TCP resource manager is unavailable")
+	}
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return DirectTCPDownloadOptions{}, nil, errors.New("direct TCP relay requires device ID")
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return DirectTCPDownloadOptions{}, nil, errors.New("direct TCP resource manager is closed")
+	}
+	opts := m.opts
+	if m.activeCount >= opts.GlobalConcurrency {
+		m.mu.Unlock()
+		return DirectTCPDownloadOptions{}, nil, fmt.Errorf("direct TCP global concurrency limit reached: %d", opts.GlobalConcurrency)
+	}
+	if m.deviceCount[deviceID] >= opts.DeviceConcurrency {
+		m.mu.Unlock()
+		return DirectTCPDownloadOptions{}, nil, fmt.Errorf("direct TCP device concurrency limit reached: %d", opts.DeviceConcurrency)
+	}
+	m.activeCount++
+	m.deviceCount[deviceID]++
+	m.mu.Unlock()
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			m.mu.Lock()
+			if m.activeCount > 0 {
+				m.activeCount--
+			}
+			if m.deviceCount[deviceID] > 0 {
+				m.deviceCount[deviceID]--
+			}
+			if m.deviceCount[deviceID] <= 0 {
+				delete(m.deviceCount, deviceID)
+			}
+			if m.activeCount == 0 && m.pendingOpts != nil {
+				m.opts = *m.pendingOpts
+				m.pendingOpts = nil
+			}
+			m.mu.Unlock()
+		})
+	}
+	return opts, release, nil
+}
+
 // Start 启动异步下载。任务建立后可通过 State/Wait 查询终态。
 func (m *DirectTCPDownloadManager) Start(parent context.Context, req DirectTCPDownloadRequest) error {
 	if m == nil {
@@ -327,10 +379,57 @@ func (m *DirectTCPDownloadManager) FindByChannel(deviceID, channelID string) (Di
 	return latest, found
 }
 
+// restoreTerminalState 恢复跨进程保存的最近下载终态。活动任务永远不会由持久状态伪造。
+func (m *DirectTCPDownloadManager) restoreTerminalState(state DirectTCPDownloadState) bool {
+	if m == nil || strings.TrimSpace(state.SessionID) == "" || strings.TrimSpace(state.DeviceID) == "" ||
+		strings.TrimSpace(state.ChannelID) == "" || state.CompletedAt.IsZero() || !isDirectTCPTerminalStatus(state.Status) {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return false
+	}
+	if _, active := m.active[state.SessionID]; active {
+		return false
+	}
+	if current, ok := m.states[state.SessionID]; ok && !current.UpdatedAt.Before(state.UpdatedAt) {
+		return false
+	}
+	m.states[state.SessionID] = state
+	m.cleanupTerminalStatesLocked(time.Now(), m.opts)
+	return true
+}
+
+func isDirectTCPTerminalStatus(status string) bool {
+	switch status {
+	case directTCPStatusCompleted, directTCPStatusFailed, directTCPStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *DirectTCPDownloadManager) terminalRetention() time.Duration {
+	if m == nil {
+		return 7 * 24 * time.Hour
+	}
+	m.mu.RLock()
+	retainDays := m.opts.RetainDays
+	m.mu.RUnlock()
+	if retainDays <= 0 {
+		retainDays = 7
+	}
+	return time.Duration(retainDays) * 24 * time.Hour
+}
+
 // Wait 等待下载终态，主要供自动化验证和内部编排使用。
 func (m *DirectTCPDownloadManager) Wait(ctx context.Context, sessionID string) (DirectTCPDownloadState, error) {
 	if m == nil {
 		return DirectTCPDownloadState{}, errors.New("direct TCP download manager is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	m.mu.RLock()
 	session, active := m.active[strings.TrimSpace(sessionID)]
@@ -414,6 +513,30 @@ func (m *DirectTCPDownloadManager) CancelDevice(deviceID string) int {
 	sessions := make([]*directTCPDownloadSession, 0, m.deviceCount[deviceID])
 	for _, session := range m.active {
 		if session != nil && session.request.DeviceID == deviceID {
+			sessions = append(sessions, session)
+		}
+	}
+	m.mu.RUnlock()
+	for _, session := range sessions {
+		session.requestCancel()
+	}
+	return len(sessions)
+}
+
+// CancelChannel 取消指定设备通道的全部活动下载，其他通道不受影响。
+func (m *DirectTCPDownloadManager) CancelChannel(deviceID, channelID string) int {
+	if m == nil {
+		return 0
+	}
+	deviceID = strings.TrimSpace(deviceID)
+	channelID = strings.TrimSpace(channelID)
+	if deviceID == "" || channelID == "" {
+		return 0
+	}
+	m.mu.RLock()
+	sessions := make([]*directTCPDownloadSession, 0)
+	for _, session := range m.active {
+		if session != nil && session.request.DeviceID == deviceID && session.request.ChannelID == channelID {
 			sessions = append(sessions, session)
 		}
 	}
@@ -574,7 +697,9 @@ func (m *DirectTCPDownloadManager) receive(session *directTCPDownloadSession, co
 			_, _ = digest.Write(buffer[:n])
 			received = next
 			m.updateProgress(session.request.SessionID, directTCPStatusReceiving, received)
-			if session.request.FileSizeKnown && received == session.request.FileSize {
+			// 设备档案明确关闭 MediaStatus 时，声明文件大小就是可用的完成边界。
+			// 默认仍保留一个空闲窗口等待标准 121 通知，以兼容现有设备行为。
+			if session.request.MediaStatusDisabled && session.request.FileSizeKnown && received == session.request.FileSize {
 				return received, hex.EncodeToString(digest.Sum(nil)), true, "size_reached", nil
 			}
 		}
@@ -598,6 +723,12 @@ func (m *DirectTCPDownloadManager) receive(session *directTCPDownloadSession, co
 		}
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
+			// 标准流程要求发送端在文件传输完成后先发送 MediaStatus/121，随后平台再结束 SIP 对话。
+			// 已收满声明大小时保留一个空闲超时窗口等待该通知；超时后仍按完整文件兜底成功，
+			// 兼容只关闭媒体数据但不发送通知的存量设备。
+			if session.request.FileSizeKnown && received == session.request.FileSize {
+				return received, hex.EncodeToString(digest.Sum(nil)), true, "size_reached", nil
+			}
 			reason := "idle_timeout"
 			if received == 0 {
 				reason = "first_byte_timeout"
@@ -650,10 +781,11 @@ func (m *DirectTCPDownloadManager) finish(session *directTCPDownloadSession, sta
 	m.cleanupTerminalStatesLocked(now, m.opts)
 	m.mu.Unlock()
 	session.cancel()
-	close(session.done)
 	if session.request.OnFinish != nil {
 		session.request.OnFinish(state)
 	}
+	// Wait 必须覆盖终态回调；否则调用方可能在媒体索引和持久状态尚未收敛时观察到“已完成”。
+	close(session.done)
 }
 
 type directTCPTerminalEntry struct {

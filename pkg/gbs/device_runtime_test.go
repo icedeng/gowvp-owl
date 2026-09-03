@@ -55,6 +55,43 @@ func TestDeviceRuntimeStateConcurrentReadWrite(t *testing.T) {
 	group.Wait()
 }
 
+func TestDeviceIsOnlineNowRequiresActiveRegistrationBinding(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name         string
+		online       bool
+		registeredAt time.Time
+		expires      int
+		want         bool
+	}{
+		{name: "active", online: true, registeredAt: now, expires: 3600, want: true},
+		{name: "offline", registeredAt: now, expires: 3600},
+		{name: "expired", online: true, registeredAt: now.Add(-time.Minute), expires: 10},
+		{name: "legacy_missing_binding_metadata", online: true, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			device := &Device{
+				IsOnline:       test.online,
+				LastRegisterAt: test.registeredAt,
+				Expires:        test.expires,
+			}
+			if got := device.IsOnlineNow(); got != test.want {
+				t.Fatalf("IsOnlineNow() = %t; want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestTransDeviceStatusAcceptsStandardOfflineValue(t *testing.T) {
+	if got := transDeviceStatus("OFFLINE"); got != "OFF" {
+		t.Fatalf("transDeviceStatus(OFFLINE) = %q; want OFF", got)
+	}
+	if got := transDeviceStatus("OFFILE"); got != "OFF" {
+		t.Fatalf("legacy transDeviceStatus(OFFILE) = %q; want OFF", got)
+	}
+}
+
 func TestNewDeviceRestoresRegistrationExpiry(t *testing.T) {
 	now := orm.Now()
 	device := NewDevice(nil, &ipc.Device{
@@ -66,5 +103,40 @@ func TestNewDeviceRestoresRegistrationExpiry(t *testing.T) {
 	}
 	if got := device.runtimeSnapshot().Expires; got != 3600 {
 		t.Fatalf("restored Expires = %d, want 3600", got)
+	}
+}
+
+func TestNewDeviceRestoresOfflineStatusWithoutClosingExplicitRegistration(t *testing.T) {
+	registeredAt := time.Now()
+	registrationClosed := false
+	device := NewDevice(nil, &ipc.Device{
+		ID:           "GB_runtime_offline_status",
+		DeviceID:     gb10DeviceID,
+		Address:      "192.0.2.10:5060",
+		IsOnline:     false,
+		RegisteredAt: orm.Time{Time: registeredAt},
+		Expires:      3600,
+		Ext: ipc.DeviceExt{
+			GBRegistrationClosed: &registrationClosed,
+		},
+	})
+	if device == nil {
+		t.Fatal("NewDevice returned nil")
+	}
+	state := device.runtimeSnapshot()
+	if state.IsOnline || state.RegistrationClosed || !runtimeRegistrationBindingActive(state, registeredAt.Add(time.Second)) {
+		t.Fatalf("restored DeviceStatus offline binding = %+v", state)
+	}
+
+	legacy := NewDevice(nil, &ipc.Device{
+		ID:           "GB_runtime_legacy_offline",
+		DeviceID:     gb10DeviceID,
+		Address:      "192.0.2.10:5060",
+		IsOnline:     false,
+		RegisteredAt: orm.Time{Time: registeredAt},
+		Expires:      3600,
+	})
+	if legacy == nil || !legacy.runtimeSnapshot().RegistrationClosed {
+		t.Fatalf("legacy offline record did not preserve closed-binding compatibility: %+v", legacy)
 	}
 }

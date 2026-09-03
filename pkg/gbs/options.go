@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,6 +10,8 @@ import (
 	"github.com/gowvp/owl/pkg/gbs/sip"
 	"github.com/ixugo/goddd/pkg/orm"
 )
+
+var errOptionsProbeRegistrationChanged = errors.New("device registration changed during options probe")
 
 // OptionsProbeInput OPTIONS 探测参数。
 type OptionsProbeInput struct {
@@ -19,9 +22,17 @@ type OptionsProbeInput struct {
 // sipOptionsGeneric 处理入向 OPTIONS 探测，按 RFC 返回 200。
 func (g *GB28181API) sipOptionsGeneric(ctx *sip.Context) {
 	resp := sip.NewResponseFromRequest("", ctx.Request, 200, "OK", nil)
-	resp.AppendHeader(&sip.GenericHeader{
-		HeaderName: "Allow",
-		Contents:   "INVITE, ACK, CANCEL, OPTIONS, BYE, MESSAGE, SUBSCRIBE, NOTIFY, INFO",
+	resp.AppendHeader(sip.AllowHeader{
+		sip.MethodInvite,
+		sip.MethodACK,
+		sip.MethodCancel,
+		sip.MethodOptions,
+		sip.MethodBYE,
+		sip.MethodMessage,
+		sip.MethodRegister,
+		sip.MethodSubscribe,
+		sip.MethodNotify,
+		sip.MethodInfo,
 	})
 	_ = ctx.Tx.Respond(resp)
 }
@@ -39,33 +50,68 @@ func (g *GB28181API) ProbeOptions(ctx context.Context, in *OptionsProbeInput) er
 		return fmt.Errorf("invalid options probe request")
 	}
 	ipcDev, ok := g.svr.memoryStorer.Load(in.DeviceID)
-	if !ok || !ipcDev.IsOnlineNow() {
+	if !ok || ipcDev == nil {
 		return ErrDeviceOffline
 	}
-	tx, err := g.svr.wrapRequestContext(ctx, ipcDev, sip.MethodOptions, nil, nil)
+	state := ipcDev.runtimeSnapshot()
+	if !registeredRuntimeActive(state, time.Now()) {
+		return ErrDeviceOffline
+	}
+	binding := inboundRegistrationBinding{
+		device:         ipcDev,
+		lastRegisterAt: state.LastRegisterAt,
+		expires:        state.Expires,
+	}
+	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, in.DeviceID, in.DeviceID)
+	defer releaseOperation()
+	requestCtx := operation.Context(ctx)
+	tx, err := g.svr.wrapRequestContext(requestCtx, ipcDev, sip.MethodOptions, nil, nil)
 	if err != nil {
-		return err
+		return operation.ErrorOr(err)
 	}
 	timeout := in.Timeout
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
-	resp, err := sipResponseWithTimeout(ctx, tx, timeout)
+	resp, err := sipResponseWithTimeout(requestCtx, tx, timeout)
 	if err != nil {
-		return err
+		return operation.ErrorOr(err)
 	}
 	if resp.StatusCode() != 200 {
 		return fmt.Errorf("options failed: %d %s", resp.StatusCode(), resp.Reason())
 	}
-	return g.persistOptionsProbeActivity(in.DeviceID)
+	var persistErr error
+	if !operation.Deliver(func() {
+		persistErr = g.persistOptionsProbeActivityForBinding(in.DeviceID, &binding)
+	}) {
+		return operation.Cause()
+	}
+	return persistErr
 }
 
 func (g *GB28181API) persistOptionsProbeActivity(deviceID string) error {
-	if err := g.svr.memoryStorer.Change(deviceID, func(d *ipc.Device) error {
-		d.KeepaliveAt = orm.Now()
+	return g.persistOptionsProbeActivityForBinding(deviceID, nil)
+}
+
+func (g *GB28181API) persistOptionsProbeActivityForBinding(deviceID string, expected *inboundRegistrationBinding) error {
+	unlockActivity := g.lockRegisterOperation(deviceID)
+	defer unlockActivity()
+	if expected != nil && !g.inboundRegistrationBindingMatchesLocked(deviceID, *expected) {
+		return errOptionsProbeRegistrationChanged
+	}
+	observedAt := time.Now()
+	if err := g.svr.changeMemory(g.serviceContext(), deviceID, func(d *ipc.Device) error {
+		d.KeepaliveAt = orm.Time{Time: observedAt}
+		d.IsOnline = true
+		setPersistedRegistrationClosed(d, false)
 		return nil
 	}, func(d *Device) {
-		d.LastKeepaliveAt = time.Now()
+		d.IsOnline = true
+		d.LastKeepaliveAt = observedAt
+		d.offlinePersistencePending = false
+		d.registrationClosed = false
+		clearPendingDeviceStatusLocked(d)
+		clearPendingKeepaliveLocked(d)
 	}); err != nil {
 		return fmt.Errorf("persist options probe activity: %w", err)
 	}
@@ -76,15 +122,13 @@ func sipResponseWithTimeout(ctx context.Context, tx *sip.Transaction, timeout ti
 	if tx == nil {
 		return nil, sip.NewError(nil, "SIP transaction is unavailable")
 	}
+	defer tx.Close()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	response, err := tx.GetResponseContext(waitCtx)
-	if err != nil {
-		tx.Close()
-	}
 	if err != nil && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

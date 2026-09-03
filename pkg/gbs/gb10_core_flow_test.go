@@ -154,6 +154,73 @@ func runFlowHandler(t *testing.T, conn *flowConnection, api *GB28181API, method,
 	}
 }
 
+type blockingFlowResponseConnection struct {
+	*flowConnection
+	started  chan struct{}
+	release  chan struct{}
+	writeErr error
+}
+
+func (c *blockingFlowResponseConnection) WriteTo(payload []byte, _ net.Addr) (int, error) {
+	select {
+	case c.started <- struct{}{}:
+	default:
+	}
+	<-c.release
+	if c.writeErr != nil {
+		return 0, c.writeErr
+	}
+	return c.flowConnection.Write(payload)
+}
+
+func startBlockingFlowHandler(t *testing.T, api *GB28181API, method, callID string, body []byte, handler func(*sip.Context), writeErr error) (*blockingFlowResponseConnection, <-chan struct{}) {
+	return startBlockingFlowHandlerForDevice(t, api, gb10DeviceID, method, callID, body, handler, writeErr)
+}
+
+func startBlockingFlowHandlerForDevice(t *testing.T, api *GB28181API, deviceID, method, callID string, body []byte, handler func(*sip.Context), writeErr error) (*blockingFlowResponseConnection, <-chan struct{}) {
+	t.Helper()
+	base := newFlowConnection()
+	conn := &blockingFlowResponseConnection{
+		flowConnection: base,
+		started:        make(chan struct{}, 1),
+		release:        make(chan struct{}),
+		writeErr:       writeErr,
+	}
+	req := newFlowRequest(t, base, method, callID, body)
+	req.SetConnection(conn)
+	tx := sip.NewTransaction(callID+"-tx", conn)
+	to := mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000")
+	done := make(chan struct{})
+	go func() {
+		handler(&sip.Context{
+			Request:  req,
+			Tx:       tx,
+			DeviceID: deviceID,
+			Source:   base.remote,
+			To:       to,
+			Log:      slog.Default(),
+		})
+		close(done)
+	}()
+	select {
+	case <-conn.started:
+	case <-time.After(time.Second):
+		close(conn.release)
+		t.Fatalf("%s SIP response write did not start", callID)
+	}
+	return conn, done
+}
+
+func finishBlockingFlowHandler(t *testing.T, conn *blockingFlowResponseConnection, done <-chan struct{}) {
+	t.Helper()
+	close(conn.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SIP response handler did not finish")
+	}
+}
+
 func newFlowRequest(t *testing.T, conn *flowConnection, method, callID string, body []byte) *sip.Request {
 	t.Helper()
 	device := mustFlowAddress(t, "sip:"+gb10DeviceID+"@3402000000")
@@ -169,6 +236,9 @@ func newFlowRequest(t *testing.T, conn *flowConnection, method, callID string, b
 			Transport: "UDP",
 			Params:    sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
 		})
+	if method == sip.MethodRegister || method == sip.MethodNotify {
+		builder.SetContact(device)
+	}
 	if len(body) > 0 {
 		if method == sip.MethodInvite {
 			builder.SetContentType(&sip.ContentTypeSDP)

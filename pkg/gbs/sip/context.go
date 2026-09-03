@@ -139,7 +139,12 @@ func (c *Context) AbortString(status int, msg string) {
 }
 
 func (c *Context) String(status int, msg string) {
-	_ = c.Tx.Respond(NewResponseFromRequest("", c.Request, status, msg, nil))
+	_ = c.RespondString(status, msg)
+}
+
+// RespondString 写出 SIP 响应并把底层发送错误交给需要按发送结果提交业务状态的调用方。
+func (c *Context) RespondString(status int, msg string) error {
+	return c.Tx.Respond(newInboundResponseFromRequest(c.Request, status, msg, nil))
 }
 
 func (c *Context) Set(k string, v any) {
@@ -179,5 +184,9 @@ func (c *Context) SendRequest(method string, body []byte) (*Transaction, error) 
 	req := NewRequest("", method, c.To.URI, DefaultSipVersion, hb.Build(), body)
 	req.SetDestination(c.Source)
 	req.SetConnection(c.Request.conn)
-	return c.svr.Request(req)
+	var security MessageSecurity
+	if c.Tx != nil {
+		security = c.Tx.messageSecurity()
+	}
+	return c.svr.RequestWithSecurity(req, security)
 }

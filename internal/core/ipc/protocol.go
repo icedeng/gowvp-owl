@@ -2,11 +2,13 @@ package ipc
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gowvp/owl/internal/core/bz"
 	"github.com/ixugo/goddd/domain/uniqueid"
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/web"
+	"gorm.io/gorm"
 )
 
 // 为协议适配，提供协议会用到的功能
@@ -68,7 +70,14 @@ func (g Adapter) ListDevices(ctx context.Context) ([]*Device, error) {
 }
 
 func (g Adapter) GetDeviceByDeviceID(gbDeviceID string) (*Device, error) {
-	ctx := context.TODO()
+	return g.GetDeviceByDeviceIDContext(context.Background(), gbDeviceID)
+}
+
+// GetDeviceByDeviceIDContext 查询设备，不存在时自动建档，并允许调用方取消数据库操作。
+func (g Adapter) GetDeviceByDeviceIDContext(ctx context.Context, gbDeviceID string) (*Device, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var d Device
 	if err := g.store.Device().Get(ctx, &d, orm.Where("device_id=?", gbDeviceID)); err != nil {
 		if !orm.IsErrRecordNotFound(err) {
@@ -90,20 +99,20 @@ func (g Adapter) GetDeviceByDeviceID(gbDeviceID string) (*Device, error) {
 }
 
 func (g Adapter) Logout(deviceID string, changeFn func(*Device)) error {
-	var d Device
-	if err := g.store.Device().Update(context.TODO(), &d, func(d *Device) error {
-		changeFn(d)
-		return nil
-	}, orm.Where("device_id=?", deviceID)); err != nil {
-		return err
-	}
-
-	return nil
+	return g.UpdateContext(context.Background(), deviceID, changeFn)
 }
 
 func (g Adapter) Edit(deviceID string, changeFn func(*Device)) error {
+	return g.UpdateContext(context.Background(), deviceID, changeFn)
+}
+
+// UpdateContext 更新设备，并允许调用方取消数据库操作。
+func (g Adapter) UpdateContext(ctx context.Context, deviceID string, changeFn func(*Device)) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var d Device
-	if err := g.store.Device().Update(context.TODO(), &d, func(d *Device) error {
+	if err := g.store.Device().Update(ctx, &d, func(d *Device) error {
 		changeFn(d)
 		return nil
 	}, orm.Where("device_id=?", deviceID)); err != nil {
@@ -114,7 +123,7 @@ func (g Adapter) Edit(deviceID string, changeFn func(*Device)) error {
 }
 
 func (g Adapter) Update(deviceID string, changeFn func(*Device)) error {
-	return g.Edit(deviceID, changeFn)
+	return g.UpdateContext(context.Background(), deviceID, changeFn)
 }
 
 func (g Adapter) EditPlayingByID(ctx context.Context, id string, playing bool) error {
@@ -158,81 +167,176 @@ func (g Adapter) SaveChannels(channels []*Channel) error {
 	if len(channels) <= 0 {
 		return nil
 	}
+	return g.SaveChannelSnapshot(context.Background(), channels[0].DeviceID, channels)
+}
 
-	ctx := context.TODO()
-	deviceID := channels[0].DeviceID
-
-	// 1. 获取设备信息
-	var dev Device
-	_ = g.store.Device().Update(context.TODO(), &dev, func(d *Device) error {
-		d.Channels = len(channels)
-		return nil
-	}, orm.Where("device_id=?", channels[0].DeviceID))
-
-	// 2. 批量查询该设备的所有现有通道（一次查询，避免循环查询）
-	var existingChannels []*Channel
-	_, _ = g.store.Channel().List(ctx, &existingChannels,
-		web.NewPagerFilterMaxSize(),
-		orm.Where("device_id = ?", deviceID),
-	)
-
-	// 3. 构建 map 方便快速查找
-	existingMap := make(map[string]*Channel)
-	for _, ch := range existingChannels {
-		existingMap[ch.ChannelID] = ch
+// SaveChannelSnapshot 原子保存设备上报的完整通道快照；空列表表示设备当前没有通道。
+func (g Adapter) SaveChannelSnapshot(ctx context.Context, deviceID string, channels []*Channel) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if g.store == nil {
+		return fmt.Errorf("save channel snapshot: store is unavailable")
+	}
+	if deviceID == "" {
+		return fmt.Errorf("save channel snapshot: device ID is empty")
+	}
+	seen := make(map[string]struct{}, len(channels))
+	for index, channel := range channels {
+		if channel == nil {
+			return fmt.Errorf("save channel snapshot: channel %d is nil", index)
+		}
+		if channel.DeviceID != deviceID {
+			return fmt.Errorf("save channel snapshot: channel %q belongs to device %q, want %q", channel.ChannelID, channel.DeviceID, deviceID)
+		}
+		if channel.ChannelID == "" {
+			return fmt.Errorf("save channel snapshot: channel %d ID is empty", index)
+		}
+		if _, ok := seen[channel.ChannelID]; ok {
+			return fmt.Errorf("save channel snapshot: duplicate channel ID %q", channel.ChannelID)
+		}
+		seen[channel.ChannelID] = struct{}{}
 	}
 
-	// 4. 收集当前上报的通道 ID
-	currentChannelIDs := make([]string, 0, len(channels))
-
-	// 5. 遍历上报的通道，区分新增和更新
+	type stagedChannelID struct {
+		channel   *Channel
+		id        string
+		did       string
+		generated bool
+	}
+	// 唯一 ID 存储使用独立连接；先在事务外为新增通道预留 ID，避免 SQLite 等数据库发生自锁。
+	var preexistingChannels []*Channel
+	if _, err := g.store.Channel().List(ctx, &preexistingChannels,
+		web.NewPagerFilterMaxSize(), orm.Where("device_id = ?", deviceID)); err != nil {
+		return fmt.Errorf("prepare channel snapshot for device %q: %w", deviceID, err)
+	}
+	preexistingMap := make(map[string]struct{}, len(preexistingChannels))
+	for _, channel := range preexistingChannels {
+		preexistingMap[channel.ChannelID] = struct{}{}
+	}
+	preparedNew := make(map[string]stagedChannelID, len(channels))
 	for _, channel := range channels {
-		currentChannelIDs = append(currentChannelIDs, channel.ChannelID)
-
-		if existing, ok := existingMap[channel.ChannelID]; ok {
-			// 只更新设备上报的字段，保留用户手动配置的 EnabledAI / Zones / RecordMode
-			_ = g.store.Channel().Update(ctx, existing, func(c *Channel) error {
-				c.Name = channel.Name
-				c.IsOnline = channel.IsOnline
-				c.PTZType = channel.PTZType
-				c.Ext.Manufacturer = channel.Ext.Manufacturer
-				c.Ext.Firmware = channel.Ext.Firmware
-				c.Ext.GBVersion = channel.Ext.GBVersion
-				c.Ext.Model = channel.Ext.Model
-				c.Ext.GBCatalog = channel.Ext.GBCatalog
-				return nil
-			}, orm.Where("id=?", existing.ID))
-		} else {
-			// 通道不存在，新增
-			channel.ID = GenerateChannelID(channel, g.uni)
-			channel.DID = dev.ID
-			_ = g.store.Channel().Create(ctx, channel)
+		if _, ok := preexistingMap[channel.ChannelID]; ok {
+			continue
+		}
+		id := channel.ID
+		generated := id == ""
+		if generated {
+			id = GenerateChannelID(channel, g.uni)
+			if id == "" || id == "unknown" {
+				for _, prepared := range preparedNew {
+					if prepared.generated {
+						_ = g.uni.UndoUniqueID(prepared.id)
+					}
+				}
+				return fmt.Errorf("generate ID for channel %q", channel.ChannelID)
+			}
+		}
+		preparedNew[channel.ChannelID] = stagedChannelID{
+			channel: channel, id: id, generated: generated,
 		}
 	}
-
-	// 6. 删除不再存在的通道（设备上报的通道列表中没有的）
-	// 方案A：标记为离线（推荐，保留历史数据）
-	if len(currentChannelIDs) > 0 {
-		_ = g.store.Channel().BatchEdit(ctx, "is_online", false,
-			orm.Where("device_id = ?", deviceID),
-			orm.Where("channel_id NOT IN ?", currentChannelIDs),
-		)
+	cleanupGeneratedIDs := func(used map[string]struct{}) {
+		for channelID, staged := range preparedNew {
+			if !staged.generated {
+				continue
+			}
+			if used != nil {
+				if _, ok := used[channelID]; ok {
+					continue
+				}
+			}
+			_ = g.uni.UndoUniqueID(staged.id)
+		}
 	}
+	stagedIDs := make([]stagedChannelID, 0, len(channels))
+	usedPreparedIDs := make(map[string]struct{}, len(preparedNew))
+	err := g.store.Channel().Session(ctx, func(tx *gorm.DB) error {
+		var device Device
+		if err := tx.WithContext(ctx).
+			Where("device_id = ? OR id = ?", deviceID, deviceID).
+			First(&device).Error; err != nil {
+			return fmt.Errorf("load device %q: %w", deviceID, err)
+		}
 
-	// 方案B：硬删除（如果需要完全删除）
-	// 可根据业务需求在配置中选择
-	// var ch Channel
-	// _ = g.store.Channel().Delete(ctx, &ch,
-	// 	orm.Where("device_id = ?", deviceID),
-	// 	orm.Where("channel_id NOT IN ?", currentChannelIDs),
-	// )
+		var existingChannels []*Channel
+		if err := tx.WithContext(ctx).
+			Where("device_id = ?", deviceID).
+			Find(&existingChannels).Error; err != nil {
+			return fmt.Errorf("list channels for device %q: %w", deviceID, err)
+		}
+		existingMap := make(map[string]*Channel, len(existingChannels))
+		for _, channel := range existingChannels {
+			existingMap[channel.ChannelID] = channel
+		}
 
-	// 7. 更新设备的通道数量
-	_ = g.store.Device().Update(ctx, &dev, func(d *Device) error {
-		d.Channels = len(channels)
+		currentChannelIDs := make([]string, 0, len(channels))
+		for _, reported := range channels {
+			currentChannelIDs = append(currentChannelIDs, reported.ChannelID)
+			if existing, ok := existingMap[reported.ChannelID]; ok {
+				// 只覆盖设备上报字段，保留用户配置和其他扩展属性。
+				// 通道明确离线时已不存在可继续恢复的媒体会话，必须同时清除播放状态；
+				// 在线通道继续保留当前播放状态，避免目录刷新中断正常直播。
+				existing.Name = reported.Name
+				existing.IsOnline = reported.IsOnline
+				if !reported.IsOnline {
+					existing.IsPlaying = false
+				}
+				existing.PTZType = reported.PTZType
+				existing.Ext.Manufacturer = reported.Ext.Manufacturer
+				existing.Ext.Firmware = reported.Ext.Firmware
+				existing.Ext.GBVersion = reported.Ext.GBVersion
+				existing.Ext.Model = reported.Ext.Model
+				existing.Ext.GBCatalog = reported.Ext.GBCatalog
+				if err := tx.WithContext(ctx).
+					Model(existing).
+					Select("name", "is_online", "is_playing", "ptztype", "ext").
+					Updates(existing).Error; err != nil {
+					return fmt.Errorf("update channel %q: %w", reported.ChannelID, err)
+				}
+				continue
+			}
+
+			prepared, ok := preparedNew[reported.ChannelID]
+			if !ok {
+				return fmt.Errorf("channel %q disappeared while preparing snapshot", reported.ChannelID)
+			}
+			created := *reported
+			created.ID = prepared.id
+			created.DID = device.ID
+			if err := tx.WithContext(ctx).Create(&created).Error; err != nil {
+				return fmt.Errorf("create channel %q: %w", reported.ChannelID, err)
+			}
+			usedPreparedIDs[reported.ChannelID] = struct{}{}
+			stagedIDs = append(stagedIDs, stagedChannelID{
+				channel: reported, id: created.ID, did: created.DID, generated: prepared.generated,
+			})
+		}
+
+		offline := tx.WithContext(ctx).Model(new(Channel)).Where("device_id = ?", deviceID)
+		if len(currentChannelIDs) > 0 {
+			offline = offline.Where("channel_id NOT IN ?", currentChannelIDs)
+		}
+		if err := offline.Updates(map[string]any{"is_online": false, "is_playing": false}).Error; err != nil {
+			return fmt.Errorf("mark missing channels offline for device %q: %w", deviceID, err)
+		}
+		if err := tx.WithContext(ctx).
+			Model(new(Device)).
+			Where("id = ?", device.ID).
+			UpdateColumn("channels", len(channels)).Error; err != nil {
+			return fmt.Errorf("update channel count for device %q: %w", deviceID, err)
+		}
 		return nil
-	}, orm.Where("device_id=?", deviceID))
-
+	})
+	if err != nil {
+		cleanupGeneratedIDs(nil)
+		return fmt.Errorf("save channel snapshot for device %q: %w", deviceID, err)
+	}
+	cleanupGeneratedIDs(usedPreparedIDs)
+	for _, staged := range stagedIDs {
+		staged.channel.ID = staged.id
+		staged.channel.DID = staged.did
+	}
 	return nil
 }
 

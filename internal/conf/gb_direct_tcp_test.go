@@ -32,3 +32,59 @@ func TestProjectConfigParsesDirectTCPDownload(t *testing.T) {
 		t.Fatalf("parsed direct TCP config = %+v", direct)
 	}
 }
+
+func TestValidateSIPDirectTCPDownloadConfig(t *testing.T) {
+	valid := DefaultConfig().Sip.DirectTCPDownload
+	valid.Enabled = true
+	valid.DeviceAllowlist = []string{"34020000001320000001"}
+	if err := ValidateSIPDirectTCPDownloadConfig(valid); err != nil {
+		t.Fatalf("valid direct TCP download config was rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		change func(*SIPDirectTCPDownload)
+	}{
+		{name: "missing allowlist", change: func(config *SIPDirectTCPDownload) { config.DeviceAllowlist = nil }},
+		{name: "invalid device ID", change: func(config *SIPDirectTCPDownload) { config.DeviceAllowlist = []string{"device"} }},
+		{name: "duplicate device ID", change: func(config *SIPDirectTCPDownload) {
+			config.DeviceAllowlist = []string{"34020000001320000001", "34020000001320000001"}
+		}},
+		{name: "missing storage directory", change: func(config *SIPDirectTCPDownload) { config.StorageDir = "" }},
+		{name: "invalid retain days", change: func(config *SIPDirectTCPDownload) { config.RetainDays = 0 }},
+		{name: "invalid offer port", change: func(config *SIPDirectTCPDownload) { config.OfferPort = 70000 }},
+		{name: "invalid max file size", change: func(config *SIPDirectTCPDownload) { config.MaxFileSize = -1 }},
+		{name: "invalid global concurrency", change: func(config *SIPDirectTCPDownload) { config.GlobalConcurrency = 0 }},
+		{name: "invalid device concurrency", change: func(config *SIPDirectTCPDownload) { config.DeviceConcurrency = 0 }},
+		{name: "device concurrency exceeds global", change: func(config *SIPDirectTCPDownload) { config.GlobalConcurrency = 1; config.DeviceConcurrency = 2 }},
+		{name: "invalid dial timeout", change: func(config *SIPDirectTCPDownload) { config.DialTimeout = 0 }},
+		{name: "invalid first byte timeout", change: func(config *SIPDirectTCPDownload) { config.FirstByteTimeout = 0 }},
+		{name: "invalid idle timeout", change: func(config *SIPDirectTCPDownload) { config.IdleTimeout = 0 }},
+		{name: "invalid total timeout", change: func(config *SIPDirectTCPDownload) { config.TotalTimeout = 0 }},
+		{name: "total timeout shorter than phase", change: func(config *SIPDirectTCPDownload) { config.TotalTimeout = Duration(time.Second) }},
+		{name: "address mismatch without CIDR", change: func(config *SIPDirectTCPDownload) {
+			config.AllowAddressMismatch = true
+			config.AllowedAddressCIDRs = nil
+		}},
+		{name: "invalid allowed CIDR", change: func(config *SIPDirectTCPDownload) {
+			config.AllowAddressMismatch = true
+			config.AllowedAddressCIDRs = []string{"not-a-cidr"}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := valid
+			config.DeviceAllowlist = append([]string(nil), valid.DeviceAllowlist...)
+			config.AllowedAddressCIDRs = append([]string(nil), valid.AllowedAddressCIDRs...)
+			test.change(&config)
+			if err := ValidateSIPDirectTCPDownloadConfig(config); err == nil {
+				t.Fatalf("invalid direct TCP download config was accepted: %+v", config)
+			}
+		})
+	}
+
+	// 默认关闭时保持旧配置兼容；真正启用前必须满足完整安全约束。
+	if err := ValidateSIPDirectTCPDownloadConfig(SIPDirectTCPDownload{}); err != nil {
+		t.Fatalf("disabled legacy direct TCP download config was rejected: %v", err)
+	}
+}

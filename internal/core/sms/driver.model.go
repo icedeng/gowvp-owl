@@ -2,9 +2,27 @@ package sms
 
 import (
 	"encoding/json"
+	"net/url"
+	"strings"
 
 	"github.com/gowvp/owl/pkg/zlm"
 )
+
+const MediaServerProxyRoutePrefix = "_media"
+
+// MediaServerProxySegment 把媒体节点 ID 编码为播放器代理路径段。
+// 路径携带节点归属后，HLS 相对分片也会自然继承相同路由。
+func MediaServerProxySegment(mediaServerID string) string {
+	id := strings.TrimSpace(mediaServerID)
+	if id == "" {
+		id = DefaultMediaServerID
+	}
+	return url.PathEscape(id)
+}
+
+func MediaServerProxyRoute(mediaServerID string) string {
+	return MediaServerProxyRoutePrefix + "/" + MediaServerProxySegment(mediaServerID)
+}
 
 type AddStreamProxyRequest struct {
 	App     string `json:"app"`      // 添加的流的应用名，例如 live

@@ -21,13 +21,14 @@ import {
   RefreshCw,
   Save,
   Search,
+  Server,
   ShieldAlert,
   Square,
   Video,
   Volume2,
   VolumeX,
 } from "@lucide/vue";
-import { api, errorMessage, typeLabel } from "../services/api";
+import { api, collectPages, errorMessage, typeLabel } from "../services/api";
 import type {
   ApiChannel,
   ApiDevice,
@@ -36,6 +37,7 @@ import type {
   GBOperationOutput,
   GBSnapshotState,
   GBUpgradeState,
+  MediaServer,
   PlayResult,
   Zone,
 } from "../types/api";
@@ -68,8 +70,10 @@ const upgradeSessionId = ref("");
 const upgradeState = ref<GBUpgradeState | null>(null);
 const historyActive = ref(false);
 const historyState = ref<GBHistoryDownloadState | null>(null);
-const resourceErrors = reactive({ device: "", recordings: "", zones: "", remote: "", history: "" });
-const resourceLoading = reactive({ recordings: false, zones: false, remote: false });
+const mediaServers = ref<MediaServer[]>([]);
+const selectedMediaServerId = ref("local");
+const resourceErrors = reactive({ device: "", recordings: "", zones: "", remote: "", history: "", media: "" });
+const resourceLoading = reactive({ recordings: false, zones: false, remote: false, media: false });
 const zoneError = ref("");
 type ChannelTab = "live" | "ai" | "recordings" | "gb" | "technical";
 const activeTab = ref<ChannelTab>("live");
@@ -169,6 +173,25 @@ const protocol = computed(() =>
   )
 );
 const isGb = computed(() => protocol.value === "GB28181");
+const boundMediaServerId = computed(() => channel.value?.config?.media_server_id?.trim() || "local");
+const boundMediaServer = computed(() => mediaServers.value.find((item) => item.id === boundMediaServerId.value));
+const boundMediaServerState = computed(() => {
+  if (resourceLoading.media) return { tone: "pending", label: "读取中" };
+  if (resourceErrors.media || !boundMediaServer.value || boundMediaServer.value.status === undefined) {
+    return { tone: "pending", label: "状态未知" };
+  }
+  return boundMediaServer.value.status
+    ? { tone: "online", label: "在线" }
+    : { tone: "offline", label: "离线" };
+});
+const mediaBindingChanged = computed(() => selectedMediaServerId.value !== boundMediaServerId.value);
+const mediaBindingDisabledReason = computed(() => {
+  if (!isGb.value) return "媒体节点绑定仅适用于 GB28181 通道";
+  if (channel.value?.is_playing || historyActive.value) return "通道存在活动媒体会话，请先停止预览、回放、下载或语音会话";
+  if (resourceLoading.media) return "正在读取媒体节点";
+  if (resourceErrors.media) return resourceErrors.media;
+  return "";
+});
 const supportsPtz = computed(() => Boolean(channel.value?.ptz_capable));
 const canUseRealtime = computed(() => Boolean(channel.value?.is_online) && !actionLoading.value);
 const gbCapabilityDeclaration = computed<string[] | undefined>(() => {
@@ -204,6 +227,15 @@ const effectiveGbVersion = computed(() => {
     default:
       return "";
   }
+});
+const gbVersionLabel = computed(() => {
+  const labels: Record<string, string> = {
+    "1.0": "2011（1.0）",
+    "1.1": "2014（1.1）",
+    "2.0": "2016（2.0）",
+    "3.0": "2022（3.0）",
+  };
+  return labels[effectiveGbVersion.value] || "版本待识别";
 });
 function hasGBCapability(name: string) {
   if (hasDeclaredGBCapabilities.value) return gbCapabilities.value.includes(name);
@@ -461,8 +493,30 @@ function clearContext() {
   upgradeState.value = null;
   historyActive.value = false;
   historyState.value = null;
-  Object.assign(resourceErrors, { device: "", recordings: "", zones: "", remote: "", history: "" });
+  mediaServers.value = [];
+  selectedMediaServerId.value = "local";
+  voiceForm.mediaServerId = "local";
+  Object.assign(resourceErrors, { device: "", recordings: "", zones: "", remote: "", history: "", media: "" });
   activeTab.value = "live";
+}
+
+function mediaServerStatusLabel(status?: boolean) {
+  if (status === true) return "在线";
+  if (status === false) return "离线";
+  return "状态未知";
+}
+
+async function loadMediaServers(sequence = loadSequence) {
+  resourceLoading.media = true;
+  resourceErrors.media = "";
+  try {
+    const response = await collectPages(api.mediaServers, {}, 1000);
+    if (sequence === loadSequence) mediaServers.value = response.items;
+  } catch (cause) {
+    if (sequence === loadSequence) resourceErrors.media = errorMessage(cause, "媒体节点暂时无法读取");
+  } finally {
+    if (sequence === loadSequence) resourceLoading.media = false;
+  }
 }
 
 async function loadRecordings(id: string, sequence = loadSequence) {
@@ -526,12 +580,15 @@ async function load() {
     if (sequence !== loadSequence) return;
     if (!data?.id) throw new Error("通道不存在或响应格式错误");
     channel.value = data;
+    selectedMediaServerId.value = data.config?.media_server_id?.trim() || "local";
+    voiceForm.mediaServerId = selectedMediaServerId.value;
     aiEnabled.value = Boolean(data.ext?.enabled_ai);
     recordMode.value = data.ext?.record_mode || "always";
 
     void loadRecordings(data.id, sequence);
     void loadZones(data.id, sequence);
     void restoreHistoryState(data.id, sequence);
+    void loadMediaServers(sequence);
     if (data.did) {
       api.device(data.did).then(
         (response) => {
@@ -575,6 +632,19 @@ async function startPlay() {
   } finally {
     actionLoading.value = "";
   }
+}
+
+async function saveMediaServerBinding() {
+  if (!channel.value || mediaBindingDisabledReason.value || !mediaBindingChanged.value || actionLoading.value) return;
+  const mediaServerId = selectedMediaServerId.value.trim() || "local";
+  const succeeded = await runAction("保存媒体节点", () => api.bindChannelMediaServer(channel.value!.id, mediaServerId));
+  if (!succeeded) return;
+  channel.value = {
+    ...channel.value,
+    config: { ...channel.value.config, media_server_id: mediaServerId },
+  };
+  voiceForm.mediaServerId = mediaServerId;
+  play.value = null;
 }
 
 async function copyPlayAddress(url: string) {
@@ -851,7 +921,6 @@ async function startHistorySession() {
       record_type: historyForm.recordType,
     });
     historyActive.value = true;
-    historyActive.value = true;
     historyState.value = null;
     if (data?.download) applyHistoryState({ ...data.download, transport: historyForm.transport });
     ui.toast(historyForm.mode === "download" ? "下载会话已启动" : "历史回放会话已启动");
@@ -968,6 +1037,8 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
               <span class="status" :class="channel.is_online ? 'online' : 'offline'">{{ channel.is_online ? "在线" : "离线" }}</span>
               <span class="status" :class="channel.is_playing ? 'online' : ''">{{ channel.is_playing ? "LIVE" : "空闲" }}</span>
               <span class="protocol-tag blue">{{ protocol }}</span>
+              <span v-if="isGb" class="protocol-tag blue" :title="`有效版本：${gbVersionLabel}`">{{ gbVersionLabel }}</span>
+              <span v-if="isGb" class="protocol-tag"><Server />{{ boundMediaServerId }}</span>
             </div>
             <div class="device-command-meta">
               <span class="mono">{{ channel.channel_id || channel.id }}</span>
@@ -1059,6 +1130,7 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
               <div class="card-head"><div><h3 class="card-title">快捷操作</h3><p class="card-sub">保持当前画面持续可见</p></div><Mic /></div>
               <div class="form-grid">
                 <label class="form-group"><span class="form-label">语音模式</span><select v-model="voiceForm.mode" class="input plain w-full"><option value="talk_standard" :disabled="!supportsStandardVoiceTalk">标准对讲（2016/2022）</option><option value="talk" :disabled="!supportsVoiceTalk">兼容对讲（2011+ 单 INVITE）</option><option value="broadcast" :disabled="!supportsVoiceBroadcast">语音广播（2014+）</option></select></label>
+                <label class="form-group"><span class="form-label">音频源节点</span><select v-model="voiceForm.mediaServerId" class="select w-full" :disabled="resourceLoading.media"><option v-if="!mediaServers.some((item) => item.id === voiceForm.mediaServerId)" :value="voiceForm.mediaServerId">{{ voiceForm.mediaServerId }} · 当前绑定</option><option v-for="item in mediaServers" :key="item.id" :value="item.id">{{ item.id }} · {{ mediaServerStatusLabel(item.status) }}</option></select></label>
                 <label class="form-group"><span class="form-label">G.711 音频源流</span><input v-model.trim="voiceForm.sourceStream" class="input plain w-full" placeholder="例如 voice-microphone-1" /></label>
               </div>
               <div class="channel-quick-actions">
@@ -1066,7 +1138,7 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
                 <button class="btn" type="button" :disabled="Boolean(voiceDisabledReason) || Boolean(actionLoading)" @click="runAction(voiceForm.mode === 'broadcast' ? '开始广播' : '开始对讲', () => api.voiceStart(channel!.id, { mode: voiceForm.mode, media_server_id: voiceForm.mediaServerId, source_vhost: voiceForm.sourceVhost, source_app: voiceForm.sourceApp, source_stream: voiceForm.sourceStream }))"><Volume2 />{{ voiceForm.mode === "broadcast" ? "开始广播" : "开始对讲" }}</button>
                 <button class="btn" type="button" :disabled="Boolean(voiceStopDisabledReason) || Boolean(actionLoading)" @click="runAction(voiceForm.mode === 'broadcast' ? '停止广播' : '停止对讲', () => api.voiceStop(channel!.id, { mode: voiceForm.mode }))"><VolumeX />{{ voiceForm.mode === "broadcast" ? "停止广播" : "停止对讲" }}</button>
               </div>
-              <p class="capability-reason">{{ voiceDisabledReason || (voiceForm.mode === "talk_standard" ? "标准对讲会组合实时点播上行与语音广播下行两条链路" : voiceForm.mode === "talk" ? "兼容模式使用厂商单个双向 INVITE，不替代标准双流程" : "音频源将通过 ZLMediaKit 转为国标 RTP 发送") }}</p>
+              <p class="capability-reason">{{ voiceDisabledReason || (voiceForm.mode === "talk_standard" ? `标准对讲会组合实时点播上行与 ${voiceForm.mediaServerId} 节点的语音广播下行` : voiceForm.mode === "talk" ? `兼容模式从 ${voiceForm.mediaServerId} 节点发送厂商单个双向 INVITE` : `音频源将由 ${voiceForm.mediaServerId} 节点转为国标 RTP 发送`) }}</p>
             </article>
           </aside>
         </div>
@@ -1146,7 +1218,7 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
               <label class="form-group"><span class="form-label">录像类型</span><select v-model.number="historyForm.recordType" class="select w-full" :disabled="historyActive"><option :value="3">定时录像</option><option :value="0">全部录像</option><option :value="1">手动录像</option><option :value="2">报警录像</option></select></label>
               <label v-if="historyForm.mode === 'download'" class="form-group"><span class="form-label">下载倍速</span><input v-model.number="historyForm.downloadSpeed" class="input plain w-full" type="number" min="1" max="16" step="1" :disabled="historyActive || !hasGBCapability('download_speed')" /><small :class="{ 'field-error': !historyDownloadSpeedValid }">{{ !historyDownloadSpeedValid ? "请输入 1–16 的整数倍速" : hasGBCapability("download_speed") ? "2014+ 支持整数倍速" : "当前档案固定 1 倍速" }}</small></label>
             </div>
-            <p class="capability-reason">{{ historyForm.transport === "direct_tcp" ? supportsDirectDownload ? "2014 附录 O 已由设备能力档案开放；仍受服务端白名单与并发限制" : "当前设备未声明 direct_tcp_download 能力" : "RTP 历史会话适用于四个版本，实际媒体能力仍需设备互通验证" }}</p>
+            <p class="capability-reason">{{ historyForm.transport === "direct_tcp" ? supportsDirectDownload ? "2014 附录 O 已由设备能力档案开放；仍受服务端白名单与并发限制" : "当前设备未声明 direct_tcp_download 能力" : `RTP 历史会话将在 ${boundMediaServerId} 节点收流；适用于四个版本，仍需设备互通验证` }}</p>
             <div class="history-session-actions">
               <button class="btn btn-primary" type="button" :disabled="!isGb || !channel.is_online || historyActive || !historyStartAllowed || Boolean(actionLoading)" @click="startHistorySession"><LoaderCircle v-if="actionLoading === '启动历史会话'" class="animate-spin" /><Play v-else />启动会话</button>
               <button class="btn" type="button" :disabled="!historyActive || Boolean(actionLoading)" @click="stopHistorySession"><Square />{{ historyForm.mode === "download" && historyForm.transport === "direct_tcp" ? "取消下载" : "停止会话" }}</button>
@@ -1248,7 +1320,18 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
 
       <section v-else id="channel-panel-technical" class="channel-detail-section" role="tabpanel" aria-labelledby="channel-tab-technical" tabindex="0">
         <div class="detail-section-head"><div><h2>通道档案</h2><p>用于运维核验的协议、归属和媒体流标识。</p></div></div>
-        <article class="card card-pad"><dl class="channel-technical-grid"><div><dt>协议</dt><dd>{{ protocol }}</dd></div><div><dt>通道编号</dt><dd class="mono">{{ channel.channel_id || channel.id }}</dd></div><div><dt>所属设备</dt><dd>{{ device?.name || channel.device_id || "—" }}</dd></div><div><dt>设备 ID</dt><dd class="mono">{{ channel.did || channel.device_id || "—" }}</dd></div><div><dt>应用 / 流</dt><dd class="mono">{{ channel.app || "—" }} / {{ channel.stream || "—" }}</dd></div><div><dt>更新时间</dt><dd>{{ formatDate(channel.updated_at) }}</dd></div></dl><details v-if="playAddresses.length" class="detail-raw-card mt-4"><summary><Link2 />查看全部播放地址（{{ playAddresses.length }}）</summary><div class="technical-link-list"><a v-for="item in playAddresses" :key="item.url" :href="item.url" target="_blank" rel="noreferrer"><strong>{{ item.label }}</strong><span class="mono">{{ item.url }}</span></a></div></details></article>
+        <div class="channel-technical-layout">
+          <article class="card card-pad"><dl class="channel-technical-grid"><div><dt>协议</dt><dd>{{ protocol }}</dd></div><div v-if="isGb"><dt>有效版本</dt><dd><span class="protocol-tag blue">{{ gbVersionLabel }}</span></dd></div><div><dt>通道编号</dt><dd class="mono">{{ channel.channel_id || channel.id }}</dd></div><div><dt>所属设备</dt><dd>{{ device?.name || channel.device_id || "—" }}</dd></div><div><dt>设备 ID</dt><dd class="mono">{{ channel.did || channel.device_id || "—" }}</dd></div><div><dt>应用 / 流</dt><dd class="mono">{{ channel.app || "—" }} / {{ channel.stream || "—" }}</dd></div><div><dt>媒体节点</dt><dd><span class="status" :class="boundMediaServerState.tone">{{ boundMediaServerId }} · {{ boundMediaServerState.label }}</span></dd></div><div><dt>更新时间</dt><dd>{{ formatDate(channel.updated_at) }}</dd></div></dl><details v-if="playAddresses.length" class="detail-raw-card mt-4"><summary><Link2 />查看全部播放地址（{{ playAddresses.length }}）</summary><div class="technical-link-list"><a v-for="item in playAddresses" :key="item.url" :href="item.url" target="_blank" rel="noreferrer"><strong>{{ item.label }}</strong><span class="mono">{{ item.url }}</span></a></div></details></article>
+
+          <article v-if="isGb" class="card form-section media-binding-card">
+            <div class="card-head"><div><h3 class="card-title">媒体节点路由</h3><p class="card-sub">直播、回放、下载、快照、语音与级联媒体共用此绑定</p></div><Server /></div>
+            <div v-if="resourceErrors.media" class="inline-resource-error" role="alert"><span>{{ resourceErrors.media }}</span><button class="btn btn-sm" type="button" @click="loadMediaServers()">重试</button></div>
+            <label v-else class="form-group"><span class="form-label">接收与处理节点</span><select v-model="selectedMediaServerId" class="select w-full" :disabled="Boolean(mediaBindingDisabledReason)" aria-describedby="media-binding-help"><option v-if="!mediaServers.some((item) => item.id === selectedMediaServerId)" :value="selectedMediaServerId">{{ selectedMediaServerId }} · 当前绑定</option><option v-for="item in mediaServers" :key="item.id" :value="item.id">{{ item.id }} · {{ mediaServerStatusLabel(item.status) }} · {{ item.ip || "地址未配置" }}</option></select></label>
+            <div class="media-binding-route" aria-live="polite"><span><small>当前节点</small><strong class="mono">{{ boundMediaServerId }}</strong></span><span aria-hidden="true">→</span><span><small>保存后</small><strong class="mono">{{ selectedMediaServerId }}</strong></span></div>
+            <p id="media-binding-help" class="capability-reason">{{ mediaBindingDisabledReason || (mediaBindingChanged ? "保存后仅影响新建媒体会话；当前播放地址将清空并需重新预览" : "当前绑定已生效，无需保存") }}</p>
+            <button class="btn btn-primary" type="button" :aria-disabled="Boolean(mediaBindingDisabledReason) || !mediaBindingChanged || Boolean(actionLoading)" aria-describedby="media-binding-help" @click="saveMediaServerBinding"><LoaderCircle v-if="actionLoading === '保存媒体节点'" class="animate-spin" /><Save v-else />保存节点绑定</button>
+          </article>
+        </div>
       </section>
     </template>
   </main>

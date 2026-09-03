@@ -2,21 +2,18 @@ package ipccache
 
 import (
 	"context"
-	"fmt"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/ipc/store/ipcdb"
+	"github.com/ixugo/goddd/pkg/orm"
 	"gorm.io/gorm"
 )
 
 func TestGBCascadeTaskRoutePersistsBothIndexesAndCleansUp(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())))
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := openInternalCacheTestDatabase(t)
 	base := ipcdb.NewDB(db).AutoMigrate(true)
 	first := NewCache(base)
 	now := time.Now()
@@ -54,10 +51,7 @@ func TestGBCascadeTaskRoutePersistsBothIndexesAndCleansUp(t *testing.T) {
 }
 
 func TestGBCascadeTaskRouteRejectsConflictingUpstreamOwner(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())))
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := openInternalCacheTestDatabase(t)
 	cache := NewCache(ipcdb.NewDB(db).AutoMigrate(true))
 	now := time.Now()
 	const (
@@ -78,11 +72,36 @@ func TestGBCascadeTaskRouteRejectsConflictingUpstreamOwner(t *testing.T) {
 	}
 }
 
-func TestGBCascadeTaskRouteUpdateKeepsIndexesConsistent(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())))
-	if err != nil {
+func TestGBCascadeTaskRouteDeletesByUpstreamIdentity(t *testing.T) {
+	db := openInternalCacheTestDatabase(t)
+	cache := NewCache(ipcdb.NewDB(db).AutoMigrate(true))
+	const (
+		kind                = "upgrade"
+		platformName        = "upstream-delete-platform"
+		deviceID            = "34020000001320000001"
+		downstreamSessionID = "downstream-delete-upstream-00001"
+		exposedID           = "34020000001320000911"
+		upstreamSessionID   = "upstream-delete-session-0000001"
+	)
+	if err := cache.SaveGBCascadeTaskRoute(
+		t.Context(), kind, platformName, deviceID, downstreamSessionID, exposedID, upstreamSessionID,
+		[]byte(`{"route":true}`), time.Now(),
+	); err != nil {
 		t.Fatal(err)
 	}
+	if err := cache.DeleteGBCascadeTaskRouteByUpstream(t.Context(), kind, platformName, exposedID, upstreamSessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := cache.LoadGBCascadeTaskRouteByDownstream(t.Context(), kind, deviceID, downstreamSessionID); err != nil || ok {
+		t.Fatalf("route survived upstream deletion through downstream index: found:%v err:%v", ok, err)
+	}
+	if _, ok, err := cache.LoadGBCascadeTaskRouteByUpstream(t.Context(), kind, platformName, exposedID, upstreamSessionID); err != nil || ok {
+		t.Fatalf("route survived upstream deletion: found:%v err:%v", ok, err)
+	}
+}
+
+func TestGBCascadeTaskRouteUpdateKeepsIndexesConsistent(t *testing.T) {
+	db := openInternalCacheTestDatabase(t)
 	cache := NewCache(ipcdb.NewDB(db).AutoMigrate(true))
 	const (
 		kind                = "snapshot"
@@ -120,11 +139,106 @@ func TestGBCascadeTaskRouteUpdateKeepsIndexesConsistent(t *testing.T) {
 	}
 }
 
-func TestDeleteDeviceRemovesGBCascadeTaskRoutes(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())))
-	if err != nil {
+func TestGBCascadeTaskRouteUpdateRefreshesCleanupTTL(t *testing.T) {
+	db := openInternalCacheTestDatabase(t)
+	cache := NewCache(ipcdb.NewDB(db).AutoMigrate(true))
+	const (
+		kind                = "upgrade"
+		platformName        = "ttl-platform"
+		deviceID            = "34020000001320000001"
+		downstreamSessionID = "downstream-session-ttl-update-001"
+		exposedID           = "34020000001320000911"
+		upstreamSessionID   = "upstream-session-ttl-update-00001"
+	)
+	createdAt := time.Now().UTC().Truncate(time.Second).Add(-2 * time.Hour)
+	updatedAt := createdAt.Add(time.Hour)
+	if err := cache.SaveGBCascadeTaskRoute(t.Context(), kind, platformName, deviceID, downstreamSessionID,
+		exposedID, upstreamSessionID, []byte(`{"completed":false}`), createdAt); err != nil {
 		t.Fatal(err)
 	}
+	updatedPayload := []byte(`{"completed":true}`)
+	if err := cache.SaveGBCascadeTaskRoute(t.Context(), kind, platformName, deviceID, downstreamSessionID,
+		exposedID, upstreamSessionID, updatedPayload, updatedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cache.CleanupGBCascadeTaskRoutes(t.Context(), createdAt.Add(30*time.Minute), 1024); err != nil {
+		t.Fatal(err)
+	}
+	payload, ok, err := cache.LoadGBCascadeTaskRouteByDownstream(t.Context(), kind, deviceID, downstreamSessionID)
+	if err != nil || !ok || string(payload) != string(updatedPayload) {
+		t.Fatalf("updated cascade route after old cutoff = %s, %v, %v", payload, ok, err)
+	}
+
+	if err := cache.CleanupGBCascadeTaskRoutes(t.Context(), updatedAt.Add(time.Second), 1024); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := cache.LoadGBCascadeTaskRouteByDownstream(t.Context(), kind, deviceID, downstreamSessionID); err != nil || ok {
+		t.Fatalf("updated cascade route survived new cutoff: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestGBCascadeTaskRouteCapacityCleanupUsesCurrentOrdering(t *testing.T) {
+	db := openInternalCacheTestDatabase(t)
+	cache := NewCache(ipcdb.NewDB(db).AutoMigrate(true))
+	const (
+		kind               = "snapshot"
+		platformName       = "capacity-platform"
+		oldDeviceID        = "34020000001320000001"
+		newDeviceID        = "34020000001320000002"
+		oldDownstream      = "downstream-capacity-old-0000001"
+		newDownstream      = "downstream-capacity-new-0000001"
+		oldExposedID       = "34020000001320000911"
+		newExposedID       = "34020000001320000912"
+		oldUpstreamSession = "upstream-capacity-old-000000001"
+		newUpstreamSession = "upstream-capacity-new-000000001"
+	)
+	base := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	if err := cache.SaveGBCascadeTaskRoute(t.Context(), kind, platformName, oldDeviceID, oldDownstream,
+		oldExposedID, oldUpstreamSession, []byte(`{"route":"old"}`), base); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.SaveGBCascadeTaskRoute(t.Context(), kind, platformName, newDeviceID, newDownstream,
+		newExposedID, newUpstreamSession, []byte(`{"route":"new"}`), base.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	refreshedAt := base.Add(2 * time.Minute)
+	oldRouteKey := ipc.GBCascadeTaskRouteKey(kind, oldDeviceID, oldDownstream)
+	var once sync.Once
+	if err := db.Callback().Delete().Before("gorm:delete").Register("test:refresh-gb-cascade-before-capacity-delete", func(tx *gorm.DB) {
+		if tx.Statement.Table != (&ipc.GBCascadeTaskRouteRecord{}).TableName() {
+			return
+		}
+		once.Do(func() {
+			if err := tx.Session(&gorm.Session{NewDB: true, SkipHooks: true}).
+				Model(new(ipc.GBCascadeTaskRouteRecord)).
+				Where("route_key = ?", oldRouteKey).
+				UpdateColumns(map[string]any{
+					"payload":    `{"route":"refreshed"}`,
+					"updated_at": orm.Time{Time: refreshedAt},
+				}).Error; err != nil {
+				t.Errorf("refresh cascade route before capacity delete: %v", err)
+			}
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cache.CleanupGBCascadeTaskRoutes(t.Context(), time.Time{}, 1); err != nil {
+		t.Fatal(err)
+	}
+	payload, ok, err := cache.LoadGBCascadeTaskRouteByDownstream(t.Context(), kind, oldDeviceID, oldDownstream)
+	if err != nil || !ok || string(payload) != `{"route":"refreshed"}` {
+		t.Fatalf("refreshed cascade route = %s, %v, %v", payload, ok, err)
+	}
+	if _, ok, err := cache.LoadGBCascadeTaskRouteByDownstream(t.Context(), kind, newDeviceID, newDownstream); err != nil || ok {
+		t.Fatalf("older cascade route after concurrent refresh survived capacity cleanup: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestDeleteDeviceRemovesGBCascadeTaskRoutes(t *testing.T) {
+	db := openInternalCacheTestDatabase(t)
 	base := ipcdb.NewDB(db).AutoMigrate(true)
 	cache := NewCache(base)
 	device := &ipc.Device{ID: "GB_cascade_route", DeviceID: "34020000001320000001", Type: ipc.TypeGB28181}

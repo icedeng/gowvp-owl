@@ -346,47 +346,80 @@ func (n *NodeManager) listMediaServers(ctx context.Context, in *FindMediaServerI
 
 // OpenRTPServer 开启RTP服务器
 func (n *NodeManager) OpenRTPServer(server *MediaServer, in zlm.OpenRTPServerRequest) (*zlm.OpenRTPServerResponse, error) {
+	return n.OpenRTPServerContext(context.Background(), server, in)
+}
+
+func (n *NodeManager) OpenRTPServerContext(ctx context.Context, server *MediaServer, in zlm.OpenRTPServerRequest) (*zlm.OpenRTPServerResponse, error) {
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
 	}
-	return driver.OpenRTPServer(context.Background(), server, &in)
+	return driver.OpenRTPServer(ctx, server, &in)
+}
+
+// ConnectRTPServer 连接设备在 SDP 应答中提供的主动 TCP RTP 端点。
+func (n *NodeManager) ConnectRTPServer(server *MediaServer, in zlm.ConnectRTPServerRequest) (*zlm.ConnectRTPServerResponse, error) {
+	return n.ConnectRTPServerContext(context.Background(), server, in)
+}
+
+func (n *NodeManager) ConnectRTPServerContext(ctx context.Context, server *MediaServer, in zlm.ConnectRTPServerRequest) (*zlm.ConnectRTPServerResponse, error) {
+	driver, err := n.getDriver(server.Type)
+	if err != nil {
+		return nil, err
+	}
+	return driver.ConnectRTPServer(ctx, server, &in)
 }
 
 // CloseRTPServer 关闭RTP服务器
 func (n *NodeManager) CloseRTPServer(server *MediaServer, in zlm.CloseRTPServerRequest) (*zlm.CloseRTPServerResponse, error) {
+	return n.CloseRTPServerContext(context.Background(), server, in)
+}
+
+func (n *NodeManager) CloseRTPServerContext(ctx context.Context, server *MediaServer, in zlm.CloseRTPServerRequest) (*zlm.CloseRTPServerResponse, error) {
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
 	}
-	return driver.CloseRTPServer(context.Background(), server, &in)
+	return driver.CloseRTPServer(ctx, server, &in)
 }
 
 // StartSendRTP 从媒体服务器中的已有流启动 RTP 发送。
 func (n *NodeManager) StartSendRTP(server *MediaServer, in zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error) {
+	return n.StartSendRTPContext(context.Background(), server, in)
+}
+
+func (n *NodeManager) StartSendRTPContext(ctx context.Context, server *MediaServer, in zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error) {
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
 	}
-	return driver.StartSendRTP(context.Background(), server, &in)
+	return driver.StartSendRTP(ctx, server, &in)
 }
 
 // StartSendRTPTalk 复用设备 RTP 接收链路发送双向对讲音频。
 func (n *NodeManager) StartSendRTPTalk(server *MediaServer, in zlm.StartSendRTPTalkRequest) (*zlm.StartSendRTPResponse, error) {
+	return n.StartSendRTPTalkContext(context.Background(), server, in)
+}
+
+func (n *NodeManager) StartSendRTPTalkContext(ctx context.Context, server *MediaServer, in zlm.StartSendRTPTalkRequest) (*zlm.StartSendRTPResponse, error) {
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
 	}
-	return driver.StartSendRTPTalk(context.Background(), server, &in)
+	return driver.StartSendRTPTalk(ctx, server, &in)
 }
 
 // StopSendRTP 停止媒体服务器中的 RTP 发送任务。
 func (n *NodeManager) StopSendRTP(server *MediaServer, in zlm.StopSendRTPRequest) (*zlm.StopSendRTPResponse, error) {
+	return n.StopSendRTPContext(context.Background(), server, in)
+}
+
+func (n *NodeManager) StopSendRTPContext(ctx context.Context, server *MediaServer, in zlm.StopSendRTPRequest) (*zlm.StopSendRTPResponse, error) {
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
 	}
-	return driver.StopSendRTP(context.Background(), server, &in)
+	return driver.StopSendRTP(ctx, server, &in)
 }
 
 // CloseStreams 关闭指定流
@@ -425,11 +458,15 @@ func (n *NodeManager) GetStreamLiveAddr(server *MediaServer, httpPrefix, host, a
 
 // GetMediaInfo 获取指定流的详细音视频轨道信息
 func (n *NodeManager) GetMediaInfo(server *MediaServer, app, stream string) ([]zlm.MediaItem, error) {
+	return n.GetMediaInfoContext(context.Background(), server, app, stream)
+}
+
+func (n *NodeManager) GetMediaInfoContext(ctx context.Context, server *MediaServer, app, stream string) ([]zlm.MediaItem, error) {
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
 	}
-	return driver.GetMediaInfo(context.Background(), server, app, stream)
+	return driver.GetMediaInfo(ctx, server, app, stream)
 }
 
 // StartRecord 开始录制指定流

@@ -18,19 +18,41 @@ import (
 )
 
 type PlayInput struct {
-	Channel    *ipc.Channel
-	SMS        *sms.MediaServer
-	StreamMode int8
+	Channel            *ipc.Channel
+	SMS                *sms.MediaServer
+	ResolveMediaServer MediaServerResolver
+	StreamMode         int8
 	// 下列字段仅供 2022 多路径级联创建相互隔离的下级媒体会话。
 	sessionKey    string
 	streamID      string
+	audioOnly     bool
 	preferredPath string
+	routeResponse *sip.Response
+}
+
+// MediaServerResolver 在取得通道媒体锁后解析实际节点，避免使用锁外旧快照。
+type MediaServerResolver func(context.Context) (*sms.MediaServer, error)
+
+func resolveMediaServerAfterLock(ctx context.Context, current *sms.MediaServer, resolver MediaServerResolver) (*sms.MediaServer, error) {
+	if resolver == nil {
+		return current, nil
+	}
+	server, err := resolver(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if server == nil {
+		return nil, fmt.Errorf("media server is unavailable")
+	}
+	return server, nil
 }
 
 type StopPlayInput struct {
 	Channel *ipc.Channel
 	// sessionKey 为空时使用普通实时点播兼容键。
 	sessionKey string
+	// skipLinkedVoice 由 Broadcast 主清理流程设置，避免标准 Talk 两条链路互相递归停止。
+	skipLinkedVoice bool
 }
 
 func resolvePlaySessionKey(deviceID, channelID, sessionKey string) string {
@@ -42,30 +64,34 @@ func resolvePlaySessionKey(deviceID, channelID, sessionKey string) string {
 
 // stopPlay 不加锁的
 func (g *GB28181API) stopPlay(ch *Channel, in *StopPlayInput) error {
+	return g.stopPlayContext(context.Background(), ch, in)
+}
+
+func (g *GB28181API) stopPlayContext(ctx context.Context, _ *Channel, in *StopPlayInput) error {
+	if in == nil || in.Channel == nil {
+		return fmt.Errorf("invalid stop play input")
+	}
 	key := resolvePlaySessionKey(in.Channel.DeviceID, in.Channel.ChannelID, in.sessionKey)
-	stream, ok := g.streams.LoadAndDelete(key)
+	stream, ok := g.streams.Load(key)
 	if !ok {
 		return nil
 	}
-
-	var cleanupErr error
-	if stream.Resp != nil {
-		req, err := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp)
-		if err != nil {
-			cleanupErr = errors.Join(cleanupErr, err)
-		} else {
-			if err = prepareDialogRequestTransport(req, ch); err == nil {
-				// 忽略响应，此处必须尽快返回。
-				_, err = g.svr.Request(req)
-			}
-			cleanupErr = errors.Join(cleanupErr, err)
-		}
+	if stream == nil {
+		g.streams.CompareAndDelete(key, nil)
+		return nil
 	}
-	if g.sms != nil && stream.mediaServer != nil && strings.TrimSpace(stream.StreamID) != "" {
-		_, err := g.sms.CloseRTPServer(stream.mediaServer, zlm.CloseRTPServerRequest{StreamID: stream.StreamID})
-		cleanupErr = errors.Join(cleanupErr, err)
+	g.markMediaStreamStopped(stream, "stopped_by_user", false)
+	complete, cleanupErr := g.cleanupMediaStreamContext(ctx, key, stream)
+	if cleanupErr != nil {
+		return cleanupErr
 	}
-	return cleanupErr
+	if !complete {
+		return fmt.Errorf("media cleanup remains pending")
+	}
+	if !in.skipLinkedVoice {
+		g.stopStandardTalkForPlayKey(key)
+	}
+	return nil
 }
 
 // StopPlay 加锁的停止播放
@@ -90,11 +116,9 @@ func (g *GB28181API) StopPlay(ctx context.Context, in *StopPlayInput) error {
 	}
 	defer unlock()
 
-	err = g.stopPlay(ch, in)
-	if !g.hasActiveChannelStream(in.Channel.DeviceID, in.Channel.ChannelID) {
-		g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, false)
-	}
-	return err
+	err = g.stopPlayContext(ctx, ch, in)
+	persistErr := g.persistChannelIdleIfNoActive(ctx, in.Channel.DeviceID, in.Channel.ChannelID)
+	return errors.Join(err, persistErr)
 }
 
 func (g *GB28181API) Play(in *PlayInput) error {
@@ -119,13 +143,27 @@ func (g *GB28181API) PlayContext(ctx context.Context, in *PlayInput) error {
 		log.Error("通道不存在")
 		return ErrChannelNotExist
 	}
+	if err := ValidateRTPStreamMode(in.StreamMode); err != nil {
+		return err
+	}
 
 	unlock, err := ch.device.lockMediaContext(ctx, ch.ChannelID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	in.SMS, err = resolveMediaServerAfterLock(ctx, in.SMS, in.ResolveMediaServer)
+	if err != nil {
+		return err
+	}
+	return g.playNoLock(ctx, ch, in)
+}
 
+func (g *GB28181API) playNoLock(ctx context.Context, ch *Channel, in *PlayInput) error {
+	log := slog.With("deviceID", in.Channel.DeviceID, "channelID", in.Channel.ChannelID)
+	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, in.Channel.DeviceID, in.Channel.ChannelID)
+	defer releaseOperation()
+	requestCtx := operation.Context(ctx)
 	if !ch.device.IsOnlineNow() {
 		return ErrDeviceOffline
 	}
@@ -133,20 +171,41 @@ func (g *GB28181API) PlayContext(ctx context.Context, in *PlayInput) error {
 		return err
 	}
 
-	// 播放中
+	// 附录 K/L 要求相同媒体流发送方标识只向设备发起一次请求，由平台完成媒体分发。
+	// 已成功建立的同键直播直接复用；仅清理未完成或已停止的残留会话。
 	key := resolvePlaySessionKey(in.Channel.DeviceID, in.Channel.ChannelID, in.sessionKey)
-	stream, ok := g.streams.LoadOrStore(key, &Streams{})
+	var (
+		stream *Streams
+		ok     bool
+	)
+	if !operation.Deliver(func() {
+		stream, ok = g.streams.LoadOrStore(key, &Streams{})
+	}) {
+		return operation.Cause()
+	}
 	if ok {
-		log.Debug("PLAY 已存在流")
-		// TODO: 临时解决方案，每次播放，先停止再播放
-		// https://github.com/gowvp/owl/issues/16
-		if err := g.stopPlay(ch, &StopPlayInput{
+		if stream != nil && stream.Resp != nil && !g.mediaStreamStopping(stream) {
+			if !operation.Deliver(func() {}) {
+				return operation.Cause()
+			}
+			log.Debug("PLAY 复用已存在流", "stream_id", stream.StreamID)
+			return nil
+		}
+		log.Warn("PLAY 清理未完成或已停止的残留流")
+		if err := g.stopPlayContext(requestCtx, ch, &StopPlayInput{
 			Channel: in.Channel, sessionKey: in.sessionKey,
 		}); err != nil {
-			slog.Error("stop play failed", "err", err)
+			return operation.ErrorOr(fmt.Errorf("cleanup previous Play session: %w", err))
 		}
 		stream = &Streams{}
-		g.streams.Store(key, stream)
+		if !operation.Deliver(func() {
+			stream, ok = g.streams.LoadOrStore(key, stream)
+		}) {
+			return operation.Cause()
+		}
+		if ok {
+			return operation.ErrorOr(fmt.Errorf("Play session was replaced concurrently"))
+		}
 	}
 	stream.DeviceID = in.Channel.DeviceID
 	stream.ChannelID = in.Channel.ChannelID
@@ -156,25 +215,32 @@ func (g *GB28181API) PlayContext(ctx context.Context, in *PlayInput) error {
 	}
 	stream.StreamID = streamID
 	stream.mediaServer = in.SMS
+	stream.sessionKey = key
 
 	// SSRC 在打开 ZLM RTP 端口前生成并绑定，避免不同设备向同一端口串流。
-	ssrc, err := g.getSSRC(0)
+	ssrc, releaseSSRC, err := g.reserveSSRC(0)
 	if err != nil {
-		g.streams.Delete(key)
-		return err
+		g.compareAndDeleteChannelStream(key, stream)
+		return operation.ErrorOr(err)
+	}
+	if err := stream.bindSSRCReservation(ssrc, releaseSSRC); err != nil {
+		g.compareAndDeleteChannelStream(key, stream)
+		return operation.ErrorOr(err)
 	}
 	ssrcValue, err := strconv.ParseUint(ssrc, 10, 64)
 	if err != nil {
-		g.streams.Delete(key)
-		return fmt.Errorf("invalid GB28181 SSRC %q: %w", ssrc, err)
+		g.compareAndDeleteChannelStream(key, stream)
+		stream.releaseSSRCReservation()
+		return operation.ErrorOr(fmt.Errorf("invalid GB28181 SSRC %q: %w", ssrc, err))
 	}
-	stream.ssrc = ssrc
 	log.Debug("1. 开启RTP服务器等待接收视频流", "ssrc", ssrc)
+	tcpRTCP := shouldEnableTCPRTCP(g.getDeviceGBProtocolVersion(in.Channel.DeviceID), in.StreamMode != 0)
 	// 开启RTP服务器等待接收视频流
-	resp, err := g.sms.OpenRTPServer(in.SMS, zlm.OpenRTPServerRequest{
+	resp, err := openRTPServerContext(requestCtx, g.sms, in.SMS, zlm.OpenRTPServerRequest{
 		TCPMode:  in.StreamMode,
 		StreamID: streamID,
 		SSRC:     ssrcValue,
+		TCPRTCP:  tcpRTCP,
 	})
 	if err != nil {
 		log.Debug("1.1. 开启RTP服务器失败", "err", err)
@@ -182,7 +248,7 @@ func (g *GB28181API) PlayContext(ctx context.Context, in *PlayInput) error {
 		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "-300") {
 			log.Info("RTP服务器已存在，尝试关闭后重新打开", "stream_id", streamID)
 			// 关闭旧的 RTP 服务器
-			_, closeErr := g.sms.CloseRTPServer(in.SMS, zlm.CloseRTPServerRequest{
+			_, closeErr := closeRTPServerContext(requestCtx, g.sms, in.SMS, zlm.CloseRTPServerRequest{
 				StreamID: streamID,
 			})
 			if closeErr != nil {
@@ -192,40 +258,63 @@ func (g *GB28181API) PlayContext(ctx context.Context, in *PlayInput) error {
 				// 等待一小段时间让 ZLM 清理资源
 				timer := time.NewTimer(500 * time.Millisecond)
 				select {
-				case <-ctx.Done():
+				case <-requestCtx.Done():
 					timer.Stop()
-					g.streams.CompareAndDelete(key, stream)
-					return ctx.Err()
+					g.compareAndDeleteChannelStream(key, stream)
+					stream.releaseSSRCReservation()
+					return operation.Cause()
 				case <-timer.C:
 				}
 			}
 			// 重新打开 RTP 服务器
-			resp, err = g.sms.OpenRTPServer(in.SMS, zlm.OpenRTPServerRequest{
+			resp, err = openRTPServerContext(requestCtx, g.sms, in.SMS, zlm.OpenRTPServerRequest{
 				TCPMode:  in.StreamMode,
 				StreamID: streamID,
 				SSRC:     ssrcValue,
+				TCPRTCP:  tcpRTCP,
 			})
 			if err != nil {
 				log.Debug("1.2. 重新开启RTP服务器失败", "err", err)
-				g.streams.CompareAndDelete(key, stream)
-				return err
+				g.compareAndDeleteChannelStream(key, stream)
+				stream.releaseSSRCReservation()
+				return operation.ErrorOr(err)
 			}
 			log.Info("成功重新打开RTP服务器", "port", resp.Port)
 		} else {
-			g.streams.CompareAndDelete(key, stream)
-			return err
+			g.compareAndDeleteChannelStream(key, stream)
+			stream.releaseSSRCReservation()
+			return operation.ErrorOr(err)
 		}
 	}
 
 	log.Debug("2. 发送SDP请求", "port", resp.Port)
-	if err := g.sipPlayPush2(ctx, ch, in, resp.Port, stream); err != nil {
+	if err := g.sipPlayPush2(requestCtx, ch, in, resp.Port, stream); err != nil {
 		log.Debug("2.1. 发送SDP请求失败", "err", err)
-		g.streams.CompareAndDelete(key, stream)
-		_, _ = g.sms.CloseRTPServer(in.SMS, zlm.CloseRTPServerRequest{StreamID: streamID})
-		return err
+		cleanupErr := g.cleanupFailedMediaStart(key, stream, "start_failed")
+		return errors.Join(operation.ErrorOr(err), cleanupErr)
 	}
 
-	g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, true)
+	var persistErr error
+	streamPublished := false
+	if !operation.Deliver(func() {
+		streamPublished, persistErr = g.commitChannelStreamStart(requestCtx, key, stream)
+	}) {
+		cleanupErr := g.stopPlayContext(g.mediaPersistenceContext(), ch, &StopPlayInput{
+			Channel: in.Channel, sessionKey: in.sessionKey,
+		})
+		idleErr := g.persistChannelIdleIfNoActive(g.mediaPersistenceContext(), in.Channel.DeviceID, in.Channel.ChannelID)
+		return errors.Join(operation.Cause(), cleanupErr, idleErr)
+	}
+	if !streamPublished {
+		return nil
+	}
+	if persistErr != nil {
+		cleanupErr := g.stopPlayContext(g.mediaPersistenceContext(), ch, &StopPlayInput{
+			Channel: in.Channel, sessionKey: in.sessionKey,
+		})
+		idleErr := g.persistChannelIdleIfNoActive(g.mediaPersistenceContext(), in.Channel.DeviceID, in.Channel.ChannelID)
+		return errors.Join(fmt.Errorf("persist playing state: %w", persistErr), cleanupErr, idleErr)
+	}
 
 	return nil
 }
@@ -293,6 +382,7 @@ func (g *GB28181API) sipPlayPush2(ctx context.Context, ch *Channel, in *PlayInpu
 
 	ssrc := stream.ssrc
 	version := g.getDeviceGBProtocolVersion(in.Channel.DeviceID)
+	h265Disabled := g.isDeviceCapabilityDisabled(in.Channel.DeviceID, "h265")
 	if in.preferredPath != "" && version != GBVersion30 {
 		return fmt.Errorf("X-PreferredPath requires downstream protocol 3.0, got %s", version)
 	}
@@ -304,7 +394,8 @@ func (g *GB28181API) sipPlayPush2(ctx context.Context, ch *Channel, in *PlayInpu
 		Port:         port,
 		StreamMode:   in.StreamMode,
 		SSRC:         ssrc,
-		H265Disabled: g.isDeviceCapabilityDisabled(in.Channel.DeviceID, "h265"),
+		AudioOnly:    in.audioOnly,
+		H265Disabled: h265Disabled,
 		AACDisabled:  g.isDeviceCapabilityDisabled(in.Channel.DeviceID, "aac"),
 	})
 	if err != nil {
@@ -326,18 +417,11 @@ func (g *GB28181API) sipPlayPush2(ctx context.Context, ch *Channel, in *PlayInpu
 		slog.Error("INVITE 发送失败", "channelID", ch.ChannelID, "ssrc", ssrc, "err", err)
 		return err
 	}
-	resp, err := sipResponseContext(ctx, tx)
+	resp, err := sipInviteResponseContext(ctx, tx)
+	in.routeResponse = resp
 	if err != nil {
 		slog.Error("INVITE 等待响应失败", "channelID", ch.ChannelID, "ssrc", ssrc, "err", err)
 		return err
-	}
-
-	if contact, _ := resp.Contact(); contact == nil {
-		resp.AppendHeader(&sip.ContactHeader{
-			DisplayName: g.svr.fromAddress.DisplayName,
-			Address:     &sip.URI{FUser: sip.String{Str: cfg.ID}, FHost: cfg.GetDomain()},
-			Params:      sip.NewParams(),
-		})
 	}
 
 	stream.Resp = resp
@@ -349,11 +433,18 @@ func (g *GB28181API) sipPlayPush2(ctx context.Context, ch *Channel, in *PlayInpu
 		stream.CallID = normalizeCallID(callID)
 	}
 
-	ackReq, err := sip.NewRequestFromResponseChecked(sip.MethodACK, resp)
-	if err != nil {
-		return err
+	mediaType := "video"
+	offeredFormats := gbVideoPayloadFormats(version, h265Disabled)
+	if in.audioOnly {
+		mediaType = "audio"
+		offeredFormats = []string{"8"}
 	}
-	return tx.Request(ackReq)
+	if err := g.ackAndConnectActiveRTP(ctx, tx, resp, in.SMS, stream.StreamID, in.StreamMode, mediaType, ssrc, version, offeredFormats...); err != nil {
+		byeErr := g.sendInviteResponseBYE(g.mediaPersistenceContext(), ch, resp)
+		g.rememberMediaDialogCleanupResult(stream, resp, byeErr)
+		return errors.Join(err, byeErr)
+	}
+	return nil
 }
 
 // sip 请求播放
@@ -533,22 +624,23 @@ func SipStopPlay(ssrc string) {
 			return
 		}
 		user := u.(Devices)
-		req, err := sip.NewRequestFromResponseChecked(sip.MethodBYE, resp)
-		if err != nil {
-			play.Msg = err.Error()
-			return
-		}
-		if req.Destination() == nil {
-			req.SetDestination(user.source)
-		}
 		server := defaultSIPServer.Load()
 		if server == nil {
 			play.Msg = "SIP server is unavailable"
 			return
 		}
-		tx, err := server.Request(req)
+		ctx, cancel := context.WithTimeout(context.Background(), legacyDeviceSIPWriteTimeout)
+		defer cancel()
+		tx, err := server.requestFromResponsePreparedContext(ctx, server.dialogTarget(play.DeviceID, play.ChannelID), sip.MethodBYE, resp, func(req *sip.Request) error {
+			if req.Destination() == nil {
+				req.SetDestination(user.source)
+			}
+			return nil
+		})
 		if err != nil {
 			// logrus.Warningln("sipStopPlay bye fail.id:", play.DeviceID, play.ChannelID, "err:", err)
+			play.Msg = err.Error()
+			return
 		}
 		_, err = sipResponse(tx)
 		if err != nil {

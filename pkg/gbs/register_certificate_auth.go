@@ -47,8 +47,9 @@ type registerCertificateNonceState struct {
 	AcceptedFingerprint string
 }
 
-// registerCertificateAuthenticator 实现 GB/T 28181-2016 9.1.2.2 的
-// Capability/Asymmetric REGISTER 挑战应答。它与传输层 TLS 证书相互独立。
+// registerCertificateAuthenticator 实现 GB/T 28181-2011 9.1.2.2/J.2 定义、
+// 2014 修改补充文件继续沿用且 2016 保留的 Capability/Asymmetric REGISTER 挑战应答。
+// 它与传输层 TLS 证书相互独立。
 type registerCertificateAuthenticator struct {
 	required               bool
 	platformCertificate    *x509.Certificate

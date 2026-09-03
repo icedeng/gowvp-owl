@@ -53,6 +53,42 @@ func TestDirectTCPDownloadManagerKnownSizeAndSHA256(t *testing.T) {
 	}
 }
 
+func TestDirectTCPDownloadManagerSkipsMediaStatusWaitWhenCapabilityDisabled(t *testing.T) {
+	payload := []byte("gb28181-direct-tcp-without-media-status")
+	written := make(chan struct{})
+	release := make(chan struct{})
+	address := startDirectTCPFixture(t, func(conn net.Conn) {
+		_, _ = conn.Write(payload)
+		close(written)
+		<-release
+	})
+	t.Cleanup(func() { close(release) })
+
+	manager := newTestDirectTCPManager(t)
+	manager.opts.IdleTimeout = time.Second
+	startDirectTCPTestDownload(t, manager, DirectTCPDownloadRequest{
+		SessionID:           "media-status-disabled",
+		DeviceID:            gb10DeviceID,
+		ChannelID:           gb10ChannelID,
+		Address:             address,
+		RegisteredIP:        net.ParseIP("127.0.0.1"),
+		FileSize:            int64(len(payload)),
+		FileSizeKnown:       true,
+		MediaStatusDisabled: true,
+	})
+	<-written
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	state, err := manager.Wait(ctx, "media-status-disabled")
+	if err != nil {
+		t.Fatalf("download still waited for MediaStatus: %v", err)
+	}
+	if state.Status != directTCPStatusCompleted || state.EndReason != "size_reached" || !state.SizeVerified {
+		t.Fatalf("download state = %+v", state)
+	}
+}
+
 func TestDirectTCPDownloadManagerIPv6(t *testing.T) {
 	listener, err := net.Listen("tcp6", "[::1]:0")
 	if err != nil {
@@ -254,6 +290,37 @@ func TestDirectTCPDownloadManagerTimeoutCancelAndMediaStatus(t *testing.T) {
 		_ = waitDirectTCPState(t, manager, other.SessionID)
 	})
 
+	t.Run("cancel channel", func(t *testing.T) {
+		targetRelease := make(chan struct{})
+		targetAddress := startDirectTCPFixture(t, func(net.Conn) { <-targetRelease })
+		defer close(targetRelease)
+		otherRelease := make(chan struct{})
+		otherAddress := startDirectTCPFixture(t, func(net.Conn) { <-otherRelease })
+		defer close(otherRelease)
+		manager := newTestDirectTCPManager(t)
+		manager.opts.DeviceConcurrency = 2
+		target := directTCPRequest("cancel-channel-target", targetAddress)
+		other := directTCPRequest("cancel-channel-other", otherAddress)
+		other.ChannelID = "34020000001320000003"
+		startDirectTCPTestDownload(t, manager, target)
+		startDirectTCPTestDownload(t, manager, other)
+		waitDirectTCPReceiving(t, manager, target.SessionID)
+		waitDirectTCPReceiving(t, manager, other.SessionID)
+
+		if count := manager.CancelChannel(target.DeviceID, target.ChannelID); count != 1 {
+			t.Fatalf("cancelled channel sessions = %d; want 1", count)
+		}
+		state := waitDirectTCPState(t, manager, target.SessionID)
+		if state.Status != directTCPStatusCancelled {
+			t.Fatalf("target channel state = %+v", state)
+		}
+		if state, ok := manager.State(other.SessionID); !ok || state.Status != directTCPStatusReceiving {
+			t.Fatalf("other channel state = %+v, exists=%v", state, ok)
+		}
+		manager.CancelChannel(other.DeviceID, other.ChannelID)
+		_ = waitDirectTCPState(t, manager, other.SessionID)
+	})
+
 	t.Run("media status", func(t *testing.T) {
 		release := make(chan struct{})
 		address := startDirectTCPFixture(t, func(conn net.Conn) {
@@ -273,6 +340,62 @@ func TestDirectTCPDownloadManagerTimeoutCancelAndMediaStatus(t *testing.T) {
 		state := waitDirectTCPState(t, manager, "media-status")
 		if state.Status != directTCPStatusCompleted || state.EndReason != "media_status" || state.SizeVerified {
 			t.Fatalf("media-status state = %+v", state)
+		}
+	})
+
+	t.Run("known size waits for media status", func(t *testing.T) {
+		payload := []byte("complete-before-media-status")
+		release := make(chan struct{})
+		address := startDirectTCPFixture(t, func(conn net.Conn) {
+			_, _ = conn.Write(payload)
+			<-release
+		})
+		defer close(release)
+		manager := newTestDirectTCPManager(t)
+		startDirectTCPTestDownload(t, manager, DirectTCPDownloadRequest{
+			SessionID:     "known-size-media-status",
+			DeviceID:      gb10DeviceID,
+			ChannelID:     gb10ChannelID,
+			Address:       address,
+			RegisteredIP:  net.ParseIP("127.0.0.1"),
+			FileSize:      int64(len(payload)),
+			FileSizeKnown: true,
+		})
+		waitDirectTCPBytes(t, manager, "known-size-media-status")
+		if state, ok := manager.State("known-size-media-status"); !ok || state.Status != directTCPStatusReceiving {
+			t.Fatalf("known-size download completed before MediaStatus: state=%+v exists=%v", state, ok)
+		}
+		if !manager.NotifySenderFinishedForDevice("known-size-media-status", gb10DeviceID) {
+			t.Fatal("NotifySenderFinished returned false")
+		}
+		state := waitDirectTCPState(t, manager, "known-size-media-status")
+		if state.Status != directTCPStatusCompleted || state.EndReason != "media_status" || !state.SizeVerified {
+			t.Fatalf("known-size media-status state = %+v", state)
+		}
+	})
+
+	t.Run("known size idle fallback", func(t *testing.T) {
+		payload := []byte("complete-without-media-status")
+		release := make(chan struct{})
+		address := startDirectTCPFixture(t, func(conn net.Conn) {
+			_, _ = conn.Write(payload)
+			<-release
+		})
+		defer close(release)
+		manager := newTestDirectTCPManager(t)
+		manager.opts.IdleTimeout = 30 * time.Millisecond
+		startDirectTCPTestDownload(t, manager, DirectTCPDownloadRequest{
+			SessionID:     "known-size-idle-fallback",
+			DeviceID:      gb10DeviceID,
+			ChannelID:     gb10ChannelID,
+			Address:       address,
+			RegisteredIP:  net.ParseIP("127.0.0.1"),
+			FileSize:      int64(len(payload)),
+			FileSizeKnown: true,
+		})
+		state := waitDirectTCPState(t, manager, "known-size-idle-fallback")
+		if state.Status != directTCPStatusCompleted || state.EndReason != "size_reached" || !state.SizeVerified {
+			t.Fatalf("known-size idle fallback state = %+v", state)
 		}
 	})
 }
@@ -362,6 +485,20 @@ func TestDirectTCPDownloadManagerTerminalRaceIsIdempotent(t *testing.T) {
 	}
 	if callbacks.Load() != 1 {
 		t.Fatalf("OnFinish callbacks = %d; want 1", callbacks.Load())
+	}
+}
+
+func TestDirectTCPDownloadManagerWaitAcceptsNilContext(t *testing.T) {
+	release := make(chan struct{})
+	address := startDirectTCPFixture(t, func(net.Conn) { <-release })
+	t.Cleanup(func() { close(release) })
+	manager := newTestDirectTCPManager(t)
+	req := directTCPRequest("wait-nil-context", address)
+	startDirectTCPTestDownload(t, manager, req)
+	waitDirectTCPReceiving(t, manager, req.SessionID)
+	time.AfterFunc(20*time.Millisecond, func() { manager.Cancel(req.SessionID) })
+	if _, err := manager.Wait(nil, req.SessionID); err != nil {
+		t.Fatalf("Wait(nil) error = %v", err)
 	}
 }
 

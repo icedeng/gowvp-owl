@@ -9,4 +9,4 @@ a=rtpmap:96 PS/90000
 a=rtpmap:97 MPEG4/90000
 a=rtpmap:98 H264/90000
 y=0100000001
-f=v/////a/1/8/1
+f=v/////a///

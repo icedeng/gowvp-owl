@@ -3,6 +3,7 @@
 package app
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -12,6 +13,6 @@ import (
 	"github.com/gowvp/owl/internal/web/api"
 )
 
-func wireApp(bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error) {
+func wireApp(ctx context.Context, bc *conf.Bootstrap, log *slog.Logger) (http.Handler, func(), error) {
 	panic(wire.Build(data.ProviderSet, api.ProviderVersionSet, api.ProviderSet))
 }

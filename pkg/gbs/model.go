@@ -27,6 +27,7 @@ type DeviceConfigRequest struct {
 	AlarmReport         *AlarmReport           `xml:"AlarmReport,omitempty"`
 	OSDConfig           *OSDConfig             `xml:"OSDConfig,omitempty"`
 	SnapShotConfig      *SnapShot              `xml:"SnapShotConfig,omitempty"`
+	ExtraInfo           []string               `xml:"ExtraInfo,omitempty"`
 }
 
 type VideoParamConfigWrite struct {

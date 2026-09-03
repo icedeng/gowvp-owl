@@ -67,32 +67,37 @@ type SwaggerPlayResponse struct {
 
 // SwaggerConfigInfoOutput 是系统配置摘要响应。
 type SwaggerConfigInfoOutput struct {
-	SIP        SwaggerSIPConfig `json:"sip"`         // 当前系统使用的 SIP 配置
+	SIP        SwaggerSIPConfig `json:"sip"`         // 当前系统使用的 SIP 配置；对端密码和摘要 seed 已脱敏
+	SIPSecrets SIPSecretStatus  `json:"sip_secrets"` // 已脱敏密钥的“是否配置”状态
 	AccessInfo SIPAccessInfo    `json:"access_info"` // 设备接入所需的精简地址信息
 }
 
 // SwaggerSIPConfig 是 Swagger 友好的 SIP 配置模型。
 type SwaggerSIPConfig struct {
-	Host                    string                            `json:"host" example:"192.0.2.20"`                           // 对设备和上级宣告的 SIP 地址
-	Port                    int                               `json:"port" example:"5060"`                                 // SIP TCP/UDP 监听端口
-	ID                      string                            `json:"id" example:"34020000002000000001"`                   // 平台 20 位国标编码
-	Domain                  string                            `json:"domain" example:"3402000000"`                         // SIP 域
-	Password                string                            `json:"password" example:"123456"`                           // 注册鉴权密码
-	EnableTLS               bool                              `json:"enable_tls" example:"false"`                          // 是否启用 SIP-TLS
-	TLSPort                 int                               `json:"tls_port" example:"5061"`                             // SIP-TLS 监听端口
-	TLSCert                 string                            `json:"tls_cert" example:"configs/certs/sip.crt"`            // TLS 证书路径
-	TLSKey                  string                            `json:"tls_key" example:"configs/certs/sip.key"`             // TLS 私钥路径
-	TLSClientCA             string                            `json:"tls_client_ca" example:"configs/certs/client-ca.crt"` // TLS 客户端 CA 路径
-	TLSRequireClientCert    bool                              `json:"tls_require_client_cert" example:"false"`             // 是否强制校验客户端证书
-	RegisterCertificateAuth SwaggerSIPRegisterCertificateAuth `json:"register_certificate_auth"`                           // Capability/Asymmetric 数字证书 REGISTER 认证
-	StrictSourceCheck       bool                              `json:"strict_source_check" example:"true"`                  // 是否严格校验源 IP
-	RequireMessageAuth      bool                              `json:"require_message_auth" example:"false"`                // 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
-	PTZWeakConfirm          bool                              `json:"ptz_weak_confirm" example:"false"`                    // 是否启用 PTZ 弱确认模式
-	SignalDigest            SwaggerSIPSignalDigest            `json:"signal_digest"`                                       // Date+Note 信令数字摘要配置
-	DeviceHistory           SwaggerDeviceHistoryConfig        `json:"device_history"`                                      // 设备注册与心跳历史保留策略
-	DirectTCPDownload       SwaggerDirectTCPDownloadConfig    `json:"direct_tcp_download"`                                 // 2014 附录 O 裸 TCP 下载配置
-	Upstreams               []SwaggerSIPUpstream              `json:"upstreams"`                                           // 上级 GB/T 28181 平台配置
-	Log                     SwaggerSIPLog                     `json:"log"`                                                 // SIP 报文日志配置；更新时可省略以保留当前值
+	Host                    string                            `json:"host" example:"192.0.2.20"`                                            // 对设备和上级宣告的 SIP 地址
+	Port                    int                               `json:"port" example:"5060"`                                                  // SIP TCP/UDP 监听端口
+	ID                      string                            `json:"id" example:"34020000002000000001"`                                    // 平台 20 位国标编码
+	Domain                  string                            `json:"domain" example:"3402000000"`                                          // SIP 域
+	Password                string                            `json:"password" example:"123456"`                                            // 注册鉴权密码
+	EnableTLS               bool                              `json:"enable_tls" example:"false"`                                           // 是否启用 SIP-TLS
+	TLSPort                 int                               `json:"tls_port" example:"5061"`                                              // SIP-TLS 监听端口
+	TLSCert                 string                            `json:"tls_cert" example:"configs/certs/sip.crt"`                             // TLS 证书路径
+	TLSKey                  string                            `json:"tls_key" example:"configs/certs/sip.key"`                              // TLS 私钥路径
+	TLSClientCA             string                            `json:"tls_client_ca" example:"configs/certs/client-ca.crt"`                  // TLS 客户端 CA 路径
+	TLSRequireClientCert    bool                              `json:"tls_require_client_cert" example:"false"`                              // 是否强制校验客户端证书
+	RegisterRedirect        string                            `json:"register_redirect" example:"sip:34020000002000000001@192.0.2.30:5060"` // 2022 REGISTER 重定向目标；为空表示不重定向
+	RegisterCertificateAuth SwaggerSIPRegisterCertificateAuth `json:"register_certificate_auth"`                                            // Capability/Asymmetric 数字证书 REGISTER 认证
+	StrictSourceCheck       bool                              `json:"strict_source_check" example:"true"`                                   // 是否严格校验源 IP
+	RequireMessageAuth      bool                              `json:"require_message_auth" example:"false"`                                 // 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
+	PTZWeakConfirm          bool                              `json:"ptz_weak_confirm" example:"false"`                                     // 是否启用级联有应答控制弱确认
+	SignalDigest            SwaggerSIPSignalDigest            `json:"signal_digest"`                                                        // Date+Note 信令数字摘要配置
+	DeviceHistory           SwaggerDeviceHistoryConfig        `json:"device_history"`                                                       // 设备注册与心跳历史保留策略
+	DirectTCPDownload       SwaggerDirectTCPDownloadConfig    `json:"direct_tcp_download"`                                                  // 2014 附录 O 裸 TCP 下载配置
+	AnnexG                  SwaggerSIPAnnexG                  `json:"annex_g"`                                                              // 2011/2014/2016 附录 G 外部系统接入配置
+	AlarmReceivers          []SwaggerSIPAlarmReceiver         `json:"alarm_receivers"`                                                      // 9.4 本域已注册接警 SIP 客户端；默认关闭
+	Upstreams               []SwaggerSIPUpstream              `json:"upstreams"`                                                            // 上级 GB/T 28181 平台配置
+	Log                     SwaggerSIPLog                     `json:"log"`                                                                  // SIP 报文日志配置；更新时可省略以保留当前值
+	SecretClears            SIPSecretClearInput               `json:"secret_clears"`                                                        // 显式清除已脱敏密钥；空密钥字段默认保留原值
 }
 
 type SwaggerSIPRegisterCertificateAuth struct {
@@ -108,8 +113,8 @@ type SwaggerSIPRegisterCertificateAuth struct {
 type SwaggerSIPSignalDigest struct {
 	Enabled         bool   `json:"enabled" example:"false"`
 	Required        bool   `json:"required" example:"false"` // 强制模式；同时启用出站签名并拒绝缺失或验签失败的入站报文
-	Seed            string `json:"seed" example:"shared-secret"`
-	Algorithm       string `json:"algorithm" example:"MD5"` // MD5、SHA-1、SHA-256 或 SM3
+	Seed            string `json:"seed" example:""`          // GET 时脱敏为空；PUT 非空替换，空值保留，清除使用 secret_clears
+	Algorithm       string `json:"algorithm" example:"MD5"`  // MD5、SHA-1、SHA-256 或 SM3
 	Encoding        string `json:"encoding" example:"base64"`
 	AcceptLegacyHex bool   `json:"accept_legacy_hex" example:"true"`
 	Window          int64  `json:"window" example:"600000000000"` // 纳秒
@@ -118,6 +123,41 @@ type SwaggerSIPSignalDigest struct {
 type SwaggerDeviceHistoryConfig struct {
 	MaxRecords int `json:"max_records" example:"1000"`
 	MaxDays    int `json:"max_days" example:"30"`
+}
+
+type SwaggerSIPAnnexG struct {
+	Enabled        bool                     `json:"enabled" example:"false"`
+	MaxSendRecords int                      `json:"max_send_records" example:"100"`
+	InboundRate    int                      `json:"inbound_rate" example:"50"`
+	InboundBurst   int                      `json:"inbound_burst" example:"100"`
+	PendingTTL     int64                    `json:"pending_ttl" example:"86400000000000"` // 纳秒
+	MaxPending     int                      `json:"max_pending" example:"4096"`
+	Systems        []SwaggerSIPAnnexGSystem `json:"systems"`
+}
+
+type SwaggerSIPAnnexGSystem struct {
+	ID                     string   `json:"id" example:"34030000002000000001"`
+	Role                   string   `json:"role" example:"emergency_command_system"`
+	Version                string   `json:"version" example:"1.0"`
+	Password               string   `json:"password" example:""`           // GET 时脱敏；PUT 非空替换
+	SignalDigestSeed       string   `json:"signal_digest_seed" example:""` // GET 时脱敏；PUT 非空替换
+	Realm                  string   `json:"realm" example:"3403000000"`
+	Address                string   `json:"address" example:"ecs.example:5061"`
+	Transport              string   `json:"transport" example:"tls"`
+	SourceCIDRs            []string `json:"source_cidrs" example:"192.0.2.0/24"`
+	AllowInsecureTransport bool     `json:"allow_insecure_transport" example:"false"`
+	TLSCA                  string   `json:"tls_ca" example:"configs/certs/ecs-ca.crt"`
+	TLSCRL                 string   `json:"tls_crl" example:"configs/certs/ecs.crl"`
+	TLSServerName          string   `json:"tls_server_name" example:"ecs.example"`
+	TLSCert                string   `json:"tls_cert" example:"configs/certs/annex-g-client.crt"`
+	TLSKey                 string   `json:"tls_key" example:"configs/certs/annex-g-client.key"`
+}
+
+type SwaggerSIPAlarmReceiver struct {
+	Name      string   `json:"name" example:"dispatch-center"`
+	Enabled   bool     `json:"enabled" example:"false"`
+	DeviceID  string   `json:"device_id" example:"34020000002000000011"`
+	SourceIDs []string `json:"source_ids" example:"34020000001320000001"`
 }
 
 type SwaggerSIPUpstream struct {
@@ -136,13 +176,14 @@ type SwaggerSIPUpstream struct {
 	LocalDomain             string                                    `json:"local_domain" example:"3402000000"`
 	LocalHost               string                                    `json:"local_host" example:"192.0.2.20"`
 	LocalPort               int                                       `json:"local_port" example:"5061"`
-	Password                string                                    `json:"password" example:"123456"`
+	Password                string                                    `json:"password" example:""` // GET 时脱敏；PUT 非空替换
 	RegisterCertificateAuth SwaggerSIPUpstreamRegisterCertificateAuth `json:"register_certificate_auth"`
-	SignalDigestSeed        string                                    `json:"signal_digest_seed" example:"upstream-shared-secret"`
+	SignalDigestSeed        string                                    `json:"signal_digest_seed" example:""` // GET 时脱敏；PUT 非空替换
 	MonitorUserIdentity     SwaggerSIPMonitorUserIdentity             `json:"monitor_user_identity"`
 	Version                 string                                    `json:"version" example:"1.1"`
 	Expires                 int                                       `json:"expires" example:"3600"`
 	KeepaliveInterval       int64                                     `json:"keepalive_interval" example:"60000000000"` // 纳秒，与配置 API 的 Duration 数值一致
+	AlarmDispatchEnabled    bool                                      `json:"alarm_dispatch_enabled" example:"false"`
 	SharedChannels          []string                                  `json:"shared_channels"`
 	ChannelIDMap            map[string]string                         `json:"channel_id_map"`
 	MediaAllowedCIDRs       []string                                  `json:"media_allowed_cidrs" example:"198.51.100.0/24"`
@@ -186,10 +227,15 @@ type SwaggerSIPLog struct {
 // SwaggerDirectTCPDownloadConfig 是 2014 裸 TCP 下载配置。
 type SwaggerDirectTCPDownloadConfig struct {
 	Enabled              bool     `json:"enabled" example:"false"`
+	CascadeRelayEnabled  bool     `json:"cascade_relay_enabled" example:"false"`
 	DeviceAllowlist      []string `json:"device_allowlist"`
 	StorageDir           string   `json:"storage_dir" example:"./configs/downloads/gb28181"`
 	RetainDays           int      `json:"retain_days" example:"7"`
 	OfferPort            int      `json:"offer_port" example:"9"`
+	RelayListenIP        string   `json:"relay_listen_ip" example:"0.0.0.0"`
+	RelayAdvertiseIP     string   `json:"relay_advertise_ip" example:"192.0.2.10"`
+	RelayPortStart       int      `json:"relay_port_start" example:"30200"`
+	RelayPortEnd         int      `json:"relay_port_end" example:"30300"`
 	MaxFileSize          int64    `json:"max_file_size" example:"10737418240"`
 	GlobalConcurrency    int      `json:"global_concurrency" example:"4"`
 	DeviceConcurrency    int      `json:"device_concurrency" example:"1"`
@@ -220,24 +266,54 @@ type SwaggerDirectTCPDownloadState struct {
 	Error         string `json:"error,omitempty"`
 }
 
+// SwaggerHistoryDownloadState 是通道最近一次 RTP 或附录 O 下载状态。
+type SwaggerHistoryDownloadState struct {
+	Transport       string  `json:"transport" example:"rtp"`
+	SessionID       string  `json:"session_id" example:"call-id@example"`
+	DeviceID        string  `json:"device_id" example:"34020000001320000001"`
+	ChannelID       string  `json:"channel_id" example:"34020000001320000002"`
+	Status          string  `json:"status" example:"receiving"`
+	Received        int64   `json:"received" example:"1048576"`
+	FileSize        int64   `json:"file_size" example:"2097152"`
+	FileSizeKnown   bool    `json:"file_size_known" example:"true"`
+	BytesSpeed      uint64  `json:"bytes_speed,omitempty" example:"524288"`
+	ProgressPercent float64 `json:"progress_percent,omitempty" example:"50"`
+	ProgressKnown   bool    `json:"progress_known,omitempty" example:"true"`
+	Approximate     bool    `json:"approximate,omitempty" example:"true"`
+	SizeVerified    bool    `json:"size_verified,omitempty" example:"false"`
+	Output          string  `json:"output,omitempty"`
+	SHA256          string  `json:"sha256,omitempty"`
+	StartedAt       string  `json:"started_at" example:"2026-08-10T19:30:00+08:00"`
+	UpdatedAt       string  `json:"updated_at" example:"2026-08-10T19:30:05+08:00"`
+	CompletedAt     string  `json:"completed_at,omitempty"`
+	EndReason       string  `json:"end_reason,omitempty" example:"size_reached"`
+	Error           string  `json:"error,omitempty"`
+}
+
 // SwaggerGBMetricsSnapshot 是 GB28181 灰度发布单调计数器。
 type SwaggerGBMetricsSnapshot struct {
-	RegisterRequests uint64 `json:"register_requests"`
-	RegisterSuccess  uint64 `json:"register_success"`
-	RegisterFailures uint64 `json:"register_failures"`
-	CatalogRequests  uint64 `json:"catalog_requests"`
-	CatalogSuccess   uint64 `json:"catalog_success"`
-	CatalogTimeouts  uint64 `json:"catalog_timeouts"`
-	CatalogPartial   uint64 `json:"catalog_partial"`
-	MediaRequests    uint64 `json:"media_requests"`
-	MediaSuccess     uint64 `json:"media_success"`
-	MediaFailures    uint64 `json:"media_failures"`
-	MediaDisconnects uint64 `json:"media_disconnects"`
-	DirectStarted    uint64 `json:"direct_tcp_started"`
-	DirectCompleted  uint64 `json:"direct_tcp_completed"`
-	DirectFailed     uint64 `json:"direct_tcp_failed"`
-	DirectCancelled  uint64 `json:"direct_tcp_cancelled"`
-	DirectBytes      uint64 `json:"direct_tcp_bytes"`
+	RegisterRequests       uint64 `json:"register_requests"`
+	RegisterSuccess        uint64 `json:"register_success"`
+	RegisterFailures       uint64 `json:"register_failures"`
+	CatalogRequests        uint64 `json:"catalog_requests"`
+	CatalogSuccess         uint64 `json:"catalog_success"`
+	CatalogTimeouts        uint64 `json:"catalog_timeouts"`
+	CatalogPartial         uint64 `json:"catalog_partial"`
+	MediaRequests          uint64 `json:"media_requests"`
+	MediaSuccess           uint64 `json:"media_success"`
+	MediaFailures          uint64 `json:"media_failures"`
+	MediaDisconnects       uint64 `json:"media_disconnects"`
+	DirectStarted          uint64 `json:"direct_tcp_started"`
+	DirectCompleted        uint64 `json:"direct_tcp_completed"`
+	DirectFailed           uint64 `json:"direct_tcp_failed"`
+	DirectCancelled        uint64 `json:"direct_tcp_cancelled"`
+	DirectBytes            uint64 `json:"direct_tcp_bytes"`
+	AnnexGRequests         uint64 `json:"annex_g_inbound_requests"`
+	AnnexGAccepted         uint64 `json:"annex_g_inbound_accepted"`
+	AnnexGRejected         uint64 `json:"annex_g_inbound_rejected"`
+	AnnexGRateLimited      uint64 `json:"annex_g_inbound_rate_limited"`
+	AnnexGBusinessFailures uint64 `json:"annex_g_business_failures"`
+	AnnexGPending          uint64 `json:"annex_g_pending"`
 }
 
 // SwaggerLoginKeyOutput 是登录公钥响应。
@@ -280,9 +356,10 @@ type SwaggerRecordModeOutput struct {
 
 // SwaggerRecordQueryOutput 是录像目录查询响应。
 type SwaggerRecordQueryOutput struct {
-	DayTotal int              `json:"daynum" example:"2"`  // 有录像的日期数量
-	TimeNum  int              `json:"timenum" example:"6"` // 录像时间片段总数
-	Data     []ipc.RecordDate `json:"list"`                // 按日期归类的录像片段
+	DayTotal   int                        `json:"daynum" example:"2"`   // 有录像的日期数量
+	TimeNum    int                        `json:"timenum" example:"6"`  // 录像时间片段总数
+	Data       []ipc.RecordDate           `json:"list"`                 // 按日期归类的录像片段
+	Incomplete *SwaggerGBIncompleteOutput `json:"incomplete,omitempty"` // 设备只返回部分分包时的完成度
 }
 
 // SwaggerPTZControlInput 是 PTZ 控制请求体。
@@ -359,35 +436,51 @@ type SwaggerGBTargetTrackInput struct {
 
 // SwaggerGBDeviceControlInput 是 GB 统一控制请求体。
 type SwaggerGBDeviceControlInput struct {
-	TargetID     string                      `json:"target_id" example:"34020000001320000001"` // 目标设备或通道国标编码；为空时默认当前设备
-	Action       string                      `json:"action" example:"ptz_cmd"`                 // GB 统一控制动作名
-	Timeout      int                         `json:"timeout" example:"5"`                      // 等待设备响应超时时间，单位秒
-	PTZCmd       string                      `json:"ptz_cmd" example:"preset_call"`            // PTZCmd 子动作名
-	PTZCmdParam  *SwaggerGBPTZCmdParamInput  `json:"ptz_cmd_param"`                            // PTZCmd 扩展参数
-	StreamNumber int                         `json:"stream_number" example:"1"`                // 录像/强制关键帧等场景使用的码流序号
-	AlarmMethod  string                      `json:"alarm_method" example:"2"`                 // 报警复位方式
-	AlarmType    string                      `json:"alarm_type" example:"1"`                   // 报警类型
-	DragZoom     *SwaggerGBDragZoomInput     `json:"drag_zoom"`                                // 拉框放大/缩小参数
-	HomePosition *SwaggerGBHomePositionInput `json:"home_position"`                            // 看守位控制参数
-	PTZPrecise   *SwaggerGBPTZPreciseInput   `json:"ptz_precise"`                              // 精确 PTZ 参数
-	TargetTrack  *SwaggerGBTargetTrackInput  `json:"target_track"`                             // 2022 目标跟踪参数
-	SDCardID     int                         `json:"sdcard_id" example:"1"`                    // SD 卡编号
+	TargetID        string                      `json:"target_id" example:"34020000001320000001"` // 目标设备或通道国标编码；为空时默认当前设备
+	Action          string                      `json:"action" example:"ptz_cmd"`                 // GB 统一控制动作名
+	Timeout         int                         `json:"timeout" example:"5"`                      // 等待设备响应超时时间，单位秒
+	ExtraInfo       []string                    `json:"extra_info"`                               // 设备控制普通文本扩展；旧版编码为 Info，2022 编码为 ExtraInfo
+	PTZCmd          string                      `json:"ptz_cmd" example:"preset_call"`            // PTZ 动作名或 16 位原始 PTZCmd
+	PTZCmdParam     *SwaggerGBPTZCmdParamInput  `json:"ptz_cmd_param"`                            // PTZCmd 扩展参数
+	PTZSpeed        uint8                       `json:"ptz_speed" example:"40"`                   // PTZ 速度
+	PTZPreset       int                         `json:"ptz_preset" example:"1"`                   // 预置位编号
+	PTZGroup        uint8                       `json:"ptz_group" example:"1"`                    // 巡航或扫描组编号
+	PTZAux          uint8                       `json:"ptz_aux" example:"1"`                      // 辅助开关编号
+	PTZValue        uint16                      `json:"ptz_value" example:"40"`                   // 巡航、扫描或辅助控制值
+	ControlPriority *int                        `json:"control_priority" example:"5"`             // 2011/2014 PTZ 控制优先级
+	StreamNumber    int                         `json:"stream_number" example:"1"`                // 2022 录像控制码流编号：0 主码流（缺省省略），1/2/... 子码流
+	AlarmMethod     string                      `json:"alarm_method" example:"2"`                 // 报警复位方式
+	AlarmType       string                      `json:"alarm_type" example:"1"`                   // 报警类型
+	DragZoom        *SwaggerGBDragZoomInput     `json:"drag_zoom"`                                // 拉框放大/缩小参数
+	HomePosition    *SwaggerGBHomePositionInput `json:"home_position"`                            // 看守位控制参数
+	PTZPrecise      *SwaggerGBPTZPreciseInput   `json:"ptz_precise"`                              // 精确 PTZ 参数
+	TargetTrack     *SwaggerGBTargetTrackInput  `json:"target_track"`                             // 2022 目标跟踪参数
+	SDCardID        int                         `json:"sdcard_id" example:"1"`                    // SD 卡编号
 }
 
 // SwaggerGBDeviceQueryInput 是 GB 统一查询请求体。
 type SwaggerGBDeviceQueryInput struct {
-	TargetID     string `json:"target_id" example:"34020000001320000001"` // 目标设备或通道国标编码；为空时默认当前设备
-	Action       string `json:"action" example:"device_status"`           // GB 统一查询动作名
-	Timeout      int    `json:"timeout" example:"5"`                      // 等待查询应答超时时间，单位秒
-	ConfigType   string `json:"config_type" example:"basic_param"`        // 配置查询时的配置类型
-	Interval     int    `json:"interval" example:"60"`                    // 订阅或统计类查询的时间间隔
-	Number       int    `json:"number" example:"0"`                       // 巡航轨迹编号（0 或 1）
-	Start        int64  `json:"start" example:"1710864000"`               // 起始时间，Unix 秒
-	End          int64  `json:"end" example:"1710950400"`                 // 结束时间，Unix 秒
-	Type         string `json:"type" example:"all"`                       // RecordInfo 录像类型：time、alarm、manual、all；空值默认 time
-	StreamNumber *int   `json:"stream_number" example:"0"`                // 2022 码流编号：0 主码流，1/2/... 子码流
-	AlarmMethod  string `json:"alarm_method" example:"5"`                 // 2022 报警方式过滤条件
-	AlarmType    string `json:"alarm_type" example:"2"`                   // 2022 报警类型过滤条件
+	TargetID           string `json:"target_id" example:"34020000001320000001"`       // 目标设备或通道国标编码；为空时默认当前设备
+	Action             string `json:"action" example:"device_status"`                 // GB 统一查询动作名
+	Timeout            int    `json:"timeout" example:"5"`                            // 等待查询应答超时时间，单位秒
+	ConfigType         string `json:"config_type" example:"basic_param"`              // 配置查询时的配置类型
+	Interval           int    `json:"interval" example:"60"`                          // 订阅或统计类查询的时间间隔
+	Number             int    `json:"number" example:"0"`                             // 巡航轨迹编号（0 或 1）
+	Start              int64  `json:"start" example:"1710864000"`                     // Catalog、RecordInfo 开始时间，Unix 秒
+	End                int64  `json:"end" example:"1710950400"`                       // Catalog、RecordInfo 结束时间，Unix 秒
+	FilePath           string `json:"file_path" example:"/record/front-gate.ps"`      // RecordInfo 文件路径过滤条件
+	Address            string `json:"address" example:"front-gate"`                   // RecordInfo 录像地址过滤条件
+	Secrecy            *int   `json:"secrecy" example:"0"`                            // RecordInfo 涉密属性：0 不涉密，1 涉密
+	Type               string `json:"type" example:"all"`                             // RecordInfo 录像类型：time、alarm、manual、all；空值默认 time
+	RecorderID         string `json:"recorder_id" example:"recorder-main"`            // RecordInfo 录像触发者标识字符串
+	IndistinctQuery    *int   `json:"indistinct_query" example:"0"`                   // 2014+ 录像模糊查询：0 按 To URI 选位置，1 同时检索中心和前端
+	StreamNumber       *int   `json:"stream_number" example:"0"`                      // 2022 码流编号：0 主码流，1/2/... 子码流
+	AlarmMethod        string `json:"alarm_method" example:"5"`                       // 2022 报警方式过滤条件
+	AlarmType          string `json:"alarm_type" example:"2"`                         // 2022 报警类型过滤条件
+	StartAlarmPriority string `json:"start_alarm_priority" example:"1"`               // Alarm 查询起始级别，0 为全部
+	EndAlarmPriority   string `json:"end_alarm_priority" example:"4"`                 // Alarm 查询终止级别，0 为全部
+	StartAlarmTime     string `json:"start_alarm_time" example:"2026-08-25T08:00:00"` // Alarm 查询起始时间
+	EndAlarmTime       string `json:"end_alarm_time" example:"2026-08-25T09:00:00"`   // Alarm 查询终止时间
 }
 
 // SwaggerGBAppendixA4Output 是附录 A.4 结构化对象。
@@ -409,12 +502,24 @@ type SwaggerGBDeviceQueryOutput struct {
 	XML        string                      `json:"xml"`                             // 原始 XML 应答全文
 	Data       any                         `json:"data,omitempty"`                  // 协议解析后的主体数据
 	AppendixA4 []SwaggerGBAppendixA4Output `json:"appendix_a4,omitempty"`           // 附录 A.4 扩展对象结构化结果
+	Incomplete *SwaggerGBIncompleteOutput  `json:"incomplete,omitempty"`            // 多响应查询未收齐时的完成度
+}
+
+// SwaggerGBIncompleteOutput 是 Catalog、RecordInfo、ConfigDownload 部分结果说明。
+type SwaggerGBIncompleteOutput struct {
+	Kind           string   `json:"kind" example:"record_info"`
+	Message        string   `json:"message" example:"RecordInfo response incomplete: received 1 of 2"`
+	ReceivedCount  int      `json:"received_count,omitempty" example:"1"`
+	ExpectedCount  int      `json:"expected_count,omitempty" example:"2"`
+	ReceivedConfig []string `json:"received_config,omitempty" example:"BasicParam"`
+	MissingConfig  []string `json:"missing_config,omitempty" example:"VideoParamOpt"`
 }
 
 // SwaggerGBDeviceConfigInput 是 2014 DeviceConfig 写入请求。
 type SwaggerGBDeviceConfigInput struct {
 	TargetID            string                          `json:"target_id" example:"34020000001320000001"`
 	Timeout             int                             `json:"timeout" example:"8"`
+	ExtraInfo           []string                        `json:"extra_info"` // 2022 扩展信息，每项最长 1024 字符
 	BasicParam          *SwaggerGBBasicParamInput       `json:"basic_param,omitempty"`
 	VideoParamConfig    *SwaggerGBVideoParamConfigInput `json:"video_param_config,omitempty"`
 	AudioParamConfig    *SwaggerGBAudioParamConfigInput `json:"audio_param_config,omitempty"`

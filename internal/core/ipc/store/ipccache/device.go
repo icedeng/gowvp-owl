@@ -63,27 +63,65 @@ func (d *Device) Delete(ctx context.Context, dev *ipc.Device, opts ...orm.QueryO
 
 // Update implements ipc.DeviceStorer.
 func (d *Device) Update(ctx context.Context, dev *ipc.Device, changeFn func(*ipc.Device) error, opts ...orm.QueryOption) error {
-	if err := d.Storer.Device().Update(ctx, dev, changeFn, opts...); err != nil {
+	before := *dev
+	if err := d.Storer.Device().Get(ctx, &before, opts...); err != nil {
 		return err
 	}
-	dev2, ok := d.devices.Load(dev.GetGB28181DeviceID())
-	// TODO: 待重构
-	if dev.IsGB28181() && ok {
-		// 密码修改，设备需要重新注册
-		if dev2.PasswordValue() != dev.Password && dev.Password != "" {
-			slog.InfoContext(ctx, " 修改密码，设备离线")
-			if err := d.Change(dev.GetGB28181DeviceID(), func(d *ipc.Device) error {
-				d.Password = dev.Password
-				d.IsOnline = false
-				return nil
-			}, func(d *gbs.Device) {
-			}); err != nil {
-				return err
-			}
+	runtime, hasRuntime := d.devices.Load(before.GetGB28181DeviceID())
+
+	update := func() error {
+		passwordChanged := false
+		if err := d.Storer.Device().Session(
+			ctx,
+			func(tx *gorm.DB) error {
+				db := tx.Clauses(clause.Locking{Strength: "UPDATE"})
+				for _, opt := range opts {
+					db = opt(db)
+				}
+				if err := db.First(dev).Error; err != nil {
+					return err
+				}
+				previousPassword := dev.Password
+				if err := changeFn(dev); err != nil {
+					return err
+				}
+				passwordChanged = dev.IsGB28181() && dev.Password != previousPassword
+				if passwordChanged {
+					dev.IsOnline = false
+					closed := true
+					dev.Ext.GBRegistrationClosed = &closed
+				}
+				return tx.Save(dev).Error
+			},
+			func(tx *gorm.DB) error {
+				if !passwordChanged {
+					return nil
+				}
+				return tx.Model(new(ipc.Channel)).Where("did = ?", dev.ID).UpdateColumn("is_online", false).Error
+			},
+		); err != nil {
+			return err
 		}
+
+		if passwordChanged && hasRuntime {
+			runtime.UpdateRuntime(func(current *gbs.Device) {
+				current.IsOnline = dev.IsOnline
+				current.LastKeepaliveAt = dev.KeepaliveAt.Time
+				current.LastRegisterAt = dev.RegisteredAt.Time
+				current.Expires = dev.Expires
+				current.Password = dev.Password
+				current.Address = dev.Address
+				gbs.SyncRegistrationBindingRuntime(current, dev)
+			})
+			slog.InfoContext(ctx, "修改密码，设备离线")
+		}
+		return nil
 	}
 
-	return nil
+	if hasRuntime {
+		return runtime.SerializeRegistrationState(update)
+	}
+	return update()
 }
 
 // List implements ipc.DeviceStorer.

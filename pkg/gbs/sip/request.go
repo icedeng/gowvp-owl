@@ -12,8 +12,9 @@ import (
 // Request Request
 type Request struct {
 	message
-	method    string
-	recipient *URI
+	method        string
+	recipient     *URI
+	strictRouting bool
 }
 
 // NewRequest NewRequest
@@ -24,6 +25,20 @@ func NewRequest(
 	sipVersion string,
 	hdrs []Header,
 	body []byte,
+) *Request {
+	return newRequest(messID, method, recipient, sipVersion, hdrs, body, true)
+}
+
+// newRequest 允许线缆解析器保留“未携带 Content-Length”的原始输入；
+// 所有公开构造入口则统一生成规范长度头，空正文也必须明确为 0。
+func newRequest(
+	messID MessageID,
+	method string,
+	recipient *URI,
+	sipVersion string,
+	hdrs []Header,
+	body []byte,
+	setContentLength bool,
 ) *Request {
 	req := new(Request)
 	if messID == "" {
@@ -37,10 +52,7 @@ func NewRequest(
 
 	req.SetMethod(method)
 	req.SetRecipient(recipient)
-
-	if len(body) != 0 {
-		req.SetBody(body, true)
-	}
+	req.SetBody(body, setContentLength)
 	return req
 }
 
@@ -53,6 +65,13 @@ func NewRequestFromResponse(method string, resp *Response) *Request {
 // NewRequestFromResponseChecked 根据响应构造对话内请求，并校验 RFC 3261 必需头。
 // 设备返回畸形 2xx 时应把错误交给业务层处理，不能因缺失 Via/CSeq/To 等字段触发 panic。
 func NewRequestFromResponseChecked(method string, resp *Response) (*Request, error) {
+	return NewRequestFromResponsePreparedChecked(method, resp, nil)
+}
+
+// NewRequestFromResponsePreparedChecked 在提交响应维护的本端对话 CSeq 前执行 prepare。
+// prepare 只应用本地路由、传输和安全头校验，不得执行网络发送；返回错误时本次
+// 候选 CSeq 不会提交，下一次合法请求仍使用连续序号。
+func NewRequestFromResponsePreparedChecked(method string, resp *Response, prepare func(*Request) error) (*Request, error) {
 	if resp == nil {
 		return nil, fmt.Errorf("cannot build %s request from nil response", method)
 	}
@@ -73,11 +92,16 @@ func NewRequestFromResponseChecked(method string, resp *Response) (*Request, err
 	if remoteTarget == nil || strings.TrimSpace(remoteTarget.Host()) == "" {
 		return nil, fmt.Errorf("cannot build %s request: response has no Contact or To target", method)
 	}
-	if from, ok := resp.From(); !ok || from == nil || from.Address == nil {
+	from, fromOK := resp.From()
+	if !fromOK || from == nil || from.Address == nil {
 		return nil, fmt.Errorf("cannot build %s request: response is missing From", method)
 	}
-	if to, ok := resp.To(); !ok || to == nil || to.Address == nil {
+	to, toOK := resp.To()
+	if !toOK || to == nil || to.Address == nil {
 		return nil, fmt.Errorf("cannot build %s request: response is missing To", method)
+	}
+	if dialogHeaderParam(from.Params, "tag") == "" || dialogHeaderParam(to.Params, "tag") == "" {
+		return nil, fmt.Errorf("cannot build %s request: response dialog tags are invalid", method)
 	}
 	if callID, ok := resp.CallID(); !ok || callID == nil || strings.TrimSpace(string(*callID)) == "" {
 		return nil, fmt.Errorf("cannot build %s request: response is missing Call-ID", method)
@@ -102,7 +126,8 @@ func NewRequestFromResponseChecked(method string, resp *Response) (*Request, err
 	}
 	recipient := remoteTarget.Clone()
 	routes := routeSet
-	if len(routeSet) > 0 && !sipURIHasParam(routeSet[0], "lr") {
+	strictRouting := len(routeSet) > 0 && !sipURIHasParam(routeSet[0], "lr")
+	if strictRouting {
 		// RFC 3261 12.2.1.1 严格路由：首个 route 成为 Request-URI，远端 target 追加到 Route 尾部。
 		recipient = routeSet[0].Clone()
 		routes = append(cloneURISlice(routeSet[1:]), remoteTarget.Clone())
@@ -115,6 +140,7 @@ func NewRequestFromResponseChecked(method string, resp *Response) (*Request, err
 		[]Header{},
 		[]byte{},
 	)
+	ackRequest.strictRouting = strictRouting
 
 	ackRequest.AppendHeader(ViaHeader{newDialogViaHop(responseVia)})
 	if len(routes) > 0 {
@@ -126,6 +152,12 @@ func NewRequestFromResponseChecked(method string, resp *Response) (*Request, err
 	CopyHeaders("Call-ID", resp, ackRequest)
 	cseq := *responseCSeq
 	cseq.MethodName = method
+	dialogCSeqReserved := false
+	if method != MethodACK {
+		resp.dialogCSeqMu.Lock()
+		dialogCSeqReserved = true
+		defer resp.dialogCSeqMu.Unlock()
+	}
 
 	// https://www.rfc-editor.org/rfc/rfc3261.html#section-12.2.1.1
 	// The Call-ID of the request MUST be set to the Call-ID of the dialog.
@@ -137,16 +169,30 @@ func NewRequestFromResponseChecked(method string, resp *Response) (*Request, err
 	// sequence number MUST be incremented by one, and this value MUST be
 	// placed into the CSeq header field.
 	if method != MethodACK {
-		cseq.SeqNo, err = resp.nextDialogCSeq(responseCSeq.SeqNo)
+		current := responseCSeq.SeqNo
+		if resp.dialogCSeqLoaded {
+			current = resp.dialogCSeq
+		}
+		cseq.SeqNo, err = NextCSeq(current)
 		if err != nil {
 			return nil, fmt.Errorf("cannot build %s request: %w", method, err)
 		}
 	}
 	ackRequest.AppendHeader(&cseq)
+	appendDefaultMaxForwards(ackRequest)
 	ackRequest.SetSource(resp.Destination())
 	ackRequest.SetDestination(resp.Source())
 	ackRequest.SetConnection(resp.GetConnection())
 	ackRequest.SetBody(nil, true)
+	if prepare != nil {
+		if err := prepare(ackRequest); err != nil {
+			return nil, err
+		}
+	}
+	if dialogCSeqReserved {
+		resp.dialogCSeq = cseq.SeqNo
+		resp.dialogCSeqLoaded = true
+	}
 	return ackRequest, nil
 }
 
@@ -166,6 +212,9 @@ func NewRequestFromServerDialogChecked(method string, inbound *Request, response
 	}
 	if cseq == 0 {
 		return nil, fmt.Errorf("cannot build %s server dialog request with zero CSeq", method)
+	}
+	if err := ValidateCSeq(cseq); err != nil {
+		return nil, fmt.Errorf("cannot build %s server dialog request: %w", method, err)
 	}
 
 	remote, remoteOK := inbound.From()
@@ -211,13 +260,15 @@ func NewRequestFromServerDialogChecked(method string, inbound *Request, response
 	}
 	recipient := remoteTarget.Clone()
 	routes := routeSet
-	if len(routeSet) > 0 && !sipURIHasParam(routeSet[0], "lr") {
+	strictRouting := len(routeSet) > 0 && !sipURIHasParam(routeSet[0], "lr")
+	if strictRouting {
 		// RFC 3261 12.2.1.1 严格路由：首个 route 成为 Request-URI，远端 target 追加到 Route 尾部。
 		recipient = routeSet[0].Clone()
 		routes = append(cloneURISlice(routeSet[1:]), remoteTarget.Clone())
 	}
 
 	request := NewRequest("", method, recipient, response.SipVersion(), nil, nil)
+	request.strictRouting = strictRouting
 	if len(routes) > 0 {
 		request.AppendHeader(&RouteHeader{Addresses: routes})
 	}
@@ -234,6 +285,7 @@ func NewRequestFromServerDialogChecked(method string, inbound *Request, response
 	callID := *responseCallID
 	request.AppendHeader(&callID)
 	request.AppendHeader(&CSeq{SeqNo: cseq, MethodName: method})
+	appendDefaultMaxForwards(request)
 	request.SetSource(inbound.Destination())
 	request.SetDestination(inbound.Source())
 	request.SetBody(nil, true)
@@ -279,6 +331,16 @@ func cloneDialogParams(params Params) Params {
 		return NewParams()
 	}
 	return params.Clone()
+}
+
+// appendDefaultMaxForwards 为本端新建的 SIP 请求补充 RFC 3261 默认跳数。
+// 已从原事务复制该头的 CANCEL/非 2xx ACK 保留原值，不重复追加。
+func appendDefaultMaxForwards(request *Request) {
+	if request == nil || len(request.GetHeaders("Max-Forwards")) != 0 {
+		return
+	}
+	value := defaultMaxForwards
+	request.AppendHeader(&value)
 }
 
 func dialogRouteSet(resp *Response) ([]*URI, error) {
@@ -365,6 +427,7 @@ func NewCancelRequestFromInviteChecked(invite *Request) (*Request, error) {
 	CopyHeaders("Call-ID", invite, cancel)
 	CopyHeaders("Max-Forwards", invite, cancel)
 	cancel.AppendHeader(&CSeq{SeqNo: cseq.SeqNo, MethodName: MethodCancel})
+	appendDefaultMaxForwards(cancel)
 	cancel.SetSource(invite.Source())
 	cancel.SetDestination(invite.Destination())
 	cancel.SetConnection(invite.GetConnection())
@@ -409,6 +472,7 @@ func NewAckRequestForNon2xxResponseChecked(invite *Request, response *Response) 
 	CopyHeaders("Call-ID", invite, ack)
 	CopyHeaders("Max-Forwards", invite, ack)
 	ack.AppendHeader(&CSeq{SeqNo: inviteCSeq.SeqNo, MethodName: MethodACK})
+	appendDefaultMaxForwards(ack)
 	ack.SetSource(invite.Source())
 	ack.SetDestination(invite.Destination())
 	ack.SetConnection(invite.GetConnection())
@@ -451,6 +515,35 @@ func (req *Request) Recipient() *URI {
 // SetRecipient SetRecipient
 func (req *Request) SetRecipient(recipient *URI) {
 	req.recipient = recipient
+}
+
+// NextHopURI 返回 RFC 3261 路由处理后的当前传输下一跳 URI。
+func (req *Request) NextHopURI() *URI {
+	if req == nil || req.strictRouting {
+		if req == nil {
+			return nil
+		}
+		return req.Recipient()
+	}
+	for _, header := range req.GetHeaders("Route") {
+		route, ok := header.(*RouteHeader)
+		if !ok || route == nil || len(route.Addresses) == 0 || route.Addresses[0] == nil {
+			continue
+		}
+		if sipURIHasParam(route.Addresses[0], "lr") {
+			return route.Addresses[0]
+		}
+		break
+	}
+	return req.Recipient()
+}
+
+// CopyRequestRouteState 在复制对话 Request-URI/Route 时同步严格路由状态。
+func CopyRequestRouteState(from, to *Request) {
+	if to == nil {
+		return
+	}
+	to.strictRouting = from != nil && from.strictRouting
 }
 
 // IsInvite IsInvite
@@ -513,5 +606,6 @@ func (req *Request) Clone() Message {
 	clone.SetSource(req.Source())
 	clone.SetDestination(req.Destination())
 	clone.SetConnection(req.GetConnection())
+	CopyRequestRouteState(req, clone)
 	return clone
 }

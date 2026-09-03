@@ -28,11 +28,11 @@ func NewCore(store Storer, notifier Dispatcher) Core {
 // CreateEventAndNotify 入库成功后触发 webhook 推送，供 AI 回调 API 层使用
 // 与生成的 CreateEvent 分离，保证生成文件不被污染
 func (c Core) CreateEventAndNotify(ctx context.Context, in *AddEventInput) (*Event, error) {
-	out, err := c.CreateEvent(ctx, in)
+	out, created, err := c.createEvent(ctx, in)
 	if err != nil {
 		return nil, err
 	}
-	if c.notifier != nil {
+	if created && c.notifier != nil {
 		c.notifier.Dispatch(ctx, out)
 	}
 	return out, nil

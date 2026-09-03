@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -31,6 +32,8 @@ type TLSListenerOptions struct {
 }
 
 var bufferSize uint16 = 65535 - 20 - 8 // IPv4 max size - IPv4 Header size - UDP Header size
+
+var errSIPTooManyHops = errors.New("request Max-Forwards is zero")
 
 const (
 	maxSIPHeaderLineBytes  = 8 << 10
@@ -116,6 +119,19 @@ func (s *Server) requestSecurityResolver() RequestSecurityResolver {
 	resolver := s.security
 	s.securityMu.RUnlock()
 	return resolver
+}
+
+func resolveRequestSecurity(resolver RequestSecurityResolver, request *Request) (security MessageSecurity, err error) {
+	if resolver == nil {
+		return nil, nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			security = nil
+			err = fmt.Errorf("SIP request security resolver panic: %v", recovered)
+		}
+	}()
+	return resolver(request)
 }
 
 // SetFrom 热更新 SIP 源地址配置，用于配置变更时无需重启服务
@@ -359,7 +375,7 @@ func (s *Server) serveTCP(listener *net.TCPListener, addr string) error {
 				}
 				return fmt.Errorf("accept SIP TCP connection: %w", err)
 			}
-			connection := NewTLSConnection(conn)
+			connection := NewTCPConnection(conn)
 			if !s.trackConnection(connection) {
 				_ = connection.Close()
 				continue
@@ -470,7 +486,7 @@ func (s *Server) serveTLS(listener net.Listener, addr string) error {
 				}
 				return fmt.Errorf("accept SIP TLS connection: %w", err)
 			}
-			connection := NewTCPConnection(conn)
+			connection := NewTLSConnection(conn)
 			if !s.trackConnection(connection) {
 				_ = connection.Close()
 				continue
@@ -600,7 +616,8 @@ func (s *Server) processTrackedTCPConnection(conn Connection) {
 		s.handlerListen(parser.out)
 	}()
 	defer func() {
-		parser.stop()
+		// 对端可能在发送最终响应后立即关闭连接；排空已接收帧，避免事务丢响应。
+		parser.finish()
 		<-handlerDone
 	}()
 
@@ -624,6 +641,18 @@ func readTCPMessageWithTimeout(conn Connection, reader *bufio.Reader, timeout ti
 		return nil, fmt.Errorf("SIP/TCP reader is nil")
 	}
 	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		// 前一帧读取可能已经把后续完整帧预取到 bufio.Reader；对端随后关闭时，
+		// 必须先排空缓存，不能因已关闭连接无法清 deadline 而丢弃后续帧。
+		if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+			if reader.Buffered() > 0 {
+				message, readErr := readTCPMessage(reader)
+				if readErr == nil {
+					return message, nil
+				}
+				return nil, errors.Join(fmt.Errorf("clear SIP/TCP read deadline: %w", err), readErr)
+			}
+			return nil, io.EOF
+		}
 		return nil, fmt.Errorf("clear SIP/TCP read deadline: %w", err)
 	}
 	// 长连接可无限空闲；收到首字节后才启动整帧时限，防止慢速逐字节占用连接。
@@ -632,12 +661,20 @@ func readTCPMessageWithTimeout(conn Connection, reader *bufio.Reader, timeout ti
 	}
 	if timeout > 0 {
 		if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+			// Peek 已经从连接读到数据；对端此时关闭时，完整帧可能仍在 reader 缓冲区。
+			// 对已关闭连接继续排空缓冲区，避免丢弃对端关闭前发送的最终响应。
+			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+				message, readErr := readTCPMessage(reader)
+				if readErr == nil {
+					return message, nil
+				}
+				return nil, errors.Join(fmt.Errorf("set SIP/TCP frame deadline: %w", err), readErr)
+			}
 			return nil, fmt.Errorf("set SIP/TCP frame deadline: %w", err)
 		}
 		defer func() {
-			clearErr := conn.SetReadDeadline(time.Time{})
-			if err == nil && clearErr != nil {
-				err = fmt.Errorf("clear SIP/TCP frame deadline: %w", clearErr)
+			if clearErr := conn.SetReadDeadline(time.Time{}); clearErr != nil && err != nil {
+				err = errors.Join(err, fmt.Errorf("clear SIP/TCP frame deadline: %w", clearErr))
 			}
 		}()
 	}
@@ -696,7 +733,12 @@ func readTCPMessage(reader *bufio.Reader) ([]byte, error) {
 // parseTCPContentLength 按 SIP 头名称大小写不敏感规则解析消息帧长度，
 // 同时兼容 RFC 3261 定义的紧凑头名 l。
 func parseTCPContentLength(line []byte) (int, bool, error) {
-	name, value, ok := strings.Cut(strings.TrimSpace(string(line)), ":")
+	raw := strings.TrimRight(string(line), "\r\n")
+	trimmed := strings.TrimSpace(raw)
+	if len(raw) > 0 && (raw[0] == ' ' || raw[0] == '\t') && isContentLengthHeaderLine(trimmed) {
+		return 0, true, fmt.Errorf("folded Content-Length header is invalid")
+	}
+	name, value, ok := strings.Cut(trimmed, ":")
 	if !ok {
 		return 0, false, nil
 	}
@@ -751,23 +793,27 @@ func (s *Server) handlerRequest(msg *Request) {
 		var responseSecurity MessageSecurity
 		if malformedRequestCanBeSigned(msg) {
 			if resolver := s.requestSecurityResolver(); resolver != nil {
-				if security, resolveErr := resolver(msg); resolveErr == nil {
+				if security, resolveErr := resolveRequestSecurity(resolver, msg); resolveErr == nil {
 					responseSecurity = security
 				}
 			}
 		}
 		statusCode := http.StatusBadRequest
 		reason := err.Error()
-		if !isSupportedSIPVersion(msg.SipVersion()) {
+		switch {
+		case !isSupportedSIPVersion(msg.SipVersion()):
 			statusCode = http.StatusHTTPVersionNotSupported
 			reason = "Version Not Supported"
+		case errors.Is(err, errSIPTooManyHops):
+			statusCode = 483
+			reason = "Too Many Hops"
 		}
-		response := NewResponseFromRequest("", msg, statusCode, reason, nil)
+		response := newInboundResponseFromRequest(msg, statusCode, reason, nil)
 		response.SetSipVersion(DefaultSipVersion)
 		if responseSecurity != nil {
-			if signErr := responseSecurity.Sign(response); signErr != nil {
+			if signErr := signOutboundMessage(responseSecurity, response); signErr != nil {
 				// 核心字段虽不歧义但仍无法签名时，退化为全新无签名错误响应，避免发送部分签名头。
-				response = NewResponseFromRequest("", msg, statusCode, reason, nil)
+				response = newInboundResponseFromRequest(msg, statusCode, reason, nil)
 				response.SetSipVersion(DefaultSipVersion)
 			}
 		}
@@ -776,24 +822,27 @@ func (s *Server) handlerRequest(msg *Request) {
 	}
 	tx := s.mustServerTX(msg)
 	if !tx.beginServerRequest() {
-		tx.replayServerResponse()
+		// 若原 handler 仍在处理，允许同源 TCP/TLS 重连接管后续响应；
+		// 已完成终态则由 replayServerResponseForRequest 负责重放。
+		tx.rebindServerRequestForRequest(msg)
+		tx.replayServerResponseForRequest(msg)
 		return
 	}
 	var security MessageSecurity
 	if resolver := s.requestSecurityResolver(); resolver != nil {
-		resolved, err := resolver(msg)
+		resolved, err := resolveRequestSecurity(resolver, msg)
 		if err != nil {
 			slog.Warn("resolve SIP request security failed", "method", msg.Method(), "err", err)
-			_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusForbidden, "request security unavailable", nil))
+			_ = tx.Respond(newInboundResponseFromRequest(msg, http.StatusForbidden, "request security unavailable", nil))
 			return
 		}
 		security = resolved
 		tx.SetMessageSecurity(resolved)
 	}
 	if security != nil {
-		if err := security.Verify(msg); err != nil {
+		if err := verifyInboundMessage(security, msg); err != nil {
 			slog.Warn("reject SIP request with invalid security proof", "method", msg.Method(), "err", err)
-			_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusForbidden, "invalid request security", nil))
+			_ = tx.Respond(newInboundResponseFromRequest(msg, http.StatusForbidden, "invalid request security", nil))
 			return
 		}
 	}
@@ -801,15 +850,21 @@ func (s *Server) handlerRequest(msg *Request) {
 
 	key, err := requestRouteKey(msg)
 	if err != nil {
-		_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusBadRequest, err.Error(), nil))
+		_ = tx.Respond(newInboundResponseFromRequest(msg, http.StatusBadRequest, err.Error(), nil))
 		return
 	}
 	routeHandlers, ok := s.route.Load(strings.ToUpper(key))
 	if !ok {
 		slog.Debug("not found handler func", "method", msg.Method(), "msg", msg.String())
-		routeHandlers = []HandlerFunc{func(c *Context) {
-			handlerMethodNotAllowed(c.Request, c.Tx)
-		}}
+		if strings.EqualFold(msg.Method(), MethodMessage) || strings.EqualFold(msg.Method(), MethodNotify) {
+			routeHandlers = []HandlerFunc{func(c *Context) {
+				_ = c.Tx.Respond(newInboundResponseFromRequest(c.Request, http.StatusBadRequest, http.StatusText(http.StatusBadRequest), nil))
+			}}
+		} else {
+			routeHandlers = []HandlerFunc{func(c *Context) {
+				handlerMethodNotAllowed(c.Request, c.Tx)
+			}}
+		}
 	}
 
 	// 全局中间件 + 路由 handler 合并为完整链
@@ -819,7 +874,7 @@ func (s *Server) handlerRequest(msg *Request) {
 
 	ctx, err := newContextChecked(msg, tx)
 	if err != nil {
-		_ = tx.Respond(NewResponseFromRequest("", msg, http.StatusBadRequest, err.Error(), nil))
+		_ = tx.Respond(newInboundResponseFromRequest(msg, http.StatusBadRequest, err.Error(), nil))
 		return
 	}
 	ctx.handlers = chain
@@ -849,6 +904,12 @@ func validateInboundRequestHeaders(msg *Request) error {
 	if !isSupportedSIPVersion(msg.SipVersion()) {
 		return fmt.Errorf("request SIP version is invalid")
 	}
+	if err := validateInboundHeaderNames(msg); err != nil {
+		return fmt.Errorf("request %w", err)
+	}
+	if !isSIPToken(msg.Method()) {
+		return fmt.Errorf("request method is invalid")
+	}
 	if headers := msg.GetHeaders("From"); len(headers) != 1 {
 		return fmt.Errorf("request must contain exactly one From header")
 	}
@@ -877,8 +938,29 @@ func validateInboundRequestHeaders(msg *Request) error {
 	if !ok || cseq == nil || strings.TrimSpace(cseq.MethodName) == "" {
 		return fmt.Errorf("request CSeq header is invalid")
 	}
+	if !isSIPToken(cseq.MethodName) {
+		return fmt.Errorf("request CSeq method is invalid")
+	}
+	if err := ValidateCSeq(cseq.SeqNo); err != nil {
+		return fmt.Errorf("request %w", err)
+	}
 	if !strings.EqualFold(strings.TrimSpace(cseq.MethodName), strings.TrimSpace(msg.Method())) {
 		return fmt.Errorf("request method does not match CSeq method")
+	}
+	maxForwardsHeaders := msg.GetHeaders("Max-Forwards")
+	if len(maxForwardsHeaders) != 1 {
+		return fmt.Errorf("request must contain exactly one Max-Forwards header")
+	}
+	maxForwards, ok := maxForwardsHeaders[0].(*MaxForwards)
+	if !ok || maxForwards == nil {
+		return fmt.Errorf("request Max-Forwards header is invalid")
+	}
+	if *maxForwards > 255 {
+		// 程序化构造的 Request 不一定经过文本解析，仍需在公共入口执行同一范围校验。
+		return fmt.Errorf("request Max-Forwards header exceeds 255")
+	}
+	if *maxForwards == 0 && !strings.EqualFold(strings.TrimSpace(msg.Method()), MethodOptions) {
+		return errSIPTooManyHops
 	}
 	via, ok := msg.ViaHop()
 	if !ok || !isValidSIPViaHop(via) {
@@ -914,6 +996,7 @@ func (s *Server) startRequestContext(ctx *Context) {
 	default:
 		s.requestWG.Add(1)
 	}
+	ctx.Tx.beginServerHandler()
 	s.lifecycleMu.Unlock()
 	go func() {
 		defer s.requestWG.Done()
@@ -922,7 +1005,18 @@ func (s *Server) startRequestContext(ctx *Context) {
 }
 
 func requestRouteKey(msg *Request) (string, error) {
-	key := msg.Method()
+	// 路由表按大写方法名索引；先规范化方法，再判断是否需要解析 MANSCDP CmdType。
+	// 否则混合大小写的 MESSAGE/NOTIFY 会落到只有组中间件的基础路由，正文 handler 不会执行。
+	key := strings.ToUpper(strings.TrimSpace(msg.Method()))
+	if key == MethodSubscribe {
+		if len(msg.Body()) == 0 {
+			return key, nil
+		}
+		if err := validateMANSCDPContentType(msg); err != nil {
+			return "", err
+		}
+		return key, nil
+	}
 	if key != MethodMessage && key != MethodNotify {
 		return key, nil
 	}
@@ -932,11 +1026,34 @@ func requestRouteKey(msg *Request) (string, error) {
 		}
 		return "", fmt.Errorf("empty body")
 	}
+	if err := validateMANSCDPContentType(msg); err != nil {
+		return "", err
+	}
 	var parsed MessageReceive
 	if err := XMLDecode(msg.Body(), &parsed); err != nil {
 		return "", fmt.Errorf("invalid xml")
 	}
-	return key + "-" + parsed.CmdType, nil
+	cmdType := strings.TrimSpace(parsed.CmdType)
+	if cmdType == "" {
+		return "", fmt.Errorf("missing CmdType")
+	}
+	return key + "-" + cmdType, nil
+}
+
+func validateMANSCDPContentType(msg *Request) error {
+	headers := msg.GetHeaders("Content-Type")
+	if len(headers) != 1 {
+		return fmt.Errorf("%s body requires exactly one Content-Type", msg.Method())
+	}
+	contentType, ok := msg.ContentType()
+	if !ok || contentType == nil {
+		return fmt.Errorf("invalid %s Content-Type", msg.Method())
+	}
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(string(*contentType)))
+	if err != nil || !strings.EqualFold(mediaType, string(ContentTypeXML)) {
+		return fmt.Errorf("%s body requires %s Content-Type", msg.Method(), string(ContentTypeXML))
+	}
+	return nil
 }
 
 func isTerminatedSubscriptionNotify(msg *Request) bool {
@@ -977,6 +1094,9 @@ func validateInboundResponseHeaders(msg *Response) error {
 	if !isSupportedSIPVersion(msg.SipVersion()) {
 		return fmt.Errorf("response SIP version is invalid")
 	}
+	if err := validateInboundHeaderNames(msg); err != nil {
+		return fmt.Errorf("response %w", err)
+	}
 	if msg.StatusCode() < 100 || msg.StatusCode() > 699 {
 		return fmt.Errorf("response status code is invalid")
 	}
@@ -1008,6 +1128,15 @@ func validateInboundResponseHeaders(msg *Response) error {
 	if !ok || cseq == nil || strings.TrimSpace(cseq.MethodName) == "" {
 		return fmt.Errorf("response CSeq header is invalid")
 	}
+	if !isSIPToken(cseq.MethodName) {
+		return fmt.Errorf("response CSeq method is invalid")
+	}
+	if err := ValidateCSeq(cseq.SeqNo); err != nil {
+		return fmt.Errorf("response %w", err)
+	}
+	if msg.StatusCode() >= 200 && strings.EqualFold(strings.TrimSpace(cseq.MethodName), MethodInvite) && dialogHeaderParam(to.Params, "tag") == "" {
+		return fmt.Errorf("response INVITE final To tag is invalid")
+	}
 	via, ok := msg.ViaHop()
 	if !ok || !isValidSIPViaHop(via) {
 		return fmt.Errorf("response Via header is invalid")
@@ -1018,8 +1147,145 @@ func validateInboundResponseHeaders(msg *Response) error {
 	return nil
 }
 
+func validateInboundHeaderNames(msg Message) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("SIP header name validation panic: %v", recovered)
+		}
+	}()
+	for index, header := range msg.Headers() {
+		if isNilInterfaceValue(header) {
+			return fmt.Errorf("SIP header %d is nil", index)
+		}
+		if malformed, ok := header.(*malformedHeader); ok {
+			return fmt.Errorf("SIP header %d is malformed: %s", index, malformed.cause)
+		}
+		if name := strings.TrimSpace(header.Name()); !isSIPToken(name) {
+			return fmt.Errorf("SIP header %d name is invalid", index)
+		}
+	}
+	return nil
+}
+
 func isSupportedSIPVersion(version string) bool {
 	return strings.EqualFold(strings.TrimSpace(version), DefaultSipVersion)
+}
+
+func validateOutboundRequestCSeq(request *Request) error {
+	if request == nil {
+		return fmt.Errorf("SIP request is nil")
+	}
+	if len(request.GetHeaders("CSeq")) != 1 {
+		return fmt.Errorf("SIP request must contain exactly one CSeq header")
+	}
+	cseq, ok := request.CSeq()
+	if !ok || cseq == nil || !isSIPToken(strings.TrimSpace(cseq.MethodName)) {
+		return fmt.Errorf("SIP request CSeq header is invalid")
+	}
+	if err := ValidateCSeq(cseq.SeqNo); err != nil {
+		return fmt.Errorf("SIP request %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(cseq.MethodName), strings.TrimSpace(request.Method())) {
+		return fmt.Errorf("SIP request method does not match CSeq method")
+	}
+	return nil
+}
+
+func validateOutboundRequestHeaders(request *Request) error {
+	if request == nil {
+		return fmt.Errorf("SIP request is nil")
+	}
+	if !isSupportedSIPVersion(request.SipVersion()) {
+		return fmt.Errorf("SIP request version is invalid")
+	}
+	if request.Destination() == nil {
+		return fmt.Errorf("SIP request destination is unavailable")
+	}
+	if !isSIPToken(strings.TrimSpace(request.Method())) {
+		return fmt.Errorf("SIP request method is invalid")
+	}
+	recipient := request.Recipient()
+	if err := validateOutboundURI("request recipient", recipient); err != nil {
+		return fmt.Errorf("SIP request recipient is invalid")
+	}
+	if headers := request.GetHeaders("From"); len(headers) != 1 {
+		return fmt.Errorf("SIP request must contain exactly one From header")
+	}
+	from, ok := request.From()
+	if !ok || from == nil || from.Address == nil || strings.TrimSpace(from.Address.Host()) == "" || from.Params == nil {
+		return fmt.Errorf("SIP request From header is invalid")
+	}
+	if headers := request.GetHeaders("To"); len(headers) != 1 {
+		return fmt.Errorf("SIP request must contain exactly one To header")
+	}
+	to, ok := request.To()
+	if !ok || to == nil || to.Address == nil || strings.TrimSpace(to.Address.Host()) == "" {
+		return fmt.Errorf("SIP request To header is invalid")
+	}
+	if headers := request.GetHeaders("Call-ID"); len(headers) != 1 {
+		return fmt.Errorf("SIP request must contain exactly one Call-ID header")
+	}
+	callID, ok := request.CallID()
+	if !ok || callID == nil || strings.TrimSpace(string(*callID)) == "" {
+		return fmt.Errorf("SIP request Call-ID header is invalid")
+	}
+	if err := validateOutboundRequestCSeq(request); err != nil {
+		return err
+	}
+	maxForwardsHeaders := request.GetHeaders("Max-Forwards")
+	if len(maxForwardsHeaders) != 1 {
+		return fmt.Errorf("SIP request must contain exactly one Max-Forwards header")
+	}
+	maxForwards, ok := maxForwardsHeaders[0].(*MaxForwards)
+	if !ok || maxForwards == nil || *maxForwards > 255 {
+		return fmt.Errorf("SIP request Max-Forwards header is invalid")
+	}
+	viaHeaders := request.GetHeaders("Via")
+	if len(viaHeaders) == 0 {
+		return fmt.Errorf("SIP request Via header is invalid")
+	}
+	for _, header := range viaHeaders {
+		via, ok := header.(ViaHeader)
+		if !ok || len(via) == 0 {
+			return fmt.Errorf("SIP request Via header is invalid")
+		}
+		for _, hop := range via {
+			if !isValidSIPViaHop(hop) || isNilInterfaceValue(hop.Params) {
+				return fmt.Errorf("SIP request Via header is invalid")
+			}
+		}
+	}
+	return nil
+}
+
+func validateOutboundResponseCSeq(response *Response) error {
+	if response == nil {
+		return fmt.Errorf("SIP response is nil")
+	}
+	if response.Destination() == nil {
+		return fmt.Errorf("SIP response destination is unavailable")
+	}
+	if !isSupportedSIPVersion(response.SipVersion()) {
+		return fmt.Errorf("SIP response version is invalid")
+	}
+	if response.StatusCode() < 100 || response.StatusCode() > 699 {
+		return fmt.Errorf("SIP response status code is invalid")
+	}
+	// 畸形请求的 400 响应可能无法复制唯一 CSeq；仍允许发送错误响应，但只要
+	// 存在程序化 CSeq 就绝不能写出解析器自身会拒绝的数值。
+	for _, header := range response.GetHeaders("CSeq") {
+		cseq, ok := header.(*CSeq)
+		if !ok || cseq == nil {
+			continue
+		}
+		if !isSIPToken(cseq.MethodName) {
+			return fmt.Errorf("SIP response CSeq method is invalid")
+		}
+		if err := ValidateCSeq(cseq.SeqNo); err != nil {
+			return fmt.Errorf("SIP response %w", err)
+		}
+	}
+	return nil
 }
 
 func isValidSIPViaHop(via *ViaHop) bool {
@@ -1035,11 +1301,184 @@ func (s *Server) Request(req *Request) (*Transaction, error) {
 
 // RequestWithSecurity 在报文写出前安装事务级签名器，避免响应早于验签器安装的竞态。
 func (s *Server) RequestWithSecurity(req *Request, security MessageSecurity) (*Transaction, error) {
+	ctx, cancel := transactionWriteContext()
+	defer cancel()
+	return s.RequestWithSecurityContext(ctx, req, security)
+}
+
+// RequestWithSecurityContext 在安装事务级安全器后写出请求，并允许 context 中止阻塞的流式写入。
+func (s *Server) RequestWithSecurityContext(ctx context.Context, req *Request, security MessageSecurity) (*Transaction, error) {
+	return s.requestWithSecurityContext(ctx, req, security, false)
+}
+
+// RequestWithSecurityContextOwnedConnection 写出请求，并把当前连接的生命周期交给事务。
+// 仅应用于为单次非对话请求主动建立的连接；最终响应、写失败或事务关闭都会释放连接。
+func (s *Server) RequestWithSecurityContextOwnedConnection(ctx context.Context, req *Request, security MessageSecurity) (*Transaction, error) {
+	return s.requestWithSecurityContext(ctx, req, security, true)
+}
+
+// PreparedRequest 保存已完成校验、签名、序列化和事务快照的请求。
+// Send 之后只进入连接写入；Close 用于放弃尚未提交 CSeq 的准备结果。
+type PreparedRequest struct {
+	mu       sync.Mutex
+	done     bool
+	ctx      context.Context
+	server   *Server
+	tx       *Transaction
+	prepared *preparedTransactionRequest
+}
+
+// PrepareRequestWithSecurityContext 完成请求写出前的全部纯本地工作，并暂时锁定服务生命周期。
+// 调用方必须恰好调用一次 Send 或 Close。
+func (s *Server) PrepareRequestWithSecurityContext(ctx context.Context, req *Request, security MessageSecurity) (*PreparedRequest, error) {
 	if s == nil || req == nil {
 		return nil, fmt.Errorf("SIP request is unavailable")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !isSupportedSIPVersion(req.SipVersion()) {
 		return nil, fmt.Errorf("unsupported SIP request version")
+	}
+	if err := validateOutboundRequestCSeq(req); err != nil {
+		return nil, err
+	}
+	s.lifecycleMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			s.lifecycleMu.Unlock()
+		}
+	}()
+	select {
+	case <-s.ctx.Done():
+		return nil, fmt.Errorf("SIP server is closed")
+	default:
+	}
+	if err := prepareServerRequestTransport(s, req); err != nil {
+		return nil, err
+	}
+	tx := s.mustTX(req)
+	tx.SetMessageSecurity(security)
+	prepared, err := tx.prepareRequest(req)
+	if err != nil {
+		tx.Close()
+		return nil, err
+	}
+	slog.Debug("SIP 最终发送报文", "method", req.Method(), "request", string(prepared.payload))
+	locked = false
+	return &PreparedRequest{ctx: ctx, server: s, tx: tx, prepared: prepared}, nil
+}
+
+func prepareServerRequestTransport(s *Server, req *Request) error {
+	if req.GetConnection() == nil {
+		return fmt.Errorf("SIP request connection is unavailable")
+	}
+	if req.Destination() == nil {
+		return fmt.Errorf("SIP request destination is unavailable")
+	}
+	viaHop, ok := req.ViaHop()
+	if !ok {
+		return fmt.Errorf("missing required 'Via' header")
+	}
+	if viaHop.Host == "" {
+		viaHop.Host = s.host
+	}
+	if transport := SignalingTransport(req.GetConnection()); transport != "" {
+		viaHop.Transport = transport
+	}
+	if viaHop.Port == nil {
+		viaHop.Port = connectionLocalPort(req.GetConnection())
+		if viaHop.Port == nil {
+			viaHop.Port = s.port
+		}
+	}
+	if !isValidSIPViaHop(viaHop) {
+		return fmt.Errorf("invalid SIP Via header")
+	}
+	if viaHop.Params == nil {
+		viaHop.Params = NewParams()
+	}
+	branchKey, branch, branchCount := sipViaParam(viaHop, "branch")
+	if branchCount > 1 {
+		return fmt.Errorf("Via header contains multiple branch parameters")
+	}
+	if branchCount == 0 {
+		branchKey = "branch"
+	}
+	if branch == "" {
+		viaHop.Params.Add(branchKey, String{Str: GenerateBranch()})
+	}
+	if _, _, count := sipViaParam(viaHop, "rport"); count == 0 {
+		viaHop.Params.Add("rport", nil)
+	}
+	return nil
+}
+
+// Send 提交已经准备完成的请求写入。
+func (prepared *PreparedRequest) Send() (*Transaction, error) {
+	if prepared == nil {
+		return nil, fmt.Errorf("prepared SIP request is unavailable")
+	}
+	prepared.mu.Lock()
+	if prepared.done {
+		prepared.mu.Unlock()
+		return nil, fmt.Errorf("prepared SIP request is already completed")
+	}
+	prepared.done = true
+	prepared.mu.Unlock()
+	defer prepared.server.lifecycleMu.Unlock()
+	if err := prepared.tx.writePreparedRequestContext(prepared.ctx, prepared.prepared); err != nil {
+		prepared.tx.Close()
+		return nil, err
+	}
+	return prepared.tx, nil
+}
+
+// Close 放弃尚未写出的准备结果并释放服务生命周期锁。
+func (prepared *PreparedRequest) Close() {
+	if prepared == nil {
+		return
+	}
+	prepared.mu.Lock()
+	if prepared.done {
+		prepared.mu.Unlock()
+		return
+	}
+	prepared.done = true
+	prepared.mu.Unlock()
+	prepared.tx.Close()
+	prepared.server.lifecycleMu.Unlock()
+}
+
+func (s *Server) requestWithSecurityContext(ctx context.Context, req *Request, security MessageSecurity, ownConnection bool) (*Transaction, error) {
+	if s == nil || req == nil {
+		return nil, fmt.Errorf("SIP request is unavailable")
+	}
+	var owned Connection
+	attached := false
+	if ownConnection {
+		owned = req.GetConnection()
+		defer func() {
+			if !attached && owned != nil {
+				_ = owned.Close()
+			}
+		}()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !isSupportedSIPVersion(req.SipVersion()) {
+		return nil, fmt.Errorf("unsupported SIP request version")
+	}
+	if err := validateOutboundRequestCSeq(req); err != nil {
+		return nil, err
 	}
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
@@ -1089,12 +1528,33 @@ func (s *Server) RequestWithSecurity(req *Request, security MessageSecurity) (*T
 	if _, _, count := sipViaParam(viaHop, "rport"); count == 0 {
 		viaHop.Params.Add("rport", nil)
 	}
-
-	slog.Debug("SIP 最终发送报文", "method", req.Method(), "request", req.String())
+	if err := prepareOutboundContentLength(req); err != nil {
+		return nil, err
+	}
+	if err := validateOutboundRequestHeaders(req); err != nil {
+		return nil, err
+	}
+	preview, err := serializeOutboundMessage(req)
+	if err != nil {
+		return nil, err
+	}
+	slog.Debug("SIP 最终发送报文", "method", req.Method(), "request", string(preview))
 
 	tx := s.mustTX(req)
 	tx.SetMessageSecurity(security)
-	return tx, tx.Request(req)
+	if owned != nil {
+		tx.ownConnection(owned)
+		attached = true
+	}
+	err = tx.RequestContext(ctx, req)
+	if owned != nil {
+		tx.finishOwnedConnectionWrite()
+	}
+	if err != nil {
+		tx.Close()
+		return nil, err
+	}
+	return tx, nil
 }
 
 func connectionLocalPort(conn Connection) *Port {
@@ -1123,18 +1583,59 @@ func connectionLocalPort(conn Connection) *Port {
 }
 
 func handlerMethodNotAllowed(req *Request, tx *Transaction) {
-	resp := NewResponseFromRequest("", req, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed), []byte{})
+	resp := newInboundResponseFromRequest(req, http.StatusMethodNotAllowed, http.StatusText(http.StatusMethodNotAllowed), []byte{})
+	resp.AppendHeader(defaultAllowMethods.Clone())
 	tx.Respond(resp)
 }
 
+func newInboundResponseFromRequest(req *Request, status int, reason string, body []byte) *Response {
+	resp := NewResponseFromRequest("", req, status, reason, body)
+	if req != nil && strings.EqualFold(strings.TrimSpace(req.Method()), MethodRegister) {
+		version := XGBVer("3.0")
+		resp.AppendHeader(&version)
+	}
+	return resp
+}
+
 func (s *Server) runContextSafely(ctx *Context) {
+	if ctx != nil && ctx.Tx != nil {
+		defer ctx.Tx.completeServerHandler()
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			slog.Error("recover panic in SIP request handler", s.requestPanicLogArgs(ctx, recovered)...)
+			s.ensureRequestFinalResponse(ctx, "panic")
 		}
 	}()
 
 	ctx.Next()
+	s.ensureRequestFinalResponse(ctx, "without final response")
+}
+
+func (s *Server) ensureRequestFinalResponse(ctx *Context, cause string) {
+	if ctx == nil || ctx.Tx == nil || ctx.Request == nil {
+		return
+	}
+	// ACK 不允许响应；只有 panic 异常退出时才释放接纳标记，正常 ACK 仍保持事务幂等。
+	if strings.EqualFold(strings.TrimSpace(ctx.Request.Method()), MethodACK) {
+		if cause == "panic" {
+			ctx.Tx.allowServerRequestRetry()
+		}
+		return
+	}
+	// handler 可能已经成功写出业务响应；保留原终态供事务层重放，不能追加矛盾响应。
+	if ctx.Tx.hasServerFinalResponse() {
+		return
+	}
+	// handler 已经尝试提交最终响应但写出失败时，RespondContext 会释放事务接纳状态；
+	// 保留该重传恢复语义，不能在返回路径追加一个与业务响应矛盾的 500。
+	if ctx.Tx.hasServerFinalAttempt() {
+		return
+	}
+	response := newInboundResponseFromRequest(ctx.Request, http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError), nil)
+	if err := ctx.Tx.Respond(response); err != nil {
+		slog.Error("respond incomplete SIP handler", "err", err, "method", ctx.Request.Method(), "cause", cause)
+	}
 }
 
 func (s *Server) requestPanicLogArgs(ctx *Context, recovered any) []any {

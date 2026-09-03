@@ -3,6 +3,8 @@ package sip
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -77,13 +79,19 @@ type signalingTransportConnection interface {
 
 // Connection implementation.
 type connection struct {
-	baseConn net.Conn
-	laddr    net.Addr
-	raddr    net.Addr
-	// mu       sync.RWMutex
+	baseConn  net.Conn
+	laddr     net.Addr
+	raddr     net.Addr
+	writeGate chan struct{}
 	logKey    string
 	packet    bool
 	transport string
+}
+
+func newConnectionWriteGate() chan struct{} {
+	gate := make(chan struct{}, 1)
+	gate <- struct{}{}
+	return gate
 }
 
 func NewUDPConnection(baseConn net.Conn) Connection {
@@ -91,6 +99,7 @@ func NewUDPConnection(baseConn net.Conn) Connection {
 		baseConn:  baseConn,
 		laddr:     baseConn.LocalAddr(),
 		raddr:     baseConn.RemoteAddr(),
+		writeGate: newConnectionWriteGate(),
 		logKey:    "udp ",
 		packet:    true,
 		transport: "UDP",
@@ -103,6 +112,7 @@ func NewTCPConnection(baseConn net.Conn) Connection {
 		baseConn:  baseConn,
 		laddr:     baseConn.LocalAddr(),
 		raddr:     baseConn.RemoteAddr(),
+		writeGate: newConnectionWriteGate(),
 		logKey:    "tcp ",
 		transport: "TCP",
 	}
@@ -172,6 +182,17 @@ func (conn *connection) ReadFrom(buf []byte) (num int, raddr net.Addr, err error
 }
 
 func (conn *connection) Write(buf []byte) (int, error) {
+	if conn.packet {
+		return conn.writeLocked(buf)
+	}
+	if err := conn.lockWrite(context.Background()); err != nil {
+		return 0, err
+	}
+	defer conn.unlockWrite()
+	return conn.writeLocked(buf)
+}
+
+func (conn *connection) writeLocked(buf []byte) (int, error) {
 	var (
 		num int
 		err error
@@ -186,6 +207,33 @@ func (conn *connection) Write(buf []byte) (int, error) {
 }
 
 func (conn *connection) WriteTo(buf []byte, raddr net.Addr) (num int, err error) {
+	if conn.packet {
+		return conn.writeToLocked(buf, raddr)
+	}
+	if err := conn.lockWrite(context.Background()); err != nil {
+		return 0, err
+	}
+	defer conn.unlockWrite()
+	return conn.writeToLocked(buf, raddr)
+}
+
+func (conn *connection) lockWrite(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-conn.writeGate:
+		return nil
+	}
+}
+
+func (conn *connection) unlockWrite() {
+	conn.writeGate <- struct{}{}
+}
+
+func (conn *connection) writeToLocked(buf []byte, raddr net.Addr) (num int, err error) {
 	if !conn.packet {
 		num, err = conn.baseConn.Write(buf)
 	} else {
@@ -201,6 +249,53 @@ func (conn *connection) WriteTo(buf []byte, raddr net.Addr) (num int, err error)
 	}
 	// logrus.Tracef("writeTo %d , %s -> %s \n %s", num, conn.baseConn.LocalAddr(), raddr.String(), string(buf[:num]))
 	return num, err
+}
+
+func (conn *connection) writeToContext(ctx context.Context, buf []byte, raddr net.Addr) (num int, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if conn.packet {
+		return conn.writeToLocked(buf, raddr)
+	}
+	if err := conn.lockWrite(ctx); err != nil {
+		return 0, err
+	}
+	defer conn.unlockWrite()
+
+	deadline := time.Time{}
+	if value, ok := ctx.Deadline(); ok {
+		deadline = value
+	}
+	if err := conn.baseConn.SetWriteDeadline(deadline); err != nil {
+		return 0, err
+	}
+	interruptDone := make(chan struct{})
+	stopInterrupt := context.AfterFunc(ctx, func() {
+		_ = conn.baseConn.SetWriteDeadline(time.Now())
+		close(interruptDone)
+	})
+	num, writeErr := conn.writeToLocked(buf, raddr)
+	if !stopInterrupt() {
+		<-interruptDone
+	}
+	clearErr := conn.baseConn.SetWriteDeadline(time.Time{})
+	// 对端可能在完整接收请求并回送最终响应后立即关闭连接。此时写入已经成功，
+	// 清理已关闭连接的 deadline 失败不应把已送达请求改判为发送失败。
+	if writeErr == nil && (errors.Is(clearErr, net.ErrClosed) || errors.Is(clearErr, io.ErrClosedPipe)) {
+		clearErr = nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return num, errors.Join(ctxErr, writeErr, clearErr)
+	}
+	var timeoutErr net.Error
+	if !deadline.IsZero() && !time.Now().Before(deadline) && errors.As(writeErr, &timeoutErr) && timeoutErr.Timeout() {
+		return num, errors.Join(context.DeadlineExceeded, writeErr, clearErr)
+	}
+	return num, errors.Join(writeErr, clearErr)
 }
 
 func (conn *connection) LocalAddr() net.Addr {

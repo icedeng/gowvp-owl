@@ -48,7 +48,7 @@ type SignalDigestSecurity struct {
 }
 
 func NewSignalDigestSecurity(options SignalDigestOptions) (*SignalDigestSecurity, error) {
-	seed := strings.TrimSpace(options.Seed)
+	seed := options.Seed
 	if seed == "" {
 		return nil, fmt.Errorf("signal Digest seed is required")
 	}
@@ -146,13 +146,12 @@ func (security *SignalDigestSecurity) Verify(message Message) error {
 	if delta > security.window {
 		return fmt.Errorf("signal Digest Date is outside the allowed window")
 	}
-	auth := AuthFromValue(note)
-	if !strings.EqualFold(canonicalDigestAlgorithm(auth.Algorithm()), security.algorithm) {
-		return fmt.Errorf("signal Digest algorithm mismatch: %s", auth.Algorithm())
+	provided, algorithm, err := parseSignalDigestNote(note)
+	if err != nil {
+		return err
 	}
-	provided := strings.TrimSpace(auth.Get("nonce"))
-	if provided == "" {
-		return fmt.Errorf("signal Digest nonce is missing")
+	if !strings.EqualFold(canonicalDigestAlgorithm(algorithm), security.algorithm) {
+		return fmt.Errorf("signal Digest algorithm mismatch: %s", algorithm)
 	}
 	expected, err := security.calculate(message, date)
 	if err != nil {
@@ -162,6 +161,106 @@ func (security *SignalDigestSecurity) Verify(message Message) error {
 		return nil
 	}
 	return fmt.Errorf("signal Digest verification failed")
+}
+
+func parseSignalDigestNote(value string) (nonce, algorithm string, err error) {
+	value = strings.TrimSpace(value)
+	const scheme = "Digest"
+	if len(value) <= len(scheme) || !strings.EqualFold(value[:len(scheme)], scheme) ||
+		(value[len(scheme)] != ' ' && value[len(scheme)] != '\t') {
+		return "", "", fmt.Errorf("signal Digest Note must use the Digest scheme")
+	}
+	value = strings.TrimSpace(value[len(scheme):])
+	seen := make(map[string]struct{}, 2)
+	for value != "" {
+		eq := strings.IndexByte(value, '=')
+		if eq <= 0 {
+			return "", "", fmt.Errorf("signal Digest Note contains a malformed parameter")
+		}
+		key := strings.ToLower(strings.TrimSpace(value[:eq]))
+		if key == "" || strings.ContainsAny(key, " \t,") {
+			return "", "", fmt.Errorf("signal Digest Note contains a malformed parameter name")
+		}
+		if key != "nonce" && key != "algorithm" {
+			return "", "", fmt.Errorf("signal Digest Note contains unsupported parameter %q", key)
+		}
+		if _, exists := seen[key]; exists {
+			return "", "", fmt.Errorf("signal Digest Note contains duplicate %s parameter", key)
+		}
+		seen[key] = struct{}{}
+
+		value = strings.TrimLeft(value[eq+1:], " \t")
+		if value == "" {
+			return "", "", fmt.Errorf("signal Digest Note %s parameter is empty", key)
+		}
+		parsed := ""
+		if value[0] == '"' {
+			var builder strings.Builder
+			escaped := false
+			closed := false
+			consumed := 1
+			for consumed < len(value) {
+				ch := value[consumed]
+				consumed++
+				if escaped {
+					builder.WriteByte(ch)
+					escaped = false
+					continue
+				}
+				if ch == '\\' {
+					escaped = true
+					continue
+				}
+				if ch == '"' {
+					closed = true
+					break
+				}
+				builder.WriteByte(ch)
+			}
+			if !closed || escaped {
+				return "", "", fmt.Errorf("signal Digest Note %s parameter has an unterminated quoted value", key)
+			}
+			parsed = builder.String()
+			value = value[consumed:]
+		} else {
+			end := strings.IndexByte(value, ',')
+			if end < 0 {
+				parsed = strings.TrimSpace(value)
+				value = ""
+			} else {
+				parsed = strings.TrimSpace(value[:end])
+				value = value[end:]
+			}
+			if strings.ContainsAny(parsed, " \t") {
+				return "", "", fmt.Errorf("signal Digest Note %s parameter must be a single token", key)
+			}
+		}
+		if parsed == "" {
+			return "", "", fmt.Errorf("signal Digest Note %s parameter is empty", key)
+		}
+		switch key {
+		case "nonce":
+			nonce = parsed
+		case "algorithm":
+			algorithm = parsed
+		}
+
+		value = strings.TrimSpace(value)
+		if value == "" {
+			break
+		}
+		if value[0] != ',' {
+			return "", "", fmt.Errorf("signal Digest Note parameters must be comma-separated")
+		}
+		value = strings.TrimSpace(value[1:])
+		if value == "" {
+			return "", "", fmt.Errorf("signal Digest Note contains a trailing comma")
+		}
+	}
+	if nonce == "" || algorithm == "" {
+		return "", "", fmt.Errorf("signal Digest Note requires exactly one nonce and algorithm parameter")
+	}
+	return nonce, algorithm, nil
 }
 
 func (security *SignalDigestSecurity) calculate(message Message, date string) ([]byte, error) {

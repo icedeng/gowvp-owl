@@ -110,6 +110,20 @@ func TestValidateSIPConfig(t *testing.T) {
 		}},
 		{name: "history record limit", change: func(config *SIP) { config.DeviceHistory.MaxRecords = 100001 }},
 		{name: "history day limit", change: func(config *SIP) { config.DeviceHistory.MaxDays = 3651 }},
+		{name: "redirect scheme", change: func(config *SIP) { config.RegisterRedirect = "https://192.0.2.31" }},
+		{name: "redirect empty address", change: func(config *SIP) { config.RegisterRedirect = "sip:" }},
+		{name: "redirect password", change: func(config *SIP) { config.RegisterRedirect = "sip:" + config.ID + ":secret@192.0.2.31" }},
+		{name: "redirect server ID mismatch", change: func(config *SIP) { config.RegisterRedirect = "sip:34020000002000000002@192.0.2.31" }},
+		{name: "redirect empty host", change: func(config *SIP) { config.RegisterRedirect = "sip:" + config.ID + "@" }},
+		{name: "redirect invalid port", change: func(config *SIP) { config.RegisterRedirect = "sip:" + config.ID + "@192.0.2.31:70000" }},
+		{name: "redirect unsupported transport", change: func(config *SIP) { config.RegisterRedirect = "sip:" + config.ID + "@192.0.2.31;transport=ws" }},
+		{name: "redirect ambiguous transport", change: func(config *SIP) {
+			config.RegisterRedirect = "sip:" + config.ID + "@192.0.2.31;transport=tcp;transport=tls"
+		}},
+		{name: "redirect SIPS transport conflict", change: func(config *SIP) { config.RegisterRedirect = "sips:" + config.ID + "@192.0.2.31;transport=tcp" }},
+		{name: "redirect control character", change: func(config *SIP) {
+			config.RegisterRedirect = "sip:" + config.ID + "@192.0.2.31\r\nContact: <sip:attacker.example>"
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -138,5 +152,62 @@ func TestValidateSIPConfig(t *testing.T) {
 	tlsOnMainPort.TLSClientCA = "client-ca.crt"
 	if err := ValidateSIPConfig(tlsOnMainPort); err != nil {
 		t.Fatalf("TLS client certificate config was rejected: %v", err)
+	}
+
+	for _, redirect := range []string{
+		"",
+		"sip:" + valid.ID + "@192.0.2.31:5070",
+		"sip:redirect.example;transport=tcp",
+		"sips:" + valid.ID + "@[2001:db8::31]:5061;transport=tls",
+	} {
+		config := valid
+		config.RegisterRedirect = redirect
+		if err := ValidateSIPConfig(config); err != nil {
+			t.Fatalf("valid REGISTER redirect %q was rejected: %v", redirect, err)
+		}
+	}
+}
+
+func TestValidateSIPAlarmReceivers(t *testing.T) {
+	valid := []SIPAlarmReceiver{{
+		Name: "dispatch-center", Enabled: true, DeviceID: "34020000002000000011",
+		SourceIDs: []string{"3402000000", "34020000001320000001"},
+	}}
+	if err := ValidateSIPAlarmReceivers(valid); err != nil {
+		t.Fatalf("valid Alarm receiver was rejected: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		receivers []SIPAlarmReceiver
+	}{
+		{name: "missing name", receivers: []SIPAlarmReceiver{{Enabled: true, DeviceID: "34020000002000000011", SourceIDs: []string{"3402000000"}}}},
+		{name: "duplicate name", receivers: []SIPAlarmReceiver{
+			{Name: "receiver", Enabled: true, DeviceID: "34020000002000000011", SourceIDs: []string{"3402000000"}},
+			{Name: "receiver", Enabled: true, DeviceID: "34020000002000000012", SourceIDs: []string{"3402000001"}},
+		}},
+		{name: "invalid device id", receivers: []SIPAlarmReceiver{{Name: "receiver", Enabled: true, DeviceID: "3402000000", SourceIDs: []string{"3402000000"}}}},
+		{name: "duplicate device id", receivers: []SIPAlarmReceiver{
+			{Name: "first", Enabled: true, DeviceID: "34020000002000000011", SourceIDs: []string{"3402000000"}},
+			{Name: "second", Enabled: true, DeviceID: "34020000002000000011", SourceIDs: []string{"3402000001"}},
+		}},
+		{name: "missing sources", receivers: []SIPAlarmReceiver{{Name: "receiver", Enabled: true, DeviceID: "34020000002000000011"}}},
+		{name: "invalid source", receivers: []SIPAlarmReceiver{{Name: "receiver", Enabled: true, DeviceID: "34020000002000000011", SourceIDs: []string{"source"}}}},
+		{name: "duplicate source", receivers: []SIPAlarmReceiver{{
+			Name: "receiver", Enabled: true, DeviceID: "34020000002000000011",
+			SourceIDs: []string{"3402000000", "3402000000"},
+		}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateSIPAlarmReceivers(test.receivers); err == nil {
+				t.Fatalf("invalid Alarm receivers were accepted: %+v", test.receivers)
+			}
+		})
+	}
+
+	// 关闭项不参与运行时分发，允许先保存未完成草稿，保持默认关闭兼容性。
+	if err := ValidateSIPAlarmReceivers([]SIPAlarmReceiver{{Name: "draft", Enabled: false}}); err != nil {
+		t.Fatalf("disabled Alarm receiver draft was rejected: %v", err)
 	}
 }

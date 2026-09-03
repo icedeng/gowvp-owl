@@ -12,6 +12,32 @@ func TestAuthFromValueParsesQuotedQOPList(t *testing.T) {
 	}
 }
 
+func TestAuthFromValueCheckedRejectsAmbiguousDigestParameters(t *testing.T) {
+	auth, err := AuthFromValueChecked(`WWW-Authenticate: Digest realm="example", nonce="abc", algorithm=SHA-256, qop="auth,auth-int", opaque="a,b"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth.Get("realm") != "example" || auth.Get("nonce") != "abc" || auth.Algorithm() != "SHA-256" || auth.QOP() != "auth" {
+		t.Fatalf("strict Digest challenge = %#v, selected=%q", auth.Data, auth.QOP())
+	}
+
+	for _, value := range []string{
+		`realm="example",nonce="abc"`,
+		`Basic realm="example",nonce="abc"`,
+		`Digest realm="first",realm="second",nonce="abc"`,
+		`Digest realm="example",nonce="first",nonce="second"`,
+		`Digest realm="example",nonce="abc",algorithm=MD5,algorithm=SHA-256`,
+		`Digest realm="example",nonce="abc",qop="auth",qop="auth"`,
+		`Digest realm="example",nonce="abc",`,
+		`Digest realm="example",nonce="abc" trailing`,
+		`Digest realm="example,nonce="abc"`,
+	} {
+		if _, err := AuthFromValueChecked(value); err == nil {
+			t.Fatalf("ambiguous Digest challenge accepted: %s", value)
+		}
+	}
+}
+
 func TestCalcResponseMatchesRFC2617MD5Example(t *testing.T) {
 	got := CalcResponse(
 		"Mufasa", "testrealm@host.com", "Circle Of Life", "GET", "/dir/index.html",

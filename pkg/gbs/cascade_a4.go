@@ -31,7 +31,7 @@ func extractCascadeCatalogExtraInfo(ext *ipc.GBCatalogExt, platform cascadePlatf
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
 		rewritten, err := rewriteCascadeOpaqueIdentifiers(value, "ExtraInfo", platform, localID, exposedID)
-		if err != nil || strings.TrimSpace(rewritten) == "" {
+		if err != nil {
 			continue
 		}
 		if _, ok := seen[rewritten]; ok {
@@ -68,8 +68,10 @@ func wrapCascadeInfoXML(raw string) string {
 func collectCascadeExtraInfo(node a4XMLNode, out *[]string) {
 	name := strings.TrimSpace(node.XMLName.Local)
 	if strings.EqualFold(name, "ExtraInfo") || strings.EqualFold(name, "ExtralInfo") {
-		if value := strings.TrimSpace(collectNodeText(node)); value != "" {
-			*out = append(*out, value)
+		// ExtraInfo 是普通 string，Schema 仅约束长度；保留空节点和首尾空白。
+		// 带子节点的值不是合法简单文本，交由上游结构校验拒绝，不在级联中重建。
+		if len(node.Children) == 0 {
+			*out = append(*out, node.Content)
 		}
 	}
 	for _, child := range node.Children {
@@ -102,6 +104,9 @@ func rewriteCascadeOpaqueIdentifiers(value, field string, platform cascadePlatfo
 	if trimmed == "" {
 		return value, nil
 	}
+	if len(findGBDeviceIdentifiers(trimmed)) == 0 {
+		return value, nil
+	}
 	var document any
 	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
 		if decoded, ok := decodeExtraInfoJSON(trimmed); ok {
@@ -117,7 +122,8 @@ func rewriteCascadeOpaqueIdentifiers(value, field string, platform cascadePlatfo
 		if err != nil {
 			return "", err
 		}
-		return string(body), nil
+		start := strings.Index(value, trimmed)
+		return value[:start] + string(body) + value[start+len(trimmed):], nil
 	}
 
 	rewritten := value

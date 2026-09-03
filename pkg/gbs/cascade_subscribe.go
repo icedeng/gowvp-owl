@@ -15,22 +15,32 @@ import (
 )
 
 func subscriptionFilterFromRequest(req subscribeEventRequest) eventSubscriptionFilter {
-	method, _ := normalizeAlarmMethodFilter(req.AlarmMethod)
-	return eventSubscriptionFilter{
-		StartAlarmPriority: strings.TrimSpace(req.StartAlarmPriority),
-		EndAlarmPriority:   strings.TrimSpace(req.EndAlarmPriority),
-		AlarmMethod:        method,
-		AlarmType:          strings.TrimSpace(req.AlarmType),
-		StartAlarmTime:     strings.TrimSpace(req.StartAlarmTime),
-		EndAlarmTime:       strings.TrimSpace(req.EndAlarmTime),
+	filter := eventSubscriptionFilter{}
+	switch {
+	case strings.EqualFold(strings.TrimSpace(req.CmdType), "Alarm"):
+		filter.StartAlarmPriority = strings.TrimSpace(req.StartAlarmPriority)
+		filter.EndAlarmPriority = strings.TrimSpace(req.EndAlarmPriority)
+		filter.AlarmMethod, _ = normalizeAlarmMethodFilter(req.AlarmMethod)
+		filter.AlarmType = strings.TrimSpace(req.AlarmType)
+		filter.StartAlarmTime = strings.TrimSpace(req.StartAlarmTime)
+		filter.EndAlarmTime = strings.TrimSpace(req.EndAlarmTime)
+	case strings.EqualFold(strings.TrimSpace(req.CmdType), "Catalog"):
+		filter.CatalogStartTime = strings.TrimSpace(req.StartTime)
+		filter.CatalogEndTime = strings.TrimSpace(req.EndTime)
 	}
+	return filter
 }
 
 func validateSubscribeEventEnvelope(req subscribeEventRequest, cmdType string) error {
 	if req.SN <= 0 {
 		return fmt.Errorf("invalid subscription SN")
 	}
-	if !isGBDeviceIdentifier(strings.TrimSpace(req.DeviceID)) {
+	deviceID := strings.TrimSpace(req.DeviceID)
+	if strings.EqualFold(strings.TrimSpace(cmdType), "Catalog") {
+		if deviceID != "*" && classifyGBCatalogItem(deviceID) == GBCatalogItemUnknown {
+			return fmt.Errorf("invalid subscription DeviceID")
+		}
+	} else if !isGBDeviceIdentifier(deviceID) {
 		return fmt.Errorf("invalid subscription DeviceID")
 	}
 	if _, ok := subscribeEventMinimumVersion(cmdType); !ok {
@@ -50,8 +60,62 @@ func validateSubscribeEventRequest(req subscribeEventRequest, cmdType string, ve
 	if !version.AtLeast(minimum) {
 		return fmt.Errorf("%s subscription requires %s or later", cmdType, minimum.StandardName())
 	}
-	if !strings.EqualFold(cmdType, "Alarm") {
+	if strings.EqualFold(strings.TrimSpace(cmdType), "Catalog") {
+		deviceID := strings.TrimSpace(req.DeviceID)
+		if deviceID != "*" && !validCatalogTargetID(version, deviceID) {
+			return fmt.Errorf("Catalog subscription target is not supported by %s", version.StandardName())
+		}
+	}
+	alarmFieldsPresent := strings.TrimSpace(req.StartAlarmPriority) != "" || strings.TrimSpace(req.EndAlarmPriority) != "" ||
+		strings.TrimSpace(req.AlarmMethod) != "" || strings.TrimSpace(req.AlarmType) != "" ||
+		strings.TrimSpace(req.StartAlarmTime) != "" || strings.TrimSpace(req.EndAlarmTime) != ""
+	switch strings.TrimSpace(cmdType) {
+	case "Catalog":
+		if alarmFieldsPresent || req.Interval != nil {
+			return fmt.Errorf("Catalog subscription contains fields from another event")
+		}
+		startTime, hasStart, err := parseSubscriptionTime(req.StartTime)
+		if err != nil {
+			return fmt.Errorf("invalid StartTime: %w", err)
+		}
+		endTime, hasEnd, err := parseSubscriptionTime(req.EndTime)
+		if err != nil {
+			return fmt.Errorf("invalid EndTime: %w", err)
+		}
+		if hasStart && hasEnd && endTime.Before(startTime) {
+			return fmt.Errorf("StartTime must not be after EndTime")
+		}
 		return nil
+	case "MobilePosition":
+		if alarmFieldsPresent || strings.TrimSpace(req.StartTime) != "" || strings.TrimSpace(req.EndTime) != "" {
+			return fmt.Errorf("MobilePosition subscription contains fields from another event")
+		}
+		return nil
+	case "PTZPosition":
+		if alarmFieldsPresent || strings.TrimSpace(req.StartTime) != "" || strings.TrimSpace(req.EndTime) != "" || req.Interval != nil {
+			return fmt.Errorf("PTZPosition subscription contains fields from another event")
+		}
+		return nil
+	case "Alarm":
+		if req.Interval != nil {
+			return fmt.Errorf("Alarm subscription contains fields from another event")
+		}
+	default:
+		return nil
+	}
+	startAlarmTime := strings.TrimSpace(req.StartAlarmTime)
+	if value := strings.TrimSpace(req.StartTime); value != "" {
+		if startAlarmTime != "" && startAlarmTime != value {
+			return fmt.Errorf("Alarm subscription contains conflicting StartTime fields")
+		}
+		startAlarmTime = value
+	}
+	endAlarmTime := strings.TrimSpace(req.EndAlarmTime)
+	if value := strings.TrimSpace(req.EndTime); value != "" {
+		if endAlarmTime != "" && endAlarmTime != value {
+			return fmt.Errorf("Alarm subscription contains conflicting EndTime fields")
+		}
+		endAlarmTime = value
 	}
 	start, err := parseAlarmPriorityFilter(req.StartAlarmPriority)
 	if err != nil {
@@ -75,11 +139,11 @@ func validateSubscribeEventRequest(req subscribeEventRequest, cmdType string, ve
 	if alarmType != "" && !alarmTypeMatchesMethods(version, method, alarmType) {
 		return fmt.Errorf("AlarmType is invalid for AlarmMethod")
 	}
-	startTime, hasStart, err := parseSubscriptionTime(req.StartAlarmTime)
+	startTime, hasStart, err := parseSubscriptionTime(startAlarmTime)
 	if err != nil {
 		return fmt.Errorf("invalid StartAlarmTime: %w", err)
 	}
-	endTime, hasEnd, err := parseSubscriptionTime(req.EndAlarmTime)
+	endTime, hasEnd, err := parseSubscriptionTime(endAlarmTime)
 	if err != nil {
 		return fmt.Errorf("invalid EndAlarmTime: %w", err)
 	}
@@ -211,15 +275,19 @@ func alarmMatchesSubscription(filter eventSubscriptionFilter, body []byte) bool 
 		return false
 	}
 	method := strings.TrimSpace(alarm.AlarmMethod)
+	infoAlarmType, infoMethod, _, err := alarmTypedInfo(alarm.Info)
+	if err != nil {
+		return false
+	}
 	if method == "" {
-		method = strings.TrimSpace(alarm.Info.AlarmMethod)
+		method = infoMethod
 	}
 	if wanted := strings.TrimSpace(filter.AlarmMethod); wanted != "" && wanted != "0" && !alarmMethodIntersects(wanted, method) {
 		return false
 	}
 	alarmType := strings.TrimSpace(alarm.AlarmType)
 	if alarmType == "" {
-		alarmType = strings.TrimSpace(alarm.Info.AlarmType)
+		alarmType = infoAlarmType
 	}
 	if wanted := strings.TrimSpace(filter.AlarmType); wanted != "" && wanted != alarmType {
 		return false
@@ -252,17 +320,24 @@ func alarmMethodIntersects(wanted, actual string) bool {
 }
 
 func copyCascadeSubscribeInput(req subscribeEventRequest, deviceID, targetID, cmdType string, expires int) SubscribeInput {
-	method, _ := normalizeAlarmMethodFilter(req.AlarmMethod)
-	return SubscribeInput{
+	input := SubscribeInput{
 		DeviceID: deviceID, TargetID: targetID, Event: cmdType, Expires: expires,
-		StartAlarmPriority: strings.TrimSpace(req.StartAlarmPriority),
-		EndAlarmPriority:   strings.TrimSpace(req.EndAlarmPriority),
-		AlarmMethod:        method,
-		AlarmType:          strings.TrimSpace(req.AlarmType),
-		StartAlarmTime:     strings.TrimSpace(req.StartAlarmTime),
-		EndAlarmTime:       strings.TrimSpace(req.EndAlarmTime),
-		Interval:           subscribeRequestInterval(req),
 	}
+	switch strings.TrimSpace(cmdType) {
+	case "Alarm":
+		input.StartAlarmPriority = strings.TrimSpace(req.StartAlarmPriority)
+		input.EndAlarmPriority = strings.TrimSpace(req.EndAlarmPriority)
+		input.AlarmMethod, _ = normalizeAlarmMethodFilter(req.AlarmMethod)
+		input.AlarmType = strings.TrimSpace(req.AlarmType)
+		input.StartAlarmTime = strings.TrimSpace(req.StartAlarmTime)
+		input.EndAlarmTime = strings.TrimSpace(req.EndAlarmTime)
+	case "Catalog":
+		input.StartTime = strings.TrimSpace(req.StartTime)
+		input.EndTime = strings.TrimSpace(req.EndTime)
+	case "MobilePosition":
+		input.Interval = subscribeRequestInterval(req)
+	}
+	return input
 }
 
 func subscribeRequestInterval(req subscribeEventRequest) int {
@@ -324,11 +399,76 @@ func monitorUserIdentitySubscriptionKey(ctx context.Context) string {
 	return fmt.Sprintf("|identity=%x", sum[:8])
 }
 
+type cascadeSubscribeContextKey struct{}
+
+func isCascadeSubscribeContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(cascadeSubscribeContextKey{}).(bool)
+	return value
+}
+
 func (g *GB28181API) invokeCascadeSubscribe(ctx context.Context, input *SubscribeInput) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithValue(ctx, cascadeSubscribeContextKey{}, true)
 	if g.cascadeSubscribe != nil {
+		if err := g.validateCascadeSubscribeTarget(input); err != nil {
+			return err
+		}
 		return g.cascadeSubscribe(ctx, input)
 	}
 	return g.Subscribe(ctx, input)
+}
+
+// validateCascadeSubscribeTarget 防止自定义下游订阅钩子绕过直连 Subscribe
+// 已执行的设备在线、通道归属和设备级能力门禁。取消操作保留原有尽力清理语义。
+func (g *GB28181API) validateCascadeSubscribeTarget(input *SubscribeInput) error {
+	if g == nil || g.svr == nil || g.svr.memoryStorer == nil {
+		return nil
+	}
+	if input == nil || strings.TrimSpace(input.DeviceID) == "" {
+		return ErrDeviceNotExist
+	}
+	if input.Cancel {
+		return nil
+	}
+	deviceID := strings.TrimSpace(input.DeviceID)
+	device, ok := g.svr.memoryStorer.Load(deviceID)
+	if !ok || device == nil || !device.IsOnlineNow() {
+		return ErrDeviceOffline
+	}
+	targetID := strings.TrimSpace(input.TargetID)
+	if targetID != "" && targetID != deviceID {
+		if _, exists := g.svr.memoryStorer.GetChannel(deviceID, targetID); !exists {
+			return ErrChannelNotExist
+		}
+	}
+	cmdType, ok := normalizeSubscribeCmdType(input.Event)
+	if strings.TrimSpace(input.Event) == "" {
+		cmdType, ok = "Alarm", true
+	}
+	if !ok {
+		return fmt.Errorf("unsupported subscribe event: %s", input.Event)
+	}
+	switch cmdType {
+	case "Catalog":
+		return g.requireGBFeature(deviceID, "directory_notify", "目录订阅", func(c GBCapabilities) bool {
+			return c.DirectoryNotify
+		})
+	case "MobilePosition":
+		return g.requireGBFeature(deviceID, "mobile_position", "移动位置订阅", func(c GBCapabilities) bool {
+			return c.MobilePosition
+		})
+	case "PTZPosition":
+		return g.requireGBFeature(deviceID, "ptz_position", "PTZ精准位置变化订阅", func(c GBCapabilities) bool {
+			return c.PTZPosition
+		})
+	default:
+		return nil
+	}
 }
 
 func (g *GB28181API) lockCascadeSubscriptionOperation(ctx context.Context, key string) (func(), error) {
@@ -452,25 +592,39 @@ func (g *GB28181API) syncCascadeDownstreamSubscriptionsMode(ctx context.Context,
 		state := g.cascadeSubscriptions[key]
 		_, alreadyOwned := previousSet[key]
 		if state != nil {
-			if input.Expires > state.Input.Expires {
-				state.Input.Expires = input.Expires
+			nextInput := state.Input
+			retryGeneration := state.RetryGeneration
+			if input.Expires > nextInput.Expires {
+				nextInput.Expires = input.Expires
 			}
 			if alreadyOwned {
-				if !refreshOwned {
+				retryDeferred := state.RetryBlocked || !state.RetryAt.IsZero() && time.Now().Before(state.RetryAt)
+				if !refreshOwned || retryDeferred {
+					state.Input = nextInput
 					g.cascadeSubscriptionMu.Unlock()
 					unlock()
 					continue
 				}
-				refresh := state.Input
+				refresh := nextInput
 				g.cascadeSubscriptionMu.Unlock()
 				if err := g.invokeCascadeSubscribe(ctx, &refresh); err != nil {
 					unlock()
 					g.rollbackCascadeDownstreamSubscriptions(ctx, acquired)
 					return nil, fmt.Errorf("renew downstream %s subscription: %w", input.Event, err)
 				}
+				g.cascadeSubscriptionMu.Lock()
+				if g.cascadeSubscriptions[key] == state {
+					state.Input = nextInput
+					if state.RetryGeneration == retryGeneration {
+						state.RetryAt = time.Time{}
+						state.RetryBlocked = false
+					}
+				}
+				g.cascadeSubscriptionMu.Unlock()
 				unlock()
 				continue
 			}
+			state.Input = nextInput
 			state.Refs++
 			g.cascadeSubscriptionMu.Unlock()
 			unlock()
@@ -509,8 +663,42 @@ func (g *GB28181API) syncCascadeDownstreamSubscriptionsMode(ctx context.Context,
 }
 
 func (g *GB28181API) rollbackCascadeDownstreamSubscriptions(ctx context.Context, keys []string) {
+	rollbackCtx := context.Background()
+	if ctx != nil {
+		// 回滚必须继续发送已经建立成功的下级退订，同时保留跨域身份等业务值。
+		rollbackCtx = context.WithoutCancel(ctx)
+	}
 	for index := len(keys) - 1; index >= 0; index-- {
-		g.releaseCascadeDownstreamSubscription(ctx, keys[index])
+		g.releaseCascadeDownstreamSubscription(rollbackCtx, keys[index])
+	}
+}
+
+func (g *GB28181API) snapshotCascadeDownstreamSubscriptions(keys []string) map[string]SubscribeInput {
+	if g == nil || len(keys) == 0 {
+		return nil
+	}
+	snapshot := make(map[string]SubscribeInput, len(keys))
+	g.cascadeSubscriptionMu.Lock()
+	for _, key := range keys {
+		if state := g.cascadeSubscriptions[key]; state != nil {
+			snapshot[key] = state.Input
+		}
+	}
+	g.cascadeSubscriptionMu.Unlock()
+	return snapshot
+}
+
+// rollbackCascadeDownstreamSubscriptionSync 恢复上级 SUBSCRIBE 响应写出前暂存的下级引用关系。
+func (g *GB28181API) rollbackCascadeDownstreamSubscriptionSync(ctx context.Context, current []string, previous map[string]SubscribeInput) {
+	if len(current) == 0 && len(previous) == 0 {
+		return
+	}
+	rollbackCtx := context.Background()
+	if ctx != nil {
+		rollbackCtx = context.WithoutCancel(ctx)
+	}
+	if _, err := g.syncCascadeDownstreamSubscriptionsMode(rollbackCtx, current, previous, false); err != nil {
+		slog.Warn("rollback cascade downstream subscriptions after SIP response failure", "err", err)
 	}
 }
 
@@ -560,6 +748,8 @@ func (g *GB28181API) reconcileCascadeDownstreamSubscriptions(ctx context.Context
 			AlarmType:          filter.AlarmType,
 			StartAlarmTime:     filter.StartAlarmTime,
 			EndAlarmTime:       filter.EndAlarmTime,
+			StartTime:          filter.CatalogStartTime,
+			EndTime:            filter.CatalogEndTime,
 		}
 		if interval > 0 {
 			request.Interval = &interval
@@ -589,7 +779,10 @@ func (g *GB28181API) releaseCascadeDownstreamSubscriptions(ctx context.Context, 
 }
 
 func (g *GB28181API) releaseCascadeDownstreamSubscription(ctx context.Context, key string) {
-	unlock, err := g.lockCascadeSubscriptionOperation(context.Background(), key)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	unlock, err := g.lockCascadeSubscriptionOperation(ctx, key)
 	if err != nil {
 		return
 	}
@@ -622,6 +815,7 @@ func (g *GB28181API) closeCascadeDownstreamSubscriptions() {
 	if g == nil {
 		return
 	}
+	cleanupCtx := g.mediaPersistenceContext()
 	for {
 		g.cascadeSubscriptionMu.Lock()
 		keys := make([]string, 0, len(g.cascadeSubscriptions))
@@ -633,8 +827,13 @@ func (g *GB28181API) closeCascadeDownstreamSubscriptions() {
 			return
 		}
 		for _, key := range keys {
-			unlock, err := g.lockCascadeSubscriptionOperation(context.Background(), key)
+			unlock, err := g.lockCascadeSubscriptionOperation(cleanupCtx, key)
 			if err != nil {
+				g.cascadeSubscriptionMu.Lock()
+				delete(g.cascadeSubscriptions, key)
+				g.cascadeSubscriptionMu.Unlock()
+				g.loadAndDeleteOutgoingSubscription(key)
+				slog.WarnContext(cleanupCtx, "wait downstream cascade subscription close lock failed", "key", key, "err", err)
 				continue
 			}
 			g.cascadeSubscriptionMu.Lock()
@@ -645,9 +844,30 @@ func (g *GB28181API) closeCascadeDownstreamSubscriptions() {
 				input := state.Input
 				input.Cancel = true
 				input.Expires = 0
-				ctx := withMonitorUserIdentityRoute(context.Background(), state.Identity, state.LocalGatewayID)
-				if err := g.invokeCascadeSubscribe(ctx, &input); err != nil {
-					slog.Warn("cancel downstream cascade subscription during close failed", "device_id", input.DeviceID, "target_id", input.TargetID, "event", input.Event, "err", err)
+				identityCtx := withMonitorUserIdentityRoute(cleanupCtx, state.Identity, state.LocalGatewayID)
+				if g.cascadeSubscribe != nil {
+					if err := g.cascadeSubscribe(identityCtx, &input); err != nil {
+						slog.WarnContext(cleanupCtx, "cancel downstream cascade subscription during close failed", "device_id", input.DeviceID, "target_id", input.TargetID, "event", input.Event, "err", err)
+					}
+				} else if value, loaded := g.loadAndDeleteOutgoingSubscription(key); loaded {
+					dialog, _ := value.(*outgoingSubscriptionDialog)
+					if dialog != nil {
+						dialog.mu.Lock()
+						if dialog.identity == nil {
+							dialog.identity = state.Identity.clone()
+							dialog.localGatewayID = state.LocalGatewayID
+						}
+						dialog.mu.Unlock()
+						tx, _, sendErr := g.sendOutgoingSubscriptionCancellationContext(cleanupCtx, dialog, true)
+						if sendErr == nil && tx != nil {
+							responseCtx, cancel := context.WithTimeout(cleanupCtx, 3*time.Second)
+							_, sendErr = sipResponseContext(responseCtx, tx)
+							cancel()
+						}
+						if sendErr != nil && cleanupCtx.Err() == nil {
+							slog.WarnContext(cleanupCtx, "cancel downstream cascade subscription during close failed", "device_id", input.DeviceID, "target_id", input.TargetID, "event", input.Event, "err", sendErr)
+						}
+					}
 				}
 			}
 			unlock()
@@ -656,17 +876,27 @@ func (g *GB28181API) closeCascadeDownstreamSubscriptions() {
 }
 
 func (g *GB28181API) removeCascadeEventSubscriptions(worker *cascadeWorker) {
+	g.removeCascadeEventSubscriptionsContext(context.Background(), worker)
+}
+
+func (g *GB28181API) removeCascadeEventSubscriptionsContext(ctx context.Context, worker *cascadeWorker) {
 	if g == nil || worker == nil {
 		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	g.eventSubscribers.Range(func(rawKey, value any) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		key, ok := rawKey.(string)
 		if !ok || strings.TrimSpace(key) == "" {
 			return true
 		}
-		unlock, err := g.lockEventSubscriptionOperation(context.Background(), key)
+		unlock, err := g.lockEventSubscriptionOperation(ctx, key)
 		if err != nil {
-			return true
+			return ctx.Err() == nil
 		}
 		defer unlock()
 		value, exists := g.eventSubscribers.Load(key)
@@ -682,8 +912,8 @@ func (g *GB28181API) removeCascadeEventSubscriptions(worker *cascadeWorker) {
 		keys := append([]string(nil), subscription.DownstreamKeys...)
 		subscription.mu.Unlock()
 		if matches && g.eventSubscribers.CompareAndDelete(key, subscription) {
-			g.releaseCascadeDownstreamSubscriptions(context.Background(), keys)
+			g.releaseCascadeDownstreamSubscriptions(ctx, keys)
 		}
-		return true
+		return ctx.Err() == nil
 	})
 }

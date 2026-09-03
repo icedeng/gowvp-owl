@@ -176,7 +176,7 @@ func cascadeRegisterChallenge(response *sip.Response, preferCertificate bool) (s
 	var unsupportedScheme string
 	var firstError error
 	for _, header := range headers {
-		scheme, authorization, err := parseRegisterAuthorizationHeader(header)
+		scheme, authorization, err := parseCascadeRegisterChallengeHeader(header)
 		if err != nil {
 			if firstError == nil {
 				firstError = fmt.Errorf("cascade REGISTER invalid %s challenge: %w", scheme, err)
@@ -214,4 +214,25 @@ func cascadeRegisterChallenge(response *sip.Response, preferCertificate bool) (s
 		return unsupportedScheme, nil, nil
 	}
 	return "", nil, fmt.Errorf("cascade REGISTER 401 has no supported authentication challenge")
+}
+
+func parseCascadeRegisterChallengeHeader(header sip.Header) (string, *sip.Authorization, error) {
+	generic, ok := header.(*sip.GenericHeader)
+	if !ok || generic == nil {
+		return "", nil, fmt.Errorf("invalid authentication challenge header")
+	}
+	value := strings.TrimSpace(generic.Contents)
+	space := strings.IndexAny(value, " \t")
+	if space <= 0 {
+		return strings.ToLower(value), nil, fmt.Errorf("authentication challenge parameters are missing")
+	}
+	scheme := strings.ToLower(strings.TrimSpace(value[:space]))
+	if scheme != "digest" {
+		return parseRegisterAuthorizationHeader(header)
+	}
+	authorization, err := sip.AuthFromValueChecked(value)
+	if err != nil {
+		return scheme, nil, err
+	}
+	return scheme, authorization, nil
 }

@@ -5,6 +5,7 @@ import (
 	"expvar"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -367,7 +369,12 @@ func (uc *Usecase) upgradeApp(c *gin.Context) {
 // @Router /proxy/sms/{path} [get]
 func (uc *Usecase) proxySMS(c *gin.Context) {
 	defer func() {
-		_ = recover()
+		if recovered := recover(); recovered != nil {
+			slog.ErrorContext(c.Request.Context(), "proxy media server panic", "panic", recovered, "path", c.Request.URL.Path)
+			if !c.Writer.Written() {
+				c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"code": http.StatusBadGateway, "msg": "流媒体代理异常"})
+			}
+		}
 	}()
 
 	path := c.Param("path")
@@ -383,19 +390,50 @@ func (uc *Usecase) proxySMS(c *gin.Context) {
 	_ = rc.SetReadDeadline(exp)
 	_ = rc.SetWriteDeadline(exp)
 
-	addr, err := url.JoinPath(fmt.Sprintf("http://%s:%d", uc.Conf.Media.IP, uc.Conf.Media.HTTPPort), path)
+	mediaServerID := c.GetString("play_media_server_id")
+	upstreamPath := path
+	if mediaServerID == "" {
+		mediaServerID, upstreamPath = uc.inferSMSProxyRoute(c.Request.Context(), path)
+	} else {
+		var ok bool
+		upstreamPath, ok = stripSMSProxyRoute(path, mediaServerID)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": "播放 token 与媒体节点路由不匹配"})
+			return
+		}
+	}
+	server, err := uc.SMSAPI.smsCore.GetMediaServer(c.Request.Context(), mediaServerID)
 	if err != nil {
-		web.Fail(c, err)
+		if mediaServerID != sms.DefaultMediaServerID {
+			web.Fail(c, err)
+			return
+		}
+		// 兼容旧部署：默认节点数据库尚未初始化时仍沿用原全局配置代理。
+		server = &sms.MediaServer{ID: sms.DefaultMediaServerID, IP: uc.Conf.Media.IP}
+		server.Ports.HTTP = uc.Conf.Media.HTTPPort
+	}
+	host := strings.TrimSpace(server.IP)
+	port := server.Ports.HTTP
+	if mediaServerID == sms.DefaultMediaServerID {
+		if host == "" {
+			host = strings.TrimSpace(uc.Conf.Media.IP)
+		}
+		if port == 0 {
+			port = uc.Conf.Media.HTTPPort
+		}
+	}
+	if host == "" || port <= 0 {
+		web.Fail(c, fmt.Errorf("media server %q HTTP address is unavailable", mediaServerID))
 		return
 	}
-	fullAddr, _ := url.Parse(addr)
+	fullAddr := &url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(port))}
 	c.Request.URL.Path = ""
 	proxy := httputil.NewSingleHostReverseProxy(fullAddr)
 
 	proxy.Director = func(req *http.Request) {
 		req.URL.Scheme = "http"
-		req.URL.Host = fmt.Sprintf("%s:%d", uc.Conf.Media.IP, uc.Conf.Media.HTTPPort)
-		req.URL.Path = path
+		req.URL.Host = fullAddr.Host
+		req.URL.Path = upstreamPath
 	}
 	proxy.ModifyResponse = func(r *http.Response) error {
 		r.Header.Del("Access-Control-Allow-Credentials")
@@ -403,13 +441,51 @@ func (uc *Usecase) proxySMS(c *gin.Context) {
 		if r.StatusCode >= 300 && r.StatusCode < 400 {
 			if l := r.Header.Get("Location"); l != "" {
 				if !strings.HasPrefix(l, "http") {
-					r.Header.Set("Location", "/proxy/sms/"+strings.TrimPrefix(l, "/"))
+					r.Header.Set("Location", "/proxy/sms/"+sms.MediaServerProxyRoute(mediaServerID)+"/"+strings.TrimPrefix(l, "/"))
 				}
 			}
 		}
 		return nil
 	}
 	proxy.ServeHTTP(c.Writer, c.Request)
+}
+
+func (uc *Usecase) inferSMSProxyRoute(ctx context.Context, path string) (string, string) {
+	trimmed := strings.TrimPrefix(path, "/")
+	prefix, rest, found := strings.Cut(trimmed, "/")
+	if !found || prefix != sms.MediaServerProxyRoutePrefix {
+		return sms.DefaultMediaServerID, path
+	}
+	segment, _, found := strings.Cut(rest, "/")
+	if !found {
+		return sms.DefaultMediaServerID, path
+	}
+	mediaServerID, err := url.PathUnescape(segment)
+	if err == nil && strings.TrimSpace(mediaServerID) != "" {
+		if _, err := uc.SMSAPI.smsCore.GetMediaServer(ctx, mediaServerID); err == nil {
+			if stripped, ok := stripSMSProxyRoute(path, mediaServerID); ok {
+				return mediaServerID, stripped
+			}
+		}
+	}
+	return sms.DefaultMediaServerID, path
+}
+
+func stripSMSProxyRoute(path, mediaServerID string) (string, bool) {
+	trimmed := strings.TrimPrefix(path, "/")
+	prefix, trimmed, found := strings.Cut(trimmed, "/")
+	if !found || prefix != sms.MediaServerProxyRoutePrefix {
+		return "", false
+	}
+	segment, rest, found := strings.Cut(trimmed, "/")
+	decoded, err := url.PathUnescape(segment)
+	if err != nil || decoded != mediaServerID {
+		return "", false
+	}
+	if !found {
+		return "/", true
+	}
+	return "/" + rest, true
 }
 
 // verifyPlayToken 校验播放 token：解析 JWT，确认 token 中的 app+stream 被请求路径包含
@@ -434,6 +510,14 @@ func (uc *Usecase) verifyPlayToken(c *gin.Context, path string) error {
 
 	app, _ := claims.Data["app"].(string)
 	stream, _ := claims.Data["stream"].(string)
+	mediaServerID, _ := claims.Data["media_server_id"].(string)
+	mediaServerID = strings.TrimSpace(mediaServerID)
+	if mediaServerID != "" {
+		if _, ok := stripSMSProxyRoute(path, mediaServerID); !ok {
+			return fmt.Errorf("播放 token 与媒体节点路由不匹配")
+		}
+		c.Set("play_media_server_id", mediaServerID)
+	}
 	if stream == "" {
 		return fmt.Errorf("播放 token 缺少 stream 信息")
 	}

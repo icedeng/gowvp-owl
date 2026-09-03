@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -22,10 +23,35 @@ func TestNormalizeUpgradeSessionIDFollows2022Schema(t *testing.T) {
 	if got, err := normalizeUpgradeSessionID(valid); err != nil || got != valid {
 		t.Fatalf("valid SessionID = %q, %v", got, err)
 	}
-	for _, invalid := range []string{"short", strings.Repeat("a", 129), strings.Repeat("a", 31) + "_"} {
+	// GB/T 28181-2022 A.2.3.1.12 和 A.2.5.7/A.2.5.9 仅约束
+	// SessionID 为 32～128 个字符，不限制为字母、数字和连字符。
+	for _, valid := range []string{strings.Repeat("a", 31) + "_", strings.Repeat("会", 32)} {
+		if got, err := normalizeUpgradeSessionID(valid); err != nil || got != valid {
+			t.Fatalf("schema-valid SessionID = %q, %v", got, err)
+		}
+	}
+	for _, invalid := range []string{"short", strings.Repeat("a", 129), strings.Repeat("会", 129), strings.Repeat("a", 31) + "\x00"} {
 		if _, err := normalizeUpgradeSessionID(invalid); err == nil {
 			t.Fatalf("invalid SessionID accepted: %q", invalid)
 		}
+	}
+}
+
+func TestDeviceUpgradeResultAcceptsSchemaValidSessionIDCharacters(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	sessionID := strings.Repeat("a", 31) + "_"
+	api.storeUpgradeState(UpgradeState{
+		DeviceID: gb10DeviceID, ChannelID: gb10DeviceID, SessionID: sessionID,
+		Status: "accepted", Firmware: "V1",
+	})
+	body := []byte(`<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>91</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><UpgradeResult>OK</UpgradeResult>` +
+		`<Firmware>V2</Firmware></Notify>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "upgrade-schema-session-id", body, api.sipMessageDeviceUpgradeResult)
+	assertFlowOK(t, response)
+	state, ok := api.UpgradeState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "completed" {
+		t.Fatalf("upgrade state = %+v, %v", state, ok)
 	}
 }
 
@@ -38,13 +64,132 @@ func TestDeviceUpgradeResultCompletesTrackedSession(t *testing.T) {
 	})
 	body := []byte(`<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>92</SN><DeviceID>` + gb10DeviceID +
 		`</DeviceID><SessionID>` + sessionID + `</SessionID><UpgradeResult>OK</UpgradeResult>` +
-		`<Firmware>V1.2.4</Firmware></Notify>`)
+		`<Firmware> V1.2.4 </Firmware></Notify>`)
 	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "upgrade-result", body, api.sipMessageDeviceUpgradeResult)
 	assertFlowOK(t, response)
 
 	state, ok := api.UpgradeState(gb10DeviceID, sessionID)
-	if !ok || state.Status != "completed" || state.Result != "OK" || state.Firmware != "V1.2.4" || state.SN != 92 {
+	if !ok || state.Status != "completed" || state.Result != "OK" || state.Firmware != " V1.2.4 " || state.SN != 92 {
 		t.Fatalf("upgrade state = %+v, %v", state, ok)
+	}
+}
+
+func TestDeviceUpgradeResultRejectsConflictingTerminalRetransmission(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	sessionID := "upgrade-session-terminal-conflict-01"
+	api.storeUpgradeState(UpgradeState{
+		DeviceID: gb10DeviceID, ChannelID: gb10DeviceID, SessionID: sessionID,
+		Status: "accepted", Firmware: "V1.2.3",
+	})
+	success := []byte(`<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>192</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><UpgradeResult>OK</UpgradeResult>` +
+		`<Firmware>V1.2.4</Firmware></Notify>`)
+	assertFlowOK(t, runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "upgrade-terminal-success", success, api.sipMessageDeviceUpgradeResult))
+
+	duplicate := []byte(`<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>193</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><UpgradeResult>OK</UpgradeResult>` +
+		`<Firmware>V1.2.4</Firmware></Notify>`)
+	assertFlowOK(t, runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "upgrade-terminal-duplicate", duplicate, api.sipMessageDeviceUpgradeResult))
+
+	conflict := []byte(`<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>194</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><UpgradeResult>ERROR</UpgradeResult>` +
+		`<Firmware>V1.2.4</Firmware><UpgradeFailedReason>02</UpgradeFailedReason></Notify>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "upgrade-terminal-conflict", conflict, api.sipMessageDeviceUpgradeResult)
+	if !strings.Contains(response, "SIP/2.0 409") {
+		t.Fatalf("conflicting upgrade terminal response = %s", response)
+	}
+	state, ok := api.UpgradeState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "completed" || state.Result != "OK" || state.Firmware != "V1.2.4" || state.SN != 192 {
+		t.Fatalf("conflicting upgrade notification changed final state = %+v, %v", state, ok)
+	}
+}
+
+func TestDeviceUpgradeResultPersistsBeforeSIPOKAndRetriesIdempotently(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	sessionID := "upgrade-session-ack-write-failure-01"
+	api.storeUpgradeState(UpgradeState{
+		DeviceID: gb10DeviceID, ChannelID: gb10DeviceID, SessionID: sessionID,
+		Status: "accepted", Firmware: "V1.2.3",
+	})
+	body := []byte(`<Notify><CmdType>DeviceUpgradeResult</CmdType><SN>195</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><UpgradeResult>OK</UpgradeResult>` +
+		`<Firmware>V1.2.4</Firmware></Notify>`)
+	base := newFlowConnection()
+	connection := &blockingFlowResponseConnection{
+		flowConnection: base,
+		started:        make(chan struct{}, 1),
+		release:        make(chan struct{}),
+		writeErr:       errors.New("DeviceUpgradeResult SIP OK write failed"),
+	}
+	request := newFlowRequest(t, base, sip.MethodMessage, "upgrade-ack-write-failure", body)
+	request.SetConnection(connection)
+	done := make(chan struct{})
+	go func() {
+		api.sipMessageDeviceUpgradeResult(&sip.Context{
+			Request: request, Tx: sip.NewTransaction("upgrade-ack-write-failure-tx", connection),
+			DeviceID: gb10DeviceID, Source: base.remote,
+		})
+		close(done)
+	}()
+	select {
+	case <-connection.started:
+	case <-time.After(time.Second):
+		close(connection.release)
+		t.Fatal("DeviceUpgradeResult SIP OK write did not start")
+	}
+	state, ok := api.UpgradeState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "completed" || state.Result != "OK" {
+		close(connection.release)
+		t.Fatalf("upgrade state before required 200 response = %+v, %v", state, ok)
+	}
+	committedAt := state.UpdatedAt
+	close(connection.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("DeviceUpgradeResult handler did not return after SIP OK write failure")
+	}
+
+	assertFlowOK(t, runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "upgrade-ack-write-retry", body, api.sipMessageDeviceUpgradeResult))
+	state, ok = api.UpgradeState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "completed" || state.Result != "OK" || !state.UpdatedAt.Equal(committedAt) {
+		t.Fatalf("retried upgrade final state = %+v, %v", state, ok)
+	}
+}
+
+func TestDeviceUpgradeResultAcceptsPresentEmptyFirmware(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	sessionID := "upgrade-session-empty-fw-0000000001"
+	api.storeUpgradeState(UpgradeState{
+		DeviceID: gb10DeviceID, ChannelID: gb10DeviceID, SessionID: sessionID,
+		Status: "accepted", Firmware: "old",
+	})
+	body := []byte(`<?xml version="1.0"?><Notify><CmdType>DeviceUpgradeResult</CmdType><SN>97</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><UpgradeResult>OK</UpgradeResult><Firmware/></Notify>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "upgrade-empty-firmware", body, api.sipMessageDeviceUpgradeResult)
+	assertFlowOK(t, response)
+	state, ok := api.UpgradeState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "completed" || state.Firmware != "" {
+		t.Fatalf("upgrade state = %+v, %v", state, ok)
+	}
+}
+
+func TestDeviceUpgradeRequestStringsPreserveWhitespace(t *testing.T) {
+	config := newDeviceUpgradeConfig(&UpgradeInput{
+		Firmware: " V1.2.4 ", FileURL: " https://example.invalid/fw.bin ", Manufacturer: " Vendor ",
+	}, "upgrade-session-request-0000000001")
+	body, err := sip.XMLEncode(deviceControlA23Request{DeviceUpgrade: config})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{
+		"<Firmware> V1.2.4 </Firmware>",
+		"<FileURL> https://example.invalid/fw.bin </FileURL>",
+		"<Manufacturer> Vendor </Manufacturer>",
+	} {
+		if !strings.Contains(string(body), value) {
+			t.Fatalf("DeviceUpgrade XML = %s", body)
+		}
 	}
 }
 
@@ -122,6 +267,11 @@ func TestDeviceUpgradeResultRejectsSchemaViolations(t *testing.T) {
 		{name: "missing firmware", sn: "1", body: `<UpgradeResult>OK</UpgradeResult>`},
 		{name: "missing failure reason", sn: "1", body: `<UpgradeResult>ERROR</UpgradeResult><Firmware>V1</Firmware>`},
 		{name: "invalid failure reason", sn: "1", body: `<UpgradeResult>ERROR</UpgradeResult><Firmware>V1</Firmware><UpgradeFailedReason>04</UpgradeFailedReason>`},
+		{name: "duplicate firmware", sn: "1", body: `<UpgradeResult>OK</UpgradeResult><Firmware>V1</Firmware><Firmware>V2</Firmware>`},
+		{name: "unknown element", sn: "1", body: `<UpgradeResult>OK</UpgradeResult><Firmware>V1</Firmware><Info/>`},
+		{name: "element attribute", sn: "1", body: `<UpgradeResult>OK</UpgradeResult><Firmware vendor="1">V1</Firmware>`},
+		{name: "nested element", sn: "1", body: `<UpgradeResult>OK</UpgradeResult><Firmware><Version>V1</Version></Firmware>`},
+		{name: "out of order", sn: "1", body: `<Firmware>V1</Firmware><UpgradeResult>OK</UpgradeResult>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -229,7 +379,7 @@ func TestUpgradeAndSnapshotStateCleanupConcurrent(t *testing.T) {
 	workers.Wait()
 }
 
-func TestUpgradeFinalNotificationOutranksLateControlResponse(t *testing.T) {
+func TestUpgradeFinalNotificationIsImmutableAgainstLateStateChanges(t *testing.T) {
 	api := &GB28181API{}
 	sessionID := "upgrade-final-first-00000000000001"
 	api.storeUpgradeState(UpgradeState{
@@ -245,11 +395,13 @@ func TestUpgradeFinalNotificationOutranksLateControlResponse(t *testing.T) {
 		t.Fatalf("late control response replaced final upgrade state = %+v, %v", state, ok)
 	}
 
-	api.storeUpgradeState(UpgradeState{
+	if err := api.storeUpgradeStateContext(t.Context(), UpgradeState{
 		DeviceID: gb10DeviceID, SessionID: sessionID, Status: "failed", Result: "ERROR", FailedReason: "02",
-	})
+	}); !errors.Is(err, errUpgradeFinalConflict) {
+		t.Fatalf("conflicting final state error = %v", err)
+	}
 	state, ok = api.UpgradeState(gb10DeviceID, sessionID)
-	if !ok || state.Status != "failed" || state.FailedReason != "02" {
-		t.Fatalf("new final notification did not update final upgrade state = %+v, %v", state, ok)
+	if !ok || state.Status != "completed" || state.Result != "OK" || state.Firmware != "V2" {
+		t.Fatalf("conflicting final state replaced completed upgrade state = %+v, %v", state, ok)
 	}
 }

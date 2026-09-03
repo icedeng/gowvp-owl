@@ -3,6 +3,7 @@ package sip
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -39,6 +40,32 @@ func TestSignalDigestSignsAndVerifiesRequestAndResponse(t *testing.T) {
 	}
 	if err := security.Verify(response); err != nil {
 		t.Fatalf("signed response verification failed: %v", err)
+	}
+}
+
+func TestSignalDigestPreservesSeedWhitespace(t *testing.T) {
+	now := time.Date(2024, 4, 1, 4, 5, 6, 0, time.UTC)
+	withWhitespace, err := NewSignalDigestSecurity(SignalDigestOptions{
+		Seed: " shared-seed ", Algorithm: "MD5", Required: true, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trimmed, err := NewSignalDigestSecurity(SignalDigestOptions{
+		Seed: "shared-seed", Algorithm: "MD5", Required: true, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := newSignalDigestTestRequest(t, MethodMessage, []byte("payload"))
+	if err := withWhitespace.Sign(request); err != nil {
+		t.Fatal(err)
+	}
+	if err := withWhitespace.Verify(request); err != nil {
+		t.Fatalf("exact seed with whitespace rejected: %v", err)
+	}
+	if err := trimmed.Verify(request); err == nil {
+		t.Fatal("trimmed seed unexpectedly verified signature made with a different secret")
 	}
 }
 
@@ -100,6 +127,55 @@ func TestSignalDigestRejectsTamperingAndExpiredDate(t *testing.T) {
 	}
 	if err := verifier.Verify(request); err == nil || !strings.Contains(err.Error(), "window") {
 		t.Fatalf("expired Date result = %v", err)
+	}
+}
+
+func TestSignalDigestRejectsAmbiguousNoteParameters(t *testing.T) {
+	now := time.Date(2024, 4, 1, 4, 5, 6, 0, time.UTC)
+	security, err := NewSignalDigestSecurity(SignalDigestOptions{
+		Seed: "shared-seed", Algorithm: "MD5", Required: true, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := newSignalDigestTestRequest(t, MethodMessage, []byte("payload"))
+	if err := security.Sign(request); err != nil {
+		t.Fatal(err)
+	}
+	note := request.GetHeaders("Note")
+	if len(note) != 1 {
+		t.Fatalf("signed Note = %#v", note)
+	}
+	value := note[0].String()
+	nonceStart := strings.Index(value, `nonce="`)
+	if nonceStart < 0 {
+		t.Fatalf("signed Note has no nonce: %s", value)
+	}
+	nonceStart += len(`nonce="`)
+	nonceEnd := strings.Index(value[nonceStart:], `"`)
+	if nonceEnd < 0 {
+		t.Fatalf("signed Note has no closing nonce quote: %s", value)
+	}
+	nonce := value[nonceStart : nonceStart+nonceEnd]
+
+	tests := []struct {
+		name string
+		note string
+	}{
+		{name: "missing algorithm", note: fmt.Sprintf(`Digest nonce="%s"`, nonce)},
+		{name: "duplicate algorithm", note: fmt.Sprintf(`Digest nonce="%s",algorithm=SHA-256,algorithm=MD5`, nonce)},
+		{name: "duplicate nonce", note: fmt.Sprintf(`Digest nonce="wrong",nonce="%s",algorithm=MD5`, nonce)},
+		{name: "unknown parameter", note: fmt.Sprintf(`Digest nonce="%s",algorithm=MD5,opaque="extra"`, nonce)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := request.Clone().(*Request)
+			candidate.RemoveHeader("Note")
+			candidate.AppendHeader(&GenericHeader{HeaderName: "Note", Contents: tt.note})
+			if err := security.Verify(candidate); err == nil {
+				t.Fatalf("ambiguous Note was accepted: %s", tt.note)
+			}
+		})
 	}
 }
 
@@ -212,6 +288,60 @@ func TestRequestWithSecuritySignsBeforeWrite(t *testing.T) {
 	payload := string(buffer[:n])
 	if !strings.Contains(payload, "Date: 2024-04-01T12:05:06") || !strings.Contains(payload, "Note: Digest nonce=") {
 		t.Fatalf("secured request payload = %s", payload)
+	}
+}
+
+func TestContextSendRequestInheritsTransactionSecurity(t *testing.T) {
+	now := time.Date(2024, 4, 1, 4, 5, 6, 0, time.UTC)
+	security, err := NewSignalDigestSecurity(SignalDigestOptions{
+		Seed: "shared-seed", Required: true, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	connection := NewTCPConnection(&sipTestTCPConn{
+		Conn:   client,
+		local:  &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 41000},
+		remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060},
+	})
+	localURI, err := ParseSipURI("sip:34020000002000000001@3402000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteURI, err := ParseSipURI("sip:34020000001320000001@3402000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := &Address{URI: &localURI, Params: NewParams()}
+	remote := &Address{URI: &remoteURI, Params: NewParams()}
+	server := NewServer(local)
+	defer server.Close()
+	inbound := newSignalDigestTestRequest(t, MethodMessage, []byte("inbound"))
+	inbound.SetConnection(connection)
+	tx := NewTransaction("context-security", connection)
+	defer tx.Close()
+	tx.SetMessageSecurity(security)
+	ctx := &Context{Request: inbound, Tx: tx, To: remote, From: local, Source: connection.RemoteAddr(), svr: server}
+	done := make(chan error, 1)
+	go func() {
+		_, requestErr := ctx.SendRequest(MethodMessage, []byte("outbound"))
+		done <- requestErr
+	}()
+	_ = peer.SetReadDeadline(time.Now().Add(time.Second))
+	buffer := make([]byte, 8192)
+	n, err := peer.Read(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	payload := string(buffer[:n])
+	if !strings.Contains(payload, "Date: 2024-04-01T12:05:06") || !strings.Contains(payload, "Note: Digest nonce=") {
+		t.Fatalf("secured context request payload = %s", payload)
 	}
 }
 

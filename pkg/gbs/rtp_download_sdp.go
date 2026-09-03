@@ -14,23 +14,20 @@ func parseRTPDownloadFileSize(body []byte) (int64, bool, error) {
 	if err != nil {
 		return 0, false, fmt.Errorf("decode RTP download SDP: %w", err)
 	}
-	value := strings.TrimSpace(message.Attribute("filesize"))
+	values := sdpAttributeValues(message.Attributes, "filesize", "fileszie")
 	for i := range message.Medias {
 		media := &message.Medias[i]
 		if !strings.EqualFold(media.Description.Type, "video") {
 			continue
 		}
-		if candidate := strings.TrimSpace(media.Attribute("filesize")); candidate != "" {
-			value = candidate
-			break
-		}
-		if candidate := strings.TrimSpace(media.Attribute("fileszie")); candidate != "" {
-			value = candidate
-			break
-		}
+		values = append(values, sdpAttributeValues(media.Attributes, "filesize", "fileszie")...)
 	}
-	if value == "" {
-		value = directTCPAttributeValue(body, "filesize", "fileszie")
+	if len(values) > 1 {
+		return 0, false, fmt.Errorf("RTP download SDP must not contain multiple filesize attributes")
+	}
+	value := ""
+	if len(values) == 1 {
+		value = values[0]
 	}
 	if value == "" {
 		return 0, false, nil

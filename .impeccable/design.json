@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-11T00:00:00+08:00",
+  "generatedAt": "2026-09-02T17:56:26+08:00",
   "title": "Design System: 国标视频管理平台 Admin UI",
   "extensions": {
     "colorMeta": {
@@ -26,11 +26,12 @@
       "violet": { "role": "tertiary", "displayName": "辅助紫", "canonical": "#6a56bd", "tonalRamp": ["#211449", "#3c287d", "#54429c", "#6a56bd", "#907fd0", "#b4a8e2", "#d6d0f0", "#eeeafd"] }
     },
     "typographyMeta": {
-      "display": { "displayName": "页面标题", "purpose": "页面标题和首要工作结论。" },
-      "headline": { "displayName": "态势结论", "purpose": "运行态势条与视频工作区的核心结论。" },
-      "title": { "displayName": "模块标题", "purpose": "卡片、导航当前项和局部模块标题。" },
+      "display": { "displayName": "页面标题", "purpose": "28px 页面标题和首要工作结论。" },
+      "headline": { "displayName": "态势结论", "purpose": "19px 运行态势条与视频工作区的核心结论。" },
+      "title": { "displayName": "模块标题", "purpose": "16px 卡片和局部模块标题。" },
       "body": { "displayName": "操作正文", "purpose": "页面描述、表单和一般界面文本。" },
-      "label": { "displayName": "短标签", "purpose": "分组、字段、状态和短按钮。" },
+      "label": { "displayName": "短标签", "purpose": "11px 状态、元数据和紧凑技术标签。" },
+      "control": { "displayName": "操作控件", "purpose": "13px 按钮、导航项和可操作短标签。" },
       "numeric": { "displayName": "监控数字", "purpose": "态势条、资源摘要、日期和优先级。" },
       "mono": { "displayName": "技术标识", "purpose": "设备编码、流 ID、地址和时间。" }
     },
@@ -47,9 +48,12 @@
       { "name": "reduced-motion", "value": "0.01ms", "purpose": "prefers-reduced-motion 下的近零时长。" }
     ],
     "breakpoints": [
-      { "name": "wide-collapse", "value": "1180px" },
+      { "name": "wide-collapse", "value": "1320px" },
+      { "name": "runtime-summary", "value": "980px" },
       { "name": "drawer", "value": "900px" },
+      { "name": "cascade-compact", "value": "760px" },
       { "name": "compact", "value": "640px" },
+      { "name": "capability-matrix", "value": "600px" },
       { "name": "minimum", "value": "320px" }
     ]
   },
@@ -60,7 +64,7 @@
       "refersTo": "button-primary",
       "description": "动作组中唯一的工程蓝主动作。",
       "html": "<button class=\"ds-btn-primary\">进入实时监控</button>",
-      "css": ".ds-btn-primary { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; color: #fff; background: var(--blue); border: 1px solid var(--blue); border-radius: 8px; font: 700 11px 'Noto Sans SC', sans-serif; cursor: pointer; transition: .16s ease; } .ds-btn-primary:hover { background: var(--blue-hover); border-color: var(--blue-hover); } .ds-btn-primary:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; } .ds-btn-primary:active { transform: translateY(1px); }"
+      "css": ".ds-btn-primary { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; color: #fff; background: var(--blue); border: 1px solid var(--blue); border-radius: 8px; font: 700 13px 'Noto Sans SC', sans-serif; cursor: pointer; transition: .16s ease; } .ds-btn-primary:hover { background: var(--blue-hover); border-color: var(--blue-hover); } .ds-btn-primary:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; } .ds-btn-primary:active { transform: translateY(1px); }"
     },
     {
       "name": "Secondary Button",
@@ -68,7 +72,7 @@
       "refersTo": "button-secondary",
       "description": "刷新、筛选和次级入口使用的白底按钮。",
       "html": "<button class=\"ds-btn-secondary\">刷新态势</button>",
-      "css": ".ds-btn-secondary { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; font: 700 11px 'Noto Sans SC', sans-serif; cursor: pointer; transition: .16s ease; } .ds-btn-secondary:hover { color: var(--blue); background: #f8fbff; border-color: #a8c7ef; } .ds-btn-secondary:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
+      "css": ".ds-btn-secondary { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 8px; font: 700 13px 'Noto Sans SC', sans-serif; cursor: pointer; transition: .16s ease; } .ds-btn-secondary:hover { color: var(--blue); background: #f8fbff; border-color: #a8c7ef; } .ds-btn-secondary:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
     },
     {
       "name": "Search Input",
@@ -84,7 +88,7 @@
       "refersTo": "nav-item-active",
       "description": "分组导航中的当前工作区入口。",
       "html": "<a class=\"ds-nav-active\" href=\"#\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"8\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"/><path d=\"M12 8v4l3 2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"/></svg><span>运行总览</span></a>",
-      "css": ".ds-nav-active { position: relative; min-height: 37px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--blue); background: var(--blue-soft); border-radius: 8px; font: 700 12px 'Noto Sans SC', sans-serif; text-decoration: none; transition: .16s ease; } .ds-nav-active::before { content: ''; position: absolute; left: -12px; width: 3px; height: 20px; background: var(--blue); border-radius: 0 3px 3px 0; } .ds-nav-active:hover { background: #f3f7fc; } .ds-nav-active:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
+      "css": ".ds-nav-active { position: relative; min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--blue); background: var(--blue-soft); border-radius: 8px; font: 700 13px 'Noto Sans SC', sans-serif; text-decoration: none; transition: .16s ease; } .ds-nav-active::before { content: ''; position: absolute; left: -12px; width: 3px; height: 20px; background: var(--blue); border-radius: 0 3px 3px 0; } .ds-nav-active:hover { background: #f3f7fc; } .ds-nav-active:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
     },
     {
       "name": "Online Status",
@@ -119,11 +123,11 @@
       "css": ".ds-matrix-slot { position: relative; min-height: 104px; display: block; padding: 12px; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; text-decoration: none; transition: .16s ease; } .ds-matrix-slot:hover { border-color: var(--line-strong); background: var(--panel); } .ds-matrix-slot .ds-protocol-tag { display: inline-flex; padding: 3px 7px; color: #3c526e; background: var(--panel-3); border: 1px solid #d9e1eb; border-radius: 5px; font: 700 9px 'Barlow Condensed', sans-serif; letter-spacing: .04em; } .ds-matrix-slot i { position: absolute; top: 16px; right: 12px; width: 7px; height: 7px; background: var(--green); border-radius: 50%; box-shadow: 0 0 0 3px var(--green-soft); } .ds-matrix-slot strong { display: block; margin-top: 12px; font: 700 18px 'Barlow Condensed', sans-serif; } .ds-matrix-slot small { color: var(--muted); font-size: 9px; } .ds-matrix-slot:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
     },
     {
-      "name": "Video Tile",
+      "name": "Operational Verification Workbench",
       "kind": "custom",
-      "description": "实时监控分屏中的可选视频画面，局部使用深海军蓝对比。",
-      "html": "<button class=\"ds-video-tile\"><span class=\"ds-video-scene\"></span><strong>东门 · 车道一</strong><small>ch-gate-01</small></button>",
-      "css": ".ds-video-tile { position: relative; aspect-ratio: 16/9; overflow: hidden; display: block; width: 100%; padding: 0; color: #fff; background: #0b1422; border: 1px solid #293b56; cursor: pointer; text-align: left; } .ds-video-scene { position: absolute; inset: 0; background: linear-gradient(180deg, transparent 55%, rgba(5,12,22,.85)), linear-gradient(140deg, #536478 0 26%, #34475c 26% 48%, #67798c 48% 65%, #28394c 65%); } .ds-video-tile strong, .ds-video-tile small { position: absolute; left: 9px; z-index: 1; display: block; } .ds-video-tile strong { bottom: 22px; font: 700 10px 'Noto Sans SC', sans-serif; } .ds-video-tile small { bottom: 8px; color: #b3c1d2; font: 10px 'SFMono-Regular', monospace; } .ds-video-tile:hover, .ds-video-tile:focus-visible { border-color: #4da0ff; box-shadow: inset 0 0 0 1px #4da0ff; } .ds-video-tile:focus-visible { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
+      "description": "并列呈现四版本实现证据、运行态、级联状态和真实验收边界。",
+      "html": "<section class=\"ds-verification\"><header><strong>四版本实现矩阵</strong><small>代码完成不等于真实互通</small></header><div class=\"ds-runtime\"><span>国标设备<b>24</b></span><span>已注册上级<b>3</b></span></div><div class=\"ds-version-row\"><strong>注册、心跳与目录</strong><span class=\"ds-ready\">2011 · 代码完成</span><span class=\"ds-ready\">2014 · 代码完成</span><span class=\"ds-verify\">2016 · 待真实互通</span><span class=\"ds-verify\">2022 · 待真实互通</span></div><footer>仍需真实设备、上级平台、网络抓包与三级链路验收</footer></section>",
+      "css": ".ds-verification { overflow: hidden; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; font-family: 'Noto Sans SC', sans-serif; } .ds-verification header { display: flex; justify-content: space-between; gap: 12px; padding: 15px 18px; border-bottom: 1px solid var(--line); } .ds-verification header strong { font-size: 16px; } .ds-verification header small, .ds-verification footer { color: var(--muted); font-size: 11px; } .ds-runtime { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); border-bottom: 1px solid var(--line); } .ds-runtime span { display: grid; grid-template-columns: 1fr auto; padding: 13px 18px; color: var(--muted); font-size: 12px; } .ds-runtime span + span { border-left: 1px solid var(--line); } .ds-runtime b { color: var(--ink); font: 700 20px 'Barlow Condensed', sans-serif; } .ds-version-row { display: grid; grid-template-columns: 1.35fr repeat(4,minmax(0,1fr)); gap: 1px; background: var(--line); } .ds-version-row > * { padding: 12px; background: var(--panel-2); font-size: 11px; } .ds-version-row span::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: currentColor; } .ds-ready { color: var(--green); } .ds-verify { color: var(--amber); } .ds-verification footer { padding: 11px 18px; background: #fff8e9; } .ds-verification:focus-within { outline: 3px solid rgba(23,104,212,.2); outline-offset: 2px; }"
     },
     {
       "name": "Modal Dialog",
@@ -140,7 +144,8 @@
       "冷白工作面（#f4f6f9）与白色面板（#ffffff）组成低反射、长时间可读的 admin 控制台。",
       "工程蓝负责主动作、导航选中和信息态；绿、琥珀、红分别表达健康、注意/异常、危险/离线。",
       "运行态势条先于协议矩阵、待关注对象和趋势内容出现，主动作直达实时监控。",
-      "固定分组导航与粘性顶栏保持位置感；窄屏导航收为遮罩抽屉，态势保留 2 × 2 槽位且协议矩阵先于资源指标。",
+      "四版本能力、当前运行态和级联注册使用固定槽位、矩阵列与状态文本并列呈现，可快速区分实现证据和真实验收边界。",
+      "固定分组导航与粘性顶栏保持位置感；窄屏导航收为遮罩抽屉，数据区域按断点重排。",
       "细边、轻阴影、8–12px 圆角和高密度短标签形成设备控制台的工程质感。"
     ],
     "rules": [
@@ -148,6 +153,7 @@
       { "name": "The Blue Action Rule", "body": "每个局部动作组只保留一个工程蓝主动作，其余使用白底、透明或危险变体，避免页面变成蓝色噪声。", "section": "colors" },
       { "name": "The Role Separation Rule", "body": "不用窄体或等宽字体承载长段中文；它们只服务于数字节奏和机器可核对的短标识。", "section": "typography" },
       { "name": "The Scan Order Rule", "body": "运行态势、协议矩阵和待关注列表是首屏扫描线；新增模块应排在这些信号之后，并保留“对象 → 状态 → 下一步”的阅读顺序。", "section": "layout" },
+      { "name": "The Acceptance Boundary Rule", "body": "“代码完成”“运行时已读取”和“真实环境验收通过”是三个不同结论；任何页面都不得用绿色完成态替代仍待真实设备、上级平台、网络抓包或三级链路验证的事实。", "section": "components" },
       { "name": "The Tonal Layer Rule", "body": "先用 panel / panel-2 / panel-3 和结构线表达层级，再使用轻阴影；不要用大面积黑底或高扩散阴影制造“大屏”效果。", "section": "elevation" }
     ],
     "dos": [
@@ -155,8 +161,9 @@
       "Do 首屏先给运行态势条，再给协议信号矩阵、待关注对象和资源趋势；主动作直达实时监控。",
       "Do 用状态灯、文字、图标或形状共同表达在线、异常、危险和信息，不把颜色当作唯一线索。",
       "Do 保留协议名、设备 ID、流 ID、时间和地址的技术标识感，并用窄体数字/等宽字体提高核验速度。",
-      "Do 沿用 14px 网格间隙、12px 主卡片圆角、36px 控件高度和 1px 冷灰结构线，保持密度一致。",
-      "Do 在 900px 和 640px 断点重排内容，保留焦点可见、抽屉遮罩关闭和 prefers-reduced-motion 支持。"
+      "Do 沿用 14px 网格间隙、12px 主卡片圆角、38px 默认按钮、36px 输入和 1px 冷灰结构线；移动端操作目标不低于 44px。",
+      "Do 在 900px 和 640px 断点重排内容，保留焦点可见、抽屉遮罩关闭和 prefers-reduced-motion 支持。",
+      "Do 把四版本、运行态、协商版本、最近错误和真实验收边界放在同一核验上下文中。"
     ],
     "donts": [
       "Don't 把整个 admin UI 做成深色大屏、黑色石墨主题或指标卡片堆叠；深色只可作为实时视频/态势条的局部对比。",
@@ -164,6 +171,7 @@
       "Don't 让工程蓝承担警告/危险语义，或在同一动作组放置多个同权重蓝色主按钮。",
       "Don't 用窄体或等宽字体排版长段中文，也不要把协议铭牌做成装饰性徽章墙。",
       "Don't 在窄屏简单压缩桌面表格；应按断点转单列、折行、横向滚动或收起次级信息。",
+      "Don't 把“代码完成”或一次接口读取成功写成“真实互通已验收”；待设备、上级平台、网络抓包或三级链路验证时必须显式标注。",
       "Don't 用厚重渐变、玻璃拟态和高扩散阴影替代清晰的槽位、边线与状态文本。"
     ]
   }

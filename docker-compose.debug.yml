@@ -1,6 +1,12 @@
 services:
   gowvp:
     image: registry.cn-shanghai.aliyuncs.com/ixugo/gowvp:latest
+    environment:
+      OWL_MEDIA_SECRET: ${OWL_MEDIA_SECRET:?set OWL_MEDIA_SECRET for the shared Owl and ZLMediaKit API secret}
+      OWL_MEDIA_IP: zlm
+      OWL_MEDIA_HTTP_PORT: "80"
+      OWL_MEDIA_WEBHOOK_IP: gowvp
+      OWL_MEDIA_SDP_IP: ${OWL_MEDIA_SDP_IP:-}
     ports:
       - 15123:15123 # 管理平台 http 端口
       - 15060:15060 # gb28181 sip tcp 端口
@@ -13,8 +19,16 @@ services:
     depends_on:
       - zlm
   zlm:
-    image: zlmediakit/zlmediakit:master
+    image: ${ZLM_IMAGE:-gowvp/zlmediakit:2fa539-tcp-rtcp}
+    build:
+      context: .
+      dockerfile: Dockerfile_zlm
+      target: zlm-runtime
+      args:
+        ZLM_COMMIT: 2fa539807370c4bcfca9801bde1dd2fdd95ba113
     restart: always
+    environment:
+      OWL_MEDIA_SECRET: ${OWL_MEDIA_SECRET:?set OWL_MEDIA_SECRET for the shared Owl and ZLMediaKit API secret}
     # 推荐 linux 主机使用 host 模式
     # network_mode: host
     networks:
@@ -31,9 +45,12 @@ services:
       - 20000-20100:20000-20100
       - 20000-20100:20000-20100/udp
     volumes:
-      - ./configs:/opt/media/conf
+      - zlm-config:/opt/media/conf
 
 # 如果不使用 host 模式，可以使用下面的配置
 networks:
   gowvp-network:
     driver: bridge
+
+volumes:
+  zlm-config:

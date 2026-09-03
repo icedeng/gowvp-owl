@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
@@ -69,10 +70,10 @@ type ConfigDownloadResponse struct {
 	FrameMirror         *FrameMirror         `xml:"FrameMirror"`
 	AlarmReport         *AlarmReport         `xml:"AlarmReport"`
 	OSDConfig           *OSDConfig           `xml:"OSDConfig"`
-	// SnapShotConfig 兼容部分厂商在查询应答中沿用配置命令节点名。
-	SnapShotConfig *SnapShot `xml:"SnapShotConfig"`
 	// SnapShot 是 2022 A.2.6.9 规定的配置查询应答节点。
 	SnapShot *SnapShot `xml:"SnapShot"`
+	// SnapShotConfig 兼容部分厂商沿用设备配置命令中的节点名；对外转发统一改回 SnapShot。
+	SnapShotConfig *SnapShot `xml:"SnapShotConfig"`
 }
 
 type SnapShot struct {
@@ -84,44 +85,53 @@ type SnapShot struct {
 
 // BasicParam 设备基本参数配置
 type BasicParam struct {
-	Name              string `xml:"Name,omitempty"`              // 设备名称
-	DeviceID          string `xml:"DeviceID,omitempty"`          // 设备 ID
-	SIPServerID       string `xml:"SIPServerID,omitempty"`       // SIP 服务器 ID
-	SIPServerIP       string `xml:"SIPServerIP,omitempty"`       // SIP 服务器 IP
-	SIPServerPort     int    `xml:"SIPServerPort,omitempty"`     // SIP 服务器端口
-	DomainName        string `xml:"DomainName,omitempty"`        // SIP 服务器域
-	Expiration        int    `xml:"Expiration,omitempty"`        // 注册过期时间
-	Password          string `xml:"Password,omitempty" json:"-"` // 注册口令
-	HeartBeatInterval int    `xml:"HeartBeatInterval,omitempty"` // 心跳间隔时间
-	HeartBeatCount    int    `xml:"HeartBeatCount,omitempty"`    // 心跳超时次数
-	present           basicParamPresence
+	Name               string  `xml:"Name,omitempty"`               // 设备名称
+	DeviceID           string  `xml:"DeviceID,omitempty"`           // 设备 ID
+	SIPServerID        string  `xml:"SIPServerID,omitempty"`        // SIP 服务器 ID
+	SIPServerIP        string  `xml:"SIPServerIP,omitempty"`        // SIP 服务器 IP
+	SIPServerPort      int     `xml:"SIPServerPort,omitempty"`      // SIP 服务器端口
+	DomainName         string  `xml:"DomainName,omitempty"`         // SIP 服务器域
+	Expiration         int     `xml:"Expiration,omitempty"`         // 注册过期时间
+	Password           string  `xml:"Password,omitempty" json:"-"`  // 注册口令
+	HeartBeatInterval  int     `xml:"HeartBeatInterval,omitempty"`  // 心跳间隔时间
+	HeartBeatCount     int     `xml:"HeartBeatCount,omitempty"`     // 心跳超时次数
+	PositionCapability int     `xml:"PositionCapability,omitempty"` // 2016 定位能力：0 不支持、1 GPS、2 北斗
+	Longitude          float64 `xml:"Longitude,omitempty"`          // 2016 经度（可选）
+	Latitude           float64 `xml:"Latitude,omitempty"`           // 2016 纬度（可选）
+	present            basicParamPresence
 }
 
 type basicParamPresence struct {
-	Name              bool
-	DeviceID          bool
-	SIPServerID       bool
-	SIPServerIP       bool
-	SIPServerPort     bool
-	DomainName        bool
-	Expiration        bool
-	Password          bool
-	HeartBeatInterval bool
-	HeartBeatCount    bool
+	Name               bool
+	DeviceID           bool
+	SIPServerID        bool
+	SIPServerIP        bool
+	SIPServerPort      bool
+	DomainName         bool
+	Expiration         bool
+	Password           bool
+	HeartBeatInterval  bool
+	HeartBeatCount     bool
+	PositionCapability bool
+	Longitude          bool
+	Latitude           bool
 }
 
 func (param *BasicParam) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
 	var decoded struct {
-		Name              *string `xml:"Name"`
-		DeviceID          *string `xml:"DeviceID"`
-		SIPServerID       *string `xml:"SIPServerID"`
-		SIPServerIP       *string `xml:"SIPServerIP"`
-		SIPServerPort     *int    `xml:"SIPServerPort"`
-		DomainName        *string `xml:"DomainName"`
-		Expiration        *int    `xml:"Expiration"`
-		Password          *string `xml:"Password"`
-		HeartBeatInterval *int    `xml:"HeartBeatInterval"`
-		HeartBeatCount    *int    `xml:"HeartBeatCount"`
+		Name               *string  `xml:"Name"`
+		DeviceID           *string  `xml:"DeviceID"`
+		SIPServerID        *string  `xml:"SIPServerID"`
+		SIPServerIP        *string  `xml:"SIPServerIP"`
+		SIPServerPort      *int     `xml:"SIPServerPort"`
+		DomainName         *string  `xml:"DomainName"`
+		Expiration         *int     `xml:"Expiration"`
+		Password           *string  `xml:"Password"`
+		HeartBeatInterval  *int     `xml:"HeartBeatInterval"`
+		HeartBeatCount     *int     `xml:"HeartBeatCount"`
+		PositionCapability *int     `xml:"PositionCapability"`
+		Longitude          *float64 `xml:"Longitude"`
+		Latitude           *float64 `xml:"Latitude"`
 	}
 	if err := decoder.DecodeElement(&decoded, &start); err != nil {
 		return err
@@ -156,6 +166,15 @@ func (param *BasicParam) UnmarshalXML(decoder *xml.Decoder, start xml.StartEleme
 	if decoded.HeartBeatCount != nil {
 		param.HeartBeatCount, param.present.HeartBeatCount = *decoded.HeartBeatCount, true
 	}
+	if decoded.PositionCapability != nil {
+		param.PositionCapability, param.present.PositionCapability = *decoded.PositionCapability, true
+	}
+	if decoded.Longitude != nil {
+		param.Longitude, param.present.Longitude = *decoded.Longitude, true
+	}
+	if decoded.Latitude != nil {
+		param.Latitude, param.present.Latitude = *decoded.Latitude, true
+	}
 	return nil
 }
 
@@ -166,16 +185,22 @@ func (param *BasicParam) hasBothHeartbeatFields() bool {
 // 下述配置结构体采用 innerxml 承接，保证协议字段兼容且不阻塞解析。
 // 后续可按业务需要继续细化字段。
 type VideoParamOpt struct {
-	InnerXML string `xml:",innerxml" json:"inner_xml"`
+	Attributes []xml.Attr `xml:",any,attr" json:"-"`
+	InnerXML   string     `xml:",innerxml" json:"inner_xml"`
 }
 type VideoParamConfig struct {
-	InnerXML string `xml:",innerxml" json:"inner_xml"`
+	Num        *int       `xml:"Num,attr" json:"num,omitempty"`
+	Attributes []xml.Attr `xml:",any,attr" json:"-"`
+	InnerXML   string     `xml:",innerxml" json:"inner_xml"`
 }
 type AudioParamOpt struct {
-	InnerXML string `xml:",innerxml" json:"inner_xml"`
+	Attributes []xml.Attr `xml:",any,attr" json:"-"`
+	InnerXML   string     `xml:",innerxml" json:"inner_xml"`
 }
 type AudioParamConfig struct {
-	InnerXML string `xml:",innerxml" json:"inner_xml"`
+	Num        *int       `xml:"Num,attr" json:"num,omitempty"`
+	Attributes []xml.Attr `xml:",any,attr" json:"-"`
+	InnerXML   string     `xml:",innerxml" json:"inner_xml"`
 }
 type SVACEncodeConfig struct {
 	InnerXML string `xml:",innerxml" json:"inner_xml"`
@@ -231,6 +256,7 @@ type DeviceConfigInput struct {
 	DeviceID            string
 	TargetID            string
 	Timeout             time.Duration
+	ExtraInfo           []string
 	BasicParam          *BasicParam
 	VideoParamConfig    *VideoParamConfigWrite
 	AudioParamConfig    *AudioParamConfigWrite
@@ -247,8 +273,9 @@ type DeviceConfigInput struct {
 }
 
 type pendingDeviceConfig struct {
-	wait     chan *DeviceConfigResponse
-	targetID string
+	wait      chan *DeviceConfigResponse
+	targetID  string
+	operation *pendingDeviceOperation
 }
 
 const CMDTypeConfigDownload = "ConfigDownload"
@@ -269,18 +296,41 @@ func (g *GB28181API) newBasicParamRequest(deviceID string) []byte {
 }
 
 func (g *GB28181API) QueryConfigDownloadBasic(deviceID string) error {
+	return g.QueryConfigDownloadBasicContext(context.Background(), deviceID)
+}
+
+func (g *GB28181API) QueryConfigDownloadBasicContext(ctx context.Context, deviceID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	slog.Debug("QueryConfigDownloadBasic", "deviceID", deviceID)
 	ipc, ok := g.svr.memoryStorer.Load(deviceID)
 	if !ok || !ipc.IsOnlineNow() {
 		return ErrDeviceOffline
 	}
-
-	tx, err := g.svr.wrapRequest(ipc, sip.MethodMessage, &sip.ContentTypeXML, g.newBasicParamRequest(deviceID))
-	if err != nil {
+	if err := g.requireGBFeature(deviceID, "config_query", "设备配置查询(ConfigDownload)", func(c GBCapabilities) bool {
+		return c.ConfigQuery
+	}); err != nil {
 		return err
 	}
-	_, err = sipResponse(tx)
-	return err
+
+	sn, cancelExpectation := g.reserveAutomaticQueryResponse(deviceID, CMDTypeConfigDownload, deviceID)
+	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, deviceID, deviceID)
+	defer releaseOperation()
+	requestCtx := operation.Context(ctx)
+	tx, err := g.svr.wrapRequestContext(requestCtx, ipc, sip.MethodMessage, &sip.ContentTypeXML, NewBasicParamRequest(int32(sn), deviceID))
+	if err != nil {
+		cancelExpectation()
+		return operation.ErrorOr(err)
+	}
+	_, err = sipResponseContext(requestCtx, tx)
+	if err != nil {
+		cancelExpectation()
+	}
+	return operation.ErrorOr(err)
 }
 
 func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
@@ -289,6 +339,10 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
 		ctx.Log.Error("handleDeviceConfig", "err", err, "body", hex.EncodeToString(ctx.Request.Body()))
 		ctx.String(400, ErrXMLDecode.Error())
+		return
+	}
+	if err := validateDeviceConfigResponseStructure(ctx.Request.Body(), g.getDeviceGBProtocolVersion(ctx.DeviceID)); err != nil {
+		ctx.String(400, err.Error())
 		return
 	}
 	msg.CmdType = strings.TrimSpace(msg.CmdType)
@@ -323,7 +377,13 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 		ctx.String(400, err.Error())
 		return
 	}
+	if pending == nil {
+		ctx.Log.Warn("ignore unassociated DeviceConfig response", "sn", msg.SN, "target_id", msg.DeviceID)
+		ctx.String(200, "OK")
+		return
+	}
 	msg.RawXML = string(ctx.Request.Body())
+	resultOK := strings.EqualFold(msg.Result, "OK")
 
 	state := &DeviceConfigState{
 		CmdType:  msg.CmdType,
@@ -333,20 +393,33 @@ func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 		SnapShot: msg.SnapShotConfig,
 		RawXML:   msg.RawXML,
 	}
-	g.storeDeviceConfigState(ctx.DeviceID, state)
-	if len(ext) > 0 {
-		g.storeAppendixA4State(ctx.DeviceID, ext)
+	if err := ctx.RespondString(200, "OK"); err != nil {
+		ctx.Log.Error("respond DeviceConfig", "err", err, "sn", msg.SN, "target_id", msg.DeviceID)
+		return
+	}
+	unlockCommit, err := g.lockAdmittedInboundDeviceStateCommit(ctx)
+	if err != nil {
+		return
+	}
+	defer unlockCommit()
+	// ERROR 只结束本次配置写入。失败应答中的可选扩展不能覆盖最近一次成功状态。
+	if resultOK {
+		// DeviceConfig 可以面向设备或其下属通道。运行态快照应归属于响应中的
+		// 实际目标，避免多个通道覆盖父设备状态；owner 仍用于删除和注册代次门禁。
+		g.storeDeviceConfigStateForOwnerLocked(ctx.DeviceID, msg.DeviceID, state)
+		if len(ext) > 0 {
+			g.storeAppendixA4StateForOwnerLocked(ctx.DeviceID, msg.DeviceID, ext)
+		}
 	}
 
-	if pending != nil {
+	pending.operation.Deliver(func() {
 		select {
 		case pending.wait <- &msg:
 		default:
 		}
-	}
+	})
 
-	ctx.String(200, "OK")
-	if len(ext) > 0 {
+	if resultOK && len(ext) > 0 {
 		g.persistAppendixA4Objects(ctx.DeviceID, ext)
 	}
 }
@@ -404,23 +477,22 @@ func (g *GB28181API) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput)
 		timeout = 8 * time.Second
 	}
 
-	sn := int32(g.nextControlSN())
+	sn, waitKey, pending, releaseOperation := g.reservePendingDeviceConfig(ctx, deviceID, targetID)
+	defer releaseOperation()
+	defer g.pendingDeviceConfig.CompareAndDelete(waitKey, pending)
 	request.SetSN(sn)
 	body, err := sip.XMLEncode(request)
 	if err != nil {
 		return nil, err
 	}
-	waitKey := buildPendingDeviceConfigKey(deviceID, int(sn))
-	pending := &pendingDeviceConfig{wait: make(chan *DeviceConfigResponse, 1), targetID: targetID}
-	g.pendingDeviceConfig.Store(waitKey, pending)
-	defer g.pendingDeviceConfig.Delete(waitKey)
 
-	tx, err := g.svr.wrapRequestContext(ctx, target, sip.MethodMessage, &sip.ContentTypeXML, body)
+	requestCtx := pending.operation.Context(ctx)
+	tx, err := g.svr.wrapRequestContext(requestCtx, target, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
-		return nil, err
+		return nil, pending.operation.ErrorOr(err)
 	}
-	if _, err = sipResponseContext(ctx, tx); err != nil {
-		return nil, err
+	if _, err = sipResponseContext(requestCtx, tx); err != nil {
+		return nil, pending.operation.ErrorOr(err)
 	}
 
 	timer := time.NewTimer(timeout)
@@ -439,8 +511,8 @@ func (g *GB28181API) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput)
 			return state, fmt.Errorf("DeviceConfig failed: %s", state.Result)
 		}
 		return state, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-pending.operation.Done():
+		return nil, pending.operation.Cause()
 	case <-g.serviceDone():
 		return nil, ErrServiceStopped
 	case <-timer.C:
@@ -451,6 +523,10 @@ func (g *GB28181API) SetDeviceConfig(ctx context.Context, in *DeviceConfigInput)
 func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, in *DeviceConfigInput) (*DeviceConfigRequest, error) {
 	request := NewDeviceConfig(targetID)
 	version := g.deviceConfigVersion(in.DeviceID, device)
+	request.ExtraInfo = append([]string(nil), in.ExtraInfo...)
+	if err := validateDeviceConfigExtraInfo(request.ExtraInfo, version); err != nil {
+		return nil, err
+	}
 	configured := false
 	if in.BasicParam != nil {
 		param, err := g.prepareBasicParam(targetID, device, *in.BasicParam, version)
@@ -491,7 +567,7 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 			return nil, fmt.Errorf("SVACEncodeConfig is not supported by %s", version.StandardName())
 		}
 		config := *in.SVACEncodeConfig
-		if err := validateDeviceConfigXMLFragment("SVACEncodeConfig", config.InnerXML); err != nil {
+		if err := validateSVACConfig(version, "SVACEncodeConfig", config.InnerXML); err != nil {
 			return nil, err
 		}
 		request.SVACEncodeConfig = &config
@@ -502,7 +578,7 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 			return nil, fmt.Errorf("SVACDecodeConfig is not supported by %s", version.StandardName())
 		}
 		config := *in.SVACDecodeConfig
-		if err := validateDeviceConfigXMLFragment("SVACDecodeConfig", config.InnerXML); err != nil {
+		if err := validateSVACConfig(version, "SVACDecodeConfig", config.InnerXML); err != nil {
 			return nil, err
 		}
 		request.SVACDecodeConfig = &config
@@ -558,7 +634,6 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 		if err := validateSnapshotConfig(&config); err != nil {
 			return nil, err
 		}
-		config.UploadURL = strings.TrimSpace(config.UploadURL)
 		config.SessionID = strings.TrimSpace(config.SessionID)
 		request.SnapShotConfig = &config
 		configured = true
@@ -567,6 +642,23 @@ func (g *GB28181API) buildDeviceConfigRequest(targetID string, device *Device, i
 		return nil, fmt.Errorf("DeviceConfig requires at least one configuration section")
 	}
 	return request, nil
+}
+
+func validateDeviceConfigExtraInfo(values []string, versions ...GBProtocolVersion) error {
+	if len(values) == 0 {
+		return nil
+	}
+	for _, version := range versions {
+		if version != GBVersion30 {
+			return fmt.Errorf("DeviceConfig ExtraInfo requires protocol 3.0")
+		}
+	}
+	for _, value := range values {
+		if utf8.RuneCountInString(value) > 1024 {
+			return fmt.Errorf("DeviceConfig ExtraInfo exceeds 1024 characters")
+		}
+	}
+	return nil
 }
 
 func (g *GB28181API) deviceConfigVersion(deviceID string, device *Device) GBProtocolVersion {
@@ -713,7 +805,7 @@ func (g *GB28181API) completeBasicParam(targetID string, device *Device, in Basi
 
 func (g *GB28181API) prepareBasicParam(targetID string, device *Device, in BasicParam, version GBProtocolVersion) (BasicParam, error) {
 	if version == GBVersion11 {
-		if strings.TrimSpace(in.Name) == "" || in.Expiration <= 0 || in.HeartBeatInterval <= 0 || in.HeartBeatCount <= 0 {
+		if strings.TrimSpace(in.Name) == "" || in.Expiration < minimumStandardRegisterTTL || in.HeartBeatInterval <= 0 || in.HeartBeatCount <= 0 {
 			return BasicParam{}, fmt.Errorf("BasicParam requires name, expiration and heartbeat values for %s", version.StandardName())
 		}
 		return g.completeBasicParam(targetID, device, in)
@@ -721,11 +813,11 @@ func (g *GB28181API) prepareBasicParam(targetID string, device *Device, in Basic
 	if !deviceConfigSectionSupported(version, "BasicParam") {
 		return BasicParam{}, fmt.Errorf("BasicParam is not supported by %s", version.StandardName())
 	}
-	if in.Expiration < 0 || in.HeartBeatInterval < 0 || in.HeartBeatCount < 0 {
-		return BasicParam{}, fmt.Errorf("BasicParam values must not be negative")
+	if in.Expiration != 0 && in.Expiration < minimumStandardRegisterTTL || in.HeartBeatInterval < 0 || in.HeartBeatCount < 0 {
+		return BasicParam{}, fmt.Errorf("BasicParam expiration must be zero or at least %d and heartbeat values must not be negative", minimumStandardRegisterTTL)
 	}
 	return BasicParam{
-		Name: strings.TrimSpace(in.Name), Expiration: in.Expiration,
+		Name: in.Name, Expiration: in.Expiration,
 		HeartBeatInterval: in.HeartBeatInterval, HeartBeatCount: in.HeartBeatCount,
 	}, nil
 }
@@ -734,27 +826,41 @@ func validateBasicParamResponse(param *BasicParam, version GBProtocolVersion) er
 	if param == nil {
 		return nil
 	}
-	if version == GBVersion11 {
-		p := param.present
+	p := param.present
+	switch version {
+	case GBVersion11:
 		if !p.Name || !p.DeviceID || !p.SIPServerID || !p.SIPServerIP || !p.SIPServerPort || !p.DomainName ||
 			!p.Expiration || !p.Password || !p.HeartBeatInterval || !p.HeartBeatCount {
 			return fmt.Errorf("ConfigDownload BasicParam is incomplete for %s", version.StandardName())
 		}
-	} else if version == GBVersion20 {
-		p := param.present
+		if p.PositionCapability || p.Longitude || p.Latitude {
+			return fmt.Errorf("ConfigDownload BasicParam contains 2016 positioning fields for %s", version.StandardName())
+		}
+	case GBVersion20:
 		if !p.Name || !p.Expiration || !p.HeartBeatInterval || !p.HeartBeatCount {
 			return fmt.Errorf("ConfigDownload BasicParam is incomplete for %s", version.StandardName())
 		}
-	} else if version != GBVersion30 {
+		if p.DeviceID || p.SIPServerID || p.SIPServerIP || p.SIPServerPort || p.DomainName || p.Password {
+			return fmt.Errorf("ConfigDownload BasicParam contains 2014-only fields for %s", version.StandardName())
+		}
+		if p.PositionCapability && (param.PositionCapability < 0 || param.PositionCapability > 2) {
+			return fmt.Errorf("ConfigDownload BasicParam PositionCapability must be 0, 1 or 2")
+		}
+	case GBVersion30:
+		if p.DeviceID || p.SIPServerID || p.SIPServerIP || p.SIPServerPort || p.DomainName || p.Password ||
+			p.PositionCapability || p.Longitude || p.Latitude {
+			return fmt.Errorf("ConfigDownload BasicParam contains fields outside %s", version.StandardName())
+		}
+	default:
 		return fmt.Errorf("ConfigDownload BasicParam is not supported by %s", version.StandardName())
 	}
-	if param.present.Expiration && param.Expiration < 0 {
+	if p.Expiration && param.Expiration < minimumStandardRegisterTTL {
 		return fmt.Errorf("ConfigDownload BasicParam expiration is invalid")
 	}
-	if param.present.HeartBeatInterval && (param.HeartBeatInterval <= 0 || param.HeartBeatInterval > 65535) {
+	if p.HeartBeatInterval && param.HeartBeatInterval <= 0 {
 		return fmt.Errorf("ConfigDownload BasicParam heartbeat interval is invalid")
 	}
-	if param.present.HeartBeatCount && (param.HeartBeatCount <= 0 || param.HeartBeatCount > 65535) {
+	if p.HeartBeatCount && param.HeartBeatCount <= 0 {
 		return fmt.Errorf("ConfigDownload BasicParam heartbeat count is invalid")
 	}
 	return nil
@@ -764,6 +870,22 @@ func buildPendingDeviceConfigKey(deviceID string, sn int) string {
 	return strings.TrimSpace(deviceID) + ":" + strconv.Itoa(sn)
 }
 
+func (g *GB28181API) reservePendingDeviceConfig(ctx context.Context, deviceID, targetID string) (int32, string, *pendingDeviceConfig, func()) {
+	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, deviceID, targetID)
+	for {
+		sn := int32(g.nextControlSN())
+		key := buildPendingDeviceConfigKey(deviceID, int(sn))
+		pending := &pendingDeviceConfig{
+			wait:      make(chan *DeviceConfigResponse, 1),
+			targetID:  strings.TrimSpace(targetID),
+			operation: operation,
+		}
+		if _, loaded := g.pendingDeviceConfig.LoadOrStore(key, pending); !loaded {
+			return sn, key, pending, releaseOperation
+		}
+	}
+}
+
 func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 	slog.Debug("sipMessageConfigDownload", "deviceID", ctx.DeviceID)
 
@@ -771,6 +893,10 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
 		ctx.Log.Error("sipMessageConfigDownload", "err", err, "body", hex.EncodeToString(ctx.Request.Body()))
 		ctx.String(400, ErrXMLDecode.Error())
+		return
+	}
+	if err := validateConfigDownloadResponseSingletons(ctx.Request.Body()); err != nil {
+		ctx.String(400, err.Error())
 		return
 	}
 	msg.CmdType = strings.TrimSpace(msg.CmdType)
@@ -793,30 +919,69 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 
 	resultOK := strings.EqualFold(msg.Result, "OK")
 	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
+	if err := validateBasicParamResponseStructure(ctx.Request.Body(), version); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
+	responseTypes := make([]string, 0, 1)
+	responseSections := []struct {
+		name    string
+		present bool
+	}{
+		{"BasicParam", msg.BasicParam != nil},
+		{"VideoParamOpt", msg.VideoParamOpt != nil},
+		{"VideoParamConfig", msg.VideoParamConfig != nil},
+		{"AudioParamOpt", msg.AudioParamOpt != nil},
+		{"AudioParamConfig", msg.AudioParamConfig != nil},
+		{"SVACEncodeConfig", msg.SVACEncodeConfig != nil},
+		{"SVACDecodeConfig", msg.SVACDecodeConfig != nil},
+		{"VideoParamAttribute", msg.VideoParamAttribute != nil},
+		{"VideoRecordPlan", msg.VideoRecordPlan != nil},
+		{"VideoAlarmRecord", msg.VideoAlarmRecord != nil},
+		{"PictureMask", msg.PictureMask != nil},
+		{"FrameMirror", msg.FrameMirror != nil},
+		{"AlarmReport", msg.AlarmReport != nil},
+		{"OSDConfig", msg.OSDConfig != nil},
+		{"SnapShotConfig", msg.SnapShotConfig != nil || msg.SnapShot != nil},
+	}
+	for _, section := range responseSections {
+		if section.present {
+			responseTypes = append(responseTypes, section.name)
+			if !configTypeSupported(version, section.name) {
+				ctx.String(400, "ConfigDownload "+section.name+" is not supported by "+version.StandardName())
+				return
+			}
+		}
+	}
+	if len(responseTypes) > 1 || resultOK && len(responseTypes) != 1 {
+		ctx.String(400, "ConfigDownload response must contain exactly one configuration section")
+		return
+	}
 	if resultOK {
-		responseSections := []struct {
+		if err := g.validatePendingConfigDownloadType(ctx.DeviceID, msg.SN, responseTypes[0]); err != nil {
+			ctx.String(400, err.Error())
+			return
+		}
+	}
+	if resultOK {
+		if err := validateConfigDownloadMediaResponse(version, &msg); err != nil {
+			ctx.String(400, err.Error())
+			return
+		}
+		svacSections := []struct {
 			name    string
+			value   string
 			present bool
 		}{
-			{"BasicParam", msg.BasicParam != nil},
-			{"VideoParamOpt", msg.VideoParamOpt != nil},
-			{"VideoParamConfig", msg.VideoParamConfig != nil},
-			{"AudioParamOpt", msg.AudioParamOpt != nil},
-			{"AudioParamConfig", msg.AudioParamConfig != nil},
-			{"SVACEncodeConfig", msg.SVACEncodeConfig != nil},
-			{"SVACDecodeConfig", msg.SVACDecodeConfig != nil},
-			{"VideoParamAttribute", msg.VideoParamAttribute != nil},
-			{"VideoRecordPlan", msg.VideoRecordPlan != nil},
-			{"VideoAlarmRecord", msg.VideoAlarmRecord != nil},
-			{"PictureMask", msg.PictureMask != nil},
-			{"FrameMirror", msg.FrameMirror != nil},
-			{"AlarmReport", msg.AlarmReport != nil},
-			{"OSDConfig", msg.OSDConfig != nil},
-			{"SnapShotConfig", msg.SnapShotConfig != nil || msg.SnapShot != nil},
+			{"SVACEncodeConfig", svacEncodeXML(msg.SVACEncodeConfig), msg.SVACEncodeConfig != nil},
+			{"SVACDecodeConfig", svacDecodeXML(msg.SVACDecodeConfig), msg.SVACDecodeConfig != nil},
 		}
-		for _, section := range responseSections {
-			if section.present && !configTypeSupported(version, section.name) {
-				ctx.String(400, "ConfigDownload "+section.name+" is not supported by "+version.StandardName())
+		for _, section := range svacSections {
+			if !section.present {
+				continue
+			}
+			if err := validateSVACConfigResponse(version, section.name, section.value); err != nil {
+				ctx.String(400, err.Error())
 				return
 			}
 		}
@@ -882,14 +1047,35 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 		ctx.String(400, err.Error())
 		return
 	}
-	if msg.BasicParam != nil && msg.DeviceID == strings.TrimSpace(ctx.DeviceID) && resultOK && msg.BasicParam.hasBothHeartbeatFields() {
+	if _, ok := g.pendingDeviceQueryExpectedTarget(ctx.DeviceID, msg.CmdType, msg.SN); !ok {
+		ctx.Log.Warn("ignore unassociated ConfigDownload response", "sn", msg.SN, "target_id", msg.DeviceID)
+		ctx.String(200, "OK")
+		return
+	}
+	// 命中通用查询等待队列（A.2.4 ConfigDownload 查询等待）。
+	// ERROR 只表示本次查询失败，其中携带的可选配置或扩展不能覆盖已有成功快照。
+	stateDeviceID := firstNonEmpty(msg.DeviceID, strings.TrimSpace(ctx.DeviceID))
+	decoded := decodedDeviceQuery{}
+	if resultOK {
+		decoded = g.decodeDeviceQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body(), extended)
+	}
+	if err := ctx.RespondString(200, "OK"); err != nil {
+		ctx.Log.Error("respond ConfigDownload", "err", err, "sn", msg.SN, "target_id", msg.DeviceID)
+		return
+	}
+	unlockCommit, err := g.lockAdmittedInboundDeviceStateCommit(ctx)
+	if err != nil {
+		return
+	}
+	defer unlockCommit()
+	if msg.BasicParam != nil && msg.DeviceID == strings.TrimSpace(ctx.DeviceID) && resultOK && basicParamHeartbeatFitsRuntime(msg.BasicParam) {
 		ipc, ok := g.svr.memoryStorer.Load(ctx.DeviceID)
 		if !ok {
 			ctx.Log.Debug("sipMessageConfigDownload", "deviceID", ctx.DeviceID, "err", "device offline")
 		} else {
 			// 计算设备离线超时时间
-			interval := uint16(msg.BasicParam.HeartBeatInterval) // nolint:gosec -- 上方已限制为 uint16 范围
-			timeout := uint16(msg.BasicParam.HeartBeatCount)     // nolint:gosec -- 上方已限制为 uint16 范围
+			interval := uint16(msg.BasicParam.HeartBeatInterval) // nolint:gosec -- basicParamHeartbeatFitsRuntime 已限制为 uint16 范围
+			timeout := uint16(msg.BasicParam.HeartBeatCount)     // nolint:gosec -- basicParamHeartbeatFitsRuntime 已限制为 uint16 范围
 			ipc.UpdateRuntime(func(device *Device) {
 				device.keepaliveInterval = interval
 				device.keepaliveTimeout = timeout
@@ -897,11 +1083,50 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 			ctx.Log.Debug("sipMessageConfigDownload update", "deviceID", ctx.DeviceID, "keepaliveInterval", interval, "keepaliveTimeout", timeout)
 		}
 	}
-
-	// 命中通用查询等待队列（A.2.4 ConfigDownload 查询等待）。
-	decoded := g.decodeAndStoreQueryResult(ctx.DeviceID, msg.CmdType, ctx.Request.Body(), extended)
+	if resultOK {
+		g.commitDecodedQueryStateForOwnerLocked(ctx.DeviceID, stateDeviceID, msg.CmdType, decoded)
+	}
 	g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
-	ctx.String(200, "OK")
-	g.persistDecodedQuery(ctx.DeviceID, msg.CmdType, decoded)
-	g.publishEventNotify(msg.CmdType, ctx.DeviceID, ctx.Request.Body())
+	if resultOK {
+		g.persistDecodedQuery(ctx.DeviceID, msg.CmdType, decoded)
+	}
+}
+
+func basicParamHeartbeatFitsRuntime(param *BasicParam) bool {
+	const maximum = int(^uint16(0))
+	return param != nil && param.hasBothHeartbeatFields() &&
+		param.HeartBeatInterval > 0 && param.HeartBeatInterval <= maximum &&
+		param.HeartBeatCount > 0 && param.HeartBeatCount <= maximum
+}
+
+func (g *GB28181API) validatePendingConfigDownloadType(deviceID string, sn int, configType string) error {
+	if g == nil || sn <= 0 {
+		return nil
+	}
+	value, ok := g.pendingDeviceQuery.Load(buildPendingQueryKey(deviceID, CMDTypeConfigDownload, sn))
+	if !ok {
+		return nil
+	}
+	pending, ok := value.(*pendingQueryWait)
+	if !ok || pending == nil {
+		return nil
+	}
+	pending.mu.Lock()
+	defer pending.mu.Unlock()
+	requested := pending.requestedConfig
+	if len(requested) == 0 {
+		requested = pending.expectedConfig
+	}
+	if len(requested) == 0 {
+		return nil
+	}
+	if _, expected := requested[configType]; !expected {
+		return fmt.Errorf("ConfigDownload response type %s was not requested", configType)
+	}
+	for _, received := range configDownloadStateTypes(pending.config) {
+		if received == configType {
+			return fmt.Errorf("ConfigDownload response type %s was already received", configType)
+		}
+	}
+	return nil
 }

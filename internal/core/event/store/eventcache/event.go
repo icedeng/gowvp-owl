@@ -51,6 +51,25 @@ func (c *Event) Create(ctx context.Context, model *event.Event) error {
 	return nil
 }
 
+// CreateIdempotent 透传底层数据库原子去重能力；不支持时退化为普通创建。
+func (c *Event) CreateIdempotent(ctx context.Context, model *event.Event) (bool, error) {
+	store := c.store.Event()
+	if idempotent, ok := store.(interface {
+		CreateIdempotent(context.Context, *event.Event) (bool, error)
+	}); ok {
+		created, err := idempotent.CreateIdempotent(ctx, model)
+		if err != nil {
+			return false, err
+		}
+		c.event.Set(ctx, c.cacheKey(model.CacheKey()), model)
+		return created, nil
+	}
+	if err := c.Create(ctx, model); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // Update implements event.EventStorer.
 func (c *Event) Update(ctx context.Context, model *event.Event, changeFn func(*event.Event), opts ...orm.QueryOption) error {
 	if err := c.store.Event().Update(ctx, model, changeFn, opts...); err != nil {

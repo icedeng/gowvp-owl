@@ -10,6 +10,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -28,6 +29,8 @@ import (
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/recording"
 	"github.com/gowvp/owl/internal/core/sms"
+	"github.com/gowvp/owl/pkg/gbs"
+	"github.com/gowvp/owl/pkg/gbs/annexg/gormstore"
 	"github.com/gowvp/owl/pkg/zlm"
 	"github.com/ixugo/goddd/pkg/hook"
 	"github.com/ixugo/goddd/pkg/reason"
@@ -43,7 +46,6 @@ const (
 	snapshotTaskTimeout              = 60 * time.Second
 )
 
-// TODO: 快照不会删除，只会覆盖，设备删除时也不会删除快照，待实现
 func writeCover(dataDir, channelID string, body []byte) error {
 	coverPath := filepath.Join(dataDir, coverDir)
 	if err := os.MkdirAll(coverPath, 0o777); err != nil {
@@ -77,6 +79,20 @@ func writeCover(dataDir, channelID string, body []byte) error {
 	return nil
 }
 
+func removeCovers(dataDir string, channelIDs []string) error {
+	var errs []error
+	for _, channelID := range channelIDs {
+		channelID = strings.TrimSpace(channelID)
+		if channelID == "" {
+			continue
+		}
+		if err := os.Remove(readCoverPath(dataDir, channelID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("remove cover %s: %w", channelID, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func readCoverPath(dataDir, channelID string) string {
 	coverPath := filepath.Join(dataDir, coverDir)
 	return filepath.Join(coverPath, channelID+".jpg")
@@ -87,21 +103,34 @@ func readCover(dataDir, channelID string) ([]byte, error) {
 }
 
 type IPCAPI struct {
-	ipc           ipc.Core
-	uc            *Usecase
-	recordingCore recording.Core
-	snapshot      *snapshotCoordinator
+	ipc                            ipc.Core
+	uc                             *Usecase
+	recordingCore                  recording.Core
+	snapshot                       *snapshotCoordinator
+	channelMediaBindingCoordinator ipc.ChannelMediaBindingCoordinator
 }
 
 func NewIPCAPI(bundle IPCBundle, recordingCore recording.Core) IPCAPI {
-	return IPCAPI{ipc: bundle.Core, recordingCore: recordingCore, snapshot: newSnapshotCoordinator(defaultSnapshotFFmpegConcurrency)}
+	api := IPCAPI{ipc: bundle.Core, recordingCore: recordingCore, snapshot: newSnapshotCoordinator(defaultSnapshotFFmpegConcurrency)}
+	if protocol := bundle.Protocols[ipc.TypeGB28181]; protocol != nil {
+		api.channelMediaBindingCoordinator, _ = protocol.(ipc.ChannelMediaBindingCoordinator)
+	}
+	return api
 }
 
 type snapshotCoordinator struct {
 	mu    sync.Mutex
 	limit int
 	sem   chan struct{}
-	group singleflight.Group
+	tasks map[string]*snapshotTask
+	// generations 使删除与刚进入 singleflight、尚未来得及登记的任务也能串行收敛。
+	generations map[string]uint64
+	blocked     map[string]struct{}
+	group       singleflight.Group
+}
+
+type snapshotTask struct {
+	cancel context.CancelFunc
 }
 
 func newSnapshotCoordinator(limit int) *snapshotCoordinator {
@@ -111,6 +140,94 @@ func newSnapshotCoordinator(limit int) *snapshotCoordinator {
 	return &snapshotCoordinator{
 		limit: limit,
 		sem:   make(chan struct{}, limit),
+		tasks: make(map[string]*snapshotTask), generations: make(map[string]uint64), blocked: make(map[string]struct{}),
+	}
+}
+
+func (c *snapshotCoordinator) taskGeneration(channelID string) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generations[channelID]
+}
+
+func (c *snapshotCoordinator) beginTask(parent context.Context, channelID string, generation uint64) (context.Context, func()) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), snapshotTaskTimeout)
+	task := &snapshotTask{cancel: cancel}
+	c.mu.Lock()
+	if c.tasks == nil {
+		c.tasks = make(map[string]*snapshotTask)
+	}
+	if c.generations == nil {
+		c.generations = make(map[string]uint64)
+	}
+	_, blocked := c.blocked[channelID]
+	if blocked || c.generations[channelID] != generation {
+		c.mu.Unlock()
+		cancel()
+		return ctx, func() {}
+	}
+	if previous := c.tasks[channelID]; previous != nil {
+		previous.cancel()
+	}
+	c.tasks[channelID] = task
+	c.mu.Unlock()
+	return ctx, func() {
+		c.mu.Lock()
+		if c.tasks[channelID] == task {
+			delete(c.tasks, channelID)
+		}
+		c.mu.Unlock()
+		cancel()
+	}
+}
+
+func (c *snapshotCoordinator) cancelTasks(channelIDs []string) {
+	if c == nil {
+		return
+	}
+	tasks := make([]*snapshotTask, 0, len(channelIDs))
+	c.mu.Lock()
+	if c.generations == nil {
+		c.generations = make(map[string]uint64)
+	}
+	if c.blocked == nil {
+		c.blocked = make(map[string]struct{})
+	}
+	for _, channelID := range channelIDs {
+		channelID = strings.TrimSpace(channelID)
+		if channelID == "" {
+			continue
+		}
+		c.generations[channelID]++
+		c.blocked[channelID] = struct{}{}
+		if task := c.tasks[channelID]; task != nil {
+			tasks = append(tasks, task)
+			delete(c.tasks, channelID)
+		}
+		c.group.Forget(channelID)
+	}
+	c.mu.Unlock()
+	for _, task := range tasks {
+		task.cancel()
+	}
+}
+
+func (c *snapshotCoordinator) allowTasks(channelIDs []string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, channelID := range channelIDs {
+		channelID = strings.TrimSpace(channelID)
+		if channelID == "" {
+			continue
+		}
+		delete(c.blocked, channelID)
+		c.generations[channelID]++
 	}
 }
 
@@ -160,6 +277,12 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 	}
 	g.GET("/gb28181/metrics", append(handler, web.WrapH(api.gbMetrics))...)
 	g.GET("/gb28181/cascade/status", append(handler, web.WrapH(api.gbCascadeStatus))...)
+	{
+		group := g.Group("/gb28181/annex-g", handler...)
+		group.GET("/alarms", web.WrapH(api.gbAnnexGAlarmAudits))
+		group.GET("/defences", web.WrapH(api.gbAnnexGDefenceStates))
+		group.GET("/defence-audits", web.WrapH(api.gbAnnexGDefenceAudits))
+	}
 
 	// 统一的设备管理 API（支持所有协议）
 	{
@@ -172,6 +295,7 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.GET("/channels", web.WrapH(api.FindChannelsForDevice)) // 设备与通道列表（所有协议）
 		group.POST("/:id/catalog", web.WrapH(api.queryCatalog))
 		group.GET("/:id/history", web.WrapH(api.deviceHistory))
+		group.GET("/:id/subscriptions", web.WrapH(api.subscriptionStates))
 		group.POST("/:id/gb/control", web.WrapH(api.gbDeviceControl)) // GB 附录A.2.3 设备控制
 		group.POST("/:id/gb/query", web.WrapH(api.gbDeviceQuery))     // GB 附录A.2.4 设备查询
 		group.POST("/:id/gb/config", web.WrapH(api.gbDeviceConfig))   // GB 设备配置（2014 DeviceConfig）
@@ -187,15 +311,16 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 	// 统一的通道管理 API（支持所有协议）
 	{
 		group := g.Group("/channels", handler...)
-		group.GET("", web.WrapH(api.findChannel))                     // 通道列表（所有协议）
-		group.POST("", web.WrapH(api.addChannel))                     // 添加通道（RTMP/RTSP）
-		group.PUT("/:id", web.WrapH(api.editChannel))                 // 修改通道（所有协议）
-		group.DELETE("/:id", web.WrapH(api.delChannel))               // 删除通道（RTMP/RTSP）
-		group.POST("/:id/play", web.WrapH(api.play))                  // 播放（所有协议）
-		group.POST("/:id/records/query", web.WrapH(api.queryRecords)) // 录像目录查询（GB28181）
-		group.POST("/:id/ptz", web.WrapH(api.ptzControl))             // 云台控制（GB28181/ONVIF）
-		group.POST("/:id/ptz_probe", web.WrapH(api.ptzProbe))         // 云台能力探测（GB28181/ONVIF）
-		group.POST("/:id/upgrade", web.WrapH(api.upgradeDevice))      // 设备升级（GB28181-2022）
+		group.GET("", web.WrapH(api.findChannel))                             // 通道列表（所有协议）
+		group.POST("", web.WrapH(api.addChannel))                             // 添加通道（RTMP/RTSP）
+		group.PUT("/:id", web.WrapH(api.editChannel))                         // 修改通道（所有协议）
+		group.PUT("/:id/media_server", web.WrapH(api.editChannelMediaServer)) // 绑定媒体节点（GB28181）
+		group.DELETE("/:id", web.WrapH(api.delChannel))                       // 删除通道（RTMP/RTSP）
+		group.POST("/:id/play", web.WrapH(api.play))                          // 播放（所有协议）
+		group.POST("/:id/records/query", web.WrapH(api.queryRecords))         // 录像目录查询（GB28181）
+		group.POST("/:id/ptz", web.WrapH(api.ptzControl))                     // 云台控制（GB28181/ONVIF）
+		group.POST("/:id/ptz_probe", web.WrapH(api.ptzProbe))                 // 云台能力探测（GB28181/ONVIF）
+		group.POST("/:id/upgrade", web.WrapH(api.upgradeDevice))              // 设备升级（GB28181-2022）
 		group.GET("/:id/upgrade/:session_id", web.WrapH(api.upgradeDeviceState))
 		group.POST("/:id/history/start", web.WrapH(api.startHistory)) // 历史回放/下载开始（GB28181）
 		group.POST("/:id/history/stop", web.WrapH(api.stopHistory))   // 历史回放/下载停止（GB28181）
@@ -248,7 +373,7 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/ptz", web.WrapH(api.ptzControlByGB))
 		group.POST("/ptz_probe", web.WrapH(api.ptzProbeByGB))
 		group.POST("/upgrade", web.WrapH(api.upgradeDeviceByGB))
-		group.GET("/upgrade/:session_id", web.WrapH(api.upgradeDeviceState))
+		group.GET("/upgrade/:session_id", web.WrapH(api.upgradeDeviceStateByGB))
 		group.POST("/history/start", web.WrapH(api.startHistoryByGB))
 		group.POST("/history/stop", web.WrapH(api.stopHistoryByGB))
 		group.POST("/history/control", web.WrapH(api.controlHistoryByGB))
@@ -257,7 +382,7 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/voice/stop", web.WrapH(api.stopVoiceByGB))
 		group.POST("/snapshot", web.WrapH(api.refreshSnapshotByGB))
 		group.GET("/snapshot", api.getSnapshotByGB)
-		group.GET("/snapshot/:session_id/status", web.WrapH(api.snapshotState))
+		group.GET("/snapshot/:session_id/status", web.WrapH(api.snapshotStateByGB))
 		group.POST("/zones", web.WrapH(api.addZoneByGB))
 		group.GET("/zones", web.WrapH(api.getZonesByGB))
 		group.POST("/ai/enable", web.WrapH(api.enableAIByGB))
@@ -266,7 +391,7 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 	}
 	{
 		group := g.Group("/devices", handler...)
-		group.POST("/:id/time_sync", web.WrapH(api.syncTime))  // 校时（GB28181）
+		group.POST("/:id/time_sync", web.WrapH(api.syncTime))  // 厂商扩展主动校时
 		group.POST("/:id/subscribe", web.WrapH(api.subscribe)) // 订阅（GB28181）
 		group.POST("/:id/options_probe", web.WrapH(api.optionsProbe))
 		group.POST("/:id/ptz_probe", web.WrapH(api.devicePTZProbe))
@@ -412,7 +537,7 @@ func (a IPCAPI) queryRecordsByGB(c *gin.Context, in *queryRecordsInput) (any, er
 // @Param device_id path string true "设备编号(device_id)"
 // @Param channel_id path string true "通道编号(channel_id)"
 // @Param body body SwaggerPTZControlInput true "PTZ 控制参数"
-// @Success 200 {object} ipc.UpgradeOutput
+// @Success 200 {object} SwaggerMessageResponse
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/gb28181/{device_id}/{channel_id}/ptz [post]
 func (a IPCAPI) ptzControlByGB(c *gin.Context, in *ptzControlInput) (any, error) {
@@ -444,11 +569,27 @@ func (a IPCAPI) ptzProbeByGB(c *gin.Context, in *ptzProbeInput) (any, error) {
 // @Param device_id path string true "设备编号(device_id)"
 // @Param channel_id path string true "通道编号(channel_id)"
 // @Param body body upgradeDeviceInput true "升级参数"
-// @Success 200 {object} SwaggerMessageResponse
+// @Success 200 {object} ipc.UpgradeOutput
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/gb28181/{device_id}/{channel_id}/upgrade [post]
 func (a IPCAPI) upgradeDeviceByGB(c *gin.Context, in *upgradeDeviceInput) (any, error) {
 	return a.upgradeDevice(c, in)
+}
+
+// upgradeDeviceStateByGB godoc
+// @Summary 查询设备升级状态
+// @Description accepted 仅表示设备已接受升级命令；completed/failed 为设备上报的最终状态。
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param session_id path string true "升级会话ID"
+// @Success 200 {object} gbs.UpgradeState
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/upgrade/{session_id} [get]
+func (a IPCAPI) upgradeDeviceStateByGB(c *gin.Context, _ *struct{}) (any, error) {
+	return a.upgradeDeviceState(c, nil)
 }
 
 // startHistoryByGB godoc
@@ -572,6 +713,21 @@ func (a IPCAPI) refreshSnapshotByGB(c *gin.Context, in *refreshSnapshotInput) (a
 // @Router /channels/gb28181/{device_id}/{channel_id}/snapshot [get]
 func (a IPCAPI) getSnapshotByGB(c *gin.Context) { a.getSnapshot(c) }
 
+// snapshotStateByGB godoc
+// @Summary 查询 GB28181 图像抓拍状态
+// @Tags Channel
+// @Security BearerAuth
+// @Produce json
+// @Param device_id path string true "设备编号(device_id)"
+// @Param channel_id path string true "通道编号(channel_id)"
+// @Param session_id path string true "抓拍会话ID"
+// @Success 200 {object} gbs.SnapshotState
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/gb28181/{device_id}/{channel_id}/snapshot/{session_id}/status [get]
+func (a IPCAPI) snapshotStateByGB(c *gin.Context, _ *struct{}) (any, error) {
+	return a.snapshotState(c, nil)
+}
+
 // addZoneByGB godoc
 // @Summary 添加检测区域
 // @Tags Channel
@@ -671,9 +827,14 @@ func (a IPCAPI) gbSnapshotUpload(c *gin.Context) {
 			c.JSON(400, gin.H{"msg": "invalid snapshot session target"})
 			return
 		}
-		if err := a.uc.SipServer.ValidateSnapshotUpload(deviceID, coverKey, sessionID); err != nil {
-			slog.WarnContext(c.Request.Context(), "reject unknown gb snapshot upload", "device_id", deviceID, "cover_key", coverKey, "session_id", sessionID, "err", err)
-			c.JSON(400, gin.H{"msg": "invalid snapshot session"})
+		if err := a.uc.SipServer.ValidateSnapshotUploadContext(c.Request.Context(), deviceID, coverKey, sessionID); err != nil {
+			if errors.Is(err, gbs.ErrSnapshotSessionNotFound) || errors.Is(err, gbs.ErrSnapshotCoverKeyMismatch) {
+				slog.WarnContext(c.Request.Context(), "reject unknown gb snapshot upload", "device_id", deviceID, "cover_key", coverKey, "session_id", sessionID, "err", err)
+				c.JSON(400, gin.H{"msg": "invalid snapshot session"})
+				return
+			}
+			slog.ErrorContext(c.Request.Context(), "load gb snapshot upload state", "device_id", deviceID, "cover_key", coverKey, "session_id", sessionID, "err", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"msg": "load snapshot state failed"})
 			return
 		}
 	} else {
@@ -693,7 +854,11 @@ func (a IPCAPI) gbSnapshotUpload(c *gin.Context) {
 			return
 		}
 		if sessionID != "" {
-			a.uc.SipServer.MarkSnapshotUploaded(deviceID, sessionID)
+			if err := a.uc.SipServer.CommitSnapshotUpload(deviceID, sessionID); err != nil {
+				slog.ErrorContext(c.Request.Context(), "save gb snapshot upload state", "err", err, "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID)
+				c.JSON(http.StatusInternalServerError, gin.H{"msg": "save snapshot state failed"})
+				return
+			}
 		}
 		slog.InfoContext(c.Request.Context(), "GBSNAPSHOT_UPLOAD_OK", "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID, "size", len(payload), "payload_type", payloadType, "content_type", detectedContentType)
 	}
@@ -801,11 +966,77 @@ func (a IPCAPI) addDevice(c *gin.Context, in *ipc.AddDeviceInput) (any, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices/{id} [delete]
 func (a IPCAPI) delDevice(c *gin.Context, _ *struct{}) (any, error) {
-	did, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	ctx := c.Request.Context()
+	did, err := a.resolveDeviceParamID(ctx, c.Param("id"))
 	if err != nil {
 		return nil, err
 	}
-	return a.ipc.DelDevice(c.Request.Context(), did)
+	channelIDs, err := a.deviceChannelIDs(ctx, did)
+	if err != nil {
+		return nil, err
+	}
+	coordinator := a.snapshotCoordinator()
+	coordinator.cancelTasks(channelIDs)
+	deleted, finalChannelIDs, err := a.ipc.DelDeviceWithChannelIDs(ctx, did)
+	channelIDs = appendUniqueStrings(channelIDs, finalChannelIDs...)
+	if err != nil {
+		coordinator.allowTasks(channelIDs)
+		return nil, err
+	}
+	// 删除锁内的最终集合可能包含初次分页读取后新建的通道。
+	coordinator.cancelTasks(finalChannelIDs)
+	if a.uc != nil && a.uc.Conf != nil {
+		if err := removeCovers(a.uc.Conf.ConfigDir, channelIDs); err != nil {
+			slog.WarnContext(ctx, "remove deleted device covers failed", "device_id", did, "err", err)
+		}
+	}
+	return deleted, nil
+}
+
+func appendUniqueStrings(values []string, extra ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(extra))
+	out := make([]string, 0, len(values)+len(extra))
+	for _, value := range append(values, extra...) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func (a IPCAPI) deviceChannelIDs(ctx context.Context, deviceID string) ([]string, error) {
+	const pageSize = 500
+	channelIDs := make([]string, 0)
+	seen := make(map[string]struct{})
+	for page := 1; ; page++ {
+		items, total, err := a.ipc.FindChannel(ctx, &ipc.FindChannelInput{
+			DID:         deviceID,
+			PagerFilter: web.PagerFilter{Page: page, Size: pageSize},
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			if item == nil || strings.TrimSpace(item.ID) == "" {
+				continue
+			}
+			if _, ok := seen[item.ID]; ok {
+				continue
+			}
+			seen[item.ID] = struct{}{}
+			channelIDs = append(channelIDs, item.ID)
+		}
+		if len(items) == 0 || len(channelIDs) >= int(total) || len(items) < pageSize {
+			break
+		}
+	}
+	return channelIDs, nil
 }
 
 // queryCatalog godoc
@@ -955,30 +1186,73 @@ func (a IPCAPI) fillRTMPPushAddr(c *gin.Context, items []*ipc.Channel) {
 	if a.uc == nil {
 		return
 	}
-
-	// 获取流媒体服务器配置
-	ms, err := a.uc.SMSAPI.smsCore.GetMediaServer(c.Request.Context(), sms.DefaultMediaServerID)
-	if err != nil {
-		return
-	}
-
+	servers := make(map[string]*sms.MediaServer)
 	host := web.GetHost(c.Request)
-
-	rtmpPort := ms.Ports.RTMP
-	if rtmpPort == 0 {
-		rtmpPort = 1935 // 默认 RTMP 端口
-	}
-
 	sign := hook.MD5(a.uc.Conf.Server.RTMPSecret)
 
 	for _, item := range items {
+		if item == nil || !item.IsRTMP() {
+			continue
+		}
+		mediaServerID := channelMediaServerID(item)
+		ms, ok := servers[mediaServerID]
+		if !ok {
+			var err error
+			ms, err = a.uc.SMSAPI.smsCore.GetMediaServer(c.Request.Context(), mediaServerID)
+			if err != nil {
+				continue
+			}
+			servers[mediaServerID] = ms
+		}
+		rtmpPort := ms.Ports.RTMP
+		if rtmpPort == 0 {
+			rtmpPort = 1935 // 默认 RTMP 端口
+		}
 		if item.IsRTMP() {
-			item.Config.PushAddr = fmt.Sprintf("rtmp://%s:%d/%s/%s", host, rtmpPort, item.App, item.Stream)
+			publishHost := mediaServerPublishHost(ms, host)
+			item.Config.PushAddr = fmt.Sprintf("rtmp://%s/%s/%s", net.JoinHostPort(publishHost, strconv.Itoa(rtmpPort)), item.App, item.Stream)
 			if !item.Config.IsAuthDisabled {
 				item.Config.PushAddr += "?sign=" + sign
 			}
 		}
 	}
+}
+
+// mediaServerPublishHost 返回客户端向媒体节点推流时应使用的主机地址。
+// StreamIP/IP 是节点级显式地址；两者为空或为回环地址时回退请求 Host，保持旧部署兼容。
+func mediaServerPublishHost(server *sms.MediaServer, fallback string) string {
+	if server != nil {
+		for _, candidate := range []string{server.StreamIP, server.IP} {
+			candidate = strings.TrimSpace(candidate)
+			if candidate == "" || isLoopbackHost(candidate) {
+				continue
+			}
+			return candidate
+		}
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(host)
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// channelMediaServerID 返回通道绑定的媒体节点；空值沿用默认节点。
+// GB28181、RTMP、RTSP 的播放器和 Webhook 均使用同一解析规则，避免多节点路由漂移。
+func channelMediaServerID(channel *ipc.Channel) string {
+	if channel != nil {
+		if id := strings.TrimSpace(channel.Config.MediaServerID); id != "" {
+			return id
+		}
+	}
+	return sms.DefaultMediaServerID
 }
 
 // func (a GB28181API) getChannel(c *gin.Context, _ *struct{}) (any, error) {
@@ -1003,6 +1277,69 @@ func (a IPCAPI) editChannel(c *gin.Context, in *ipc.EditChannelInput) (any, erro
 		return nil, err
 	}
 	return a.ipc.EditChannel(c.Request.Context(), in, cid)
+}
+
+type editChannelMediaServerInput struct {
+	MediaServerID string `json:"media_server_id"`
+}
+
+// editChannelMediaServer godoc
+// @Summary 绑定 GB28181 通道媒体节点
+// @Description 仅更新通道的媒体节点绑定，避免通用通道编辑覆盖设备目录字段；存在活动媒体会话时需先停止会话。
+// @Tags Channel
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "通道ID"
+// @Param body body editChannelMediaServerInput true "媒体节点绑定"
+// @Success 200 {object} ipc.Channel
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /channels/{id}/media_server [put]
+func (a IPCAPI) editChannelMediaServer(c *gin.Context, in *editChannelMediaServerInput) (any, error) {
+	ctx := c.Request.Context()
+	channelID, err := a.resolveChannelParamID(c)
+	if err != nil {
+		return nil, err
+	}
+	channel, err := a.ipc.GetChannel(ctx, channelID)
+	if err != nil {
+		return nil, err
+	}
+	if !channel.IsGB28181() {
+		return nil, reason.ErrBadRequest.SetMsg("仅支持绑定 GB28181 通道媒体节点")
+	}
+	if a.channelMediaBindingCoordinator != nil {
+		unlock, err := a.channelMediaBindingCoordinator.LockChannelMedia(ctx, channel)
+		if err != nil {
+			return nil, err
+		}
+		defer unlock()
+		channel, err = a.ipc.GetChannel(ctx, channelID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	mediaServerID := strings.TrimSpace(in.MediaServerID)
+	if mediaServerID == "" {
+		mediaServerID = sms.DefaultMediaServerID
+	}
+	if mediaServerID == channelMediaServerID(channel) {
+		return channel, nil
+	}
+	if channel.IsPlaying {
+		return nil, reason.ErrBadRequest.SetMsg("通道存在活动媒体会话，请先停止预览、回放、下载或语音会话")
+	}
+	if a.uc == nil {
+		return nil, reason.ErrServer.SetMsg("流媒体服务不可用")
+	}
+	if _, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, mediaServerID); err != nil {
+		return nil, reason.ErrBadRequest.SetMsg("目标媒体节点不存在")
+	}
+
+	return a.ipc.EditChannelConfig(ctx, channelID, func(config *ipc.StreamConfig) {
+		config.MediaServerID = mediaServerID
+	})
 }
 
 // addChannel 添加 RTMP/RTSP 通道
@@ -1047,7 +1384,19 @@ func (a IPCAPI) delChannel(c *gin.Context, _ *struct{}) (any, error) {
 		return nil, reason.ErrBadRequest.SetMsg("仅支持删除 RTMP/RTSP 类型通道")
 	}
 
-	return a.ipc.DelChannel(c.Request.Context(), channelID)
+	coordinator := a.snapshotCoordinator()
+	coordinator.cancelTasks([]string{channelID})
+	deleted, err := a.ipc.DelChannel(c.Request.Context(), channelID)
+	if err != nil {
+		coordinator.allowTasks([]string{channelID})
+		return nil, err
+	}
+	if a.uc != nil && a.uc.Conf != nil {
+		if err := removeCovers(a.uc.Conf.ConfigDir, []string{channelID}); err != nil {
+			slog.WarnContext(c.Request.Context(), "remove deleted channel cover failed", "channel_id", channelID, "err", err)
+		}
+	}
+	return deleted, nil
 }
 
 // play godoc
@@ -1064,72 +1413,57 @@ func (a IPCAPI) play(c *gin.Context, _ *struct{}) (*playOutput, error) {
 	if err != nil {
 		return nil, err
 	}
+	ch, err := a.ipc.GetChannel(c.Request.Context(), channelID)
+	if err != nil {
+		return nil, err
+	}
 
 	var app, appStream, host, stream, session, mediaServerID string
 
-	// 国标逻辑
-	if bz.IsGB28181(channelID) {
-		// 防止错误的配置，无法收到流
-		if a.uc.Conf.Media.SDPIP == "127.0.0.1" {
-			return nil, reason.ErrUsedLogic.SetMsg("请先配置流媒体 SDP 收流地址")
-		}
-		ch, err := a.ipc.GetChannel(c.Request.Context(), channelID)
-		if err != nil {
-			return nil, err
-		}
-
+	// 显式持久化类型优先，ID 前缀仅作为历史数据回退。
+	switch ch.GetType() {
+	case ipc.TypeGB28181:
 		app = "rtp"
 		appStream = ch.ID
-		mediaServerID = sms.DefaultMediaServerID
+		mediaServerID = channelMediaServerID(ch)
 
-	} else if bz.IsRTMP(channelID) {
+	case ipc.TypeRTMP:
 		// 从 Channel 获取 RTMP 推流信息
-		ch, err := a.ipc.GetChannel(c.Request.Context(), channelID)
-		if err != nil {
-			return nil, err
-		}
 		if !ch.IsOnline {
 			return nil, reason.ErrNotFound.SetMsg("未推流")
 		}
 		app = ch.App
 		appStream = ch.Stream
-		mediaServerID = ch.Config.MediaServerID
-		if mediaServerID == "" {
-			mediaServerID = sms.DefaultMediaServerID
-		}
+		mediaServerID = channelMediaServerID(ch)
 
 		if !ch.Config.IsAuthDisabled && ch.Config.Session != "" {
 			session = "session=" + ch.Config.Session
 		}
-	} else if bz.IsRTSP(channelID) {
+	case ipc.TypeRTSP:
 		// 从 Channel 获取 RTSP 拉流代理信息
-		ch, err := a.ipc.GetChannel(c.Request.Context(), channelID)
-		if err != nil {
-			return nil, err
-		}
 		app = ch.App
 		if app == "" {
 			app = "live"
 		}
 		appStream = ch.Stream
-		mediaServerID = ch.Config.MediaServerID
-		if mediaServerID == "" {
-			mediaServerID = sms.DefaultMediaServerID
-		}
-	} else if bz.IsOnvif(channelID) {
+		mediaServerID = channelMediaServerID(ch)
+	case ipc.TypeOnvif:
 		app = "live"
 		appStream = channelID
 		mediaServerID = sms.DefaultMediaServerID
-	} else {
+	default:
 		return nil, reason.ErrNotFound.SetMsg("不支持的播放通道")
 	}
 
-	if !a.uc.SMSAPI.smsCore.IsOnline(mediaServerID) {
-		return nil, reason.ErrNotFound.SetMsg("Oops! 流媒体服务离线或IP有误")
-	}
 	svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(c.Request.Context(), mediaServerID)
 	if err != nil {
 		return nil, err
+	}
+	if ch.GetType() == ipc.TypeGB28181 && svr.GetSDPIP() == "127.0.0.1" {
+		return nil, reason.ErrUsedLogic.SetMsg("请先配置流媒体 SDP 收流地址")
+	}
+	if !a.uc.SMSAPI.smsCore.IsOnline(mediaServerID) {
+		return nil, reason.ErrNotFound.SetMsg("Oops! 流媒体服务离线或IP有误")
 	}
 
 	stream = app + "/" + appStream
@@ -1151,7 +1485,7 @@ func (a IPCAPI) play(c *gin.Context, _ *struct{}) (*playOutput, error) {
 	}
 
 	playToken, err := web.NewToken(
-		map[string]any{"stream": appStream, "app": app},
+		map[string]any{"stream": appStream, "app": app, "media_server_id": mediaServerID},
 		a.uc.Conf.Server.HTTP.JwtSecret+"_play",
 		web.WithExpiresAt(time.Now().Add(42*time.Hour)),
 	)
@@ -1223,7 +1557,7 @@ func (a IPCAPI) play(c *gin.Context, _ *struct{}) (*playOutput, error) {
 // stopPlay 停止播放（幂等：始终返回成功）
 //
 // 根据通道协议类型分发：
-//   - GB28181: SIP BYE + CloseRTPServer
+//   - GB28181: 协议层在通道媒体锁内完成 SIP 与媒体资源清理
 //   - ONVIF/RTSP/RTMP: ZLM close_streams
 func (a IPCAPI) stopPlay(c *gin.Context, _ *struct{}) (gin.H, error) {
 	channelID := c.Param("id")
@@ -1237,7 +1571,7 @@ func (a IPCAPI) stopPlay(c *gin.Context, _ *struct{}) (gin.H, error) {
 
 	log = log.With("type", ch.GetType())
 
-	if bz.IsGB28181(channelID) {
+	if ch.GetType() == ipc.TypeGB28181 {
 		device, err := a.ipc.GetDevice(ctx, ch.DID)
 		if err != nil {
 			return nil, reason.ErrBadRequest.SetMsg("设备不存在")
@@ -1251,19 +1585,9 @@ func (a IPCAPI) stopPlay(c *gin.Context, _ *struct{}) (gin.H, error) {
 		if err := protocol.StopPlay(ctx, device, ch); err != nil {
 			log.ErrorContext(ctx, "停止播放：GB28181 StopPlay 失败", "err", err)
 		}
-
-		// 关闭 ZLM 的 RTP 接收端口
-		svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
-		if err == nil {
-			if _, err := a.uc.SMSAPI.smsCore.CloseRTPServer(svr, zlm.CloseRTPServerRequest{
-				StreamID: ch.GetStream(),
-			}); err != nil {
-				log.WarnContext(ctx, "停止播放：CloseRTPServer 失败", "err", err)
-			}
-		}
 	} else {
 		// ONVIF/RTSP/RTMP 统一通过 ZLM close_streams 关闭
-		svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
+		svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, channelMediaServerID(ch))
 		if err != nil {
 			log.WarnContext(ctx, "停止播放：获取流媒体服务器失败", "err", err)
 			return gin.H{"msg": "ok"}, nil
@@ -1308,10 +1632,7 @@ func (a IPCAPI) getMediaInfo(c *gin.Context, _ *struct{}) (any, error) {
 	if app == "" {
 		app = "rtp"
 	}
-	mediaServerID := ch.Config.MediaServerID
-	if mediaServerID == "" {
-		mediaServerID = sms.DefaultMediaServerID
-	}
+	mediaServerID := channelMediaServerID(ch)
 	svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(c.Request.Context(), mediaServerID)
 	if err != nil {
 		return nil, err
@@ -1358,13 +1679,18 @@ type ptzProbeOutput struct {
 }
 
 type queryRecordsInput struct {
-	StartAt      int64  `json:"start_at" example:"1710864000"` // 查询开始时间，Unix 秒
-	EndAt        int64  `json:"end_at" example:"1710950400"`   // 查询结束时间，Unix 秒
-	Timeout      int    `json:"timeout" example:"10"`          // 等待设备应答超时时间，单位秒
-	Type         string `json:"type" example:"all"`            // 录像类型：time、alarm、manual、all；空值默认 time
-	StreamNumber *int   `json:"stream_number" example:"0"`     // 2022 码流编号：0 主码流，1/2/... 子码流
-	AlarmMethod  string `json:"alarm_method" example:"5"`      // 2022 报警方式过滤条件
-	AlarmType    string `json:"alarm_type" example:"2"`        // 2022 报警类型过滤条件
+	StartAt         int64  `json:"start_at" example:"1710864000"`             // 查询开始时间，Unix 秒
+	EndAt           int64  `json:"end_at" example:"1710950400"`               // 查询结束时间，Unix 秒
+	Timeout         int    `json:"timeout" example:"10"`                      // 等待设备应答超时时间，单位秒
+	FilePath        string `json:"file_path" example:"/record/front-gate.ps"` // RecordInfo 文件路径过滤条件
+	Address         string `json:"address" example:"front-gate"`              // RecordInfo 录像地址过滤条件
+	Secrecy         *int   `json:"secrecy" example:"0"`                       // RecordInfo 涉密属性：0 不涉密，1 涉密
+	Type            string `json:"type" example:"all"`                        // 录像类型：time、alarm、manual、all；空值默认 time
+	RecorderID      string `json:"recorder_id" example:"recorder-main"`       // RecordInfo 录像触发者标识字符串
+	IndistinctQuery *int   `json:"indistinct_query" example:"0"`              // 2014+ 录像模糊查询：0 按 To URI 选位置，1 同时检索中心和前端
+	StreamNumber    *int   `json:"stream_number" example:"0"`                 // 2022 码流编号：0 主码流，1/2/... 子码流
+	AlarmMethod     string `json:"alarm_method" example:"5"`                  // 2022 报警方式过滤条件
+	AlarmType       string `json:"alarm_type" example:"2"`                    // 2022 报警类型过滤条件
 }
 
 type upgradeDeviceInput struct {
@@ -1376,19 +1702,20 @@ type upgradeDeviceInput struct {
 }
 
 type historyControlInput struct {
-	Mode          string  `json:"mode" example:"playback"`       // 会话模式：playback 回放，download 下载
-	StartAt       int64   `json:"start_at" example:"1710864000"` // 开始时间，Unix 秒；start 时必填
-	EndAt         int64   `json:"end_at" example:"1710950400"`   // 结束时间，Unix 秒；start 时必填
-	Cmd           string  `json:"cmd" example:"PLAY"`            // 原始控制命令透传值
-	Action        string  `json:"action" example:"pause"`        // 结构化动作，如 play/pause/seek/speed
-	Scale         float64 `json:"scale" example:"2"`             // 倍速值，Action=speed 时使用
-	SeekAt        int64   `json:"seek_at" example:"1710867600"`  // 跳转目标时间，Action=seek 时使用
-	Transport     string  `json:"transport" example:"rtp"`       // rtp 或 direct_tcp；direct_tcp 仅支持 1.1 下载
-	DownloadSpeed int     `json:"download_speed" example:"4"`    // 下载整数倍速；仅 mode=download，0 表示默认 1 倍速
+	Mode          string  `json:"mode" example:"playback"`           // 会话模式：playback 回放，download 下载
+	StartAt       int64   `json:"start_at" example:"1710864000"`     // 开始时间，Unix 秒；start 时必填
+	EndAt         int64   `json:"end_at" example:"1710950400"`       // 结束时间，Unix 秒；start 时必填
+	Cmd           string  `json:"cmd" example:"PLAY"`                // 原始控制命令透传值
+	Action        string  `json:"action" example:"pause"`            // 结构化动作，如 play/pause/seek/speed
+	Scale         float64 `json:"scale" example:"2"`                 // 倍速值，Action=speed 时使用；负值表示倒放
+	SeekAt        int64   `json:"seek_at" example:"1710867600"`      // Action=seek 的目标时间；2011 倍速或 2022 负倍速时可作为播放起点
+	Transport     string  `json:"transport" example:"rtp"`           // rtp 或 direct_tcp；direct_tcp 仅支持 1.1 下载
+	DownloadSpeed int     `json:"download_speed" example:"4"`        // 下载整数倍速；仅 mode=download，0 表示默认 1 倍速
+	RecordType    *int    `json:"record_type,omitempty" example:"3"` // 录像/下载类型：0=all、1=manual、2=alarm、3=time；省略默认 3
 }
 
 type voiceControlInput struct {
-	Mode          string `json:"mode" example:"talk"`                        // 语音模式：talk 对讲，broadcast 广播
+	Mode          string `json:"mode" example:"talk_standard"`               // 语音模式：talk 厂商兼容对讲，talk_standard 标准双流程对讲，broadcast 广播
 	MediaServerID string `json:"media_server_id" example:"local"`            // 音频源所在媒体服务器；空值使用默认节点
 	SourceID      string `json:"source_id" example:"34020000002000000001"`   // 语音流发送者国标 ID；空值使用本平台 ID
 	SourceVHost   string `json:"source_vhost" example:"__defaultVhost__"`    // ZLM 音频源虚拟主机
@@ -1407,7 +1734,14 @@ type subscribeInput struct {
 	AlarmType          string `json:"alarm_type" example:"2"`                         // Alarm 类型，仅 2016/2022（2.0/3.0）
 	StartAlarmTime     string `json:"start_alarm_time" example:"2026-08-25T08:00:00"` // Alarm 起始时间
 	EndAlarmTime       string `json:"end_alarm_time" example:"2026-08-25T09:00:00"`   // Alarm 终止时间
+	StartTime          string `json:"start_time" example:"2026-08-25T08:00:00"`       // Catalog 新增设备起始时间
+	EndTime            string `json:"end_time" example:"2026-08-25T09:00:00"`         // Catalog 新增设备终止时间
 	Interval           int    `json:"interval" example:"5"`                           // MobilePosition 上报间隔，单位秒
+}
+
+type subscriptionStatesOutput struct {
+	Items []ipc.SubscriptionState `json:"items"`
+	Total int                     `json:"total"`
 }
 
 type gbBasicParamInput struct {
@@ -1420,6 +1754,7 @@ type gbBasicParamInput struct {
 type gbDeviceConfigInput struct {
 	TargetID            string                   `json:"target_id" example:"34020000001320000001"`
 	Timeout             int                      `json:"timeout" example:"8"`
+	ExtraInfo           []string                 `json:"extra_info"` // 2022 扩展信息，每项最长 1024 字符
 	BasicParam          *gbBasicParamInput       `json:"basic_param"`
 	VideoParamConfig    *gbVideoParamConfigInput `json:"video_param_config"`
 	AudioParamConfig    *gbAudioParamConfigInput `json:"audio_param_config"`
@@ -1507,34 +1842,50 @@ type gbTargetTrackInput struct {
 }
 
 type gbDeviceControlInput struct {
-	TargetID     string               `json:"target_id" example:"34020000001320000001"` // 目标设备或通道编码
-	Action       string               `json:"action" example:"ptz_cmd"`                 // 统一控制动作
-	Timeout      int                  `json:"timeout" example:"5"`                      // 超时时间，秒
-	PTZCmd       string               `json:"ptz_cmd" example:"preset_call"`            // PTZCmd 子动作
-	PTZCmdParam  *gbPTZCmdParamInput  `json:"ptz_cmd_param"`                            // PTZCmd 扩展参数
-	StreamNumber int                  `json:"stream_number" example:"1"`                // 码流序号
-	AlarmMethod  string               `json:"alarm_method" example:"2"`                 // 报警方式
-	AlarmType    string               `json:"alarm_type" example:"1"`                   // 报警类型
-	DragZoom     *gbDragZoomInput     `json:"drag_zoom"`                                // 拉框参数
-	HomePosition *gbHomePositionInput `json:"home_position"`                            // 看守位参数
-	PTZPrecise   *gbPTZPreciseInput   `json:"ptz_precise"`                              // 精确 PTZ 参数
-	TargetTrack  *gbTargetTrackInput  `json:"target_track"`                             // 2022 目标跟踪参数
-	SDCardID     int                  `json:"sdcard_id" example:"1"`                    // SD 卡编号
+	TargetID        string               `json:"target_id" example:"34020000001320000001"` // 目标设备或通道编码
+	Action          string               `json:"action" example:"ptz_cmd"`                 // 统一控制动作
+	Timeout         int                  `json:"timeout" example:"5"`                      // 超时时间，秒
+	ExtraInfo       []string             `json:"extra_info"`                               // 设备控制普通文本扩展；旧版编码为 Info，2022 编码为 ExtraInfo
+	PTZCmd          string               `json:"ptz_cmd" example:"preset_call"`            // PTZ 动作名或 16 位原始 PTZCmd
+	PTZCmdParam     *gbPTZCmdParamInput  `json:"ptz_cmd_param"`                            // PTZCmd 扩展参数
+	PTZSpeed        uint8                `json:"ptz_speed" example:"40"`                   // PTZ 速度
+	PTZPreset       int                  `json:"ptz_preset" example:"1"`                   // 预置位编号
+	PTZGroup        uint8                `json:"ptz_group" example:"1"`                    // 巡航或扫描组编号
+	PTZAux          uint8                `json:"ptz_aux" example:"1"`                      // 辅助开关编号
+	PTZValue        uint16               `json:"ptz_value" example:"40"`                   // 巡航、扫描或辅助控制值
+	ControlPriority *int                 `json:"control_priority" example:"5"`             // 2011/2014 PTZ 控制优先级
+	StreamNumber    int                  `json:"stream_number" example:"1"`                // 2022 录像控制码流编号：0 主码流（缺省省略），1/2/... 子码流
+	AlarmMethod     string               `json:"alarm_method" example:"2"`                 // 报警方式
+	AlarmType       string               `json:"alarm_type" example:"1"`                   // 报警类型
+	DragZoom        *gbDragZoomInput     `json:"drag_zoom"`                                // 拉框参数
+	HomePosition    *gbHomePositionInput `json:"home_position"`                            // 看守位参数
+	PTZPrecise      *gbPTZPreciseInput   `json:"ptz_precise"`                              // 精确 PTZ 参数
+	TargetTrack     *gbTargetTrackInput  `json:"target_track"`                             // 2022 目标跟踪参数
+	SDCardID        int                  `json:"sdcard_id" example:"1"`                    // SD 卡编号
 }
 
 type gbDeviceQueryInput struct {
-	TargetID     string `json:"target_id" example:"34020000001320000001"` // 目标设备或通道编码
-	Action       string `json:"action" example:"device_status"`           // 统一查询动作
-	Timeout      int    `json:"timeout" example:"5"`                      // 超时时间，秒
-	ConfigType   string `json:"config_type" example:"basic_param"`        // 配置查询类型
-	Interval     int    `json:"interval" example:"60"`                    // 间隔秒数
-	Number       int    `json:"number" example:"0"`                       // 巡航轨迹编号（0 或 1）
-	Start        int64  `json:"start" example:"1710864000"`               // 开始时间，Unix 秒
-	End          int64  `json:"end" example:"1710950400"`                 // 结束时间，Unix 秒
-	Type         string `json:"type" example:"all"`                       // RecordInfo 录像类型：time、alarm、manual、all；空值默认 time
-	StreamNumber *int   `json:"stream_number" example:"0"`                // 2022 码流编号：0 主码流，1/2/... 子码流
-	AlarmMethod  string `json:"alarm_method" example:"5"`                 // 2022 报警方式过滤条件
-	AlarmType    string `json:"alarm_type" example:"2"`                   // 2022 报警类型过滤条件
+	TargetID           string `json:"target_id" example:"34020000001320000001"`       // 目标设备或通道编码
+	Action             string `json:"action" example:"device_status"`                 // 统一查询动作
+	Timeout            int    `json:"timeout" example:"5"`                            // 超时时间，秒
+	ConfigType         string `json:"config_type" example:"basic_param"`              // 配置查询类型
+	Interval           int    `json:"interval" example:"60"`                          // 间隔秒数
+	Number             int    `json:"number" example:"0"`                             // 巡航轨迹编号（0 或 1）
+	Start              int64  `json:"start" example:"1710864000"`                     // Catalog、RecordInfo 开始时间，Unix 秒
+	End                int64  `json:"end" example:"1710950400"`                       // Catalog、RecordInfo 结束时间，Unix 秒
+	FilePath           string `json:"file_path" example:"/record/front-gate.ps"`      // RecordInfo 文件路径过滤条件
+	Address            string `json:"address" example:"front-gate"`                   // RecordInfo 录像地址过滤条件
+	Secrecy            *int   `json:"secrecy" example:"0"`                            // RecordInfo 涉密属性：0 不涉密，1 涉密
+	Type               string `json:"type" example:"all"`                             // RecordInfo 录像类型：time、alarm、manual、all；空值默认 time
+	RecorderID         string `json:"recorder_id" example:"recorder-main"`            // RecordInfo 录像触发者标识字符串
+	IndistinctQuery    *int   `json:"indistinct_query" example:"0"`                   // 2014+ 录像模糊查询：0 按 To URI 选位置，1 同时检索中心和前端
+	StreamNumber       *int   `json:"stream_number" example:"0"`                      // 2022 码流编号：0 主码流，1/2/... 子码流
+	AlarmMethod        string `json:"alarm_method" example:"5"`                       // 2022 报警方式过滤条件
+	AlarmType          string `json:"alarm_type" example:"2"`                         // 2022 报警类型过滤条件
+	StartAlarmPriority string `json:"start_alarm_priority" example:"1"`               // Alarm 查询起始级别，0 为全部
+	EndAlarmPriority   string `json:"end_alarm_priority" example:"4"`                 // Alarm 查询终止级别，0 为全部
+	StartAlarmTime     string `json:"start_alarm_time" example:"2026-08-25T08:00:00"` // Alarm 查询起始时间
+	EndAlarmTime       string `json:"end_alarm_time" example:"2026-08-25T09:00:00"`   // Alarm 查询终止时间
 }
 
 // gbAppendixA4SnapshotInput 为附录 A.4 快照查询参数。
@@ -1563,6 +1914,21 @@ type gbDeviceQueryOutput struct {
 	XML        string               `json:"xml"`                   // 原始 XML
 	Data       any                  `json:"data,omitempty"`        // 主体数据
 	AppendixA4 []gbAppendixA4Output `json:"appendix_a4,omitempty"` // A.4 扩展对象
+	Incomplete *gbIncompleteOutput  `json:"incomplete,omitempty"`  // 多响应查询未收齐时的完成度
+}
+
+type gbIncompleteOutput struct {
+	Kind           string   `json:"kind"`
+	Message        string   `json:"message"`
+	ReceivedCount  int      `json:"received_count,omitempty"`
+	ExpectedCount  int      `json:"expected_count,omitempty"`
+	ReceivedConfig []string `json:"received_config,omitempty"`
+	MissingConfig  []string `json:"missing_config,omitempty"`
+}
+
+type recordQueryOutput struct {
+	*ipc.RecordQueryOutput
+	Incomplete *gbIncompleteOutput `json:"incomplete,omitempty"`
 }
 
 // gbAppendixA4SnapshotOutput 为附录 A.4 快照查询 API 出参模型。
@@ -1581,6 +1947,7 @@ type gbAppendixA4SnapshotOutput struct {
 // @Description 失败场景：1. 通道不存在；2. 设备离线；3. 设备协议版本或厂商实现不支持；4. 查询超时未应答。
 // @Description 请求示例：`{ "start_at": 1710864000, "end_at": 1710950400, "timeout": 10 }`
 // @Description 响应中 `daynum` 表示有录像的日期数，`timenum` 表示录像片段总数，`list` 按日期归类。
+// @Description 设备在超时前只返回部分分包时仍返回已收到的录像，`incomplete` 给出已收/应收数量；零分包仍返回错误。
 // @Description 响应示例：`{ "daynum": 2, "timenum": 3, "list": [ { "date": "2024-03-20", "items": [ { "start": 1710864000, "end": 1710867600 } ] } ] }`
 // @Tags Channel
 // @Security BearerAuth
@@ -1597,18 +1964,31 @@ func (a IPCAPI) queryRecords(c *gin.Context, in *queryRecordsInput) (any, error)
 		return nil, err
 	}
 	out, err := a.ipc.QueryRecords(c.Request.Context(), channelID, &ipc.RecordQueryInput{
-		StartAt:      in.StartAt,
-		EndAt:        in.EndAt,
-		Timeout:      in.Timeout,
-		Type:         in.Type,
-		StreamNumber: in.StreamNumber,
-		AlarmMethod:  in.AlarmMethod,
-		AlarmType:    in.AlarmType,
+		StartAt:         in.StartAt,
+		EndAt:           in.EndAt,
+		Timeout:         in.Timeout,
+		FilePath:        in.FilePath,
+		Address:         in.Address,
+		Secrecy:         in.Secrecy,
+		Type:            in.Type,
+		RecorderID:      in.RecorderID,
+		IndistinctQuery: in.IndistinctQuery,
+		StreamNumber:    in.StreamNumber,
+		AlarmMethod:     in.AlarmMethod,
+		AlarmType:       in.AlarmType,
 	})
-	if err != nil {
+	return recordQueryAPIResult(out, err)
+}
+
+func recordQueryAPIResult(out *ipc.RecordQueryOutput, err error) (any, error) {
+	if err == nil {
+		return out, nil
+	}
+	incomplete := gbIncompleteResult(err)
+	if out == nil || incomplete == nil {
 		return nil, ErrDevice.SetMsg(err.Error())
 	}
-	return out, nil
+	return recordQueryOutput{RecordQueryOutput: out, Incomplete: incomplete}, nil
 }
 
 // upgradeDevice 执行设备软件升级（GB/T 28181-2022 9.13）。
@@ -1621,7 +2001,7 @@ func (a IPCAPI) queryRecords(c *gin.Context, in *queryRecordsInput) (any, error)
 // @Produce json
 // @Param id path string true "通道ID"
 // @Param body body upgradeDeviceInput true "升级参数"
-// @Success 200 {object} SwaggerMessageResponse
+// @Success 200 {object} ipc.UpgradeOutput
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/upgrade [post]
 func (a IPCAPI) upgradeDevice(c *gin.Context, in *upgradeDeviceInput) (any, error) {
@@ -1669,7 +2049,10 @@ func (a IPCAPI) upgradeDeviceState(c *gin.Context, _ *struct{}) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	state, ok := a.uc.SipServer.UpgradeState(device.DeviceID, strings.TrimSpace(c.Param("session_id")))
+	state, ok, err := a.uc.SipServer.UpgradeStateContext(c.Request.Context(), device.DeviceID, strings.TrimSpace(c.Param("session_id")))
+	if err != nil {
+		return nil, err
+	}
 	if !ok || (state.ChannelID != "" && state.ChannelID != channel.ChannelID) {
 		return nil, reason.ErrBadRequest.SetMsg("upgrade session not found")
 	}
@@ -1706,6 +2089,7 @@ func (a IPCAPI) startHistory(c *gin.Context, in *historyControlInput) (any, erro
 		EndAt:         in.EndAt,
 		Transport:     strings.ToLower(strings.TrimSpace(in.Transport)),
 		DownloadSpeed: in.DownloadSpeed,
+		RecordType:    in.RecordType,
 	})
 	if err != nil {
 		return nil, ErrDevice.SetMsg(err.Error())
@@ -1730,13 +2114,13 @@ func (a IPCAPI) startHistory(c *gin.Context, in *historyControlInput) (any, erro
 }
 
 // historyStatus godoc
-// @Summary 查询普通 RTP 下载状态
-// @Description 返回设备在 200 OK SDP 中声明的 filesize，以及 ZLMediaKit 媒体源接收字节统计。由于 RTP/PS 封装开销，progress_percent 为近似值。
+// @Summary 查询通道最近一次下载状态
+// @Description 返回普通 RTP 或 2014 附录 O 裸 TCP 下载状态，以 transport 区分传输方式；RTP 有文件大小时按字节计算近似进度，无文件大小时按媒体轨道时长计算，媒体服务器不提供时长则 progress_known=false。
 // @Tags Channel
 // @Security BearerAuth
 // @Produce json
 // @Param id path string true "通道ID"
-// @Success 200 {object} gbs.RTPDownloadState
+// @Success 200 {object} SwaggerHistoryDownloadState
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/history/status [get]
 func (a IPCAPI) historyStatus(c *gin.Context, _ *struct{}) (any, error) {
@@ -1755,11 +2139,21 @@ func (a IPCAPI) historyStatus(c *gin.Context, _ *struct{}) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	state, ok := a.uc.SipServer.RTPDownloadByChannel(device.DeviceID, channel.ChannelID)
-	if !ok {
-		return nil, reason.ErrBadRequest.SetMsg("RTP download session not found")
+	rtpState, rtpOK := a.uc.SipServer.RTPDownloadByChannel(device.DeviceID, channel.ChannelID)
+	directState, directOK := a.uc.SipServer.DirectTCPDownloadByChannel(device.DeviceID, channel.ChannelID)
+	if !rtpOK && !directOK {
+		return nil, reason.ErrBadRequest.SetMsg("download session not found")
 	}
-	return state, nil
+	if directOK && (!rtpOK || directState.StartedAt.After(rtpState.StartedAt)) {
+		return struct {
+			gbs.DirectTCPDownloadState
+			Transport string `json:"transport"`
+		}{DirectTCPDownloadState: directState, Transport: "direct_tcp"}, nil
+	}
+	return struct {
+		gbs.RTPDownloadState
+		Transport string `json:"transport"`
+	}{RTPDownloadState: rtpState, Transport: "rtp"}, nil
 }
 
 // directTCPDownloadState godoc
@@ -1831,6 +2225,155 @@ func (a IPCAPI) gbCascadeStatus(_ *gin.Context, _ *struct{}) (any, error) {
 	return gin.H{"items": a.uc.SipServer.CascadeStatuses()}, nil
 }
 
+type gbAnnexGAuditInput struct {
+	Kind              string `form:"kind"`
+	BeginTime         string `form:"begin_time"`
+	EndTime           string `form:"end_time"`
+	AlarmClass        string `form:"alarm_class"`
+	AlarmDeviceRange  string `form:"alarm_device_range"`
+	AlarmPriority     string `form:"alarm_priority"`
+	AlarmMethod       string `form:"alarm_method"`
+	AlarmAddressRange string `form:"alarm_address_range"`
+	TollgateID        string `form:"tollgate_id"`
+	CarPlate          string `form:"car_plate"`
+	PlateType         string `form:"plate_type"`
+	DefenceType       string `form:"defence_type"`
+	Active            *bool  `form:"active"`
+	Page              int    `form:"page"`
+	PageSize          int    `form:"page_size"`
+}
+
+// gbAnnexGAlarmAudits godoc
+// @Summary 查询 GB28181 附录 G 报警审计
+// @Tags Device
+// @Security BearerAuth
+// @Produce json
+// @Param kind query string true "报警来源：mp、ecs、tgs"
+// @Param begin_time query string false "报警开始时间，RFC3339"
+// @Param end_time query string false "报警结束时间，RFC3339"
+// @Param page query int false "页码，默认 1"
+// @Param page_size query int false "每页条数，默认 50，最大 500"
+// @Success 200 {object} gormstore.AlarmAuditPage
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /gb28181/annex-g/alarms [get]
+func (a IPCAPI) gbAnnexGAlarmAudits(c *gin.Context, in *gbAnnexGAuditInput) (any, error) {
+	server, err := a.gbServer()
+	if err != nil {
+		return nil, err
+	}
+	begin, end, err := parseAnnexGAuditRange(in.BeginTime, in.EndTime)
+	if err != nil {
+		return nil, reason.ErrBadRequest.SetMsg(err.Error())
+	}
+	result, err := server.AnnexGAlarmAudits(c.Request.Context(), gormstore.AlarmAuditQuery{
+		Kind: in.Kind, BeginTime: begin, EndTime: end, AlarmClass: in.AlarmClass,
+		AlarmDeviceRange: in.AlarmDeviceRange, AlarmPriority: in.AlarmPriority,
+		AlarmMethod: in.AlarmMethod, AlarmAddressRange: in.AlarmAddressRange,
+		TollgateID: in.TollgateID, CarPlate: in.CarPlate, PlateType: in.PlateType,
+		Page: in.Page, PageSize: in.PageSize,
+	})
+	if err != nil {
+		return nil, reason.ErrBadRequest.SetMsg(err.Error())
+	}
+	return result, nil
+}
+
+// gbAnnexGDefenceStates godoc
+// @Summary 查询 GB28181 附录 G 布控当前状态
+// @Tags Device
+// @Security BearerAuth
+// @Produce json
+// @Param begin_time query string false "更新时间起点，RFC3339"
+// @Param end_time query string false "更新时间终点，RFC3339"
+// @Param active query bool false "是否处于布控状态"
+// @Success 200 {object} gormstore.DefenceStatePage
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /gb28181/annex-g/defences [get]
+func (a IPCAPI) gbAnnexGDefenceStates(c *gin.Context, in *gbAnnexGAuditInput) (any, error) {
+	server, err := a.gbServer()
+	if err != nil {
+		return nil, err
+	}
+	query, err := annexGDefenceAuditQuery(in)
+	if err != nil {
+		return nil, reason.ErrBadRequest.SetMsg(err.Error())
+	}
+	result, err := server.AnnexGDefenceStates(c.Request.Context(), query)
+	if err != nil {
+		return nil, reason.ErrBadRequest.SetMsg(err.Error())
+	}
+	return result, nil
+}
+
+// gbAnnexGDefenceAudits godoc
+// @Summary 查询 GB28181 附录 G 布控历史审计
+// @Tags Device
+// @Security BearerAuth
+// @Produce json
+// @Param begin_time query string false "审计开始时间，RFC3339"
+// @Param end_time query string false "审计结束时间，RFC3339"
+// @Param active query bool false "true 为布控，false 为撤控"
+// @Success 200 {object} gormstore.DefenceAuditPage
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /gb28181/annex-g/defence-audits [get]
+func (a IPCAPI) gbAnnexGDefenceAudits(c *gin.Context, in *gbAnnexGAuditInput) (any, error) {
+	server, err := a.gbServer()
+	if err != nil {
+		return nil, err
+	}
+	query, err := annexGDefenceAuditQuery(in)
+	if err != nil {
+		return nil, reason.ErrBadRequest.SetMsg(err.Error())
+	}
+	result, err := server.AnnexGDefenceAudits(c.Request.Context(), query)
+	if err != nil {
+		return nil, reason.ErrBadRequest.SetMsg(err.Error())
+	}
+	return result, nil
+}
+
+func (a IPCAPI) gbServer() (*gbs.Server, error) {
+	if a.uc == nil || a.uc.SipServer == nil {
+		return nil, ErrDevice.SetMsg("GB28181 server is unavailable")
+	}
+	return a.uc.SipServer, nil
+}
+
+func annexGDefenceAuditQuery(in *gbAnnexGAuditInput) (gormstore.DefenceAuditQuery, error) {
+	begin, end, err := parseAnnexGAuditRange(in.BeginTime, in.EndTime)
+	if err != nil {
+		return gormstore.DefenceAuditQuery{}, err
+	}
+	return gormstore.DefenceAuditQuery{
+		TollgateID: in.TollgateID, CarPlate: in.CarPlate, PlateType: in.PlateType,
+		DefenceType: in.DefenceType, Active: in.Active, BeginTime: begin, EndTime: end,
+		Page: in.Page, PageSize: in.PageSize,
+	}, nil
+}
+
+func parseAnnexGAuditRange(beginValue, endValue string) (*time.Time, *time.Time, error) {
+	parse := func(name, value string) (*time.Time, error) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, nil
+		}
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			return nil, fmt.Errorf("%s must use RFC3339: %w", name, err)
+		}
+		return &parsed, nil
+	}
+	begin, err := parse("begin_time", beginValue)
+	if err != nil {
+		return nil, nil, err
+	}
+	end, err := parse("end_time", endValue)
+	if err != nil {
+		return nil, nil, err
+	}
+	return begin, end, nil
+}
+
 // stopHistory 停止历史回放/下载会话。
 // stopHistory godoc
 // @Summary 停止历史会话
@@ -1865,11 +2408,12 @@ func (a IPCAPI) stopHistory(c *gin.Context, in *historyControlInput) (any, error
 // controlHistory godoc
 // @Summary 控制历史会话
 // @Description 对历史回放/下载会话执行暂停、恢复、倍速、跳转等控制。
-// @Description `action` 枚举：`play` 恢复播放、`pause` 暂停、`speed` 调整倍速、`seek` 跳转到指定时间。
+// @Description `action` 枚举：`play` 恢复播放、`pause` 暂停、`speed` 调整倍速（负值倒放）、`seek` 跳转到指定时间。
 // @Description 调用前置条件：历史会话已经启动。
 // @Description 失败场景：1. 会话不存在；2. action 不受支持；3. 跳转时间越界；4. 设备未返回控制应答。
 // @Description 暂停示例：`{ "mode":"playback", "action":"pause" }`
 // @Description 倍速示例：`{ "mode":"playback", "action":"speed", "scale":2 }`
+// @Description 2022 指定位置倒放示例：`{ "mode":"playback", "action":"speed", "scale":-2, "seek_at":1710867600 }`
 // @Description 跳转示例：`{ "mode":"playback", "action":"seek", "seek_at":1710867600 }`
 // @Description 成功响应示例：`{ "msg": "ok" }`
 // @Tags Channel
@@ -1902,7 +2446,7 @@ func (a IPCAPI) controlHistory(c *gin.Context, in *historyControlInput) (any, er
 // startVoice 启动语音会话（对讲/广播）。
 // startVoice godoc
 // @Summary 启动语音会话
-// @Description 启动对讲或广播会话
+// @Description 启动语音会话；talk_standard 按 GB/T 28181-2016/2022 组合实时点播上行和语音广播下行，talk 保留厂商单 INVITE 兼容模式。
 // @Description 调用前置条件：1. 通道存在；2. 设备在线；3. 设备支持语音对讲或广播；4. source_stream 是 ZLMediaKit 中已就绪的 G.711 A-law 音频流。
 // @Description 失败场景：1. 设备不支持语音能力；2. 音频源不存在或编码不兼容；3. 会话建立失败；4. 设备离线。
 // @Tags Channel
@@ -1936,7 +2480,7 @@ func (a IPCAPI) startVoice(c *gin.Context, in *voiceControlInput) (any, error) {
 // stopVoice 停止语音会话（对讲/广播）。
 // stopVoice godoc
 // @Summary 停止语音会话
-// @Description 停止已建立的对讲或广播会话。
+// @Description 停止已建立的对讲或广播会话；停止 talk_standard 会同时清理实时点播和语音广播两条独立链路。
 // @Description 调用前置条件：语音会话已启动。
 // @Description 失败场景：1. 会话不存在；2. 设备离线；3. 设备拒绝停止。
 // @Tags Channel
@@ -1962,9 +2506,10 @@ func (a IPCAPI) stopVoice(c *gin.Context, in *voiceControlInput) (any, error) {
 	return gin.H{"msg": "ok"}, nil
 }
 
-// syncTime 执行设备校时。
+// syncTime 执行厂商扩展 DeviceControl(Time) 主动校时。
 // syncTime godoc
-// @Summary 设备校时
+// @Summary 厂商扩展主动校时
+// @Description 向设备发送非标准 DeviceControl(Time)；GB/T 28181 标准校时由成功 REGISTER 的 200 OK Date 或 NTP 完成
 // @Tags Device
 // @Security BearerAuth
 // @Produce json
@@ -1988,8 +2533,8 @@ func (a IPCAPI) syncTime(c *gin.Context, _ *struct{}) (any, error) {
 // @Summary 发起事件订阅
 // @Description 对指定设备发起事件订阅。
 // @Description `event` 常见值：`alarm`、`mobile_position`、`catalog`、`device_position`、`ptz_position`。
-// @Description 调用前置条件：设备在线，且协议/厂商实现支持订阅。
-// @Description 失败场景：1. 设备离线；2. 订阅事件类型不支持；3. 设备未返回 200/OK。
+// @Description 创建或续订要求设备在线，且协议/厂商实现支持订阅；取消已持久化的订阅意图允许设备离线执行。
+// @Description 失败场景：1. 创建或续订时设备离线；2. 订阅事件类型不支持；3. 设备未返回 200/OK。
 // @Tags Device
 // @Security BearerAuth
 // @Accept json
@@ -2015,11 +2560,37 @@ func (a IPCAPI) subscribe(c *gin.Context, in *subscribeInput) (any, error) {
 		AlarmType:          in.AlarmType,
 		StartAlarmTime:     in.StartAlarmTime,
 		EndAlarmTime:       in.EndAlarmTime,
+		StartTime:          in.StartTime,
+		EndTime:            in.EndTime,
 		Interval:           in.Interval,
 	}); err != nil {
 		return nil, ErrDevice.SetMsg(err.Error())
 	}
 	return gin.H{"msg": "ok"}, nil
+}
+
+// subscriptionStates 查询平台向设备建立的事件订阅运行态。
+// subscriptionStates godoc
+// @Summary 查询设备事件订阅运行态
+// @Tags Device
+// @Param id path string true "设备 ID"
+// @Produce json
+// @Success 200 {object} subscriptionStatesOutput
+// @Failure 400 {object} SwaggerErrorResponse
+// @Router /devices/{id}/subscriptions [get]
+func (a IPCAPI) subscriptionStates(c *gin.Context, _ *struct{}) (any, error) {
+	deviceID, err := a.resolveDeviceParamID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return nil, err
+	}
+	states, err := a.ipc.SubscriptionStates(c.Request.Context(), deviceID)
+	if err != nil {
+		return nil, ErrDevice.SetMsg(err.Error())
+	}
+	if states == nil {
+		states = []ipc.SubscriptionState{}
+	}
+	return subscriptionStatesOutput{Items: states, Total: len(states)}, nil
 }
 
 // optionsProbe 发起设备 OPTIONS 探测。
@@ -2053,11 +2624,12 @@ func (a IPCAPI) optionsProbe(c *gin.Context, in *optionsProbeInput) (any, error)
 // gbDeviceControl godoc
 // @Summary GB 设备控制
 // @Description 执行 GB/T 28181 附录 A.2.3 统一设备控制命令。
-// @Description 常见 `action`：`ptz_cmd`、`teleboot`、`record_cmd`、`guard_cmd`、`alarm_cmd`、`ifame_cmd`、`drag_zoom_in`、`drag_zoom_out`、`home_position`、`ptz_precise`、`target_track`。
+// @Description `action` 支持：`ptz_cmd`、`teleboot`、`record_start`、`record_stop`、`guard_set`、`guard_reset`、`alarm_reset`、`iframe_send`、`drag_zoom_in`、`drag_zoom_out`、`home_position`、`ptz_precise`、`format_sdcard`、`target_track`。历史拼写 `ifame_cmd` 继续兼容为 `iframe_send`。
 // @Description `ptz_cmd` 常见值：`stop`、`left`、`right`、`up`、`down`、`left_up`、`left_down`、`right_up`、`right_down`、`zoom_in`、`zoom_out`、`focus_near`、`focus_far`、`iris_open`、`iris_close`、`preset_set`、`preset_call`、`preset_delete`、`cruise_add`、`cruise_del`、`cruise_speed`、`cruise_stay`、`cruise_start`、`scan_start`、`scan_left`、`scan_right`、`scan_speed`、`aux_on`、`aux_off`。
+// @Description `ptz_cmd` 也兼容 16 位十六进制原始 PTZCmd；原始命令必须符合 A.3 的 `A5 0F` 头和校验和。动作名通过 `ptz_speed`、`ptz_preset`、`ptz_group`、`ptz_aux`、`ptz_value` 提供编码参数。2022 `ptz_cmd_param.preset_name` 仅用于设置预置位，`cruise_track_name` 仅用于巡航命令且最长 32 字节。
 // @Description 调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 所选动作受设备能力和协议版本支持。
-// @Description 失败场景：1. `action` 或 `ptz_cmd` 非法；2. 2016/2022 差异导致设备不支持；3. 设备离线；4. 等待 Response 超时。
-// @Description PTZCmd 示例：`{ "target_id": "34020000001320000001", "action": "ptz_cmd", "ptz_cmd": "preset_call", "timeout": 5 }`
+// @Description 失败场景：1. `action`、`ptz_cmd` 或命令参数非法；2. 协议版本不支持所选能力；3. 设备离线；4. SIP 下发失败或有应答控制等待业务 Response 超时。
+// @Description PTZCmd 示例：`{ "target_id": "34020000001320000001", "action": "ptz_cmd", "ptz_cmd": "preset_call", "ptz_preset": 1, "timeout": 5 }`
 // @Description 精确 PTZ 示例：`{ "action": "ptz_precise", "ptz_precise": { "pan": 10.5, "tilt": 5.2, "zoom": 2.0 }, "timeout": 5 }`
 // @Description 手动目标跟踪示例：`{ "action": "target_track", "target_track": { "mode": "Manual", "target_area": { "length": 1920, "width": 1080, "mid_point_x": 960, "mid_point_y": 540, "length_x": 300, "length_y": 200 } } }`
 // @Description 成功响应示例：`{ "sn": 12, "device_id": "34020000002000000001", "target_id": "34020000001320000001", "result": "OK" }`
@@ -2076,19 +2648,26 @@ func (a IPCAPI) gbDeviceControl(c *gin.Context, in *gbDeviceControlInput) (any, 
 		return nil, err
 	}
 	out, err := a.ipc.GBDeviceControl(c.Request.Context(), deviceID, &ipc.GBDeviceControlInput{
-		TargetID:     in.TargetID,
-		Action:       in.Action,
-		Timeout:      in.Timeout,
-		PTZCmd:       in.PTZCmd,
-		PTZCmdParam:  toIPCPTZCmdParam(in.PTZCmdParam),
-		StreamNumber: in.StreamNumber,
-		AlarmMethod:  in.AlarmMethod,
-		AlarmType:    in.AlarmType,
-		SDCardID:     in.SDCardID,
-		DragZoom:     toIPCDragZoom(in.DragZoom),
-		HomePosition: toIPCHomePosition(in.HomePosition),
-		PTZPrecise:   toIPCPTZPrecise(in.PTZPrecise),
-		TargetTrack:  toIPCTargetTrack(in.TargetTrack),
+		TargetID:        in.TargetID,
+		Action:          in.Action,
+		Timeout:         in.Timeout,
+		ExtraInfo:       append([]string(nil), in.ExtraInfo...),
+		PTZCmd:          in.PTZCmd,
+		PTZCmdParam:     toIPCPTZCmdParam(in.PTZCmdParam),
+		PTZSpeed:        in.PTZSpeed,
+		PTZPreset:       in.PTZPreset,
+		PTZGroup:        in.PTZGroup,
+		PTZAux:          in.PTZAux,
+		PTZValue:        in.PTZValue,
+		ControlPriority: in.ControlPriority,
+		StreamNumber:    in.StreamNumber,
+		AlarmMethod:     in.AlarmMethod,
+		AlarmType:       in.AlarmType,
+		SDCardID:        in.SDCardID,
+		DragZoom:        toIPCDragZoom(in.DragZoom),
+		HomePosition:    toIPCHomePosition(in.HomePosition),
+		PTZPrecise:      toIPCPTZPrecise(in.PTZPrecise),
+		TargetTrack:     toIPCTargetTrack(in.TargetTrack),
 	})
 	if err != nil {
 		return nil, ErrDevice.SetMsg(err.Error())
@@ -2106,12 +2685,14 @@ func toIPCTargetTrack(in *gbTargetTrackInput) *ipc.GBTargetTrackInput {
 // gbDeviceQuery godoc
 // @Summary GB 设备查询
 // @Description 执行 GB/T 28181 附录 A.2.4 统一设备查询命令。
-// @Description 常见 `action`：`device_status`、`catalog`、`config_download`、`preset_query`、`record_info`、`mobile_position`、`cruise_track_list`、`cruise_track`、`ptz_position`、`sdcard_status`。
+// @Description 常见 `action`：`device_status`、`alarm`、`catalog`、`config_download`、`preset_query`、`record_info`、`mobile_position`、`home_position_query`、`cruise_track_list`、`cruise_track`、`ptz_position`、`sdcard_status`。
+// @Description `alarm` 保留部分厂商接受 `MESSAGE/Query/Alarm` 并返回 `Response/Alarm/Result` 的兼容流程；四版标准中的 A.2.4 Alarm 查询体用于 9.11 SUBSCRIBE 报警订阅，不保证独立主动查询。
 // @Description 调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 查询动作被设备支持。
 // @Description 失败场景：1. `action` 不支持；2. 设备离线；3. 查询超时；4. 2016 协议设备不支持 2022 扩展查询。
 // @Description 请求示例：`{ "action": "device_status", "target_id": "34020000001320000001", "timeout": 5 }`
 // @Description 录像查询示例：`{ "action": "record_info", "target_id": "34020000001320000001", "start": 1710864000, "end": 1710950400, "timeout": 10 }`
 // @Description 响应中 `xml` 为原始 XML，`data` 为解析后的主体数据，`appendix_a4` 为 2022 版附录 A.4 扩展对象。
+// @Description Catalog、RecordInfo 或 ConfigDownload 在超时前只收到部分分包时仍返回已收到的数据，`incomplete` 给出完成度；零分包仍返回错误。
 // @Tags GB28181
 // @Security BearerAuth
 // @Accept json
@@ -2127,21 +2708,37 @@ func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, erro
 		return nil, err
 	}
 	out, err := a.ipc.GBDeviceQuery(c.Request.Context(), deviceID, &ipc.GBDeviceQueryInput{
-		TargetID:     in.TargetID,
-		Action:       in.Action,
-		Timeout:      in.Timeout,
-		ConfigType:   in.ConfigType,
-		Interval:     in.Interval,
-		Number:       in.Number,
-		Start:        in.Start,
-		End:          in.End,
-		Type:         in.Type,
-		StreamNumber: in.StreamNumber,
-		AlarmMethod:  in.AlarmMethod,
-		AlarmType:    in.AlarmType,
+		TargetID:           in.TargetID,
+		Action:             in.Action,
+		Timeout:            in.Timeout,
+		ConfigType:         in.ConfigType,
+		Interval:           in.Interval,
+		Number:             in.Number,
+		Start:              in.Start,
+		End:                in.End,
+		FilePath:           in.FilePath,
+		Address:            in.Address,
+		Secrecy:            in.Secrecy,
+		Type:               in.Type,
+		RecorderID:         in.RecorderID,
+		IndistinctQuery:    in.IndistinctQuery,
+		StreamNumber:       in.StreamNumber,
+		AlarmMethod:        in.AlarmMethod,
+		AlarmType:          in.AlarmType,
+		StartAlarmPriority: in.StartAlarmPriority,
+		EndAlarmPriority:   in.EndAlarmPriority,
+		StartAlarmTime:     in.StartAlarmTime,
+		EndAlarmTime:       in.EndAlarmTime,
 	})
-	if err != nil {
-		return nil, ErrDevice.SetMsg(err.Error())
+	return gbDeviceQueryAPIResult(out, err)
+}
+
+func gbDeviceQueryAPIResult(out *ipc.GBDeviceQueryOutput, err error) (any, error) {
+	if out == nil {
+		if err != nil {
+			return nil, ErrDevice.SetMsg(err.Error())
+		}
+		return nil, nil
 	}
 	resp := gbDeviceQueryOutput{
 		SN:         out.SN,
@@ -2162,12 +2759,48 @@ func (a IPCAPI) gbDeviceQuery(c *gin.Context, in *gbDeviceQueryInput) (any, erro
 			UpdatedAt: item.UpdatedAt,
 		})
 	}
+	if err != nil {
+		resp.Incomplete = gbIncompleteResult(err)
+		if resp.Incomplete == nil {
+			return nil, ErrDevice.SetMsg(err.Error())
+		}
+	}
 	return resp, nil
+}
+
+func gbIncompleteResult(err error) *gbIncompleteOutput {
+	if err == nil {
+		return nil
+	}
+	var catalog *gbs.CatalogIncompleteError
+	if errors.As(err, &catalog) {
+		return &gbIncompleteOutput{
+			Kind: "catalog", Message: err.Error(),
+			ReceivedCount: catalog.Received, ExpectedCount: catalog.Expected,
+		}
+	}
+	var recordInfo *gbs.RecordInfoIncompleteError
+	if errors.As(err, &recordInfo) {
+		return &gbIncompleteOutput{
+			Kind: "record_info", Message: err.Error(),
+			ReceivedCount: recordInfo.Received, ExpectedCount: recordInfo.Expected,
+		}
+	}
+	var configDownload *gbs.ConfigDownloadIncompleteError
+	if errors.As(err, &configDownload) {
+		return &gbIncompleteOutput{
+			Kind:           "config_download",
+			Message:        err.Error(),
+			ReceivedConfig: append([]string(nil), configDownload.Received...),
+			MissingConfig:  append([]string(nil), configDownload.Missing...),
+		}
+	}
+	return nil
 }
 
 // gbDeviceConfig godoc
 // @Summary GB 设备配置
-// @Description 下发 DeviceConfig；支持 2014 的 BasicParam、VideoParamConfig、AudioParamConfig、SVAC，以及 2022 的视频属性、录像计划、报警录像、遮挡、翻转、报警上报、OSD 和抓拍配置。
+// @Description 下发 DeviceConfig；支持 2014 的 BasicParam、VideoParamConfig、AudioParamConfig、SVAC，以及 2022 的视频属性、录像计划、报警录像、遮挡、翻转、报警上报、OSD、抓拍配置和 ExtraInfo。
 // @Description XML 配置的 `inner_xml` 只填写配置节点内部的标准 XML；服务端会校验 XML 完整性并拒绝指令/DOCTYPE。2022 扩展仅允许有效版本 3.0。
 // @Tags GB28181
 // @Security BearerAuth
@@ -2189,8 +2822,9 @@ func (a IPCAPI) gbDeviceConfig(c *gin.Context, in *gbDeviceConfigInput) (any, er
 		return nil, err
 	}
 	input := &ipc.GBDeviceConfigInput{
-		TargetID: in.TargetID,
-		Timeout:  in.Timeout,
+		TargetID:  in.TargetID,
+		Timeout:   in.Timeout,
+		ExtraInfo: append([]string(nil), in.ExtraInfo...),
 	}
 	if in.BasicParam != nil {
 		input.BasicParam = &ipc.GBBasicParamInput{
@@ -2585,12 +3219,13 @@ func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, 
 		}
 	}
 
-	if bz.IsGB28181(channelID) {
+	channel, err := a.ipc.GetChannel(c.Request.Context(), channelID)
+	if err != nil {
+		return nil, err
+	}
+	if channel.GetType() == ipc.TypeGB28181 {
 		// GB28181 优先走 9.14 抓拍流程，由设备回传图片到 /gb28181/snapshot。
-		ch, err := a.ipc.GetChannel(c.Request.Context(), channelID)
-		if err != nil {
-			return nil, err
-		}
+		ch := channel
 		if _, err = a.ipc.GetDevice(c.Request.Context(), ch.DID); err != nil {
 			return nil, err
 		}
@@ -2663,7 +3298,10 @@ func (a IPCAPI) snapshotState(c *gin.Context, _ *struct{}) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	state, ok := a.uc.SipServer.SnapshotState(device.DeviceID, strings.TrimSpace(c.Param("session_id")))
+	state, ok, err := a.uc.SipServer.SnapshotStateContext(c.Request.Context(), device.DeviceID, strings.TrimSpace(c.Param("session_id")))
+	if err != nil {
+		return nil, err
+	}
 	if !ok || (state.ChannelID != "" && state.ChannelID != channel.ChannelID) {
 		return nil, reason.ErrBadRequest.SetMsg("snapshot session not found")
 	}
@@ -2676,9 +3314,11 @@ type snapshotResult struct {
 }
 
 func (a IPCAPI) refreshGBSnapshotByLiveStreamSingleflight(ctx context.Context, channelID string, requestAt time.Time) (snapshotResult, error) {
-	ch := a.snapshotCoordinator().group.DoChan(channelID, func() (any, error) {
-		taskCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotTaskTimeout)
-		defer cancel()
+	coordinator := a.snapshotCoordinator()
+	generation := coordinator.taskGeneration(channelID)
+	ch := coordinator.group.DoChan(channelID, func() (any, error) {
+		taskCtx, finish := coordinator.beginTask(ctx, channelID, generation)
+		defer finish()
 		return a.refreshGBSnapshotByLiveStream(taskCtx, channelID, requestAt)
 	})
 
@@ -2806,7 +3446,11 @@ func (a IPCAPI) requestGBIFrame(ctx context.Context, deviceID, channelID string)
 }
 
 func (a IPCAPI) refreshSnapshotFromURL(ctx context.Context, channelID, snapshotURL string, requestAt time.Time, attempts int, delay time.Duration) error {
-	svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
+	var channel *ipc.Channel
+	if loaded, loadErr := a.ipc.GetChannel(ctx, channelID); loadErr == nil {
+		channel = loaded
+	}
+	svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, channelMediaServerID(channel))
 	if err != nil {
 		return err
 	}
@@ -3185,7 +3829,16 @@ func (a IPCAPI) addZone(c *gin.Context, in *ipc.AddZoneInput) (gin.H, error) {
 		in.Labels = []string{"person", "car", "cat", "dog"}
 	}
 	zones, err := a.ipc.AddZone(c.Request.Context(), in, channelID)
-	return gin.H{"items": zones}, err
+	if err != nil {
+		return nil, err
+	}
+	ch, chErr := a.ipc.GetChannel(c.Request.Context(), channelID)
+	if chErr == nil && ch.Ext.EnabledAI {
+		if reloadErr := a.uc.AIWebhookAPI.ReloadAITask(c.Request.Context(), ch); reloadErr != nil {
+			slog.WarnContext(c.Request.Context(), "reload AI task after zone add failed", "channel_id", channelID, "err", reloadErr)
+		}
+	}
+	return gin.H{"items": zones}, nil
 }
 
 // getZones godoc
@@ -3324,14 +3977,13 @@ func (a IPCAPI) enableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
 		return nil, ErrAIServiceNotReady
 	}
 
-	// 更新数据库中的 AI 启用状态
-	channel, err := a.ipc.SetAIEnabled(ctx, channelID, true)
+	channel, err := a.ipc.GetChannel(ctx, channelID)
 	if err != nil {
 		return nil, err
 	}
 
 	// 构建 RTSP 地址
-	rtspURL, err := a.buildRTSPURL(ctx, channelID)
+	rtspURL, err := buildChannelRTSPURL(ctx, a.uc.SMSAPI.smsCore, channel)
 	if err != nil {
 		return nil, err
 	}
@@ -3341,6 +3993,12 @@ func (a IPCAPI) enableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
 	if err != nil {
 		slog.ErrorContext(ctx, "start camera AI", "err", err)
 		return nil, reason.ErrUsedLogic.SetMsg("启动 AI 检测失败: " + err.Error())
+	}
+	if _, err = a.ipc.SetAIEnabled(ctx, channelID, true); err != nil {
+		if stopErr := a.uc.AIWebhookAPI.StopAIDetection(ctx, channelID); stopErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("rollback AI task: %w", stopErr))
+		}
+		return nil, err
 	}
 
 	return gin.H{
@@ -3385,6 +4043,7 @@ func (a IPCAPI) disableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
 	// 停止 AI 检测任务
 	if err := a.uc.AIWebhookAPI.StopAIDetection(ctx, channelID); err != nil {
 		slog.ErrorContext(ctx, "stop camera AI", "err", err)
+		return nil, reason.ErrUsedLogic.SetMsg("停止 AI 检测失败: " + err.Error())
 	}
 
 	return gin.H{
@@ -3395,35 +4054,52 @@ func (a IPCAPI) disableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
 
 // buildRTSPURL 根据通道类型构建对应的 RTSP 播放地址
 func (a IPCAPI) buildRTSPURL(ctx context.Context, channelID string) (string, error) {
-	svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
+	ch, err := a.ipc.GetChannel(ctx, channelID)
 	if err != nil {
 		return "", err
 	}
+	return buildChannelRTSPURL(ctx, a.uc.SMSAPI.smsCore, ch)
+}
 
+// buildChannelRTSPURL 根据通道绑定的媒体节点和协议类型构建 RTSP 播放地址。
+// 即时操作与服务重启后的任务恢复共用该入口，避免多节点路由和流路径漂移。
+func buildChannelRTSPURL(ctx context.Context, smsCore sms.Core, ch *ipc.Channel) (string, error) {
+	if ch == nil {
+		return "", ErrChannelNotSupported
+	}
 	var app, stream string
 
-	if bz.IsGB28181(channelID) {
+	switch ch.GetType() {
+	case ipc.TypeGB28181:
 		app = "rtp"
-		stream = channelID
-	} else if bz.IsOnvif(channelID) {
+		stream = ch.ID
+	case ipc.TypeOnvif:
 		app = "live"
-		stream = channelID
-	} else if bz.IsRTSP(channelID) || bz.IsRTMP(channelID) {
+		stream = ch.ID
+	case ipc.TypeRTSP, ipc.TypeRTMP:
 		// 从 Channel 获取流信息
-		ch, err := a.ipc.GetChannel(ctx, channelID)
-		if err != nil {
-			return "", err
-		}
 		app = ch.App
 		if app == "" {
 			app = "live"
 		}
 		stream = ch.Stream
-	} else {
+	default:
 		return "", ErrChannelNotSupported
 	}
+	mediaServerID := channelMediaServerID(ch)
+	svr, err := smsCore.GetMediaServer(ctx, mediaServerID)
+	if err != nil {
+		return "", err
+	}
 
-	return fmt.Sprintf("rtsp://%s:%d/%s/%s", "127.0.0.1", svr.Ports.RTSP, app, stream), nil
+	host := strings.TrimSpace(svr.StreamIP)
+	if host == "" {
+		host = strings.TrimSpace(svr.IP)
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("rtsp://%s/%s/%s", net.JoinHostPort(host, strconv.Itoa(svr.Ports.RTSP)), app, stream), nil
 }
 
 // setRecordModeInput 设置录像模式请求参数

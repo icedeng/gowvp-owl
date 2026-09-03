@@ -45,7 +45,7 @@ var (
 		NewSMSCore, NewSmsAPI,
 		NewWebHookAPI,
 		NewUniqueID,
-		gbs.NewServer,
+		gbs.NewServerWithStoresContext,
 		NewIPCStore, NewGBAdapter,
 		NewIPCCoreWithProtocols,
 		NewIPCAPI,
@@ -111,16 +111,16 @@ func setupGBAlarmBridge(uc *Usecase) {
 		return
 	}
 
-	uc.SipServer.SetAlarmHandler(func(ctx context.Context, in *gbs.AlarmEvent) {
+	uc.SipServer.SetReliableAlarmHandler(func(ctx context.Context, in *gbs.AlarmEvent) error {
 		if in == nil || strings.TrimSpace(in.DeviceID) == "" {
-			return
+			return nil
 		}
 
 		// 1) 设备国标编码 -> 内部设备ID。
 		dev, err := uc.GB28181API.ipc.GetDeviceByDeviceID(ctx, in.DeviceID)
 		if err != nil {
 			slog.Warn("alarm: device not found", "deviceID", in.DeviceID, "err", err)
-			return
+			return err
 		}
 
 		var cid string
@@ -145,7 +145,14 @@ func setupGBAlarmBridge(uc *Usecase) {
 		}
 
 		// 原始报警内容序列化到 zones 字段，便于审计和回溯。
-		zones, _ := json.Marshal(in)
+		zones, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		var sourceKey *string
+		if key := strings.TrimSpace(in.DeliveryID); key != "" {
+			sourceKey = &key
+		}
 		if _, err := uc.EventAPI.eventCore.CreateEventAndNotify(ctx, &event.AddEventInput{
 			DID:       dev.ID,
 			CID:       cid,
@@ -155,9 +162,12 @@ func setupGBAlarmBridge(uc *Usecase) {
 			Score:     1,
 			Zones:     string(zones),
 			Model:     "GB28181",
+			SourceKey: sourceKey,
 		}); err != nil {
 			slog.Warn("alarm: save event failed", "deviceID", in.DeviceID, "channelID", in.ChannelID, "err", err)
+			return err
 		}
+		return nil
 	})
 }
 

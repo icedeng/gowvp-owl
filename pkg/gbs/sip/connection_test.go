@@ -1,9 +1,11 @@
 package sip
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -52,6 +54,97 @@ func TestTCPConnectionWriteToUsesStreamWrite(t *testing.T) {
 	}
 }
 
+func TestTCPConnectionContextWriteInterruptsBlockedWriteAndClearsDeadline(t *testing.T) {
+	base, peer := net.Pipe()
+	defer base.Close()
+	defer peer.Close()
+	conn := NewTCPConnection(base).(*connection)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := conn.writeToContext(ctx, []byte("blocked"), peer.LocalAddr()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked TCP write error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("blocked TCP write took %s", elapsed)
+	}
+
+	readDone := make(chan error, 1)
+	go func() {
+		buffer := make([]byte, 1)
+		_, err := peer.Read(buffer)
+		readDone <- err
+	}()
+	if _, err := conn.WriteTo([]byte("x"), peer.LocalAddr()); err != nil {
+		t.Fatalf("TCP write after context timeout = %v", err)
+	}
+	if err := <-readDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTCPConnectionContextWriteCancelsWhileWaitingForWriter(t *testing.T) {
+	base, peer := net.Pipe()
+	observed := &observedWriteConn{Conn: base, started: make(chan struct{})}
+	conn := NewTCPConnection(observed).(*connection)
+	defer conn.Close()
+	defer peer.Close()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := conn.WriteTo([]byte("first blocked write"), peer.LocalAddr())
+		firstDone <- err
+	}()
+	select {
+	case <-observed.started:
+	case <-time.After(time.Second):
+		t.Fatal("first TCP write did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := conn.writeToContext(ctx, []byte("second write"), peer.LocalAddr()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("queued TCP write error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("queued TCP write took %s", elapsed)
+	}
+
+	if err := peer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first TCP write remained blocked after peer close")
+	}
+}
+
+func TestTransactionRespondContextInterruptsBlockedTCPWrite(t *testing.T) {
+	base, peer := net.Pipe()
+	defer base.Close()
+	defer peer.Close()
+	conn := NewTCPConnection(base)
+	request := newSignalDigestTestRequest(t, MethodMessage, nil)
+	request.SetConnection(conn)
+	request.SetSource(conn.RemoteAddr())
+	request.SetDestination(conn.LocalAddr())
+	response := NewResponseFromRequest("", request, 200, "OK", nil)
+	tx := NewTransaction("blocked-response", conn)
+	defer tx.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if err := tx.RespondContext(ctx, response); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked SIP response error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("blocked SIP response took %s", elapsed)
+	}
+}
+
 func TestSignalingTransportDistinguishesTLSFromTCP(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -76,6 +169,17 @@ type connectionTestConn struct {
 	local    net.Addr
 	remote   net.Addr
 	closeErr error
+}
+
+type observedWriteConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *observedWriteConn) Write(payload []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+	return c.Conn.Write(payload)
 }
 
 func (c *connectionTestConn) Read([]byte) (int, error)         { return 0, errors.New("not implemented") }

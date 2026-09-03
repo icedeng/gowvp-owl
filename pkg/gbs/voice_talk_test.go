@@ -8,6 +8,34 @@ import (
 	"github.com/ixugo/goddd/pkg/conc"
 )
 
+func TestTalkMediaLifecycleIgnoresAnotherMediaServer(t *testing.T) {
+	media := &fakeRTPMediaService{talkPort: 30000}
+	api := &GB28181API{sms: media, streams: &conc.Map[string, *Streams]{}}
+	stream := &Streams{DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, StreamID: "device-audio-node"}
+	session := &talkSession{
+		DeviceID: gb10DeviceID, ChannelID: gb10ChannelID, ReceiveStream: stream.StreamID,
+		SourceVHost: defaultBroadcastVHost, SourceApp: defaultBroadcastApp, SourceStream: "microphone",
+		SMS: &sms.MediaServer{ID: "edge-zlm-1", Type: sms.ProtocolZLMediaKit}, Stream: stream,
+		receiverOpened: true, ready: make(chan error, 1),
+	}
+	api.talkSessions.Store(stream.StreamID, session)
+	api.streams.Store(voiceKey(voiceModeTalk, gb10DeviceID, gb10ChannelID), stream)
+
+	if err := api.OnMediaStreamChanged(t.Context(), MediaStreamEvent{MediaServerID: "edge-zlm-2", StreamID: stream.StreamID, Active: true}); err != nil {
+		t.Fatal(err)
+	}
+	media.mu.Lock()
+	if media.talkCalls != 0 {
+		t.Fatalf("foreign media server started Talk RTP: %d calls", media.talkCalls)
+	}
+	media.mu.Unlock()
+	select {
+	case err := <-session.ready:
+		t.Fatalf("foreign media server completed Talk session: %v", err)
+	default:
+	}
+}
+
 func TestTalkMediaLifecycleStartsAndStopsBidirectionalRTP(t *testing.T) {
 	media := &fakeRTPMediaService{talkPort: 30000}
 	api := &GB28181API{

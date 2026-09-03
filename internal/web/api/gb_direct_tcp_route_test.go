@@ -15,7 +15,12 @@ func TestRegisterGB28181DirectTCPDownloadRoutes(t *testing.T) {
 		"DELETE /gb28181/downloads/:session_id":                               false,
 		"GET /gb28181/metrics":                                                false,
 		"GET /gb28181/cascade/status":                                         false,
+		"GET /gb28181/annex-g/alarms":                                         false,
+		"GET /gb28181/annex-g/defences":                                       false,
+		"GET /gb28181/annex-g/defence-audits":                                 false,
+		"GET /devices/:id/subscriptions":                                      false,
 		"GET /channels/:id/history/status":                                    false,
+		"PUT /channels/:id/media_server":                                      false,
 		"GET /gb28181/devices/:device_id/channels/:channel_id/history/status": false,
 		"GET /channels/gb28181/:device_id/:channel_id/history/status":         false,
 	}

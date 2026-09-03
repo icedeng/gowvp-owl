@@ -1,7 +1,6 @@
 package gbs
 
 import (
-	"context"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
@@ -17,10 +16,15 @@ import (
 )
 
 var (
-	errAuthHeaderMissing = errors.New("authorization header required")
+	errAuthHeaderMissing              = errors.New("authorization header required")
+	errInboundDeviceNotRegistered     = errors.New("GB28181 device is not registered")
+	errInboundDeviceGenerationChanged = errors.New("GB28181 device registration generation changed")
 )
 
-const cascadeWorkerContextKey = "gb28181.cascade.worker"
+const (
+	cascadeWorkerContextKey              = "gb28181.cascade.worker"
+	inboundRegistrationBindingContextKey = "gb28181.inbound.registration-binding"
+)
 
 const (
 	messageNonceTTL  = 5 * time.Minute
@@ -36,11 +40,21 @@ type messageNonceState struct {
 	Expires             time.Time
 }
 
+type inboundRegistrationBinding struct {
+	device         *Device
+	lastRegisterAt time.Time
+	expires        int
+}
+
 // sipAccessControlMiddleware 为 MESSAGE/NOTIFY 提供访问控制中间件。
 // 控制项：
 // 1) strict_source_check：校验上报源 IP 是否与注册源一致；
 // 2) require_message_auth：要求 MESSAGE/NOTIFY 携带 Digest 鉴权。
 func (g *GB28181API) sipAccessControlMiddleware(ctx *sip.Context) {
+	if g != nil && g.annexG != nil && ctx != nil && annexGCommandFromRequest(ctx.Request) != "" {
+		g.sipAnnexGAccessControlMiddleware(ctx)
+		return
+	}
 	if g != nil && g.svr != nil && g.svr.cascade != nil {
 		if worker, ok := g.svr.cascade.matchRegistered(ctx.DeviceID, ctx.Source, ctx.Request.GetConnection()); ok {
 			ctx.Set(cascadeWorkerContextKey, worker)
@@ -50,6 +64,20 @@ func (g *GB28181API) sipAccessControlMiddleware(ctx *sip.Context) {
 			return
 		}
 	}
+	device, binding, err := g.ensureRegisteredInboundDeviceWithBinding(ctx.DeviceID)
+	if err != nil {
+		if errors.Is(err, errInboundDeviceNotRegistered) {
+			ctx.AbortString(403, "unregistered GB28181 device")
+			return
+		}
+		ctx.Log.Error("validate inbound GB28181 device", "err", err)
+		ctx.AbortString(503, "GB28181 device store unavailable")
+		return
+	}
+	ctx.XGBVer = string(GBVersion10)
+	if version, ok := ParseGBProtocolVersion(device.GBVersion()); ok {
+		ctx.XGBVer = string(version)
+	}
 	if err := g.checkSourceAddress(ctx); err != nil {
 		ctx.AbortString(403, err.Error())
 		return
@@ -58,7 +86,61 @@ func (g *GB28181API) sipAccessControlMiddleware(ctx *sip.Context) {
 		g.respondMessageDigestChallenge(ctx)
 		return
 	}
+	ctx.Set(inboundRegistrationBindingContextKey, binding)
 	ctx.Next()
+}
+
+func admittedInboundRegistrationBinding(ctx *sip.Context) (inboundRegistrationBinding, bool) {
+	if ctx == nil {
+		return inboundRegistrationBinding{}, false
+	}
+	value, ok := ctx.Get(inboundRegistrationBindingContextKey)
+	if !ok {
+		return inboundRegistrationBinding{}, false
+	}
+	binding, ok := value.(inboundRegistrationBinding)
+	return binding, ok
+}
+
+// inboundRegistrationBindingMatchesLocked 仅在持有同设备 REGISTER 操作锁时调用。
+func (g *GB28181API) inboundRegistrationBindingMatchesLocked(deviceID string, expected inboundRegistrationBinding) bool {
+	if g == nil || g.svr == nil || g.svr.memoryStorer == nil {
+		return false
+	}
+	device, ok := g.svr.memoryStorer.Load(strings.TrimSpace(deviceID))
+	if !ok || device == nil {
+		return false
+	}
+	if expected.device != nil && device != expected.device {
+		return false
+	}
+	current := device.runtimeSnapshot()
+	return runtimeRegistrationBindingActive(current, time.Now()) &&
+		current.Expires == expected.expires && current.LastRegisterAt.Equal(expected.lastRegisterAt)
+}
+
+// ensureRegisteredInboundDevice 只允许已有注册运行态的设备进入普通业务路由。
+// 附录 G 外部系统和已注册上级平台在调用前已由各自身份门禁分流。
+func (g *GB28181API) ensureRegisteredInboundDevice(deviceID string) (*Device, error) {
+	device, _, err := g.ensureRegisteredInboundDeviceWithBinding(deviceID)
+	return device, err
+}
+
+func (g *GB28181API) ensureRegisteredInboundDeviceWithBinding(deviceID string) (*Device, inboundRegistrationBinding, error) {
+	if g == nil || g.svr == nil || g.svr.memoryStorer == nil {
+		return nil, inboundRegistrationBinding{}, fmt.Errorf("GB28181 memory store unavailable")
+	}
+	if device, ok := g.svr.memoryStorer.Load(deviceID); ok && device != nil {
+		state := device.runtimeSnapshot()
+		if runtimeRegistrationBindingActive(state, time.Now()) {
+			return device, inboundRegistrationBinding{
+				device:         device,
+				lastRegisterAt: state.LastRegisterAt,
+				expires:        state.Expires,
+			}, nil
+		}
+	}
+	return nil, inboundRegistrationBinding{}, errInboundDeviceNotRegistered
 }
 
 func (g *GB28181API) respondMessageDigestChallenge(ctx *sip.Context) {
@@ -83,19 +165,19 @@ func (g *GB28181API) checkSourceAddress(ctx *sip.Context) error {
 	if cfg == nil || !cfg.StrictSourceCheck {
 		return nil
 	}
-	srcIP := parseAddressIP(addrString(ctx.Source))
-	if srcIP == "" {
-		return nil
+	srcIP := parseComparableIP(addrString(ctx.Source))
+	if srcIP == nil {
+		return fmt.Errorf("source ip is unavailable or invalid")
 	}
 	cred, err := g.lookupDeviceCredential(ctx.DeviceID)
 	if err != nil {
 		return fmt.Errorf("device not found")
 	}
-	expectedIP := parseAddressIP(cred.Address)
-	if expectedIP == "" {
-		return nil
+	expectedIP := parseComparableIP(cred.Address)
+	if expectedIP == nil {
+		return fmt.Errorf("registered source ip is unavailable or invalid")
 	}
-	if srcIP != expectedIP {
+	if !srcIP.Equal(expectedIP) {
 		return fmt.Errorf("source ip mismatch")
 	}
 	return nil
@@ -111,30 +193,47 @@ func (g *GB28181API) checkDigestAuth(ctx *sip.Context) error {
 	if err != nil {
 		return fmt.Errorf("device not found")
 	}
-	password := strings.TrimSpace(cred.Password)
+	password := cred.Password
 	if password == "" {
-		password = strings.TrimSpace(cfg.Password)
+		password = cfg.Password
 	}
 	// ignorePassword 表示免鉴权，保持与 REGISTER 逻辑一致。
 	if password == "" || password == ignorePassword {
 		return nil
 	}
+	return g.checkMessageDigestCredential(ctx, cred.DeviceID, password, cfg.GetDomain())
+}
+
+// checkMessageDigestCredential 使用服务端签发且绑定来源的 nonce 校验一组明确凭据。
+// 普通设备和附录 G 静态外部系统共用同一套 qop/nc/重放语义。
+func (g *GB28181API) checkMessageDigestCredential(ctx *sip.Context, username, password, realm string) error {
+	if ctx == nil || ctx.Request == nil {
+		return fmt.Errorf("request is unavailable")
+	}
+	username = strings.TrimSpace(username)
+	realm = strings.TrimSpace(realm)
+	if username == "" || password == "" || realm == "" {
+		return fmt.Errorf("Digest credential is incomplete")
+	}
 	hdrs := ctx.Request.GetHeaders("Authorization")
 	if len(hdrs) == 0 {
 		return errAuthHeaderMissing
+	}
+	if len(hdrs) != 1 {
+		return fmt.Errorf("request must contain exactly one Authorization header")
 	}
 	h, ok := hdrs[0].(*sip.GenericHeader)
 	if !ok {
 		return fmt.Errorf("invalid authorization header")
 	}
 	auth := sip.AuthFromValue(h.Contents)
-	if auth.Get("realm") != cfg.GetDomain() {
+	if auth.Get("realm") != realm {
 		return fmt.Errorf("digest realm mismatch")
 	}
 	if !strings.EqualFold(auth.Algorithm(), registerDigestAlgo) {
 		return fmt.Errorf("unsupported Digest algorithm %q", auth.Algorithm())
 	}
-	if auth.Get("username") != cred.DeviceID {
+	if auth.Get("username") != username {
 		return fmt.Errorf("digest username mismatch")
 	}
 	if ctx.Request.Recipient() == nil {
@@ -156,7 +255,7 @@ func (g *GB28181API) checkDigestAuth(ctx *sip.Context) error {
 		return fmt.Errorf("unsupported Digest qop %q", auth.QOP())
 	}
 	nonce := auth.Get("nonce")
-	if err := g.validateMessageNonce(nonce, cred.DeviceID, parseAddressIP(addrString(ctx.Source))); err != nil {
+	if err := g.validateMessageNonce(nonce, username, parseAddressIP(addrString(ctx.Source))); err != nil {
 		return err
 	}
 	provided := strings.ToLower(strings.TrimSpace(auth.Get("response")))
@@ -164,7 +263,7 @@ func (g *GB28181API) checkDigestAuth(ctx *sip.Context) error {
 		return fmt.Errorf("digest response is missing")
 	}
 	auth.SetPassword(password)
-	auth.SetUsername(cred.DeviceID)
+	auth.SetUsername(username)
 	auth.SetMethod(ctx.Request.Method())
 	auth.SetURI(requestURI)
 	calculated, err := auth.CalcResponseChecked()
@@ -276,18 +375,18 @@ func (g *GB28181API) lookupDeviceCredential(deviceID string) (*deviceCredential,
 			state := dev.runtimeSnapshot()
 			return &deviceCredential{
 				DeviceID: strings.TrimSpace(deviceID),
-				Password: strings.TrimSpace(state.Password),
+				Password: state.Password,
 				Address:  strings.TrimSpace(state.Address),
 			}, nil
 		}
 	}
 	var dev ipc.Device
-	if err := g.core.Store().Device().Get(context.TODO(), &dev, orm.Where("device_id=?", deviceID)); err != nil {
+	if err := g.core.Store().Device().Get(g.serviceContext(), &dev, orm.Where("device_id=?", deviceID)); err != nil {
 		return nil, err
 	}
 	return &deviceCredential{
 		DeviceID: strings.TrimSpace(dev.GetGB28181DeviceID()),
-		Password: strings.TrimSpace(dev.Password),
+		Password: dev.Password,
 		Address:  strings.TrimSpace(dev.Address),
 	}, nil
 }
@@ -310,6 +409,14 @@ func parseAddressIP(address string) string {
 	}
 	// 非 host:port 场景，退化为原值。
 	return address
+}
+
+func parseComparableIP(address string) net.IP {
+	value := parseAddressIP(address)
+	if zone := strings.LastIndexByte(value, '%'); zone >= 0 {
+		value = value[:zone]
+	}
+	return net.ParseIP(value)
 }
 
 func addrString(addr net.Addr) string {

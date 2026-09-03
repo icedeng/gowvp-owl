@@ -55,6 +55,14 @@ func (c *Cache) LoadGBTaskState(ctx context.Context, kind, deviceID, sessionID s
 	return []byte(record.Payload), true, nil
 }
 
+func (c *Cache) ListGBTaskStates(ctx context.Context, kind string, limit int) ([]ipc.GBTaskStateRecord, error) {
+	store, err := c.gbTaskStateStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.List(ctx, kind, limit)
+}
+
 func (c *Cache) DeleteGBTaskState(ctx context.Context, kind, deviceID, sessionID string) error {
 	store, err := c.gbTaskStateStore()
 	if err != nil {

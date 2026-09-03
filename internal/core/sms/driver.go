@@ -27,6 +27,7 @@ type Driver interface {
 
 	// Stream Operations
 	OpenRTPServer(ctx context.Context, ms *MediaServer, req *zlm.OpenRTPServerRequest) (*zlm.OpenRTPServerResponse, error)
+	ConnectRTPServer(ctx context.Context, ms *MediaServer, req *zlm.ConnectRTPServerRequest) (*zlm.ConnectRTPServerResponse, error)
 	CloseRTPServer(ctx context.Context, ms *MediaServer, req *zlm.CloseRTPServerRequest) (*zlm.CloseRTPServerResponse, error)
 	StartSendRTP(ctx context.Context, ms *MediaServer, req *zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error)
 	StartSendRTPTalk(ctx context.Context, ms *MediaServer, req *zlm.StartSendRTPTalkRequest) (*zlm.StartSendRTPResponse, error)

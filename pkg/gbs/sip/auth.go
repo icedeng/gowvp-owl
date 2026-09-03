@@ -29,13 +29,27 @@ type Authorization struct {
 
 // AuthFromValue AuthFromValue
 func AuthFromValue(value string) *Authorization {
+	return authFromDigestParams(parseDigestParams(value))
+}
+
+// AuthFromValueChecked 严格解析 Digest 头，拒绝缺失认证方案、重复或畸形参数。
+// AuthFromValue 保留历史宽松语义，避免改变存量设备兼容行为。
+func AuthFromValueChecked(value string) (*Authorization, error) {
+	params, err := parseDigestParamsChecked(value)
+	if err != nil {
+		return nil, err
+	}
+	return authFromDigestParams(params), nil
+}
+
+func authFromDigestParams(params map[string]string) *Authorization {
 	auth := &Authorization{
 		algorithm: "MD5",
 		other:     make(map[string]string),
 		Data:      make(map[string]string),
 	}
 
-	for key, value := range parseDigestParams(value) {
+	for key, value := range params {
 		switch key {
 		case "realm":
 			auth.realm = value
@@ -70,6 +84,119 @@ func AuthFromValue(value string) *Authorization {
 		auth.Data[key] = value
 	}
 	return auth
+}
+
+func parseDigestParamsChecked(value string) (map[string]string, error) {
+	value = strings.TrimSpace(value)
+	if colon := strings.IndexByte(value, ':'); colon >= 0 {
+		name := strings.ToLower(strings.TrimSpace(value[:colon]))
+		switch name {
+		case "authorization", "proxy-authorization", "www-authenticate", "proxy-authenticate":
+			value = strings.TrimSpace(value[colon+1:])
+		}
+	}
+	schemeEnd := strings.IndexAny(value, " \t")
+	if schemeEnd <= 0 || !strings.EqualFold(value[:schemeEnd], "Digest") {
+		return nil, fmt.Errorf("authentication scheme must be Digest")
+	}
+	value = strings.TrimSpace(value[schemeEnd:])
+	if value == "" {
+		return nil, fmt.Errorf("Digest challenge has no parameters")
+	}
+
+	params := make(map[string]string)
+	for value != "" {
+		value = strings.TrimLeft(value, " \t")
+		keyEnd := 0
+		for keyEnd < len(value) && isDigestTokenByte(value[keyEnd]) {
+			keyEnd++
+		}
+		if keyEnd == 0 {
+			return nil, fmt.Errorf("Digest challenge contains an invalid parameter name")
+		}
+		key := strings.ToLower(value[:keyEnd])
+		value = strings.TrimLeft(value[keyEnd:], " \t")
+		if value == "" || value[0] != '=' {
+			return nil, fmt.Errorf("Digest parameter %s is missing '='", key)
+		}
+		value = strings.TrimLeft(value[1:], " \t")
+		if value == "" {
+			return nil, fmt.Errorf("Digest parameter %s has no value", key)
+		}
+
+		var parsed string
+		if value[0] == '"' {
+			var builder strings.Builder
+			escaped := false
+			closed := false
+			index := 1
+			for ; index < len(value); index++ {
+				char := value[index]
+				if char == '\r' || char == '\n' || char == 0 {
+					return nil, fmt.Errorf("Digest parameter %s contains a control character", key)
+				}
+				if escaped {
+					builder.WriteByte(char)
+					escaped = false
+					continue
+				}
+				if char == '\\' {
+					escaped = true
+					continue
+				}
+				if char == '"' {
+					closed = true
+					index++
+					break
+				}
+				builder.WriteByte(char)
+			}
+			if !closed || escaped {
+				return nil, fmt.Errorf("Digest parameter %s has an unterminated quoted value", key)
+			}
+			parsed = builder.String()
+			value = value[index:]
+		} else {
+			valueEnd := strings.IndexByte(value, ',')
+			if valueEnd < 0 {
+				valueEnd = len(value)
+			}
+			parsed = strings.TrimSpace(value[:valueEnd])
+			if parsed == "" {
+				return nil, fmt.Errorf("Digest parameter %s has no value", key)
+			}
+			for index := range len(parsed) {
+				if !isDigestTokenByte(parsed[index]) {
+					return nil, fmt.Errorf("Digest parameter %s has an invalid token value", key)
+				}
+			}
+			value = value[valueEnd:]
+		}
+
+		if _, duplicate := params[key]; duplicate {
+			return nil, fmt.Errorf("Digest challenge contains duplicate %s parameter", key)
+		}
+		params[key] = parsed
+		value = strings.TrimLeft(value, " \t")
+		if value == "" {
+			break
+		}
+		if value[0] != ',' {
+			return nil, fmt.Errorf("Digest parameter %s is followed by invalid data", key)
+		}
+		value = strings.TrimLeft(value[1:], " \t")
+		if value == "" {
+			return nil, fmt.Errorf("Digest challenge has a trailing comma")
+		}
+	}
+	return params, nil
+}
+
+func isDigestTokenByte(value byte) bool {
+	if value < 0x21 || value > 0x7e {
+		return false
+	}
+	return !strings.ContainsRune("()<>@,;:\\\"/[]?={}\t ", rune(value))
 }
 
 func parseDigestParams(value string) map[string]string {

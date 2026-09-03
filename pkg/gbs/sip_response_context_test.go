@@ -1,8 +1,11 @@
 package gbs
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +34,100 @@ func TestSIPResponseContextReturnsCallerCancellation(t *testing.T) {
 func TestSIPResponseContextRejectsMissingTransaction(t *testing.T) {
 	if _, err := sipResponseContext(context.Background(), nil); err == nil {
 		t.Fatal("missing SIP transaction was accepted")
+	}
+}
+
+func TestSIPResponseContextClosesNonInviteTransactionAfterFinalResponse(t *testing.T) {
+	local := mustFlowAddress(t, "sip:"+gb10PlatformID+"@192.0.2.20:5060")
+	remote := mustFlowAddress(t, "sip:"+gb10DeviceID+"@192.0.2.10:5060")
+	server := sip.NewServer(local)
+	localRaw, remoteRaw := net.Pipe()
+	connection := sip.NewTCPConnection(localRaw)
+	go server.ProcessTCPConnection(connection)
+	defer func() {
+		_ = remoteRaw.Close()
+		server.Close()
+	}()
+
+	callID := sip.CallID("completed-message-transaction")
+	request := sip.NewRequest("", sip.MethodMessage, remote.URI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetMethod(sip.MethodMessage).SetSeqNo(26).SetFrom(local).SetTo(remote).SetCallID(&callID).
+			AddVia(&sip.ViaHop{Host: "192.0.2.20", Port: sip.NewPort(5060), Transport: "TCP", Params: sip.NewParams().Add("branch", sip.String{Str: "z9hG4bK-completed-message"})}).Build(), nil)
+	request.SetConnection(connection)
+	request.SetSource(connection.LocalAddr())
+	request.SetDestination(connection.RemoteAddr())
+
+	remoteErr := make(chan error, 1)
+	go func() {
+		_ = remoteRaw.SetDeadline(time.Now().Add(3 * time.Second))
+		message, err := readAnnexGTestSIPFrame(bufio.NewReader(remoteRaw))
+		if err == nil {
+			_, err = remoteRaw.Write([]byte(cancelledInviteTestResponse(message, 200, "OK")))
+		}
+		remoteErr <- err
+	}()
+
+	tx, err := server.Request(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sipResponseContext(t.Context(), tx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-remoteErr; err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if response, err := tx.GetResponseContext(waitCtx); response != nil || err != nil {
+		t.Fatalf("completed non-INVITE transaction remained active: response=%v err=%v", response, err)
+	}
+}
+
+func TestSIPResponseWithTimeoutClosesTransactionAfterFinalResponse(t *testing.T) {
+	local := mustFlowAddress(t, "sip:"+gb10PlatformID+"@192.0.2.20:5060")
+	remote := mustFlowAddress(t, "sip:"+gb10DeviceID+"@192.0.2.10:5060")
+	server := sip.NewServer(local)
+	localRaw, remoteRaw := net.Pipe()
+	connection := sip.NewTCPConnection(localRaw)
+	go server.ProcessTCPConnection(connection)
+	defer func() {
+		_ = remoteRaw.Close()
+		server.Close()
+	}()
+
+	callID := sip.CallID("completed-options-transaction")
+	request := sip.NewRequest("", sip.MethodOptions, remote.URI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetMethod(sip.MethodOptions).SetSeqNo(27).SetFrom(local).SetTo(remote).SetCallID(&callID).
+			AddVia(&sip.ViaHop{Host: "192.0.2.20", Port: sip.NewPort(5060), Transport: "TCP", Params: sip.NewParams().Add("branch", sip.String{Str: "z9hG4bK-completed-options"})}).Build(), nil)
+	request.SetConnection(connection)
+	request.SetSource(connection.LocalAddr())
+	request.SetDestination(connection.RemoteAddr())
+
+	remoteErr := make(chan error, 1)
+	go func() {
+		_ = remoteRaw.SetDeadline(time.Now().Add(3 * time.Second))
+		message, err := readAnnexGTestSIPFrame(bufio.NewReader(remoteRaw))
+		if err == nil {
+			_, err = remoteRaw.Write([]byte(cancelledInviteTestResponse(message, 200, "OK")))
+		}
+		remoteErr <- err
+	}()
+
+	tx, err := server.Request(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sipResponseWithTimeout(t.Context(), tx, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-remoteErr; err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if response, err := tx.GetResponseContext(waitCtx); response != nil || err != nil {
+		t.Fatalf("completed OPTIONS transaction remained active: response=%v err=%v", response, err)
 	}
 }
 
@@ -69,6 +166,190 @@ func TestSIPResponseContextCancelsPendingInviteTransaction(t *testing.T) {
 	if cascadeTestHeader(cancelPayload, "CSeq") != "23 CANCEL" {
 		t.Fatalf("CANCEL CSeq = %q", cascadeTestHeader(cancelPayload, "CSeq"))
 	}
+}
+
+func TestSIPResponseContextCancelledInviteAcknowledges487(t *testing.T) {
+	local := mustFlowAddress(t, "sip:"+gb10PlatformID+"@192.0.2.20:5060")
+	remote := mustFlowAddress(t, "sip:"+gb10DeviceID+"@192.0.2.10:5060")
+	server := sip.NewServer(local)
+	localRaw, remoteRaw := net.Pipe()
+	connection := sip.NewTCPConnection(localRaw)
+	go server.ProcessTCPConnection(connection)
+	defer func() {
+		_ = remoteRaw.Close()
+		server.Close()
+	}()
+
+	callID := sip.CallID("cancelled-invite-487")
+	request := sip.NewRequest("", sip.MethodInvite, remote.URI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetMethod(sip.MethodInvite).SetSeqNo(25).SetFrom(local).SetTo(remote).SetCallID(&callID).
+			AddVia(&sip.ViaHop{Host: "192.0.2.20", Port: sip.NewPort(5060), Transport: "TCP", Params: sip.NewParams().Add("branch", sip.String{Str: "z9hG4bK-cancel-487"})}).Build(), nil)
+	request.SetConnection(connection)
+	request.SetSource(connection.LocalAddr())
+	request.SetDestination(connection.RemoteAddr())
+
+	observed := make(chan []string, 1)
+	remoteErr := make(chan error, 1)
+	go func() {
+		_ = remoteRaw.SetDeadline(time.Now().Add(3 * time.Second))
+		reader := bufio.NewReader(remoteRaw)
+		invite, err := readAnnexGTestSIPFrame(reader)
+		if err != nil {
+			remoteErr <- err
+			return
+		}
+		cancel, err := readAnnexGTestSIPFrame(reader)
+		if err != nil {
+			remoteErr <- err
+			return
+		}
+		if _, err := remoteRaw.Write([]byte(cancelledInviteTestResponse(cancel, 200, "OK"))); err != nil {
+			remoteErr <- err
+			return
+		}
+		if _, err := remoteRaw.Write([]byte(cancelledInviteTestResponse(invite, 487, "Request Terminated"))); err != nil {
+			remoteErr <- err
+			return
+		}
+		ack, err := readAnnexGTestSIPFrame(reader)
+		if err != nil {
+			remoteErr <- err
+			return
+		}
+		observed <- []string{invite, cancel, ack}
+	}()
+
+	tx, err := server.Request(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := sipInviteResponseContext(ctx, tx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled INVITE wait error = %v", err)
+	}
+
+	select {
+	case err := <-remoteErr:
+		t.Fatal(err)
+	case messages := <-observed:
+		if !strings.HasPrefix(messages[0], "INVITE ") || !strings.HasPrefix(messages[1], "CANCEL ") || !strings.HasPrefix(messages[2], "ACK ") {
+			t.Fatalf("SIP order = %q / %q / %q", firstSIPLine(messages[0]), firstSIPLine(messages[1]), firstSIPLine(messages[2]))
+		}
+		if cascadeTestHeader(messages[2], "CSeq") != "25 ACK" || cascadeTestHeader(messages[2], "Via") != cascadeTestHeader(messages[0], "Via") {
+			t.Fatalf("487 ACK transaction headers = CSeq %q Via %q", cascadeTestHeader(messages[2], "CSeq"), cascadeTestHeader(messages[2], "Via"))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for CANCEL/487/ACK flow")
+	}
+}
+
+func TestSIPResponseContextCancelledInviteAcknowledgesLate2xxAndSendsBYE(t *testing.T) {
+	local := mustFlowAddress(t, "sip:"+gb10PlatformID+"@192.0.2.20:5060")
+	remote := mustFlowAddress(t, "sip:"+gb10DeviceID+"@192.0.2.10:5060")
+	server := sip.NewServer(local)
+	localRaw, remoteRaw := net.Pipe()
+	connection := sip.NewTCPConnection(localRaw)
+	go server.ProcessTCPConnection(connection)
+	defer func() {
+		_ = remoteRaw.Close()
+		server.Close()
+	}()
+
+	callID := sip.CallID("cancelled-invite-late-2xx")
+	request := sip.NewRequest("", sip.MethodInvite, remote.URI, sip.DefaultSipVersion,
+		sip.NewHeaderBuilder().SetMethod(sip.MethodInvite).SetSeqNo(27).SetFrom(local).SetTo(remote).SetCallID(&callID).
+			AddVia(&sip.ViaHop{Host: "192.0.2.20", Port: sip.NewPort(5060), Transport: "TCP", Params: sip.NewParams().Add("branch", sip.String{Str: "z9hG4bK-cancel-late-2xx"})}).Build(), nil)
+	request.SetConnection(connection)
+	request.SetSource(connection.LocalAddr())
+	request.SetDestination(connection.RemoteAddr())
+
+	observed := make(chan []string, 1)
+	remoteErr := make(chan error, 1)
+	go func() {
+		_ = remoteRaw.SetDeadline(time.Now().Add(3 * time.Second))
+		reader := bufio.NewReader(remoteRaw)
+		invite, err := readAnnexGTestSIPFrame(reader)
+		if err != nil {
+			remoteErr <- err
+			return
+		}
+		cancel, err := readAnnexGTestSIPFrame(reader)
+		if err != nil {
+			remoteErr <- err
+			return
+		}
+		if _, err := remoteRaw.Write([]byte(cancelledInviteTestResponse(cancel, 200, "OK"))); err != nil {
+			remoteErr <- err
+			return
+		}
+		if _, err := remoteRaw.Write([]byte(cancelledInviteTestResponse(invite, 200, "OK"))); err != nil {
+			remoteErr <- err
+			return
+		}
+		ack, err := readAnnexGTestSIPFrame(reader)
+		if err != nil {
+			remoteErr <- err
+			return
+		}
+		bye, err := readAnnexGTestSIPFrame(reader)
+		if err != nil {
+			remoteErr <- err
+			return
+		}
+		if _, err := remoteRaw.Write([]byte(cancelledInviteTestResponse(invite, 200, "OK"))); err != nil {
+			remoteErr <- err
+			return
+		}
+		retransmittedACK, err := readAnnexGTestSIPFrame(reader)
+		if err != nil {
+			remoteErr <- err
+			return
+		}
+		if _, err := remoteRaw.Write([]byte(cancelledInviteTestResponse(bye, 200, "OK"))); err != nil {
+			remoteErr <- err
+			return
+		}
+		observed <- []string{invite, cancel, ack, bye, retransmittedACK}
+	}()
+
+	tx, err := server.Request(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := sipInviteResponseContext(ctx, tx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled INVITE wait error = %v", err)
+	}
+
+	select {
+	case err := <-remoteErr:
+		t.Fatal(err)
+	case messages := <-observed:
+		if !strings.HasPrefix(messages[0], "INVITE ") || !strings.HasPrefix(messages[1], "CANCEL ") ||
+			!strings.HasPrefix(messages[2], "ACK ") || !strings.HasPrefix(messages[3], "BYE ") {
+			t.Fatalf("SIP order = %q / %q / %q / %q", firstSIPLine(messages[0]), firstSIPLine(messages[1]), firstSIPLine(messages[2]), firstSIPLine(messages[3]))
+		}
+		if cascadeTestHeader(messages[2], "CSeq") != "27 ACK" || cascadeTestHeader(messages[3], "CSeq") != "28 BYE" {
+			t.Fatalf("late 2xx cleanup CSeq = ACK %q BYE %q", cascadeTestHeader(messages[2], "CSeq"), cascadeTestHeader(messages[3], "CSeq"))
+		}
+		if messages[4] != messages[2] {
+			t.Fatalf("retransmitted late 2xx ACK changed:\nfirst=%s\nsecond=%s", messages[2], messages[4])
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for late 2xx ACK/BYE cleanup")
+	}
+}
+
+func cancelledInviteTestResponse(request string, status int, reason string) string {
+	to := cascadeTestHeader(request, "To")
+	if !strings.Contains(strings.ToLower(to), ";tag=") {
+		to += ";tag=cancelled-device"
+	}
+	return fmt.Sprintf("SIP/2.0 %d %s\r\nVia: %s\r\nFrom: %s\r\nTo: %s\r\nCall-ID: %s\r\nCSeq: %s\r\nContent-Length: 0\r\n\r\n",
+		status, reason, cascadeTestHeader(request, "Via"), cascadeTestHeader(request, "From"), to,
+		cascadeTestHeader(request, "Call-ID"), cascadeTestHeader(request, "CSeq"))
 }
 
 func TestSIPResponseContextCancelsInviteWhenTransactionEndsWithoutResponse(t *testing.T) {
@@ -111,6 +392,8 @@ func TestGBOperationsRejectCancelledContextBeforeSideEffects(t *testing.T) {
 		call func() error
 	}{
 		{name: "catalog", call: func() error { return api.QueryCatalogContext(ctx, gb10DeviceID) }},
+		{name: "device info", call: func() error { return api.QueryDeviceInfoContext(ctx, gb10DeviceID) }},
+		{name: "basic config", call: func() error { return api.QueryConfigDownloadBasicContext(ctx, gb10DeviceID) }},
 		{name: "play", call: func() error { return api.PlayContext(ctx, nil) }},
 		{name: "stop play", call: func() error { return api.StopPlay(ctx, nil) }},
 		{name: "history", call: func() error { return api.StartHistory(ctx, nil) }},

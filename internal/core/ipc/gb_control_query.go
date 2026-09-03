@@ -61,14 +61,6 @@ func (c Core) GBDeviceQuery(ctx context.Context, deviceID string, in *GBDeviceQu
 	if in.Action == "" {
 		return nil, reason.ErrBadRequest.SetMsg("action is required")
 	}
-	if in.Action == "record_info" || in.Action == "record_query" || in.Action == "file_query" {
-		if strings.TrimSpace(in.TargetID) == "" {
-			return nil, reason.ErrBadRequest.SetMsg("record_info requires target_id(channel id)")
-		}
-		if in.Start <= 0 || in.End <= in.Start {
-			return nil, reason.ErrBadRequest.SetMsg("record_info requires valid start/end")
-		}
-	}
 	if in.Timeout <= 0 {
 		in.Timeout = 6
 	}

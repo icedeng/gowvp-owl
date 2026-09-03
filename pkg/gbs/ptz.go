@@ -15,7 +15,6 @@ import (
 const (
 	ptzCmdTypeDeviceControl = "DeviceControl"
 	ptzResultOK             = "OK"
-	ptzResultWeakConfirmed  = "SENT_NO_RESPONSE"
 )
 
 const ptzTimeoutErrorMessage = "命令已发送，但设备未返回控制应答"
@@ -83,7 +82,7 @@ type deviceControlRequest struct {
 	SN        int      `xml:"SN"`
 	DeviceID  string   `xml:"DeviceID"`
 	PTZCmd    string   `xml:"PTZCmd,omitempty"`
-	ExtraInfo string   `xml:"ExtralInfo,omitempty"`
+	ExtraInfo string   `xml:"ExtraInfo,omitempty"`
 }
 
 type deviceControlResponse struct {
@@ -95,15 +94,16 @@ type deviceControlResponse struct {
 }
 
 type pendingDeviceControl struct {
-	wait     chan *deviceControlResponse
-	targetID string
+	wait      chan *deviceControlResponse
+	targetID  string
+	operation *pendingDeviceOperation
 }
 
 func (g *GB28181API) PTZ(in *PTZInput) (*PTZOutput, error) {
 	return g.PTZContext(context.Background(), in)
 }
 
-// PTZContext 下发云台控制并允许调用方取消 SIP 及业务应答等待。
+// PTZContext 下发云台控制；按标准在收到 SIP 200 OK 后即返回成功。
 func (g *GB28181API) PTZContext(ctx context.Context, in *PTZInput) (*PTZOutput, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -126,15 +126,11 @@ func (g *GB28181API) PTZContext(ctx context.Context, in *PTZInput) (*PTZOutput, 
 	if in.Speed == 0 {
 		in.Speed = 40
 	}
-	if in.Timeout <= 0 {
-		in.Timeout = 6 * time.Second
-	}
-
-	sn := g.nextControlSN()
 	cmd, err := encodePTZCommand(in)
 	if err != nil {
 		return nil, err
 	}
+	sn := g.nextControlSN()
 	req := deviceControlRequest{
 		CmdType:  ptzCmdTypeDeviceControl,
 		SN:       sn,
@@ -146,58 +142,35 @@ func (g *GB28181API) PTZContext(ctx context.Context, in *PTZInput) (*PTZOutput, 
 		return nil, err
 	}
 
-	waitKey := fmt.Sprintf("%s:%d", in.DeviceID, sn)
-	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1), targetID: in.ChannelID}
-	g.pendingDeviceControl.Store(waitKey, pending)
-	defer g.pendingDeviceControl.Delete(waitKey)
-
-	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodMessage, &sip.ContentTypeXML, body)
+	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, in.DeviceID, in.ChannelID)
+	defer releaseOperation()
+	requestCtx := operation.Context(ctx)
+	tx, err := g.svr.wrapRequestContext(requestCtx, ch, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
-		return nil, err
+		return nil, operation.ErrorOr(err)
 	}
-	if _, err = sipResponseContext(ctx, tx); err != nil {
-		return nil, err
+	if _, err = sipResponseContext(requestCtx, tx); err != nil {
+		return nil, operation.ErrorOr(err)
 	}
-
-	timer := time.NewTimer(in.Timeout)
-	defer timer.Stop()
-
-	select {
-	case resp := <-pending.wait:
-		result := strings.ToUpper(strings.TrimSpace(resp.Result))
-		if result != ptzResultOK {
-			return nil, fmt.Errorf("device control failed: %s", resp.Result)
-		}
-		return &PTZOutput{
-			SN:       sn,
-			DeviceID: in.DeviceID,
-			Channel:  in.ChannelID,
-			Result:   result,
-		}, nil
-	case <-g.serviceDone():
-		return nil, ErrServiceStopped
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-timer.C:
-		cfg := g.configSnapshot()
-		if cfg != nil && cfg.PTZWeakConfirm {
-			// 弱确认模式：SIP MESSAGE 已经收到 200 OK，只是设备未回业务 Response。
-			// 对部分“执行命令但不回 DeviceControl 应答”的厂商设备，按已发送成功处理。
-			return &PTZOutput{
-				SN:       sn,
-				DeviceID: in.DeviceID,
-				Channel:  in.ChannelID,
-				Result:   ptzResultWeakConfirmed,
-			}, nil
-		}
-		return nil, fmt.Errorf("%s", ptzTimeoutErrorMessage)
+	if !operation.Deliver(func() {}) {
+		return nil, operation.Cause()
 	}
+	return &PTZOutput{
+		SN:       sn,
+		DeviceID: in.DeviceID,
+		Channel:  in.ChannelID,
+		Result:   ptzResultOK,
+	}, nil
 }
 
 func (g *GB28181API) sipMessageDeviceControl(ctx *sip.Context) {
 	var msg deviceControlResponse
 	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
 		ctx.String(400, ErrXMLDecode.Error())
+		return
+	}
+	if err := validateDeviceControlResponseStructure(ctx.Request.Body()); err != nil {
+		ctx.String(400, err.Error())
 		return
 	}
 	msg.CmdType = strings.TrimSpace(msg.CmdType)
@@ -214,18 +187,36 @@ func (g *GB28181API) sipMessageDeviceControl(ctx *sip.Context) {
 	}
 
 	waitKey := fmt.Sprintf("%s:%d", ctx.DeviceID, msg.SN)
-	if v, ok := g.pendingDeviceControl.Load(waitKey); ok {
-		pending := v.(*pendingDeviceControl)
+	var pending *pendingDeviceControl
+	if value, ok := g.pendingDeviceControl.Load(waitKey); ok {
+		var pendingOK bool
+		pending, pendingOK = value.(*pendingDeviceControl)
+		if !pendingOK || pending == nil {
+			ctx.String(400, "invalid DeviceControl pending state")
+			return
+		}
 		if pending.targetID != "" && !strings.EqualFold(strings.TrimSpace(pending.targetID), msg.DeviceID) {
 			ctx.String(400, "DeviceControl response target mismatch")
 			return
 		}
-		select {
-		case pending.wait <- &msg:
-		default:
-		}
 	}
-	ctx.String(200, "OK")
+	if err := ctx.RespondString(200, "OK"); err != nil {
+		ctx.Log.Error("respond DeviceControl", "err", err, "sn", msg.SN, "target_id", msg.DeviceID)
+		return
+	}
+	unlockCommit, err := g.lockAdmittedInboundDeviceStateCommit(ctx)
+	if err != nil {
+		return
+	}
+	defer unlockCommit()
+	if pending != nil {
+		pending.operation.Deliver(func() {
+			select {
+			case pending.wait <- &msg:
+			default:
+			}
+		})
+	}
 }
 
 func encodePTZCommand(in *PTZInput) (string, error) {
@@ -474,6 +465,21 @@ func finalizePTZCmd(cmd []byte) string {
 	}
 	cmd[7] = byte(sum % 0x100)
 	return strings.ToUpper(hex.EncodeToString(cmd))
+}
+
+func parsePTZCommand(value string) ([]byte, error) {
+	command, err := hex.DecodeString(strings.TrimSpace(value))
+	if err != nil || len(command) != 8 || command[0] != 0xA5 || command[1] != 0x0F {
+		return nil, fmt.Errorf("invalid PTZCmd")
+	}
+	var checksum byte
+	for _, item := range command[:7] {
+		checksum += item
+	}
+	if checksum != command[7] {
+		return nil, fmt.Errorf("invalid PTZCmd checksum")
+	}
+	return command, nil
 }
 
 func set12BitValue(cmd []byte, value uint16) {

@@ -32,3 +32,22 @@ func TestTrafficLoggerConcurrentLogAndClose(t *testing.T) {
 	}()
 	group.Wait()
 }
+
+func TestCompareAndSwapTrafficLoggerDoesNotClearReplacement(t *testing.T) {
+	old := &TrafficLogger{}
+	replacement := &TrafficLogger{}
+	previous := SetTrafficLogger(old)
+	t.Cleanup(func() {
+		SetTrafficLogger(previous)
+	})
+
+	if got := SetTrafficLogger(replacement); got != old {
+		t.Fatalf("replaced logger = %p, want %p", got, old)
+	}
+	if CompareAndSwapTrafficLogger(old, nil) {
+		t.Fatal("stale logger generation cleared its replacement")
+	}
+	if got := SetTrafficLogger(nil); got != replacement {
+		t.Fatalf("current logger = %p, want replacement %p", got, replacement)
+	}
+}

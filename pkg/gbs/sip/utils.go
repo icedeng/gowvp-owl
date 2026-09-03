@@ -194,14 +194,27 @@ func XMLDecode(data []byte, v any) error {
 }
 
 func xmlDecode(data []byte, v any) error {
-	decoder := xml.NewDecoder(bytes.NewReader(data))
+	decoder := NewGBXMLDecoder(data)
+	return decoder.Decode(v)
+}
+
+// NewGBXMLDecoder 创建兼容国标信令字符集的 XML 解码器。
+// 对实际 UTF-8 字节保留历史上的宽容处理；非 UTF-8 字节统一按 GB18030
+// （兼容 GB2312/GBK）解码，并修复设备常见的缺失或错误 UTF-8 声明。
+func NewGBXMLDecoder(data []byte) *xml.Decoder {
+	sourceUTF8 := utf8.Valid(data)
+	input := data
+	if !sourceUTF8 {
+		input = xmlDocumentWithEncoding(data, "GB18030")
+	}
+	decoder := xml.NewDecoder(bytes.NewReader(input))
 	decoder.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
-		if utf8.Valid(data) {
+		if sourceUTF8 {
 			return input, nil
 		}
 		return simplifiedchinese.GB18030.NewDecoder().Reader(input), nil
 	}
-	return decoder.Decode(v)
+	return decoder
 }
 
 // XMLEncode XML编码器
@@ -211,8 +224,66 @@ func XMLEncode(data any) ([]byte, error) {
 		slog.Error("MarshalIndent", "err", err)
 		return nil, err
 	}
-	xmlHeader := "<?xml version=\"1.0\" encoding=\"GB2312\"?>\n"
-	return Utf8ToGbk([]byte(xmlHeader + string(b)))
+	return EncodeGBXMLDocument(b)
+}
+
+// EncodeGBXMLDocument 把 UTF-8 XML 文档规范化为实际 GBK 字节，并声明 GB2312。
+// GBK 覆盖 GB2312 字符集，保持项目既有的国标设备兼容策略。
+func EncodeGBXMLDocument(data []byte) ([]byte, error) {
+	if !utf8.Valid(data) {
+		return nil, fmt.Errorf("GB XML encoder requires UTF-8 input")
+	}
+	return Utf8ToGbk(xmlDocumentWithEncoding(data, "GB2312"))
+}
+
+func xmlDocumentWithEncoding(data []byte, charset string) []byte {
+	const declarationPrefix = "<?xml"
+	if !bytes.HasPrefix(data, []byte(declarationPrefix)) {
+		prefix := []byte("<?xml version=\"1.0\" encoding=\"" + charset + "\"?>\n")
+		return append(prefix, data...)
+	}
+	declarationEnd := bytes.Index(data, []byte("?>"))
+	if declarationEnd < 0 {
+		return data
+	}
+	declaration := data[:declarationEnd]
+	lowerDeclaration := strings.ToLower(string(declaration))
+	encodingIndex := strings.Index(lowerDeclaration, "encoding")
+	if encodingIndex < 0 {
+		result := make([]byte, 0, len(data)+len(charset)+12)
+		result = append(result, data[:declarationEnd]...)
+		result = append(result, []byte(" encoding=\"")...)
+		result = append(result, charset...)
+		result = append(result, '"')
+		result = append(result, data[declarationEnd:]...)
+		return result
+	}
+	valueStart := encodingIndex + len("encoding")
+	for valueStart < len(declaration) && strings.ContainsRune(abnfWs, rune(declaration[valueStart])) {
+		valueStart++
+	}
+	if valueStart >= len(declaration) || declaration[valueStart] != '=' {
+		return data
+	}
+	valueStart++
+	for valueStart < len(declaration) && strings.ContainsRune(abnfWs, rune(declaration[valueStart])) {
+		valueStart++
+	}
+	if valueStart >= len(declaration) || declaration[valueStart] != '\'' && declaration[valueStart] != '"' {
+		return data
+	}
+	quote := declaration[valueStart]
+	valueStart++
+	valueEnd := bytes.IndexByte(declaration[valueStart:], quote)
+	if valueEnd < 0 {
+		return data
+	}
+	valueEnd += valueStart
+	result := make([]byte, 0, len(data)-valueEnd+valueStart+len(charset))
+	result = append(result, data[:valueStart]...)
+	result = append(result, charset...)
+	result = append(result, data[valueEnd:]...)
+	return result
 }
 
 // Max Max

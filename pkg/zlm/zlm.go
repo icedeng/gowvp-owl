@@ -2,6 +2,7 @@ package zlm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -48,14 +49,25 @@ func (e Engine) SetConfig(cfg Config) Engine {
 }
 
 func (e *Engine) post(path string, data map[string]any, out any) error {
+	return e.postContext(context.Background(), path, data, out)
+}
+
+func (e *Engine) postContext(ctx context.Context, path string, data map[string]any, out any) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	bodyMap := make(map[string]any)
 	if e.cfg.Secret != "" {
 		bodyMap["secret"] = e.cfg.Secret
 	}
 	maps.Copy(bodyMap, data)
 	body, _ := json.Marshal(bodyMap)
-
-	resp, err := e.cli.Post(e.cfg.URL+path, "application/json", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, e.cfg.URL+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	resp, err := e.cli.Do(request)
 	if err != nil {
 		return err
 	}

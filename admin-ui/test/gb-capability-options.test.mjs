@@ -66,6 +66,8 @@ test("2014 与 2016 能力的最低版本提示保持准确", () => {
 test("国标设备列表提供四版本筛选并兼容旧版分页接口", () => {
   assert.match(devicesSource, /const version = ref\("all"\)/);
   assert.match(devicesSource, /function protocolVersion\(device: ApiDevice\)/);
+  assert.match(devicesSource, /function protocolVersionLabel\(device: ApiDevice\)/);
+  assert.match(devicesSource, /<strong>\{\{ protocolVersionLabel\(device\) \}\}<\/strong>/);
   assert.match(devicesSource, /2011（1\.0）/);
   assert.match(devicesSource, /2014（1\.1）/);
   assert.match(devicesSource, /2016（2\.0）/);

@@ -84,8 +84,22 @@ func (a ConfigAPI) deleteConfig(c *gin.Context, in *configIDInput) (any, error) 
 }
 
 type getConfigInfoOutput struct {
-	SIP        conf.SIP      `json:"sip"`
-	AccessInfo SIPAccessInfo `json:"access_info"`
+	SIP        conf.SIP        `json:"sip"`
+	SIPSecrets SIPSecretStatus `json:"sip_secrets"`
+	AccessInfo SIPAccessInfo   `json:"access_info"`
+}
+
+// SIPPeerSecretStatus 只暴露密钥是否已配置，不返回任何密钥内容。
+type SIPPeerSecretStatus struct {
+	PasswordConfigured         bool `json:"password_configured"`
+	SignalDigestSeedConfigured bool `json:"signal_digest_seed_configured"`
+}
+
+// SIPSecretStatus 描述配置摘要中已脱敏的 SIP 对端密钥。
+type SIPSecretStatus struct {
+	SignalDigestSeedConfigured bool                           `json:"signal_digest_seed_configured"`
+	Upstreams                  map[string]SIPPeerSecretStatus `json:"upstreams,omitempty"`
+	AnnexGSystems              map[string]SIPPeerSecretStatus `json:"annex_g_systems,omitempty"`
 }
 
 type SIPAccessInfo struct {
@@ -115,10 +129,24 @@ type updateSIPInput struct {
 	TLSClientCA             *string                          `json:"tls_client_ca"`
 	TLSRequireClientCert    *bool                            `json:"tls_require_client_cert"`
 	RegisterCertificateAuth *conf.SIPRegisterCertificateAuth `json:"register_certificate_auth"`
+	AnnexG                  *conf.SIPAnnexG                  `json:"annex_g"`
 	DeviceHistory           *conf.DeviceHistoryConfig        `json:"device_history"`
+	DirectTCPDownload       *conf.SIPDirectTCPDownload       `json:"direct_tcp_download"`
 	SignalDigest            *conf.SIPSignalDigest            `json:"signal_digest"`
+	AlarmReceivers          *[]conf.SIPAlarmReceiver         `json:"alarm_receivers"`
 	Upstreams               *[]conf.SIPUpstream              `json:"upstreams"`
 	Log                     *conf.SIPLog                     `json:"log"`
+	SecretClears            SIPSecretClearInput              `json:"secret_clears"`
+}
+
+// SIPSecretClearInput 提供显式清密钥语义。空字符串默认表示保留已有密钥，
+// 避免客户端读取脱敏配置后完整回传时误清空运行配置。
+type SIPSecretClearInput struct {
+	SignalDigestSeed          bool     `json:"signal_digest_seed"`
+	UpstreamPasswords         []string `json:"upstream_passwords"`
+	UpstreamSignalDigestSeeds []string `json:"upstream_signal_digest_seeds"`
+	AnnexGPasswords           []string `json:"annex_g_passwords"`
+	AnnexGSignalDigestSeeds   []string `json:"annex_g_signal_digest_seeds"`
 }
 
 // getConfigInfo godoc
@@ -141,10 +169,49 @@ func (a ConfigAPI) getConfigInfo(c *gin.Context, _ *struct{}) (*getConfigInfoOut
 	if a.sipConfig != nil {
 		cfg = *a.sipConfig
 	}
+	redacted, secretStatus := redactSIPPeerSecrets(cfg)
 	return &getConfigInfoOutput{
-		SIP:        cfg,
+		SIP:        redacted,
+		SIPSecrets: secretStatus,
 		AccessInfo: sipAccessInfo(cfg, a.conf.Media.SDPIP),
 	}, nil
+}
+
+func redactSIPPeerSecrets(cfg conf.SIP) (conf.SIP, SIPSecretStatus) {
+	redacted := cfg
+	status := SIPSecretStatus{
+		SignalDigestSeedConfigured: cfg.SignalDigest.Seed != "",
+	}
+	redacted.SignalDigest.Seed = ""
+
+	redacted.Upstreams = append([]conf.SIPUpstream(nil), cfg.Upstreams...)
+	if len(cfg.Upstreams) > 0 {
+		status.Upstreams = make(map[string]SIPPeerSecretStatus, len(cfg.Upstreams))
+	}
+	for index := range redacted.Upstreams {
+		item := &redacted.Upstreams[index]
+		status.Upstreams[item.Name] = SIPPeerSecretStatus{
+			PasswordConfigured:         item.Password != "",
+			SignalDigestSeedConfigured: item.SignalDigestSeed != "",
+		}
+		item.Password = ""
+		item.SignalDigestSeed = ""
+	}
+
+	redacted.AnnexG = cloneSIPAnnexG(cfg.AnnexG)
+	if len(cfg.AnnexG.Systems) > 0 {
+		status.AnnexGSystems = make(map[string]SIPPeerSecretStatus, len(cfg.AnnexG.Systems))
+	}
+	for index := range redacted.AnnexG.Systems {
+		item := &redacted.AnnexG.Systems[index]
+		status.AnnexGSystems[item.ID] = SIPPeerSecretStatus{
+			PasswordConfigured:         item.Password != "",
+			SignalDigestSeedConfigured: item.SignalDigestSeed != "",
+		}
+		item.Password = ""
+		item.SignalDigestSeed = ""
+	}
+	return redacted, status
 }
 
 // updateSIP godoc
@@ -186,6 +253,13 @@ func (a ConfigAPI) updateSIP(_ *gin.Context, in *updateSIPInput) (gin.H, error) 
 	if err := conf.WriteConfig(&candidate, a.conf.ConfigPath); err != nil {
 		return nil, reason.ErrServer.WithMsg(err.Error())
 	}
+	var applyRuntime func(conf.SIP) error
+	if a.uc != nil && a.uc.SipServer != nil {
+		applyRuntime = a.uc.SipServer.ApplyConfig
+	}
+	if err := applySIPRuntimeWithRollback(a.conf, current, next, applyRuntime); err != nil {
+		return nil, reason.ErrServer.WithMsg(err.Error())
+	}
 	if a.sipConfig != nil {
 		*a.sipConfig = next
 	}
@@ -196,11 +270,26 @@ func (a ConfigAPI) updateSIP(_ *gin.Context, in *updateSIPInput) (gin.H, error) 
 			MaxDays:    next.DeviceHistory.MaxDays,
 		})
 	}
-	if a.uc != nil && a.uc.SipServer != nil {
-		a.uc.SipServer.SetConfig(next)
-	}
 
 	return gin.H{"msg": "ok"}, nil
+}
+
+func applySIPRuntimeWithRollback(config *conf.Bootstrap, current, next conf.SIP, apply func(conf.SIP) error) error {
+	if apply == nil {
+		return nil
+	}
+	if err := apply(next); err != nil {
+		if config == nil {
+			return err
+		}
+		rollback := *config
+		rollback.Sip = current
+		if rollbackErr := conf.WriteConfig(&rollback, config.ConfigPath); rollbackErr != nil {
+			return fmt.Errorf("%v；回滚配置文件失败: %v", err, rollbackErr)
+		}
+		return err
+	}
+	return nil
 }
 
 func applyHotSIPConfig(target *conf.SIP, next conf.SIP) {
@@ -216,6 +305,7 @@ func applyHotSIPConfig(target *conf.SIP, next conf.SIP) {
 	target.SignalDigest = next.SignalDigest
 	target.DeviceHistory = next.DeviceHistory
 	target.DirectTCPDownload = next.DirectTCPDownload
+	target.AlarmReceivers = cloneSIPAlarmReceivers(next.AlarmReceivers)
 	target.Upstreams = append([]conf.SIPUpstream(nil), next.Upstreams...)
 }
 
@@ -254,6 +344,9 @@ func sipRestartRequiredFields(current, next conf.SIP) []string {
 	if !reflect.DeepEqual(current.RegisterCertificateAuth, next.RegisterCertificateAuth) {
 		fields = append(fields, "RegisterCertificateAuth")
 	}
+	if !reflect.DeepEqual(current.AnnexG, next.AnnexG) {
+		fields = append(fields, "AnnexG")
+	}
 	if current.Log != next.Log {
 		fields = append(fields, "Log")
 	}
@@ -281,20 +374,42 @@ func mergeSIPUpdate(current conf.SIP, in *updateSIPInput) conf.SIP {
 		next.RegisterCertificateAuth = *in.RegisterCertificateAuth
 		next.RegisterCertificateAuth.DeviceCertificates = cloneStringMap(in.RegisterCertificateAuth.DeviceCertificates)
 	}
+	if in.AnnexG == nil {
+		next.AnnexG = cloneSIPAnnexG(current.AnnexG)
+	} else {
+		next.AnnexG = cloneSIPAnnexG(*in.AnnexG)
+	}
+	mergeAnnexGSecrets(current.AnnexG.Systems, next.AnnexG.Systems, in.SecretClears)
 	if in.DeviceHistory == nil {
 		next.DeviceHistory = current.DeviceHistory
 	} else {
 		next.DeviceHistory = *in.DeviceHistory
+	}
+	if in.DirectTCPDownload == nil {
+		next.DirectTCPDownload = cloneSIPDirectTCPDownload(current.DirectTCPDownload)
+	} else {
+		next.DirectTCPDownload = cloneSIPDirectTCPDownload(*in.DirectTCPDownload)
 	}
 	if in.Upstreams == nil {
 		next.Upstreams = append([]conf.SIPUpstream(nil), current.Upstreams...)
 	} else {
 		next.Upstreams = append([]conf.SIPUpstream(nil), (*in.Upstreams)...)
 	}
+	mergeUpstreamSecrets(current.Upstreams, next.Upstreams, in.SecretClears)
+	if in.AlarmReceivers == nil {
+		next.AlarmReceivers = cloneSIPAlarmReceivers(current.AlarmReceivers)
+	} else {
+		next.AlarmReceivers = cloneSIPAlarmReceivers(*in.AlarmReceivers)
+	}
 	if in.SignalDigest == nil {
 		next.SignalDigest = current.SignalDigest
 	} else {
 		next.SignalDigest = *in.SignalDigest
+	}
+	if in.SecretClears.SignalDigestSeed {
+		next.SignalDigest.Seed = ""
+	} else if next.SignalDigest.Seed == "" {
+		next.SignalDigest.Seed = current.SignalDigest.Seed
 	}
 	if in.Log == nil {
 		next.Log = current.Log
@@ -302,6 +417,117 @@ func mergeSIPUpdate(current conf.SIP, in *updateSIPInput) conf.SIP {
 		next.Log = *in.Log
 	}
 	return next
+}
+
+func mergeUpstreamSecrets(current, next []conf.SIPUpstream, clears SIPSecretClearInput) {
+	clearPasswords := stringSet(clears.UpstreamPasswords)
+	clearSeeds := stringSet(clears.UpstreamSignalDigestSeeds)
+	currentByName := make(map[string]conf.SIPUpstream, len(current))
+	currentByEndpoint := make(map[string]conf.SIPUpstream, len(current))
+	endpointCounts := make(map[string]int, len(current))
+	for _, item := range current {
+		currentByName[item.Name] = item
+		if identity := upstreamSecretIdentity(item); identity != "" {
+			endpointCounts[identity]++
+			currentByEndpoint[identity] = item
+		}
+	}
+	for index := range next {
+		item := &next[index]
+		previous, exists := currentByName[item.Name]
+		if !exists {
+			identity := upstreamSecretIdentity(*item)
+			if identity != "" && endpointCounts[identity] == 1 {
+				previous, exists = currentByEndpoint[identity]
+			}
+		}
+		if _, clear := clearPasswords[item.Name]; clear {
+			item.Password = ""
+		} else if item.Password == "" && exists {
+			item.Password = previous.Password
+		}
+		if _, clear := clearSeeds[item.Name]; clear {
+			item.SignalDigestSeed = ""
+		} else if item.SignalDigestSeed == "" && exists {
+			item.SignalDigestSeed = previous.SignalDigestSeed
+		}
+	}
+}
+
+func upstreamSecretIdentity(item conf.SIPUpstream) string {
+	serverID := strings.TrimSpace(item.ServerID)
+	host := strings.ToLower(strings.TrimSpace(item.Host))
+	if serverID == "" || host == "" {
+		return ""
+	}
+	transport := strings.ToLower(strings.TrimSpace(item.Transport))
+	if transport == "" {
+		transport = "udp"
+	}
+	port := item.Port
+	if port == 0 {
+		if transport == "tls" {
+			port = 5061
+		} else {
+			port = 5060
+		}
+	}
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%s", serverID, host, port, transport)
+}
+
+func mergeAnnexGSecrets(current, next []conf.SIPAnnexGSystem, clears SIPSecretClearInput) {
+	clearPasswords := stringSet(clears.AnnexGPasswords)
+	clearSeeds := stringSet(clears.AnnexGSignalDigestSeeds)
+	currentByID := make(map[string]conf.SIPAnnexGSystem, len(current))
+	for _, item := range current {
+		currentByID[item.ID] = item
+	}
+	for index := range next {
+		item := &next[index]
+		previous, exists := currentByID[item.ID]
+		if _, clear := clearPasswords[item.ID]; clear {
+			item.Password = ""
+		} else if item.Password == "" && exists {
+			item.Password = previous.Password
+		}
+		if _, clear := clearSeeds[item.ID]; clear {
+			item.SignalDigestSeed = ""
+		} else if item.SignalDigestSeed == "" && exists {
+			item.SignalDigestSeed = previous.SignalDigestSeed
+		}
+	}
+}
+
+func stringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
+}
+
+func cloneSIPAlarmReceivers(source []conf.SIPAlarmReceiver) []conf.SIPAlarmReceiver {
+	cloned := append([]conf.SIPAlarmReceiver(nil), source...)
+	for index := range cloned {
+		cloned[index].SourceIDs = append([]string(nil), source[index].SourceIDs...)
+	}
+	return cloned
+}
+
+func cloneSIPDirectTCPDownload(source conf.SIPDirectTCPDownload) conf.SIPDirectTCPDownload {
+	cloned := source
+	cloned.DeviceAllowlist = append([]string(nil), source.DeviceAllowlist...)
+	cloned.AllowedAddressCIDRs = append([]string(nil), source.AllowedAddressCIDRs...)
+	return cloned
+}
+
+func cloneSIPAnnexG(source conf.SIPAnnexG) conf.SIPAnnexG {
+	cloned := source
+	cloned.Systems = append([]conf.SIPAnnexGSystem(nil), source.Systems...)
+	for index := range cloned.Systems {
+		cloned.Systems[index].SourceCIDRs = append([]string(nil), source.Systems[index].SourceCIDRs...)
+	}
+	return cloned
 }
 
 func cloneStringMap(source map[string]string) map[string]string {

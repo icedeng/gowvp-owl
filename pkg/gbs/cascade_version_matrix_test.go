@@ -15,8 +15,8 @@ import (
 
 func TestCascadeFourVersionProtocolMatrix(t *testing.T) {
 	channel := &ipc.Channel{
-		ChannelID: testCascadeChannelID, Name: "Front Gate", PTZType: 3, IsOnline: true,
-		Ext: ipc.DeviceExt{GBCatalog: &ipc.GBCatalogExt{Resolution: "1920x1080"}},
+		ChannelID: testCascadeChannelID, Name: "   ", PTZType: 3, IsOnline: true,
+		Ext: ipc.DeviceExt{Manufacturer: " Vendor ", Model: " IPC ", GBCatalog: &ipc.GBCatalogExt{Resolution: "1920x1080"}},
 	}
 	const start, end = int64(1711929600), int64(1711933200)
 	tests := []struct {
@@ -35,9 +35,9 @@ func TestCascadeFourVersionProtocolMatrix(t *testing.T) {
 		catalogEvent       string
 	}{
 		{"2011", GBVersion10, false, false, false, false, false, false, false, 0, "", "MANSRTSP/1.0", "presence"},
-		{"2014", GBVersion11, true, false, true, true, false, true, true, 96, "PS/90000", "RTSP/1.0", "Catalog;id=" + gb10DeviceID},
-		{"2016", GBVersion20, true, true, false, true, true, true, true, 8, "PCMA/8000", "RTSP/1.0", "Catalog;id=" + gb10DeviceID},
-		{"2022", GBVersion30, true, true, false, true, true, true, true, 8, "PCMA/8000", "RTSP/1.0", "Catalog;id=" + gb10DeviceID},
+		{"2014", GBVersion11, true, false, true, true, false, true, true, 96, "PS/90000", "RTSP/1.0", "Catalog;id=1894"},
+		{"2016", GBVersion20, true, true, false, true, true, true, true, 8, "PCMA/8000", "RTSP/1.0", "Catalog;id=1894"},
+		{"2022", GBVersion30, true, true, false, true, true, true, true, 8, "PCMA/8000", "RTSP/1.0", "Catalog;id=1894"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -51,8 +51,8 @@ func TestCascadeFourVersionProtocolMatrix(t *testing.T) {
 			response := sip.NewResponseFromRequest("", register, http.StatusOK, "OK", nil)
 			remoteVersion := sip.XGBVer(test.version)
 			response.AppendHeader(&remoteVersion)
-			if got := negotiateCascadeVersion(test.version, response); got != test.version {
-				t.Fatalf("negotiated version = %s", got)
+			if got, err := negotiateCascadeVersion(test.version, response); err != nil || got != test.version {
+				t.Fatalf("negotiated version = %s, %v", got, err)
 			}
 
 			items := buildCascadeCatalogItems([]*ipc.Channel{channel}, platform, test.version)
@@ -61,6 +61,9 @@ func TestCascadeFourVersionProtocolMatrix(t *testing.T) {
 			}
 			if items[0].DeviceID != testExposedChannelID || items[0].ParentID != gb10DeviceID {
 				t.Fatalf("Catalog mapping = %+v", items[0])
+			}
+			if items[0].Name != "   " || items[0].Manufacturer != " Vendor " || items[0].Model != " IPC " {
+				t.Fatalf("Catalog ordinary string whitespace was changed: %+v", items[0])
 			}
 			alarmXML, err := xml.Marshal(cascadeAlarmStatusForVersion(test.version, 0))
 			if err != nil {
@@ -73,14 +76,35 @@ func TestCascadeFourVersionProtocolMatrix(t *testing.T) {
 			if !strings.Contains(string(alarmXML), wantAlarmCount) {
 				t.Fatalf("DeviceStatus Alarmstatus profile = %s, want %s", alarmXML, wantAlarmCount)
 			}
-			deviceInfoXML, err := xml.Marshal(cascadeDeviceInfoResponse{
-				DeviceName: cascadeDeviceInfoName(test.version, "camera"), Result: "OK", Channel: 1,
-			})
+			deviceInfo := cascadeDeviceInfoResponse{
+				DeviceName: cascadeDeviceInfoName(test.version, "   "), Result: "OK", Channel: 1,
+			}
+			applyCascadeDeviceInfoCompatibility(&deviceInfo, test.version, "IPC", 1, 2)
+			deviceInfoXML, err := xml.Marshal(deviceInfo)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if strings.Contains(string(deviceInfoXML), "<DeviceName>") != test.version.AtLeast(GBVersion11) {
 				t.Fatalf("DeviceInfo DeviceName profile = %s", deviceInfoXML)
+			}
+			if test.version.AtLeast(GBVersion11) && !strings.Contains(string(deviceInfoXML), "<DeviceName>   </DeviceName>") {
+				t.Fatalf("DeviceInfo ordinary string whitespace was changed: %s", deviceInfoXML)
+			}
+			deviceInfoText := string(deviceInfoXML)
+			resultIndex := strings.Index(deviceInfoText, "<Result>")
+			if test.version.AtLeast(GBVersion11) && strings.Index(deviceInfoText, "<DeviceName>") > resultIndex {
+				t.Fatalf("DeviceInfo DeviceName must precede Result: %s", deviceInfoXML)
+			}
+			maxCameraIndex, maxAlarmIndex, channelIndex := strings.Index(deviceInfoText, "<MaxCamera>"), strings.Index(deviceInfoText, "<MaxAlarm>"), strings.Index(deviceInfoText, "<Channel>")
+			if test.version == GBVersion30 {
+				if strings.Contains(deviceInfoText, "<DeviceType>") || maxCameraIndex >= 0 || maxAlarmIndex >= 0 {
+					t.Fatalf("2022 DeviceInfo contains removed compatibility fields: %s", deviceInfoXML)
+				}
+				if channelIndex < resultIndex {
+					t.Fatalf("2022 DeviceInfo Channel must follow Result: %s", deviceInfoXML)
+				}
+			} else if maxCameraIndex < resultIndex || maxAlarmIndex < maxCameraIndex || channelIndex < maxAlarmIndex {
+				t.Fatalf("DeviceInfo compatibility field order = %s", deviceInfoXML)
 			}
 
 			if _, err := parseCascadeVideoOffer(cascadeOfferSDP("RTP/AVP", "192.0.2.30", ""), test.version, platform); err != nil {
@@ -105,7 +129,7 @@ func TestCascadeFourVersionProtocolMatrix(t *testing.T) {
 			if got := historyControlProtocolVersion(test.version); got != test.historyRTSPVersion {
 				t.Fatalf("history control version = %s", got)
 			}
-			if got := buildSubscriptionEventValueForVersion(test.version, "Catalog", gb10DeviceID); got != test.catalogEvent {
+			if got := buildSubscriptionEventValueForVersion(test.version, "Catalog", "1894"); got != test.catalogEvent {
 				t.Fatalf("Catalog Event = %s", got)
 			}
 			if got := buildSubscriptionEventValueForVersion(test.version, "Alarm", gb10DeviceID); got != "presence" {
@@ -128,6 +152,12 @@ func TestCascadeFourVersionProtocolMatrix(t *testing.T) {
 			if defaultExpires != wantExpires {
 				t.Fatalf("Catalog default Expires = %d, want %d", defaultExpires, wantExpires)
 			}
+			if outgoingExpires := defaultOutgoingSubscribeExpires(test.version, "Catalog"); outgoingExpires != wantExpires {
+				t.Fatalf("outgoing Catalog default Expires = %d, want %d", outgoingExpires, wantExpires)
+			}
+			if outgoingExpires := defaultOutgoingSubscribeExpires(test.version, "Alarm"); outgoingExpires != defaultSubscribeExpires {
+				t.Fatalf("outgoing Alarm default Expires = %d, want %d", outgoingExpires, defaultSubscribeExpires)
+			}
 			payload, mapping, voiceAllowed := cascadeBroadcastProfile(test.version)
 			if voiceAllowed != test.voiceBroadcast || payload != test.voicePayload || mapping != test.voiceMapping {
 				t.Fatalf("Broadcast profile = %d, %q, %v", payload, mapping, voiceAllowed)
@@ -138,6 +168,11 @@ func TestCascadeFourVersionProtocolMatrix(t *testing.T) {
 			}
 			if voiceErr == nil && (!strings.Contains(string(voiceSDP), "m=audio 30000 RTP/AVP "+strconv.Itoa(test.voicePayload)) || !strings.Contains(string(voiceSDP), "a=rtpmap:"+strconv.Itoa(test.voicePayload)+" "+test.voiceMapping)) {
 				t.Fatalf("Broadcast SDP profile = %s", voiceSDP)
+			}
+			if test.voiceBroadcast {
+				if _, err := buildCascadeVoiceReceiveSDP(gb10DeviceID, &sms.MediaServer{SDPIP: "192.0.2.20"}, test.version, 30000, "1100000001"); err == nil || !strings.Contains(err.Error(), "realtime SSRC") {
+					t.Fatalf("Broadcast history SSRC error = %v, want realtime SSRC rejection", err)
+				}
 			}
 
 			stream := &Streams{S: time.Unix(start, 0), E: time.Unix(end, 0)}
@@ -157,7 +192,42 @@ func TestCascadeVersionNegotiationNeverUpgradesConfiguredProfile(t *testing.T) {
 	response := sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil)
 	remote := sip.XGBVer(GBVersion30)
 	response.AppendHeader(&remote)
-	if got := negotiateCascadeVersion(GBVersion11, response); got != GBVersion11 {
-		t.Fatalf("configured 1.1 was upgraded to %s", got)
+	if got, err := negotiateCascadeVersion(GBVersion11, response); err != nil || got != GBVersion11 {
+		t.Fatalf("configured 1.1 was upgraded to %s, %v", got, err)
+	}
+}
+
+func TestCascadeVersionNegotiationValidatesResponseHeader(t *testing.T) {
+	request := sip.NewRequest("", sip.MethodRegister, &sip.URI{}, sip.DefaultSipVersion, nil, nil)
+	tests := []struct {
+		name    string
+		headers []string
+		want    GBProtocolVersion
+		wantErr string
+	}{
+		{name: "missing legacy header", want: GBVersion30},
+		{name: "known downgrade", headers: []string{"1.1"}, want: GBVersion11},
+		{name: "unknown extension is conservative", headers: []string{"4.0"}, want: GBVersion10},
+		{name: "malformed", headers: []string{"2011"}, wantErr: "invalid X-GB-Ver"},
+		{name: "empty", headers: []string{""}, wantErr: "invalid X-GB-Ver"},
+		{name: "duplicate", headers: []string{"2.0", "3.0"}, wantErr: "multiple X-GB-Ver"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := sip.NewResponseFromRequest("", request, http.StatusOK, "OK", nil)
+			for _, value := range test.headers {
+				response.AppendHeader(&sip.GenericHeader{HeaderName: "X-GB-Ver", Contents: value})
+			}
+			got, err := negotiateCascadeVersion(GBVersion30, response)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("negotiation error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("negotiated version = %s, %v; want %s", got, err, test.want)
+			}
+		})
 	}
 }

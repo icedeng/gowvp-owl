@@ -11,12 +11,11 @@ import (
 	"time"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
-	"github.com/gowvp/owl/pkg/zlm"
 )
 
 const mediaStatusHistoryFinished = "121"
 
-// MediaStatusNotify 是 2011 附录 J 定义、后续版本延续的媒体通知。
+// MediaStatusNotify 是四版本历史回放/下载结束流程使用的媒体通知。
 type MediaStatusNotify struct {
 	XMLName    xml.Name
 	CmdType    string `xml:"CmdType" json:"cmd_type"`
@@ -33,6 +32,10 @@ func (g *GB28181API) sipMessageMediaStatus(ctx *sip.Context) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
+	if err := validateMediaStatusStructure(ctx.Request.Body()); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 	notify.CmdType = strings.TrimSpace(notify.CmdType)
 	notify.DeviceID = strings.TrimSpace(notify.DeviceID)
 	notify.NotifyType = strings.TrimSpace(notify.NotifyType)
@@ -41,26 +44,35 @@ func (g *GB28181API) sipMessageMediaStatus(ctx *sip.Context) {
 		return
 	}
 	callID := callIDFromRequest(ctx.Request)
+	unlockCommit, err := g.lockAdmittedInboundDeviceStateCommit(ctx)
+	if err != nil {
+		ctx.String(200, "OK")
+		return
+	}
+	defer unlockCommit()
 	if err := g.validateMediaStatusTarget(ctx, notify.DeviceID, callID); err != nil {
 		ctx.String(400, err.Error())
 		return
 	}
 	if notify.NotifyType != mediaStatusHistoryFinished {
-		ctx.String(200, "OK")
+		_ = ctx.RespondString(200, "OK")
+		ctx.Abort()
 		return
 	}
 
 	matched := false
+	directCandidate := false
+	cascadeForwarded := false
 	var ended *Streams
 	endedKey := ""
 	endedDownload := false
 	if callID != "" && g.directDownloads != nil {
-		if state, ok := g.directDownloads.State(callID); ok && mediaStatusTargetMatches(notify.DeviceID, state.DeviceID, state.ChannelID) &&
-			g.directDownloads.NotifySenderFinishedForDevice(callID, ctx.DeviceID) {
-			matched = true
+		if state, ok := g.directDownloads.State(callID); ok && state.DeviceID == ctx.DeviceID &&
+			mediaStatusTargetMatches(notify.DeviceID, state.DeviceID, state.ChannelID) {
+			directCandidate = true
 		}
 	}
-	if !matched && g.streams != nil && callID != "" {
+	if !directCandidate && g.streams != nil && callID != "" {
 		g.streams.Range(func(key string, stream *Streams) bool {
 			if stream == nil || stream.DeviceID != ctx.DeviceID || normalizeStoredCallID(stream.CallID) != callID || !strings.HasPrefix(key, "history:") {
 				return true
@@ -77,34 +89,69 @@ func (g *GB28181API) sipMessageMediaStatus(ctx *sip.Context) {
 	}
 	if ended != nil {
 		forwarded, status, reason := g.forwardCascadeMediaStatus(ended, notify)
+		cascadeForwarded = forwarded
 		if forwarded && (status < 200 || status >= 300) {
 			ctx.String(status, reason)
 			return
 		}
-		if endedKey == "" || !g.streams.CompareAndDelete(endedKey, ended) {
+		if forwarded {
+			// 上级已确认媒体结束后立即禁止复用旧源；其后到达的上级 BYE 负责逐级释放对话。
+			g.markCascadeSourcesMediaStatusFinished(ended)
+		}
+	}
+	// 上级转发必须在本级响应前完成，才能把 4xx/5xx 反馈给设备；
+	// 本地流索引和下载终态则只在 200 OK 实际写出后提交。
+	respondErr := ctx.RespondString(200, "OK")
+	ctx.Abort()
+	if respondErr != nil {
+		slog.Error("acknowledge MediaStatus failed", "device_id", ctx.DeviceID, "call_id", callID, "notify_type", notify.NotifyType, "err", respondErr)
+		return
+	}
+	directMatched := false
+	if directCandidate && g.directDownloads.NotifySenderFinishedForDevice(callID, ctx.DeviceID) {
+		matched = true
+		directMatched = true
+	}
+	if ended != nil {
+		current, exists := g.streams.Load(endedKey)
+		if endedKey == "" || !exists || current != ended {
 			ended = nil
 		} else {
-			ended.Status = 1
-			ended.Stop = true
-			ended.EndReason = "media_status"
+			if cascadeForwarded {
+				g.deferMediaStreamDialogCleanup(ended)
+				if ended.DirectTCP {
+					g.notifyCascadeDirectTCPRelaySenderFinished(ended)
+				}
+			}
+			g.markMediaStreamStopped(ended, "media_status", false)
 		}
+	}
+	if ended == nil && !directMatched && callID != "" &&
+		g.finishRTPDownloadByCallID(ctx.DeviceID, notify.DeviceID, callID, rtpDownloadCompleted, "media_status") {
+		matched = true
+	}
+	if ended != nil {
+		matched = true
 	}
 	if !matched {
 		slog.Debug("MediaStatus session not found", "device_id", ctx.DeviceID, "call_id", callID, "notify_type", notify.NotifyType)
 	}
-	// 先确认设备并保留已收敛的会话终态，媒体服务器/数据库清理慢时不触发 MediaStatus 重传。
-	ctx.String(200, "OK")
+	// SIP 已确认后再执行慢速媒体服务器/数据库清理，避免拖延设备事务。
 	if ended == nil {
 		return
 	}
+	// MediaStatus/121 是下载自然完成的更强证据；即使远端 BYE 先到，也允许把 stopped 升级为 completed。
 	if endedDownload {
 		g.finishRTPDownload(ended, rtpDownloadCompleted, "media_status")
 	}
-	if ended.mediaServer != nil && g.sms != nil {
-		_, _ = g.sms.CloseRTPServer(ended.mediaServer, zlm.CloseRTPServerRequest{StreamID: ended.StreamID})
+	// 级联已把 MediaStatus 转发给上级时，下级 SIP 对话由随后到达的上级 BYE 收敛；
+	// markMediaStreamStopped 已将该步视为由级联持有，本地这里只释放 RTP 接收端口。
+	cleanupCtx := g.mediaPersistenceContext()
+	if _, err := g.cleanupMediaStreamContext(cleanupCtx, endedKey, ended); err != nil {
+		slog.WarnContext(cleanupCtx, "cleanup media after MediaStatus failed", "device_id", ended.DeviceID, "channel_id", ended.ChannelID, "stream_id", ended.StreamID, "err", err)
 	}
-	if g.core.Store() != nil {
-		_ = g.core.EditPlaying(context.Background(), ended.DeviceID, ended.ChannelID, false)
+	if err := g.persistChannelIdleIfNoActive(g.mediaPersistenceContext(), ended.DeviceID, ended.ChannelID); err != nil {
+		slog.Warn("persist MediaStatus channel state", "device_id", ended.DeviceID, "channel_id", ended.ChannelID, "err", err)
 	}
 }
 
@@ -143,22 +190,30 @@ func (g *GB28181API) forwardCascadeMediaStatus(stream *Streams, notify MediaStat
 }
 
 func cascadeMediaStatusDialogMatches(dialog *inboundInviteDialog, stream *Streams) bool {
-	if dialog == nil || dialog.Cascade == nil || dialog.Cascade.source == nil || dialog.Cascade.source.stream == nil || stream == nil {
+	if dialog == nil || dialog.Cascade == nil || stream == nil {
+		return false
+	}
+	sourceRef := dialog.Cascade.sourceSnapshot()
+	if sourceRef == nil || sourceRef.stream == nil {
 		return false
 	}
 	dialog.mu.Lock()
 	established := dialog.Established && dialog.Request != nil && dialog.Response != nil
 	dialog.mu.Unlock()
-	if !established || dialog.Cascade.source.mode != historyModePlayback && dialog.Cascade.source.mode != historyModeDownload {
+	if !established || sourceRef.mode != historyModePlayback && sourceRef.mode != historyModeDownload {
 		return false
 	}
-	source := dialog.Cascade.source.stream
+	source := sourceRef.stream
 	return source == stream || source.DeviceID == stream.DeviceID && source.ChannelID == stream.ChannelID &&
 		normalizeStoredCallID(source.CallID) == normalizeStoredCallID(stream.CallID)
 }
 
 func (g *GB28181API) forwardCascadeMediaStatusDialog(dialog *inboundInviteDialog, session *cascadeMediaSession, notify MediaStatusNotify) (int, string) {
-	if g == nil || g.svr == nil || dialog == nil || session == nil || session.worker == nil || session.source == nil || session.source.stream == nil {
+	if g == nil || g.svr == nil || dialog == nil || session == nil || session.worker == nil {
+		return http.StatusBadGateway, "cascade MediaStatus target is unavailable"
+	}
+	source := session.sourceSnapshot()
+	if source == nil || source.stream == nil {
 		return http.StatusBadGateway, "cascade MediaStatus target is unavailable"
 	}
 	if session.worker.exchange == nil {
@@ -175,13 +230,11 @@ func (g *GB28181API) forwardCascadeMediaStatusDialog(dialog *inboundInviteDialog
 		dialog.mu.Unlock()
 		return http.StatusConflict, "cascade media dialog is not established"
 	}
-	dialog.LocalCSeq++
-	cseq := dialog.LocalCSeq
 	request := dialog.Request
 	response := dialog.Response
 	dialog.mu.Unlock()
 
-	exposedID := cascadeMediaStatusExposedID(session.worker.platform, request, session.source.stream.ChannelID)
+	exposedID := cascadeMediaStatusExposedID(session.worker.platform, request, source.stream.ChannelID)
 	if exposedID == "" {
 		return http.StatusBadGateway, "cascade MediaStatus channel mapping is unavailable"
 	}
@@ -191,6 +244,17 @@ func (g *GB28181API) forwardCascadeMediaStatusDialog(dialog *inboundInviteDialog
 	if err != nil {
 		return http.StatusBadGateway, "encode cascade MediaStatus failed"
 	}
+	dialog.mu.Lock()
+	if !dialog.Established || dialog.Request != request || dialog.Response != response {
+		dialog.mu.Unlock()
+		return http.StatusConflict, "cascade media dialog changed before MediaStatus forwarding"
+	}
+	baseCSeq := dialog.LocalCSeq
+	cseq, cseqErr := nextLocalCSeqLocked(dialog)
+	dialog.mu.Unlock()
+	if cseqErr != nil {
+		return http.StatusConflict, cseqErr.Error()
+	}
 	forwarded, err := sip.NewRequestFromServerDialogChecked(sip.MethodMessage, request, response, cseq)
 	if err != nil {
 		return http.StatusBadGateway, "build cascade MediaStatus dialog request failed"
@@ -199,7 +263,8 @@ func (g *GB28181API) forwardCascadeMediaStatusDialog(dialog *inboundInviteDialog
 	version := sip.XGBVer(session.worker.protocolVersion())
 	forwarded.AppendHeader(&version)
 	transport := cascadeTransportForAddr(forwarded.Destination())
-	forwarded.AppendHeader(&sip.ViaHeader{&sip.ViaHop{
+	forwarded.AppendHeader(sip.ViaHeader{&sip.ViaHop{
+		ProtocolName: "SIP", ProtocolVersion: "2.0",
 		Host: session.worker.platform.localHost, Port: sip.NewPort(session.worker.platform.contactPort(transport)),
 		Transport: strings.ToUpper(transport), Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}),
 	}})
@@ -211,9 +276,24 @@ func (g *GB28181API) forwardCascadeMediaStatusDialog(dialog *inboundInviteDialog
 	if err := session.worker.platform.monitorUserIdentity.apply(identityCtx, forwarded); err != nil {
 		return http.StatusForbidden, "cascade MediaStatus identity forwarding failed"
 	}
+	if err := identityCtx.Err(); err != nil {
+		return http.StatusBadGateway, "cascade MediaStatus upstream is unavailable"
+	}
+	dialog.mu.Lock()
+	if !dialog.Established || dialog.Request != request || dialog.Response != response || dialog.LocalCSeq != baseCSeq {
+		dialog.mu.Unlock()
+		return http.StatusConflict, "cascade media dialog changed before MediaStatus forwarding"
+	}
+	dialog.LocalCSeq = cseq
+	dialog.mu.Unlock()
 	waitCtx, cancel := context.WithTimeout(identityCtx, 10*time.Second)
 	defer cancel()
-	upstream, err := session.worker.exchange(waitCtx, forwarded)
+	upstream, err := session.worker.exchangeMessageWithDigestPrepared(waitCtx, forwarded, func(retry *sip.Request) error {
+		if err := waitCtx.Err(); err != nil {
+			return err
+		}
+		return reserveCascadeDialogMessageCSeq(dialog, request, response, retry)
+	})
 	if err != nil || upstream == nil {
 		return http.StatusBadGateway, "cascade MediaStatus upstream is unavailable"
 	}
@@ -224,8 +304,33 @@ func (g *GB28181API) forwardCascadeMediaStatusDialog(dialog *inboundInviteDialog
 	}
 	if status >= 200 && status < 300 {
 		session.mediaStatusForwarded = true
+		dialog.mu.Lock()
+		dialog.UpdatedAt = time.Now()
+		dialog.mu.Unlock()
 	}
 	return status, reason
+}
+
+func reserveCascadeDialogMessageCSeq(dialog *inboundInviteDialog, dialogRequest *sip.Request, dialogResponse *sip.Response, request *sip.Request) error {
+	if dialog == nil || dialogRequest == nil || dialogResponse == nil || request == nil {
+		return fmt.Errorf("cascade dialog MESSAGE retry is unavailable")
+	}
+	cseq, ok := request.CSeq()
+	if !ok || cseq == nil || cseq.MethodName != sip.MethodMessage {
+		return fmt.Errorf("cascade dialog MESSAGE retry CSeq is invalid")
+	}
+	dialog.mu.Lock()
+	defer dialog.mu.Unlock()
+	if !dialog.Established || dialog.Request != dialogRequest || dialog.Response != dialogResponse {
+		return fmt.Errorf("cascade dialog changed before MESSAGE retry")
+	}
+	next, err := nextLocalCSeqLocked(dialog)
+	if err != nil {
+		return fmt.Errorf("cascade dialog MESSAGE retry: %w", err)
+	}
+	cseq.SeqNo = next
+	dialog.LocalCSeq = next
+	return nil
 }
 
 func cascadeMediaStatusExposedID(platform cascadePlatform, request *sip.Request, localChannelID string) string {

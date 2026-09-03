@@ -12,8 +12,8 @@ type TimeSyncInput struct {
 	DeviceID string
 }
 
-// SyncTime 主动校时（9.10），向设备发送 DeviceControl(Time)。
-// 注：注册 200 OK 中已携带 Date，此接口用于主动触发。
+// SyncTime 通过厂商扩展 DeviceControl(Time) 主动校时。
+// GB/T 28181 四版本的标准校时由成功 REGISTER 的 200 OK Date 或 NTP 完成；保留此接口兼容已有调用方。
 func (g *GB28181API) SyncTime(ctx context.Context, in *TimeSyncInput) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -43,17 +43,26 @@ func (g *GB28181API) SyncTime(ctx context.Context, in *TimeSyncInput) error {
 			CmdType:  "DeviceControl",
 			SN:       g.nextControlSN(),
 			DeviceID: in.DeviceID,
-			// 9.10 采用 XML 时间格式：yyyy-MM-ddTHH:mm:ss.SSS
+			// 厂商扩展沿用国标 Date 的北京时间格式。
 			Time: sip.FormatGBTime(time.Now(), "2006-01-02T15:04:05.000"),
 		},
 	})
 	if err != nil {
 		return err
 	}
-	tx, err := g.svr.wrapRequestContext(ctx, ipc, sip.MethodMessage, &sip.ContentTypeXML, body)
+	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, in.DeviceID, in.DeviceID)
+	defer releaseOperation()
+	requestCtx := operation.Context(ctx)
+	tx, err := g.svr.wrapRequestContext(requestCtx, ipc, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
-		return err
+		return operation.ErrorOr(err)
 	}
-	_, err = sipResponseContext(ctx, tx)
-	return err
+	_, err = sipResponseContext(requestCtx, tx)
+	if err != nil {
+		return operation.ErrorOr(err)
+	}
+	if !operation.Deliver(func() {}) {
+		return operation.Cause()
+	}
+	return nil
 }

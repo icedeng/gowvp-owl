@@ -347,12 +347,19 @@ func monitorUserIdentityFromContext(ctx context.Context) *monitorUserIdentity {
 }
 
 func monitorUserIdentityContext(ctx *sip.Context) context.Context {
+	return monitorUserIdentityContextWithParent(context.Background(), ctx)
+}
+
+func monitorUserIdentityContextWithParent(parent context.Context, ctx *sip.Context) context.Context {
+	if parent == nil {
+		parent = context.Background()
+	}
 	if ctx == nil {
-		return context.Background()
+		return parent
 	}
 	value, ok := ctx.Get(monitorUserIdentityCacheKey)
 	if !ok {
-		return context.Background()
+		return parent
 	}
 	identity, _ := value.(*monitorUserIdentity)
 	localGatewayID := ""
@@ -361,7 +368,7 @@ func monitorUserIdentityContext(ctx *sip.Context) context.Context {
 			localGatewayID = worker.platform.monitorUserIdentity.localGatewayID
 		}
 	}
-	return withMonitorUserIdentityRoute(context.Background(), identity, localGatewayID)
+	return withMonitorUserIdentityRoute(parent, identity, localGatewayID)
 }
 
 // applyForwardedMonitorUserIdentity 将已验证的跨域用户身份继续传给下行目标，

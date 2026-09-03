@@ -90,6 +90,47 @@ definitions:
       server_ip:
         type: string
     type: object
+  api.SIPPeerSecretStatus:
+    properties:
+      password_configured:
+        type: boolean
+      signal_digest_seed_configured:
+        type: boolean
+    type: object
+  api.SIPSecretClearInput:
+    properties:
+      annex_g_passwords:
+        items:
+          type: string
+        type: array
+      annex_g_signal_digest_seeds:
+        items:
+          type: string
+        type: array
+      signal_digest_seed:
+        type: boolean
+      upstream_passwords:
+        items:
+          type: string
+        type: array
+      upstream_signal_digest_seeds:
+        items:
+          type: string
+        type: array
+    type: object
+  api.SIPSecretStatus:
+    properties:
+      annex_g_systems:
+        additionalProperties:
+          $ref: '#/definitions/api.SIPPeerSecretStatus'
+        type: object
+      signal_digest_seed_configured:
+        type: boolean
+      upstreams:
+        additionalProperties:
+          $ref: '#/definitions/api.SIPPeerSecretStatus'
+        type: object
+    type: object
   api.SwaggerAIDisableOutput:
     properties:
       enabled:
@@ -149,7 +190,11 @@ definitions:
       sip:
         allOf:
         - $ref: '#/definitions/api.SwaggerSIPConfig'
-        description: 当前系统使用的 SIP 配置
+        description: 当前系统使用的 SIP 配置；对端密码和摘要 seed 已脱敏
+      sip_secrets:
+        allOf:
+        - $ref: '#/definitions/api.SIPSecretStatus'
+        description: 已脱敏密钥的“是否配置”状态
     type: object
   api.SwaggerDeviceHistoryConfig:
     properties:
@@ -178,6 +223,9 @@ definitions:
         items:
           type: string
         type: array
+      cascade_relay_enabled:
+        example: false
+        type: boolean
       device_allowlist:
         items:
           type: string
@@ -208,6 +256,18 @@ definitions:
         type: integer
       offer_port:
         example: 9
+        type: integer
+      relay_advertise_ip:
+        example: 192.0.2.10
+        type: string
+      relay_listen_ip:
+        example: 0.0.0.0
+        type: string
+      relay_port_end:
+        example: 30300
+        type: integer
+      relay_port_start:
+        example: 30200
         type: integer
       retain_days:
         example: 7
@@ -363,6 +423,11 @@ definitions:
         $ref: '#/definitions/api.SwaggerGBAudioParamConfigInput'
       basic_param:
         $ref: '#/definitions/api.SwaggerGBBasicParamInput'
+      extra_info:
+        description: 2022 扩展信息，每项最长 1024 字符
+        items:
+          type: string
+        type: array
       frame_mirror:
         $ref: '#/definitions/api.SwaggerGBXMLConfigInput'
       osd_config:
@@ -421,32 +486,61 @@ definitions:
         description: 报警类型
         example: "1"
         type: string
+      control_priority:
+        description: 2011/2014 PTZ 控制优先级
+        example: 5
+        type: integer
       drag_zoom:
         allOf:
         - $ref: '#/definitions/api.SwaggerGBDragZoomInput'
         description: 拉框放大/缩小参数
+      extra_info:
+        description: 设备控制普通文本扩展；旧版编码为 Info，2022 编码为 ExtraInfo
+        items:
+          type: string
+        type: array
       home_position:
         allOf:
         - $ref: '#/definitions/api.SwaggerGBHomePositionInput'
         description: 看守位控制参数
+      ptz_aux:
+        description: 辅助开关编号
+        example: 1
+        type: integer
       ptz_cmd:
-        description: PTZCmd 子动作名
+        description: PTZ 动作名或 16 位原始 PTZCmd
         example: preset_call
         type: string
       ptz_cmd_param:
         allOf:
         - $ref: '#/definitions/api.SwaggerGBPTZCmdParamInput'
         description: PTZCmd 扩展参数
+      ptz_group:
+        description: 巡航或扫描组编号
+        example: 1
+        type: integer
       ptz_precise:
         allOf:
         - $ref: '#/definitions/api.SwaggerGBPTZPreciseInput'
         description: 精确 PTZ 参数
+      ptz_preset:
+        description: 预置位编号
+        example: 1
+        type: integer
+      ptz_speed:
+        description: PTZ 速度
+        example: 40
+        type: integer
+      ptz_value:
+        description: 巡航、扫描或辅助控制值
+        example: 40
+        type: integer
       sdcard_id:
         description: SD 卡编号
         example: 1
         type: integer
       stream_number:
-        description: 录像/强制关键帧等场景使用的码流序号
+        description: 2022 录像控制码流编号：0 主码流（缺省省略），1/2/... 子码流
         example: 1
         type: integer
       target_id:
@@ -468,6 +562,10 @@ definitions:
         description: GB 统一查询动作名
         example: device_status
         type: string
+      address:
+        description: RecordInfo 录像地址过滤条件
+        example: front-gate
+        type: string
       alarm_method:
         description: 2022 报警方式过滤条件
         example: "5"
@@ -481,8 +579,24 @@ definitions:
         example: basic_param
         type: string
       end:
-        description: 结束时间，Unix 秒
+        description: Catalog、RecordInfo 结束时间，Unix 秒
         example: 1710950400
+        type: integer
+      end_alarm_priority:
+        description: Alarm 查询终止级别，0 为全部
+        example: "4"
+        type: string
+      end_alarm_time:
+        description: Alarm 查询终止时间
+        example: 2026-08-25T09:00:00
+        type: string
+      file_path:
+        description: RecordInfo 文件路径过滤条件
+        example: /record/front-gate.ps
+        type: string
+      indistinct_query:
+        description: 2014+ 录像模糊查询：0 按 To URI 选位置，1 同时检索中心和前端
+        example: 0
         type: integer
       interval:
         description: 订阅或统计类查询的时间间隔
@@ -492,10 +606,26 @@ definitions:
         description: 巡航轨迹编号（0 或 1）
         example: 0
         type: integer
+      recorder_id:
+        description: RecordInfo 录像触发者标识字符串
+        example: recorder-main
+        type: string
+      secrecy:
+        description: RecordInfo 涉密属性：0 不涉密，1 涉密
+        example: 0
+        type: integer
       start:
-        description: 起始时间，Unix 秒
+        description: Catalog、RecordInfo 开始时间，Unix 秒
         example: 1710864000
         type: integer
+      start_alarm_priority:
+        description: Alarm 查询起始级别，0 为全部
+        example: "1"
+        type: string
+      start_alarm_time:
+        description: Alarm 查询起始时间
+        example: 2026-08-25T08:00:00
+        type: string
       stream_number:
         description: 2022 码流编号：0 主码流，1/2/... 子码流
         example: 0
@@ -530,6 +660,10 @@ definitions:
         description: 返回结果对应的设备编码
         example: 340200...
         type: string
+      incomplete:
+        allOf:
+        - $ref: '#/definitions/api.SwaggerGBIncompleteOutput'
+        description: 多响应查询未收齐时的完成度
       result:
         description: 设备处理结果
         example: OK
@@ -584,8 +718,47 @@ definitions:
         example: 60
         type: integer
     type: object
+  api.SwaggerGBIncompleteOutput:
+    properties:
+      expected_count:
+        example: 2
+        type: integer
+      kind:
+        example: record_info
+        type: string
+      message:
+        example: 'RecordInfo response incomplete: received 1 of 2'
+        type: string
+      missing_config:
+        example:
+        - VideoParamOpt
+        items:
+          type: string
+        type: array
+      received_config:
+        example:
+        - BasicParam
+        items:
+          type: string
+        type: array
+      received_count:
+        example: 1
+        type: integer
+    type: object
   api.SwaggerGBMetricsSnapshot:
     properties:
+      annex_g_business_failures:
+        type: integer
+      annex_g_inbound_accepted:
+        type: integer
+      annex_g_inbound_rate_limited:
+        type: integer
+      annex_g_inbound_rejected:
+        type: integer
+      annex_g_inbound_requests:
+        type: integer
+      annex_g_pending:
+        type: integer
       catalog_partial:
         type: integer
       catalog_requests:
@@ -705,6 +878,65 @@ definitions:
         example: <SVCParam><SVCFlag>1</SVCFlag></SVCParam>
         type: string
     type: object
+  api.SwaggerHistoryDownloadState:
+    properties:
+      approximate:
+        example: true
+        type: boolean
+      bytes_speed:
+        example: 524288
+        type: integer
+      channel_id:
+        example: "34020000001320000002"
+        type: string
+      completed_at:
+        type: string
+      device_id:
+        example: "34020000001320000001"
+        type: string
+      end_reason:
+        example: size_reached
+        type: string
+      error:
+        type: string
+      file_size:
+        example: 2097152
+        type: integer
+      file_size_known:
+        example: true
+        type: boolean
+      output:
+        type: string
+      progress_known:
+        example: true
+        type: boolean
+      progress_percent:
+        example: 50
+        type: number
+      received:
+        example: 1048576
+        type: integer
+      session_id:
+        example: call-id@example
+        type: string
+      sha256:
+        type: string
+      size_verified:
+        example: false
+        type: boolean
+      started_at:
+        example: "2026-08-10T19:30:00+08:00"
+        type: string
+      status:
+        example: receiving
+        type: string
+      transport:
+        example: rtp
+        type: string
+      updated_at:
+        example: "2026-08-10T19:30:05+08:00"
+        type: string
+    type: object
   api.SwaggerMessageResponse:
     properties:
       msg:
@@ -821,6 +1053,10 @@ definitions:
         description: 有录像的日期数量
         example: 2
         type: integer
+      incomplete:
+        allOf:
+        - $ref: '#/definitions/api.SwaggerGBIncompleteOutput'
+        description: 设备只返回部分分包时的完成度
       list:
         description: 按日期归类的录像片段
         items:
@@ -831,8 +1067,114 @@ definitions:
         example: 6
         type: integer
     type: object
+  api.SwaggerSIPAlarmReceiver:
+    properties:
+      device_id:
+        example: "34020000002000000011"
+        type: string
+      enabled:
+        example: false
+        type: boolean
+      name:
+        example: dispatch-center
+        type: string
+      source_ids:
+        example:
+        - "34020000001320000001"
+        items:
+          type: string
+        type: array
+    type: object
+  api.SwaggerSIPAnnexG:
+    properties:
+      enabled:
+        example: false
+        type: boolean
+      inbound_burst:
+        example: 100
+        type: integer
+      inbound_rate:
+        example: 50
+        type: integer
+      max_pending:
+        example: 4096
+        type: integer
+      max_send_records:
+        example: 100
+        type: integer
+      pending_ttl:
+        description: 纳秒
+        example: 86400000000000
+        type: integer
+      systems:
+        items:
+          $ref: '#/definitions/api.SwaggerSIPAnnexGSystem'
+        type: array
+    type: object
+  api.SwaggerSIPAnnexGSystem:
+    properties:
+      address:
+        example: ecs.example:5061
+        type: string
+      allow_insecure_transport:
+        example: false
+        type: boolean
+      id:
+        example: "34030000002000000001"
+        type: string
+      password:
+        description: GET 时脱敏；PUT 非空替换
+        example: ""
+        type: string
+      realm:
+        example: "3403000000"
+        type: string
+      role:
+        example: emergency_command_system
+        type: string
+      signal_digest_seed:
+        description: GET 时脱敏；PUT 非空替换
+        example: ""
+        type: string
+      source_cidrs:
+        example:
+        - 192.0.2.0/24
+        items:
+          type: string
+        type: array
+      tls_ca:
+        example: configs/certs/ecs-ca.crt
+        type: string
+      tls_cert:
+        example: configs/certs/annex-g-client.crt
+        type: string
+      tls_crl:
+        example: configs/certs/ecs.crl
+        type: string
+      tls_key:
+        example: configs/certs/annex-g-client.key
+        type: string
+      tls_server_name:
+        example: ecs.example
+        type: string
+      transport:
+        example: tls
+        type: string
+      version:
+        example: "1.0"
+        type: string
+    type: object
   api.SwaggerSIPConfig:
     properties:
+      alarm_receivers:
+        description: 9.4 本域已注册接警 SIP 客户端；默认关闭
+        items:
+          $ref: '#/definitions/api.SwaggerSIPAlarmReceiver'
+        type: array
+      annex_g:
+        allOf:
+        - $ref: '#/definitions/api.SwaggerSIPAnnexG'
+        description: 2011/2014/2016 附录 G 外部系统接入配置
       device_history:
         allOf:
         - $ref: '#/definitions/api.SwaggerDeviceHistoryConfig'
@@ -870,17 +1212,25 @@ definitions:
         example: 5060
         type: integer
       ptz_weak_confirm:
-        description: 是否启用 PTZ 弱确认模式
+        description: 是否启用级联有应答控制弱确认
         example: false
         type: boolean
       register_certificate_auth:
         allOf:
         - $ref: '#/definitions/api.SwaggerSIPRegisterCertificateAuth'
         description: Capability/Asymmetric 数字证书 REGISTER 认证
+      register_redirect:
+        description: 2022 REGISTER 重定向目标；为空表示不重定向
+        example: sip:34020000002000000001@192.0.2.30:5060
+        type: string
       require_message_auth:
         description: 是否要求 MESSAGE/NOTIFY 做 Digest 鉴权
         example: false
         type: boolean
+      secret_clears:
+        allOf:
+        - $ref: '#/definitions/api.SIPSecretClearInput'
+        description: 显式清除已脱敏密钥；空密钥字段默认保留原值
       signal_digest:
         allOf:
         - $ref: '#/definitions/api.SwaggerSIPSignalDigest'
@@ -1030,7 +1380,8 @@ definitions:
         example: false
         type: boolean
       seed:
-        example: shared-secret
+        description: GET 时脱敏为空；PUT 非空替换，空值保留，清除使用 secret_clears
+        example: ""
         type: string
       window:
         description: 纳秒
@@ -1039,6 +1390,9 @@ definitions:
     type: object
   api.SwaggerSIPUpstream:
     properties:
+      alarm_dispatch_enabled:
+        example: false
+        type: boolean
       channel_id_map:
         additionalProperties:
           type: string
@@ -1083,7 +1437,8 @@ definitions:
         example: provincial
         type: string
       password:
-        example: "123456"
+        description: GET 时脱敏；PUT 非空替换
+        example: ""
         type: string
       port:
         example: 5060
@@ -1098,7 +1453,8 @@ definitions:
           type: string
         type: array
       signal_digest_seed:
-        example: upstream-shared-secret
+        description: GET 时脱敏；PUT 非空替换
+        example: ""
         type: string
       tls_ca:
         example: configs/certs/upstream-ca.crt
@@ -1221,6 +1577,11 @@ definitions:
       new_version:
         type: string
     type: object
+  api.editChannelMediaServerInput:
+    properties:
+      media_server_id:
+        type: string
+    type: object
   api.getHealthOutput:
     properties:
       git_branch:
@@ -1287,12 +1648,16 @@ definitions:
         description: 会话模式：playback 回放，download 下载
         example: playback
         type: string
+      record_type:
+        description: 录像/下载类型：0=all、1=manual、2=alarm、3=time；省略默认 3
+        example: 3
+        type: integer
       scale:
-        description: 倍速值，Action=speed 时使用
+        description: 倍速值，Action=speed 时使用；负值表示倒放
         example: 2
         type: number
       seek_at:
-        description: 跳转目标时间，Action=seek 时使用
+        description: Action=seek 的目标时间；2011 倍速或 2022 负倍速时可作为播放起点
         example: 1710867600
         type: integer
       start_at:
@@ -1649,6 +2014,10 @@ definitions:
     type: object
   api.queryRecordsInput:
     properties:
+      address:
+        description: RecordInfo 录像地址过滤条件
+        example: front-gate
+        type: string
       alarm_method:
         description: 2022 报警方式过滤条件
         example: "5"
@@ -1660,6 +2029,22 @@ definitions:
       end_at:
         description: 查询结束时间，Unix 秒
         example: 1710950400
+        type: integer
+      file_path:
+        description: RecordInfo 文件路径过滤条件
+        example: /record/front-gate.ps
+        type: string
+      indistinct_query:
+        description: 2014+ 录像模糊查询：0 按 To URI 选位置，1 同时检索中心和前端
+        example: 0
+        type: integer
+      recorder_id:
+        description: RecordInfo 录像触发者标识字符串
+        example: recorder-main
+        type: string
+      secrecy:
+        description: RecordInfo 涉密属性：0 不涉密，1 涉密
+        example: 0
         type: integer
       start_at:
         description: 查询开始时间，Unix 秒
@@ -1724,6 +2109,10 @@ definitions:
         description: Alarm 终止时间
         example: 2026-08-25T09:00:00
         type: string
+      end_time:
+        description: Catalog 新增设备终止时间
+        example: 2026-08-25T09:00:00
+        type: string
       event:
         description: 订阅事件类型，如 alarm/mobile_position/catalog/device_position/ptz_position
         example: alarm
@@ -1744,10 +2133,23 @@ definitions:
         description: Alarm 起始时间
         example: 2026-08-25T08:00:00
         type: string
+      start_time:
+        description: Catalog 新增设备起始时间
+        example: 2026-08-25T08:00:00
+        type: string
       target_id:
         description: 可选目标通道国标编码；空值订阅设备本身
         example: "34020000001320000001"
         type: string
+    type: object
+  api.subscriptionStatesOutput:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/ipc.SubscriptionState'
+        type: array
+      total:
+        type: integer
     type: object
   api.upgradeDeviceInput:
     properties:
@@ -1779,8 +2181,8 @@ definitions:
         example: local
         type: string
       mode:
-        description: 语音模式：talk 对讲，broadcast 广播
-        example: talk
+        description: 语音模式：talk 厂商兼容对讲，talk_standard 标准双流程对讲，broadcast 广播
+        example: talk_standard
         type: string
       source_app:
         description: ZLM 音频源应用名
@@ -1900,6 +2302,114 @@ definitions:
         type: string
       updated_at:
         type: string
+    type: object
+  gormstore.AlarmAuditItem:
+    properties:
+      alarm_address:
+        type: string
+      alarm_class:
+        type: string
+      alarm_method:
+        type: string
+      alarm_no:
+        type: string
+      alarm_priority:
+        type: string
+      alarm_time:
+        type: string
+      car_plate:
+        type: string
+      created_at:
+        type: string
+      device_id:
+        type: string
+      id:
+        type: integer
+      kind:
+        type: string
+      payload:
+        type: object
+      plate_type:
+        type: string
+      tollgate_id:
+        type: string
+    type: object
+  gormstore.AlarmAuditPage:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/gormstore.AlarmAuditItem'
+        type: array
+      page:
+        type: integer
+      page_size:
+        type: integer
+      total:
+        type: integer
+    type: object
+  gormstore.DefenceAuditItem:
+    properties:
+      active:
+        type: boolean
+      car_plate:
+        type: string
+      created_at:
+        type: string
+      defence_time:
+        type: string
+      defence_type:
+        type: string
+      id:
+        type: integer
+      plate_type:
+        type: string
+      tollgate_id:
+        type: string
+    type: object
+  gormstore.DefenceAuditPage:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/gormstore.DefenceAuditItem'
+        type: array
+      page:
+        type: integer
+      page_size:
+        type: integer
+      total:
+        type: integer
+    type: object
+  gormstore.DefenceStateItem:
+    properties:
+      active:
+        type: boolean
+      car_plate:
+        type: string
+      defence_time:
+        type: string
+      defence_type:
+        type: string
+      id:
+        type: integer
+      plate_type:
+        type: string
+      tollgate_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  gormstore.DefenceStatePage:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/gormstore.DefenceStateItem'
+        type: array
+      page:
+        type: integer
+      page_size:
+        type: integer
+      total:
+        type: integer
     type: object
   ipc.AddChannelInput:
     properties:
@@ -2070,8 +2580,6 @@ definitions:
       name:
         description: 自定义名称
         type: string
-      password:
-        type: string
       port:
         type: integer
       ptz_capable:
@@ -2140,6 +2648,11 @@ definitions:
       gb_manual_version:
         description: GBManualVersion 非空时覆盖自动协商；值为空表示恢复自动协商。
         type: string
+      gb_registration_closed:
+        description: |-
+          GBRegistrationClosed 区分 REGISTER 绑定关闭与有效绑定内的 DeviceStatus 离线。
+          指针用于兼容升级前仅有 IsOnline 的历史记录。
+        type: boolean
       gb_version:
         description: GB版本（兼容历史年份值）
         type: string
@@ -2223,7 +2736,7 @@ definitions:
         description: 设备名称
         type: string
       password:
-        description: 注册密码
+        description: Password 为 nil 时保留当前注册密码；非 nil 时使用传入值，空字符串表示清除设备独立密码。
         type: string
       port:
         description: port
@@ -2266,19 +2779,37 @@ definitions:
         type: string
       business_group_id:
         type: string
+      capture_position_type:
+        type: string
       cert_num:
         type: string
       certifiable:
         type: integer
       civil_code:
         type: string
+      contact_info:
+        type: string
       direction_type:
         type: integer
+      download_speed:
+        type: string
+      encode_type:
+        type: string
       end_time:
         type: string
       err_code:
         type: integer
+      function_type:
+        type: string
+      grassroots_code:
+        type: string
+      horizontal_field_angle:
+        type: number
+      industrial_classification:
+        type: string
       info_raw_xml:
+        type: string
+      install_time:
         type: string
       ip_address:
         type: string
@@ -2288,6 +2819,14 @@ definitions:
         type: number
       longitude:
         type: number
+      mac:
+        type: string
+      management_unit:
+        type: string
+      max_view_distance:
+        type: number
+      mobile_device_type:
+        type: integer
       owner:
         type: string
       parent_id:
@@ -2296,14 +2835,24 @@ definitions:
         type: integer
       password:
         type: string
+      photoelectric_imaging_type:
+        type: string
+      point_common_name:
+        type: string
+      point_type:
+        type: integer
       port:
         type: integer
       position_type:
         type: integer
       ptz_type:
         type: integer
+      ptz_type_list:
+        type: string
       raw_xml:
         type: string
+      record_save_days:
+        type: integer
       register_way:
         type: integer
       resolution:
@@ -2314,12 +2863,24 @@ definitions:
         type: integer
       secrecy:
         type: integer
+      security_level_code:
+        type: string
+      ssvc_ratio_support_list:
+        type: string
       status:
+        type: string
+      stream_number_list:
         type: string
       supply_light_type:
         type: integer
+      svc_space_support_mode:
+        type: integer
+      svc_time_support_mode:
+        type: integer
       use_type:
         type: integer
+      vertical_field_angle:
+        type: number
     type: object
   ipc.GBDeviceControlOutput:
     properties:
@@ -2392,6 +2953,49 @@ definitions:
       transport:
         description: 拉流方式 (0:tcp, 1:udp)
         type: integer
+    type: object
+  ipc.SubscriptionState:
+    properties:
+      alarm_method:
+        type: string
+      alarm_type:
+        type: string
+      cancel_pending:
+        type: boolean
+      device_id:
+        type: string
+      end_alarm_priority:
+        type: string
+      end_alarm_time:
+        type: string
+      end_time:
+        type: string
+      event:
+        type: string
+      expires:
+        type: integer
+      expires_at:
+        type: string
+      interval:
+        type: integer
+      notify_cseq:
+        type: integer
+      notify_expires_at:
+        type: string
+      refresh_at:
+        type: string
+      refreshing:
+        type: boolean
+      start_alarm_priority:
+        type: string
+      start_alarm_time:
+        type: string
+      start_time:
+        type: string
+      status:
+        type: string
+      target_id:
+        type: string
     type: object
   ipc.UpgradeOutput:
     properties:
@@ -2681,11 +3285,12 @@ paths:
       - application/json
       description: |-
         对历史回放/下载会话执行暂停、恢复、倍速、跳转等控制。
-        `action` 枚举：`play` 恢复播放、`pause` 暂停、`speed` 调整倍速、`seek` 跳转到指定时间。
+        `action` 枚举：`play` 恢复播放、`pause` 暂停、`speed` 调整倍速（负值倒放）、`seek` 跳转到指定时间。
         调用前置条件：历史会话已经启动。
         失败场景：1. 会话不存在；2. action 不受支持；3. 跳转时间越界；4. 设备未返回控制应答。
         暂停示例：`{ "mode":"playback", "action":"pause" }`
         倍速示例：`{ "mode":"playback", "action":"speed", "scale":2 }`
+        2022 指定位置倒放示例：`{ "mode":"playback", "action":"speed", "scale":-2, "seek_at":1710867600 }`
         跳转示例：`{ "mode":"playback", "action":"seek", "seek_at":1710867600 }`
         成功响应示例：`{ "msg": "ok" }`
       parameters:
@@ -2758,8 +3363,8 @@ paths:
       - Channel
   /channels/{id}/history/status:
     get:
-      description: 返回设备在 200 OK SDP 中声明的 filesize，以及 ZLMediaKit 媒体源接收字节统计。由于 RTP/PS
-        封装开销，progress_percent 为近似值。
+      description: 返回普通 RTP 或 2014 附录 O 裸 TCP 下载状态，以 transport 区分传输方式；RTP 有文件大小时按字节计算近似进度，无文件大小时按媒体轨道时长计算，媒体服务器不提供时长则
+        progress_known=false。
       parameters:
       - description: 通道ID
         in: path
@@ -2772,14 +3377,14 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/gbs.RTPDownloadState'
+            $ref: '#/definitions/api.SwaggerHistoryDownloadState'
         "400":
           description: Bad Request
           schema:
             $ref: '#/definitions/api.SwaggerErrorResponse'
       security:
       - BearerAuth: []
-      summary: 查询普通 RTP 下载状态
+      summary: 查询通道最近一次下载状态
       tags:
       - Channel
   /channels/{id}/history/stop:
@@ -2817,6 +3422,39 @@ paths:
       security:
       - BearerAuth: []
       summary: 停止历史会话
+      tags:
+      - Channel
+  /channels/{id}/media_server:
+    put:
+      consumes:
+      - application/json
+      description: 仅更新通道的媒体节点绑定，避免通用通道编辑覆盖设备目录字段；存在活动媒体会话时需先停止会话。
+      parameters:
+      - description: 通道ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 媒体节点绑定
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.editChannelMediaServerInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ipc.Channel'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 绑定 GB28181 通道媒体节点
       tags:
       - Channel
   /channels/{id}/play:
@@ -2972,6 +3610,7 @@ paths:
         失败场景：1. 通道不存在；2. 设备离线；3. 设备协议版本或厂商实现不支持；4. 查询超时未应答。
         请求示例：`{ "start_at": 1710864000, "end_at": 1710950400, "timeout": 10 }`
         响应中 `daynum` 表示有录像的日期数，`timenum` 表示录像片段总数，`list` 按日期归类。
+        设备在超时前只返回部分分包时仍返回已收到的录像，`incomplete` 给出已收/应收数量；零分包仍返回错误。
         响应示例：`{ "daynum": 2, "timenum": 3, "list": [ { "date": "2024-03-20", "items": [ { "start": 1710864000, "end": 1710867600 } ] } ] }`
       parameters:
       - description: 通道ID
@@ -3105,7 +3744,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/api.SwaggerMessageResponse'
+            $ref: '#/definitions/ipc.UpgradeOutput'
         "400":
           description: Bad Request
           schema:
@@ -3150,7 +3789,7 @@ paths:
       consumes:
       - application/json
       description: |-
-        启动对讲或广播会话
+        启动语音会话；talk_standard 按 GB/T 28181-2016/2022 组合实时点播上行和语音广播下行，talk 保留厂商单 INVITE 兼容模式。
         调用前置条件：1. 通道存在；2. 设备在线；3. 设备支持语音对讲或广播；4. source_stream 是 ZLMediaKit 中已就绪的 G.711 A-law 音频流。
         失败场景：1. 设备不支持语音能力；2. 音频源不存在或编码不兼容；3. 会话建立失败；4. 设备离线。
       parameters:
@@ -3186,7 +3825,7 @@ paths:
       consumes:
       - application/json
       description: |-
-        停止已建立的对讲或广播会话。
+        停止已建立的对讲或广播会话；停止 talk_standard 会同时清理实时点播和语音广播两条独立链路。
         调用前置条件：语音会话已启动。
         失败场景：1. 会话不存在；2. 设备离线；3. 设备拒绝停止。
       parameters:
@@ -3565,7 +4204,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/ipc.UpgradeOutput'
+            $ref: '#/definitions/api.SwaggerMessageResponse'
         "400":
           description: Bad Request
           schema:
@@ -3748,6 +4387,40 @@ paths:
       summary: 刷新通道快照
       tags:
       - Channel
+  /channels/gb28181/{device_id}/{channel_id}/snapshot/{session_id}/status:
+    get:
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 抓拍会话ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/gbs.SnapshotState'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 查询 GB28181 图像抓拍状态
+      tags:
+      - Channel
   /channels/gb28181/{device_id}/{channel_id}/upgrade:
     post:
       consumes:
@@ -3775,7 +4448,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/api.SwaggerMessageResponse'
+            $ref: '#/definitions/ipc.UpgradeOutput'
         "400":
           description: Bad Request
           schema:
@@ -3783,6 +4456,41 @@ paths:
       security:
       - BearerAuth: []
       summary: 设备升级
+      tags:
+      - Channel
+  /channels/gb28181/{device_id}/{channel_id}/upgrade/{session_id}:
+    get:
+      description: accepted 仅表示设备已接受升级命令；completed/failed 为设备上报的最终状态。
+      parameters:
+      - description: 设备编号(device_id)
+        in: path
+        name: device_id
+        required: true
+        type: string
+      - description: 通道编号(channel_id)
+        in: path
+        name: channel_id
+        required: true
+        type: string
+      - description: 升级会话ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/gbs.UpgradeState'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 查询设备升级状态
       tags:
       - Channel
   /channels/gb28181/{device_id}/{channel_id}/voice/start:
@@ -4168,7 +4876,7 @@ paths:
       consumes:
       - application/json
       description: |-
-        下发 DeviceConfig；支持 2014 的 BasicParam、VideoParamConfig、AudioParamConfig、SVAC，以及 2022 的视频属性、录像计划、报警录像、遮挡、翻转、报警上报、OSD 和抓拍配置。
+        下发 DeviceConfig；支持 2014 的 BasicParam、VideoParamConfig、AudioParamConfig、SVAC，以及 2022 的视频属性、录像计划、报警录像、遮挡、翻转、报警上报、OSD、抓拍配置和 ExtraInfo。
         XML 配置的 `inner_xml` 只填写配置节点内部的标准 XML；服务端会校验 XML 完整性并拒绝指令/DOCTYPE。2022 扩展仅允许有效版本 3.0。
       parameters:
       - description: 设备内部ID或设备编号(device_id)
@@ -4204,11 +4912,12 @@ paths:
       - application/json
       description: |-
         执行 GB/T 28181 附录 A.2.3 统一设备控制命令。
-        常见 `action`：`ptz_cmd`、`teleboot`、`record_cmd`、`guard_cmd`、`alarm_cmd`、`ifame_cmd`、`drag_zoom_in`、`drag_zoom_out`、`home_position`、`ptz_precise`、`target_track`。
+        `action` 支持：`ptz_cmd`、`teleboot`、`record_start`、`record_stop`、`guard_set`、`guard_reset`、`alarm_reset`、`iframe_send`、`drag_zoom_in`、`drag_zoom_out`、`home_position`、`ptz_precise`、`format_sdcard`、`target_track`。历史拼写 `ifame_cmd` 继续兼容为 `iframe_send`。
         `ptz_cmd` 常见值：`stop`、`left`、`right`、`up`、`down`、`left_up`、`left_down`、`right_up`、`right_down`、`zoom_in`、`zoom_out`、`focus_near`、`focus_far`、`iris_open`、`iris_close`、`preset_set`、`preset_call`、`preset_delete`、`cruise_add`、`cruise_del`、`cruise_speed`、`cruise_stay`、`cruise_start`、`scan_start`、`scan_left`、`scan_right`、`scan_speed`、`aux_on`、`aux_off`。
+        `ptz_cmd` 也兼容 16 位十六进制原始 PTZCmd；原始命令必须符合 A.3 的 `A5 0F` 头和校验和。动作名通过 `ptz_speed`、`ptz_preset`、`ptz_group`、`ptz_aux`、`ptz_value` 提供编码参数。2022 `ptz_cmd_param.preset_name` 仅用于设置预置位，`cruise_track_name` 仅用于巡航命令且最长 32 字节。
         调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 所选动作受设备能力和协议版本支持。
-        失败场景：1. `action` 或 `ptz_cmd` 非法；2. 2016/2022 差异导致设备不支持；3. 设备离线；4. 等待 Response 超时。
-        PTZCmd 示例：`{ "target_id": "34020000001320000001", "action": "ptz_cmd", "ptz_cmd": "preset_call", "timeout": 5 }`
+        失败场景：1. `action`、`ptz_cmd` 或命令参数非法；2. 协议版本不支持所选能力；3. 设备离线；4. SIP 下发失败或有应答控制等待业务 Response 超时。
+        PTZCmd 示例：`{ "target_id": "34020000001320000001", "action": "ptz_cmd", "ptz_cmd": "preset_call", "ptz_preset": 1, "timeout": 5 }`
         精确 PTZ 示例：`{ "action": "ptz_precise", "ptz_precise": { "pan": 10.5, "tilt": 5.2, "zoom": 2.0 }, "timeout": 5 }`
         手动目标跟踪示例：`{ "action": "target_track", "target_track": { "mode": "Manual", "target_area": { "length": 1920, "width": 1080, "mid_point_x": 960, "mid_point_y": 540, "length_x": 300, "length_y": 200 } } }`
         成功响应示例：`{ "sn": 12, "device_id": "34020000002000000001", "target_id": "34020000001320000001", "result": "OK" }`
@@ -4246,12 +4955,14 @@ paths:
       - application/json
       description: |-
         执行 GB/T 28181 附录 A.2.4 统一设备查询命令。
-        常见 `action`：`device_status`、`catalog`、`config_download`、`preset_query`、`record_info`、`mobile_position`、`cruise_track_list`、`cruise_track`、`ptz_position`、`sdcard_status`。
+        常见 `action`：`device_status`、`alarm`、`catalog`、`config_download`、`preset_query`、`record_info`、`mobile_position`、`home_position_query`、`cruise_track_list`、`cruise_track`、`ptz_position`、`sdcard_status`。
+        `alarm` 保留部分厂商接受 `MESSAGE/Query/Alarm` 并返回 `Response/Alarm/Result` 的兼容流程；四版标准中的 A.2.4 Alarm 查询体用于 9.11 SUBSCRIBE 报警订阅，不保证独立主动查询。
         调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 查询动作被设备支持。
         失败场景：1. `action` 不支持；2. 设备离线；3. 查询超时；4. 2016 协议设备不支持 2022 扩展查询。
         请求示例：`{ "action": "device_status", "target_id": "34020000001320000001", "timeout": 5 }`
         录像查询示例：`{ "action": "record_info", "target_id": "34020000001320000001", "start": 1710864000, "end": 1710950400, "timeout": 10 }`
         响应中 `xml` 为原始 XML，`data` 为解析后的主体数据，`appendix_a4` 为 2022 版附录 A.4 扩展对象。
+        Catalog、RecordInfo 或 ConfigDownload 在超时前只收到部分分包时仍返回已收到的数据，`incomplete` 给出完成度；零分包仍返回错误。
       parameters:
       - description: 设备内部ID或设备编号(device_id)
         in: path
@@ -4359,8 +5070,8 @@ paths:
       description: |-
         对指定设备发起事件订阅。
         `event` 常见值：`alarm`、`mobile_position`、`catalog`、`device_position`、`ptz_position`。
-        调用前置条件：设备在线，且协议/厂商实现支持订阅。
-        失败场景：1. 设备离线；2. 订阅事件类型不支持；3. 设备未返回 200/OK。
+        创建或续订要求设备在线，且协议/厂商实现支持订阅；取消已持久化的订阅意图允许设备离线执行。
+        失败场景：1. 创建或续订时设备离线；2. 订阅事件类型不支持；3. 设备未返回 200/OK。
       parameters:
       - description: 设备内部ID或设备编号(device_id)
         in: path
@@ -4389,8 +5100,32 @@ paths:
       summary: 发起事件订阅
       tags:
       - Device
+  /devices/{id}/subscriptions:
+    get:
+      parameters:
+      - description: 设备 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.subscriptionStatesOutput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      summary: 查询设备事件订阅运行态
+      tags:
+      - Device
   /devices/{id}/time_sync:
     post:
+      description: 向设备发送非标准 DeviceControl(Time)；GB/T 28181 标准校时由成功 REGISTER 的 200
+        OK Date 或 NTP 完成
       parameters:
       - description: 设备内部ID或设备编号(device_id)
         in: path
@@ -4410,7 +5145,7 @@ paths:
             $ref: '#/definitions/api.SwaggerErrorResponse'
       security:
       - BearerAuth: []
-      summary: 设备校时
+      summary: 厂商扩展主动校时
       tags:
       - Device
   /devices/channels:
@@ -4442,6 +5177,108 @@ paths:
       security:
       - BearerAuth: []
       summary: 查询设备及其通道列表
+      tags:
+      - Device
+  /gb28181/annex-g/alarms:
+    get:
+      parameters:
+      - description: 报警来源：mp、ecs、tgs
+        in: query
+        name: kind
+        required: true
+        type: string
+      - description: 报警开始时间，RFC3339
+        in: query
+        name: begin_time
+        type: string
+      - description: 报警结束时间，RFC3339
+        in: query
+        name: end_time
+        type: string
+      - description: 页码，默认 1
+        in: query
+        name: page
+        type: integer
+      - description: 每页条数，默认 50，最大 500
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/gormstore.AlarmAuditPage'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 查询 GB28181 附录 G 报警审计
+      tags:
+      - Device
+  /gb28181/annex-g/defence-audits:
+    get:
+      parameters:
+      - description: 审计开始时间，RFC3339
+        in: query
+        name: begin_time
+        type: string
+      - description: 审计结束时间，RFC3339
+        in: query
+        name: end_time
+        type: string
+      - description: true 为布控，false 为撤控
+        in: query
+        name: active
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/gormstore.DefenceAuditPage'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 查询 GB28181 附录 G 布控历史审计
+      tags:
+      - Device
+  /gb28181/annex-g/defences:
+    get:
+      parameters:
+      - description: 更新时间起点，RFC3339
+        in: query
+        name: begin_time
+        type: string
+      - description: 更新时间终点，RFC3339
+        in: query
+        name: end_time
+        type: string
+      - description: 是否处于布控状态
+        in: query
+        name: active
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/gormstore.DefenceStatePage'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.SwaggerErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: 查询 GB28181 附录 G 布控当前状态
       tags:
       - Device
   /gb28181/cascade/status:

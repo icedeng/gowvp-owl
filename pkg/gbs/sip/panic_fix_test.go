@@ -1,6 +1,7 @@
 package sip
 
 import (
+	"errors"
 	"net"
 	"sync"
 	"testing"
@@ -130,6 +131,18 @@ func TestNewRequestFromResponseCheckedRejectsMalformedResponse(t *testing.T) {
 			response.RemoveHeader("Call-ID")
 			return response
 		}()},
+		{name: "missing From tag", response: func() *Response {
+			response := NewResponseFromRequest("", validRequest, 200, "OK", nil)
+			from, _ := response.From()
+			from.Params = NewParams()
+			return response
+		}()},
+		{name: "missing To tag", response: func() *Response {
+			response := NewResponseFromRequest("", validRequest, 200, "OK", nil)
+			to, _ := response.To()
+			to.Params = NewParams()
+			return response
+		}()},
 	}
 
 	for _, test := range tests {
@@ -214,6 +227,9 @@ func TestNewRequestFromResponseAppliesStrictAndLooseRouting(t *testing.T) {
 	if got := ack.Recipient().Host(); got != "strict.example" {
 		t.Fatalf("strict-route Request-URI host = %q", got)
 	}
+	if nextHop := ack.NextHopURI(); nextHop == nil || nextHop.Host() != "strict.example" {
+		t.Fatalf("strict-route next hop = %v", nextHop)
+	}
 	route, ok := ack.GetHeaders("Route")[0].(*RouteHeader)
 	if !ok || len(route.Addresses) != 2 || route.Addresses[0].Host() != "loose.example" || route.Addresses[1].Host() != "contact.example" {
 		t.Fatalf("strict-route Route = %#v", ack.GetHeaders("Route"))
@@ -229,6 +245,9 @@ func TestNewRequestFromResponseAppliesStrictAndLooseRouting(t *testing.T) {
 	}
 	if got := ack.Recipient().Host(); got != "contact.example" {
 		t.Fatalf("loose-route Request-URI host = %q", got)
+	}
+	if nextHop := ack.NextHopURI(); nextHop == nil || nextHop.Host() != "second.example" {
+		t.Fatalf("loose-route next hop = %v", nextHop)
 	}
 	route, ok = ack.GetHeaders("Route")[0].(*RouteHeader)
 	if !ok || len(route.Addresses) != 2 || route.Addresses[0].Host() != "second.example" || route.Addresses[1].Host() != "first.example" {
@@ -263,6 +282,9 @@ func TestNewRequestFromServerDialogAppliesStrictAndLooseRouting(t *testing.T) {
 	if got := notify.Recipient().Host(); got != "contact.example" {
 		t.Fatalf("loose-route Request-URI host = %q", got)
 	}
+	if nextHop := notify.NextHopURI(); nextHop == nil || nextHop.Host() != "first-proxy.example" {
+		t.Fatalf("loose-route next hop = %v", nextHop)
+	}
 	route, ok := notify.GetHeaders("Route")[0].(*RouteHeader)
 	if !ok || len(route.Addresses) != 2 || route.Addresses[0].Host() != "first-proxy.example" || route.Addresses[1].Host() != "second-proxy.example" {
 		t.Fatalf("loose-route Route = %#v", notify.GetHeaders("Route"))
@@ -278,6 +300,7 @@ func TestNewRequestFromServerDialogAppliesStrictAndLooseRouting(t *testing.T) {
 	if actualCSeq, _ := notify.CSeq(); actualCSeq == nil || actualCSeq.SeqNo != 1 || actualCSeq.MethodName != MethodNotify {
 		t.Fatalf("NOTIFY CSeq = %+v", actualCSeq)
 	}
+	assertDefaultMaxForwards(t, notify)
 	if notify.Destination() == nil || notify.Destination().String() != inbound.Source().String() {
 		t.Fatalf("NOTIFY destination = %v", notify.Destination())
 	}
@@ -292,6 +315,13 @@ func TestNewRequestFromServerDialogAppliesStrictAndLooseRouting(t *testing.T) {
 	}
 	if got := notify.Recipient().Host(); got != "strict-proxy.example" {
 		t.Fatalf("strict-route Request-URI host = %q", got)
+	}
+	if nextHop := notify.NextHopURI(); nextHop == nil || nextHop.Host() != "strict-proxy.example" {
+		t.Fatalf("strict-route next hop = %v", nextHop)
+	}
+	clone, ok := notify.Clone().(*Request)
+	if !ok || clone.NextHopURI() == nil || clone.NextHopURI().Host() != "strict-proxy.example" {
+		t.Fatalf("strict-route cloned next hop = %v", clone)
 	}
 	route, ok = notify.GetHeaders("Route")[0].(*RouteHeader)
 	if !ok || len(route.Addresses) != 2 || route.Addresses[0].Host() != "loose-proxy.example" || route.Addresses[1].Host() != "contact.example" {
@@ -361,15 +391,18 @@ func TestNewRequestFromResponseSanitizesViaAndAllocatesDialogCSeq(t *testing.T) 
 	if ack.GetConnection() != wrapped {
 		t.Fatal("ACK did not retain response transport connection")
 	}
+	assertDefaultMaxForwards(t, ack)
 
 	info, err := NewRequestFromResponseChecked(MethodInfo, response)
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertDefaultMaxForwards(t, info)
 	bye, err := NewRequestFromResponseChecked(MethodBYE, response)
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertDefaultMaxForwards(t, bye)
 	infoCSeq, _ := info.CSeq()
 	byeCSeq, _ := bye.CSeq()
 	if infoCSeq.SeqNo != 42 || byeCSeq.SeqNo != 43 {
@@ -378,6 +411,18 @@ func TestNewRequestFromResponseSanitizesViaAndAllocatesDialogCSeq(t *testing.T) 
 	responseCSeq, _ := response.CSeq()
 	if responseCSeq.SeqNo != 41 || responseCSeq.MethodName != MethodInvite {
 		t.Fatalf("response CSeq mutated: %+v", responseCSeq)
+	}
+}
+
+func assertDefaultMaxForwards(t *testing.T, request *Request) {
+	t.Helper()
+	headers := request.GetHeaders("Max-Forwards")
+	if len(headers) != 1 {
+		t.Fatalf("%s Max-Forwards header count = %d", request.Method(), len(headers))
+	}
+	value, ok := headers[0].(*MaxForwards)
+	if !ok || value == nil || *value != defaultMaxForwards {
+		t.Fatalf("%s Max-Forwards = %#v", request.Method(), headers[0])
 	}
 }
 
@@ -423,6 +468,32 @@ func TestNewRequestFromResponseAllocatesConcurrentDialogCSeq(t *testing.T) {
 	}
 }
 
+func TestNewRequestFromResponsePreparedFailureDoesNotConsumeDialogCSeq(t *testing.T) {
+	target, _ := ParseURI("sip:34020000001320000001@device.example:5060")
+	request := NewRequest("", MethodInvite, target, DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodInvite).SetSeqNo(17).
+		SetFrom(&Address{URI: target.Clone(), Params: NewParams()}).
+		SetTo(&Address{URI: target.Clone(), Params: NewParams()}).
+		AddVia(&ViaHop{Host: "client.example", Params: NewParams().Add("branch", String{Str: "z9hG4bK-prepared"})}).
+		Build(), nil)
+	response := NewResponseFromRequest("", request, 200, "OK", nil)
+	prepareErr := errors.New("local preparation failed")
+	prepared, err := NewRequestFromResponsePreparedChecked(MethodInfo, response, func(*Request) error {
+		return prepareErr
+	})
+	if prepared != nil || !errors.Is(err, prepareErr) {
+		t.Fatalf("prepared failure = request %v, err %v", prepared, err)
+	}
+	info, err := NewRequestFromResponseChecked(MethodInfo, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cseq, _ := info.CSeq()
+	if cseq == nil || cseq.SeqNo != 18 {
+		t.Fatalf("dialog CSeq after prepared failure = %+v, want 18", cseq)
+	}
+}
+
 func TestNewCancelRequestFromInvitePreservesTransaction(t *testing.T) {
 	target, _ := ParseURI("sip:34020000001320000001@device.example:5060")
 	from := &Address{URI: target.Clone(), Params: NewParams().Add("tag", String{Str: "from-tag"})}
@@ -455,6 +526,22 @@ func TestNewCancelRequestFromInvitePreservesTransaction(t *testing.T) {
 	}
 	if request, err := NewRequestFromResponseChecked(MethodCancel, NewResponseFromRequest("", invite, 200, "OK", nil)); err == nil || request != nil {
 		t.Fatal("CANCEL was incorrectly constructed from a response")
+	}
+}
+
+func TestNewRequestFromServerDialogRejectsOutOfRangeCSeq(t *testing.T) {
+	target, _ := ParseURI("sip:34020000001320000001@device.example:5060")
+	from := &Address{URI: target.Clone(), Params: NewParams().Add("tag", String{Str: "remote-tag"})}
+	to := &Address{URI: target.Clone(), Params: NewParams()}
+	callID := CallID("server-dialog-cseq-limit")
+	request := NewRequest("", MethodSubscribe, target, DefaultSipVersion, NewHeaderBuilder().
+		SetMethod(MethodSubscribe).SetSeqNo(19).SetFrom(from).SetTo(to).SetCallID(&callID).
+		AddVia(&ViaHop{Host: "device.example", Params: NewParams().Add("branch", String{Str: "z9hG4bK-server-dialog-limit"})}).
+		Build(), nil)
+	response := NewResponseFromRequest("", request, 200, "OK", nil)
+
+	if built, err := NewRequestFromServerDialogChecked(MethodNotify, request, response, maxCseq+1); err == nil || built != nil {
+		t.Fatalf("out-of-range server-dialog CSeq accepted: request=%v err=%v", built, err)
 	}
 }
 

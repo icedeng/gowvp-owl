@@ -30,11 +30,8 @@ func (c Core) UpgradeDevice(ctx context.Context, channelID string, in *UpgradeIn
 	}
 
 	in.ChannelID = ch.ChannelID
-	in.Firmware = strings.TrimSpace(in.Firmware)
-	in.FileURL = strings.TrimSpace(in.FileURL)
-	in.Manufacturer = strings.TrimSpace(in.Manufacturer)
 	in.SessionID = strings.TrimSpace(in.SessionID)
-	if in.Firmware == "" || in.FileURL == "" || in.Manufacturer == "" {
+	if strings.TrimSpace(in.Firmware) == "" || strings.TrimSpace(in.FileURL) == "" || strings.TrimSpace(in.Manufacturer) == "" {
 		return nil, reason.ErrBadRequest.SetMsg("firmware/file_url/manufacturer are required")
 	}
 	if in.Timeout <= 0 {

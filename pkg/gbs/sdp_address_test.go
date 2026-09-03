@@ -107,7 +107,7 @@ func TestBuildIPv6VoiceAndCascadeSDP(t *testing.T) {
 			return buildCascadeVoiceReceiveSDP(gb10DeviceID, server, GBVersion11, 30000, "0100000001")
 		}},
 		{"cascade video", func() ([]byte, error) {
-			return buildCascadeSDPAnswer(gb10DeviceID, server, &cascadeVideoOffer{Payload: 96, Protocol: "RTP/AVP", IsUDP: true, SSRC: "0100000001"}, 30000)
+			return buildCascadeSDPAnswer(gb10DeviceID, server, &cascadeVideoOffer{Version: GBVersion10, Payload: 96, Protocol: "RTP/AVP", IsUDP: true, SSRC: "0100000001"}, 30000, "")
 		}},
 	}
 	for _, test := range tests {

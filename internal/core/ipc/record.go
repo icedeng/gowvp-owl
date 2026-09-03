@@ -30,9 +30,6 @@ func (c Core) QueryRecords(ctx context.Context, channelID string, in *RecordQuer
 		return nil, reason.ErrBadRequest.SetMsg("protocol does not support record query")
 	}
 
-	if in.StartAt <= 0 || in.EndAt <= in.StartAt {
-		return nil, reason.ErrBadRequest.SetMsg("invalid record query time range")
-	}
 	if in.Timeout <= 0 {
 		in.Timeout = 10
 	}

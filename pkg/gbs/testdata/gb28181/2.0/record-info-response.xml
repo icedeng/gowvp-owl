@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <CmdType>RecordInfo</CmdType>
+  <SN>3</SN>
+  <DeviceID>34020000001320000002</DeviceID>
+  <Name>camera-2016</Name>
+  <SumNum>1</SumNum>
+  <RecordList Num="1">
+    <Item>
+      <DeviceID>34020000001320000002</DeviceID>
+      <Name>record-2016</Name>
+      <FilePath>/record/2016.ps</FilePath>
+      <Address>Address 2016</Address>
+      <StartTime>2024-04-01T00:00:00</StartTime>
+      <EndTime>2024-04-01T01:00:00</EndTime>
+      <Secrecy>0</Secrecy>
+      <Type>time</Type>
+      <RecorderID>34020000001320000001</RecorderID>
+      <FileSize>1048576</FileSize>
+    </Item>
+  </RecordList>
+  <Info>2016 fixture</Info>
+</Response>

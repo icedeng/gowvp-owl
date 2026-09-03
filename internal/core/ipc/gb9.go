@@ -46,6 +46,9 @@ func (c Core) StartHistory(ctx context.Context, channelID string, in *HistoryCon
 	if in.DownloadSpeed < 0 || (in.DownloadSpeed > 0 && mode != "download") {
 		return reason.ErrBadRequest.SetMsg("download_speed must be non-negative and only used with download mode")
 	}
+	if in.RecordType != nil && (*in.RecordType < 0 || *in.RecordType > 3) {
+		return reason.ErrBadRequest.SetMsg("record_type must be between 0 and 3")
+	}
 	return h.StartHistory(ctx, dev, ch, in)
 }
 
@@ -108,7 +111,7 @@ func (c Core) ControlHistory(ctx context.Context, channelID string, in *HistoryC
 	return h.ControlHistory(ctx, dev, ch, in)
 }
 
-// SyncTime 执行设备校时（9.10）。
+// SyncTime 执行厂商扩展 DeviceControl(Time) 主动校时。
 func (c Core) SyncTime(ctx context.Context, deviceID string) error {
 	dev, err := c.GetDevice(ctx, deviceID)
 	if err != nil {
@@ -146,6 +149,27 @@ func (c Core) Subscribe(ctx context.Context, deviceID string, in *SubscribeInput
 	return s.Subscribe(ctx, dev, in)
 }
 
+// SubscriptionStates 查询平台向指定设备建立的事件订阅运行态。
+func (c Core) SubscriptionStates(ctx context.Context, deviceID string) ([]SubscriptionState, error) {
+	dev, err := c.GetDevice(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	p, ok := c.protocols[dev.GetType()]
+	if !ok {
+		return nil, reason.ErrBadRequest.SetMsg("unsupported protocol")
+	}
+	provider, ok := p.(SubscriptionStateCapable)
+	if !ok {
+		return nil, reason.ErrBadRequest.SetMsg("protocol does not expose subscription state")
+	}
+	states, err := provider.SubscriptionStates(ctx, dev)
+	if err != nil {
+		return nil, err
+	}
+	return append([]SubscriptionState(nil), states...), nil
+}
+
 // ProbeOptions 发起 OPTIONS 探活（9.2 协议探测）。
 func (c Core) ProbeOptions(ctx context.Context, deviceID string, in *OptionsProbeInput) error {
 	if in == nil {
@@ -166,7 +190,7 @@ func (c Core) ProbeOptions(ctx context.Context, deviceID string, in *OptionsProb
 	return s.ProbeOptions(ctx, dev, in)
 }
 
-// StartVoice 启动语音会话（9.12），mode=talk/broadcast。
+// StartVoice 启动语音会话（9.12），mode=talk/talk_standard/broadcast。
 func (c Core) StartVoice(ctx context.Context, channelID string, in *VoiceControlInput) error {
 	if in == nil {
 		return reason.ErrBadRequest.SetMsg("invalid voice request")
@@ -188,8 +212,8 @@ func (c Core) StartVoice(ctx context.Context, channelID string, in *VoiceControl
 		return reason.ErrBadRequest.SetMsg("protocol does not support voice")
 	}
 	in.Mode = strings.ToLower(strings.TrimSpace(in.Mode))
-	if in.Mode != "talk" && in.Mode != "broadcast" {
-		return reason.ErrBadRequest.SetMsg("mode must be talk/broadcast")
+	if in.Mode != "talk" && in.Mode != "talk_standard" && in.Mode != "broadcast" {
+		return reason.ErrBadRequest.SetMsg("mode must be talk/talk_standard/broadcast")
 	}
 	return v.StartVoice(ctx, dev, ch, in)
 }
@@ -216,8 +240,8 @@ func (c Core) StopVoice(ctx context.Context, channelID string, in *VoiceControlI
 		return reason.ErrBadRequest.SetMsg("protocol does not support voice")
 	}
 	in.Mode = strings.ToLower(strings.TrimSpace(in.Mode))
-	if in.Mode != "talk" && in.Mode != "broadcast" {
-		return reason.ErrBadRequest.SetMsg("mode must be talk/broadcast")
+	if in.Mode != "talk" && in.Mode != "talk_standard" && in.Mode != "broadcast" {
+		return reason.ErrBadRequest.SetMsg("mode must be talk/talk_standard/broadcast")
 	}
 	return v.StopVoice(ctx, dev, ch, in)
 }

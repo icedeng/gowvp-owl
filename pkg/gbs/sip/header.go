@@ -3,6 +3,7 @@ package sip
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -30,10 +31,12 @@ type HeadersBuilder struct {
 	// recipient *URI
 }
 
+const defaultMaxForwards = MaxForwards(70)
+
 // NewHeaderBuilder NewHeaderBuilder
 func NewHeaderBuilder() *HeadersBuilder {
 	callID := CallID(RandString(32))
-	maxForwards := MaxForwards(70)
+	maxForwards := defaultMaxForwards
 	userAgent := UserAgentHeader("GoWVP")
 	return &HeadersBuilder{
 		protocol:        "SIP",
@@ -53,7 +56,7 @@ func NewHeaderBuilder() *HeadersBuilder {
 // Build Build
 func (hb *HeadersBuilder) Build() []Header {
 	hdrs := make([]Header, 0)
-	if hb.supported != nil {
+	if hb.supported != nil && len(hb.supported.Options) > 0 {
 		hdrs = append(hdrs, hb.supported)
 	}
 	if hb.allow != nil {
@@ -133,9 +136,15 @@ func (hb *HeadersBuilder) SetSeqNo(seqNo uint) *HeadersBuilder {
 
 // SetFrom FromHeader
 func (hb *HeadersBuilder) SetFrom(address *Address) *HeadersBuilder {
+	if address == nil || address.URI == nil {
+		return hb
+	}
 	address = address.Clone()
 	if address.URI.Host() == "" {
 		address.URI.SetHost(hb.host)
+	}
+	if address.Params == nil {
+		address.Params = NewParams()
 	}
 	if _, ok := address.Params.Get("tag"); !ok {
 		address.Params.Add("tag", String{Str: RandString(32)})
@@ -152,8 +161,7 @@ func (hb *HeadersBuilder) SetFrom(address *Address) *HeadersBuilder {
 
 // SetTo ToHeader
 func (hb *HeadersBuilder) SetTo(address *Address) *HeadersBuilder {
-	// TODO: 防止崩溃，但应该在上层，防止传递空指针
-	if address == nil {
+	if address == nil || address.URI == nil {
 		return hb
 	}
 	address = address.Clone()
@@ -170,6 +178,9 @@ func (hb *HeadersBuilder) SetTo(address *Address) *HeadersBuilder {
 
 // SetTo ToHeader
 func (hb *HeadersBuilder) SetToWithParam(address *Address) *HeadersBuilder {
+	if address == nil || address.URI == nil {
+		return hb
+	}
 	address = address.Clone()
 	if address.URI.Host() == "" {
 		address.URI.SetHost(hb.host)
@@ -184,6 +195,9 @@ func (hb *HeadersBuilder) SetToWithParam(address *Address) *HeadersBuilder {
 
 // SetContact SetContact
 func (hb *HeadersBuilder) SetContact(address *Address) *HeadersBuilder {
+	if address == nil || address.URI == nil {
+		return hb
+	}
 	address = address.Clone()
 	if address.URI.Host() == "" {
 		address.URI.SetHost(hb.host)
@@ -200,6 +214,9 @@ func (hb *HeadersBuilder) SetContact(address *Address) *HeadersBuilder {
 
 // AddVia AddVia
 func (hb *HeadersBuilder) AddVia(via *ViaHop) *HeadersBuilder {
+	if via == nil {
+		return hb
+	}
 	if via.ProtocolName == "" {
 		via.ProtocolName = hb.protocol
 	}
@@ -396,7 +413,7 @@ func (hs *headers) CSeq() (*CSeq, bool) {
 
 // AppendHeader Add the given header.
 func (hs *headers) AppendHeader(header Header) {
-	if header == nil {
+	if isNilInterfaceValue(header) {
 		return
 	}
 	name := strings.ToLower(header.Name())
@@ -405,6 +422,19 @@ func (hs *headers) AppendHeader(header Header) {
 	} else {
 		hs.headers[name] = []Header{header}
 		hs.headerOrder = append(hs.headerOrder, name)
+	}
+}
+
+func isNilInterfaceValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
 	}
 }
 
@@ -554,8 +584,23 @@ func (params *headerParams) Keys() []string {
 
 // Returns the requested parameter value.
 func (params *headerParams) Get(key string) (MaybeString, bool) {
-	v, ok := params.params[key]
-	return v, ok
+	if params == nil {
+		return nil, false
+	}
+	var value MaybeString
+	found := false
+	for candidate, candidateValue := range params.params {
+		if !strings.EqualFold(candidate, key) {
+			continue
+		}
+		if found {
+			// 同名参数即使仅大小写不同也存在歧义，调用方不得静默采用其中一个。
+			return nil, false
+		}
+		value = candidateValue
+		found = true
+	}
+	return value, found
 }
 
 // Put a new parameter.
@@ -573,8 +618,7 @@ func (params *headerParams) Add(key string, val MaybeString) Params {
 }
 
 func (params *headerParams) Has(key string) bool {
-	_, ok := params.params[key]
-
+	_, ok := params.Get(key)
 	return ok
 }
 
@@ -587,7 +631,7 @@ func (params *headerParams) Clone() Params {
 
 	dup := NewParams()
 	for _, key := range params.Keys() {
-		if val, ok := params.Get(key); ok {
+		if val, ok := params.params[key]; ok {
 			dup.Add(key, val)
 		}
 	}
@@ -606,7 +650,7 @@ func (params *headerParams) ToString(sep uint8) string {
 	first := true
 
 	for _, key := range params.Keys() {
-		val, ok := params.Get(key)
+		val, ok := params.params[key]
 		if !ok {
 			continue
 		}
@@ -667,7 +711,13 @@ func (params *headerParams) Equals(other any) bool {
 		return false
 	}
 
+	matched := make(map[string]struct{}, params.Length())
 	for key, pVal := range params.Items() {
+		canonicalKey := strings.ToLower(key)
+		if _, duplicate := matched[canonicalKey]; duplicate {
+			return false
+		}
+		matched[canonicalKey] = struct{}{}
 		qVal, ok := q.Get(key)
 		if !ok {
 			return false
@@ -1321,7 +1371,7 @@ func (maxForwards *MaxForwards) Equals(other any) bool {
 type Expires uint32
 
 func (expires Expires) String() string {
-	return fmt.Sprintf("Expires: %d", int(expires))
+	return fmt.Sprintf("Expires: %d", uint32(expires))
 }
 
 // Name Name
@@ -1396,12 +1446,14 @@ func (ua *UserAgentHeader) Equals(other any) bool {
 var defaultAllowMethods = &AllowHeader{
 	MethodInvite,
 	MethodACK,
+	MethodInfo,
 	MethodCancel,
+	MethodBYE,
+	MethodOptions,
 	MethodMessage,
 	MethodRegister,
 	MethodSubscribe,
 	MethodNotify,
-	MethodInfo,
 }
 
 // AllowHeader AllowHeader

@@ -6,12 +6,13 @@
 
 - 1.0：代码与模拟器核心流程已完成，尚未完成真实设备矩阵验收；
 - 1.1：Catalog 扩展、Basic/视频/音频/SVAC 设备配置、MediaStatus、多响应、目录订阅、接收者主动 INVITE 广播和附录 O 直接 TCP 文件下载已完成自动化/模拟器验证；
-- 2.0/3.0：相关包回归通过，广播使用 `PCMA/8000`，对讲具备 RTP 双向媒体闭环；RTP over TCP 与 2022 能力门禁未被 1.0/1.1 打开或降级；
+- 2.0/3.0：相关包回归通过，广播使用 `PCMA/8000`，对讲具备 RTP 双向媒体闭环；RTP over TCP 与 2022 能力门禁未被 1.0/1.1 打开或降级；2022 `VideoUploadNotify` 在任务存储可用时会先持久化所有已配置 3.0 上级目标，即使上级暂未 REGISTER 也会在恢复注册后补发；
+- 2014 附录 O 下载管理器的公开等待接口兼容 `nil context`，活动任务仍可通过完成或显式取消结束，不因调用方未提供上下文而触发运行时崩溃；
 - 四版本 Catalog 查询均支持可选 `StartTime/EndTime`；统一查询 API 会按北京时间下发已设置边界，级联在 SIP `200` 前校验时间格式和顺序，并按通道增加时间闭区间过滤。2022 先过滤显式共享通道，再补齐匹配项所需目录祖先，避免孤立设备；
 - 上下级平台级联：基于 UDP/TCP/TLS 的多上级注册、核心及版本化扩展查询、目录、订阅通知、直播、回放、下载和语音广播/对讲已完成自动化验证；TCP/TLS 持久连接覆盖 Digest 注册、心跳、重连事务换连接及 301/302 传输切换，出向 TLS 校验服务端证书并支持客户端证书，入向 TLS 可校验或强制要求客户端证书；2022 附录 H 指定路径已覆盖实时、回放和下载；停止开始后迟到的 REGISTER 成功只保留远端绑定证据用于退注册，不会复活本地注册状态，Keepalive 成功也不会延长已到期绑定；级联语音源在等待媒体期间收到上级 BYE、媒体注销或 worker 终止时会立即中断，源终止与下游广播索引绑定通过同一状态锁原子互斥，批量关闭多个普通/广播源保持幂等，不能在终止后重新挂接下游会话；仍需四版本真实上级平台互通；
 - SIP 业务响应事务：服务端只缓存成功写出的响应，写失败允许同一事务重传重新进入 handler；附录 G、Keepalive、MediaStatus、升级/抓拍、入向 SUBSCRIBE 创建/刷新/退订、上级查询/控制/广播、CANCEL、BYE、历史 TEARDOWN 及级联最终通知均已覆盖 ACK 阻塞、写失败、持久化故障或幂等重传；
 - 公共入口复核：设备 API、前端类型和 Swagger 均不暴露 REGISTER 的 Call-ID、CSeq、请求指纹、原响应 Date 和确认状态，数据库序列化仍完整保留；SIP 的 REGISTER/MESSAGE/NOTIFY/SUBSCRIBE/INVITE/CANCEL/BYE/ACK/INFO/OPTIONS 路由已逐项复核，其中入向 OPTIONS 只返回 `200 + Allow`，不读写设备、上级或附录 G 业务状态；合法 `MESSAGE/NOTIFY` 中未注册的 MANSCDP `CmdType` 属于业务命令错误，四版本均返回 `400 Bad Request` 且不得携带 `Allow`；真正未知的 SIP 方法才返回 `405 Method Not Allowed`，其 `Allow` 与 OPTIONS 200 必须准确包含上述十种生产方法及 `REGISTER`，不得漏报、重复或输出空方法；
-- 全仓 test/vet/race 已通过；对外状态仍不得标记为“生产完整支持”，真实设备矩阵和目标环境灰度/回滚仍是阶段门。
+- 当前工作树的协议整包、全仓 test/vet、协议 race 及管理端 test/build 已通过；对外状态仍不得标记为“生产完整支持”，真实设备矩阵和目标环境灰度/回滚仍是阶段门。
 
 ## 2. 已执行验证
 
@@ -32,19 +33,20 @@ pnpm test
 pnpm build
 ```
 
-结果：本轮最新全仓 test/vet/race、全仓随机顺序回归、管理端 40/40 契约测试和生产构建均通过。两项 SIP 解析模糊测试使用独立临时 Go 缓存执行，分别完成 46,772 和 371,012 次输入，未发现崩溃。
+结果：历史轮次的全仓 test/vet/race、全仓随机顺序回归及两项 SIP 解析模糊测试均通过；模糊测试分别完成 46,772 和 371,012 次输入，未发现崩溃。2026-09-02 当前工作树另行重跑全仓串行 test、全仓 race、全仓 vet、GB 核心包随机顺序回归 5 轮、三项协议解析模糊测试、管理端 46/46 契约测试和生产构建，均通过；GB 核心包语句覆盖率为 79.0%，TLS 重连事务波动用例连续执行 100 次通过。
 
 2026-09-02 当前工作树重新执行并通过：
 
 ```bash
-go test ./pkg/gbs/sip
-go test ./pkg/gbs
-go test ./internal/core/ipc/...
-go test ./...
+go test ./... -count=1 -p 1
+go test -race -vet=off ./... -count=1 -p 1
 go vet ./...
-go test -race -vet=off ./...
-go test ./... -shuffle=on -count=3
-go test ./docs -count=1
+go test ./pkg/gbs -shuffle=on -count=5
+go test ./pkg/gbs/sip -run '^TestServerTransactionReplaysResponseOnReconnectedTLSPeer$' -count=100
+go test ./pkg/gbs/sip -run '^$' -fuzz '^FuzzParseSIPAddressesDoNotPanic$' -fuzztime=10s
+go test ./pkg/gbs/sip -run '^$' -fuzz '^FuzzParseSIPHeaderDoesNotPanic$' -fuzztime=10s
+go test ./pkg/gbs/annexg -run '^$' -fuzz '^FuzzDecode$' -fuzztime=10s
+go test ./pkg/gbs -coverprofile=/private/tmp/owl-gbs.cover -count=1
 
 cd admin-ui
 pnpm test
@@ -54,7 +56,7 @@ cd ..
 git diff --check
 ```
 
-随机顺序三轮回归首次在限制环境中因本地临时监听被拒绝（`listen tcp6 [::1]:0: bind: operation not permitted`）失败；相关 TCP 测试单独连续 20 次通过，同一全仓命令在允许本地监听的环境复验通过，未归类为代码回归。
+涉及本机临时监听的命令在允许绑定本机端口的环境执行；受限环境中的 `bind: operation not permitted` 属于执行环境限制，不归类为代码回归。
 
 覆盖内容包括：
 
@@ -298,13 +300,25 @@ SIP 客户端事务键由原来的 `Call-ID/CSeq/方法` 扩展为同时绑定�
 
 ### RTP/RTCP 真实媒体验证
 
-四版标准均要求或宜采用 RTCP，且媒体传输能力表包含 RTP/RTCP。项目融合镜像和调试编排固定 ZLMediaKit 源码提交 `2fa539807370c4bcfca9801bde1dd2fdd95ba113`，并在构建时应用仓库内 RFC 4571 RTP/RTCP 补丁，不再以浮动 `master` 或未打补丁官方镜像作为默认依赖。UDP 路径保持原有 RTP+1 RTCP、SR/RR 和丢包统计；补丁为 TCP 接收、发送路径增加默认关闭的 `tcp_rtcp` 参数以及同连接 RTCP 解复用、SR/RR 处理和周期发送，Owl 仅为 2016/2022 TCP 会话开启。`arm64` 目标镜像 `gowvp/zlmediakit:2fa539-tcp-rtcp` 已从当前工作树重建，镜像 ID/仓库摘要均为 `sha256:f86cbbc680318e9d1f55065b8166247c078e729aebfe69c38fff3b6e19a76175`，镜像内 `MediaServer` SHA-256 为 `6a7b931a0415e2a5473ce54b8be9c8008b5ba64ea3e0bf0bb6de34c0b0f644fe`。一次性容器的短时运行日志确认 `git hash:2fa5398`，HTTP/API、RTSP、RTMP、RTP TCP/UDP 监听均成功，并能在受控 SIGTERM 后完整退出。接收侧合成烟测通过 `openRtpServer(tcp_rtcp=true)` 写入同连接 RTP/SR 并收到 32 字节 RR；发送侧通过 `startSendRtp(tcp_rtcp=true)` 收到 28 字节 SR 并成功回送 RR。关闭参数后，接收侧不返回 RTCP，发送侧连续 55 帧 RTP 也没有 SR，默认兼容路径保持不变。目标镜像门已关闭；真实设备/上级的 UDP、TCP SR/RR 抓包仍未完成，发布前还必须确认 RFC 4571 帧、会话 SSRC、周期、丢包率及拥塞行为。原厂商兼容 Talk 的双向同连接 TCP RTCP 仍不在承诺范围。该项属于外部发布阶段门，现有 SIP/SDP、镜像启动与合成媒体烟测通过不等于媒体面生产完整。
+四版标准均要求或宜采用 RTCP，且媒体传输能力表包含 RTP/RTCP。项目融合镜像和调试编排固定 ZLMediaKit 源码提交 `2fa539807370c4bcfca9801bde1dd2fdd95ba113`，并在构建时应用仓库内 RFC 4571 RTP/RTCP 补丁，不再以浮动 `master` 或未打补丁官方镜像作为默认依赖。UDP 路径保持原有 RTP+1 RTCP、SR/RR 和丢包统计；补丁为 TCP 接收、发送路径增加默认关闭的 `tcp_rtcp` 参数以及同连接 RTCP 解复用、SR/RR 处理和周期发送，发送侧网络回调现在把畸形 RFC 4571 帧的解析异常收敛为连接级错误，Owl 仅为 2016/2022 TCP 会话开启。`arm64` 目标镜像 `gowvp/zlmediakit:2fa539-tcp-rtcp` 已从当前工作树重建，镜像 ID/仓库摘要均为 `sha256:32fa733d16cfca95659b64f67b277f8e81e24aaf754bd7e23c87931e3f0bd992`，镜像内 `MediaServer` SHA-256 为 `ef64203fb4b74f7cf9c6356564ee695a194dc2584c3e88bfab1e3867b53241ec`。一次性容器的短时运行日志确认 `git hash:2fa5398`，HTTP/API、RTSP、RTMP、RTP TCP/UDP 监听均成功，并能在受控 SIGTERM 后完整退出；向 `openRtpServer(tcp_rtcp=true)` 发送畸形 RFC 4571/RTCP 帧后进程保持存活。接收侧合成烟测通过 `openRtpServer(tcp_rtcp=true)` 写入同连接 RTP/SR 并收到 32 字节 RR；发送侧通过 `startSendRtp(tcp_rtcp=true)` 收到 28 字节 SR 并成功回送 RR。关闭参数后，接收侧不返回 RTCP，发送侧连续 55 帧 RTP 也没有 SR，默认兼容路径保持不变。目标镜像门已关闭；真实设备/上级的 UDP、TCP SR/RR 抓包仍未完成，发布前还必须确认 RFC 4571 帧、会话 SSRC、周期、丢包率及拥塞行为。原厂商兼容 Talk 的双向同连接 TCP RTCP 仍不在承诺范围。该项属于外部发布阶段门，现有 SIP/SDP、镜像启动与合成媒体烟测通过不等于媒体面生产完整。
 
 独立 ZLM 调试部署现在使用共享的必填 `OWL_MEDIA_SECRET`，入口脚本在空持久卷中从镜像模板生成 `config.ini` 并更新 `[api].secret`；Owl 通过运行时环境指向 `zlm:80`，ZLM Webhook 回指 `gowvp`。真实容器烟测确认正确密钥 API 成功、错误密钥被拒绝，默认 `api.apiDebug=0`，两次请求日志均不包含 secret，且运行期间不再随机改写 secret。该证据关闭配置卷遮蔽、密钥失配和默认 API URL 泄密问题，但不替代目标环境网络、端口映射和外部设备可达性验证。
 
 ### 2014 直接 TCP 下载及级联中继真实验证
 
 ADR：`docs/adr/gb28181-2014-direct-tcp-download.md`。AI-403 已按 Owl 内置 TCP 客户端方案实现并通过本地发送端模拟器验证；附录 O 消息 1/2/5 的独立客户端控制腿由进程内调用替代，设备发送方和级联媒体入口严格承接必须携带 SDP 的消息 3。上级平台级联中继也已完成独立监听、来源授权、原始 PS 转发、文件大小/并发/超时限制及终态清理的本地自动化。尚无真实 1.1 设备证明不同厂商对占位 SDP 端口、`filesize/fileszie` 和 MediaStatus 时序的兼容性，也没有真实 1.1 上级平台验证中继宣告地址、NAT/防火墙、大文件背压及完整双侧 SIP/媒体抓包。
+
+自动化还必须覆盖上级 ACK 晚于中继总期限的顺序：监听结束后应保存一次 `cancelled/total_timeout` 终态、释放一次并发额度，迟到 ACK 只能补交一次媒体会话结束回调，重复 ACK 不得重新拨号或重复回调。`TestDirectTCPRelayReportsContextTimeoutBeforeStart` 已覆盖该本地状态机；真实上级应在高延迟和丢包条件下确认 BYE/会话释放时序。
+
+2022 `VideoUploadNotify` 多上级投递还必须注入回执数据库写失败：某一上级已经 SIP 成功后，同一进程的后续轮询只能补写回执，不能再次发送业务 MESSAGE；其他尚未成功的平台仍应独立重试。`TestVideoUploadNotifyReceiptPersistenceRetryDoesNotResendUpstream` 已覆盖单目标瞬时写失败。进程恰好在网络成功与回执持久化之间崩溃仍属于至少一次投递窗口，真实上级必须验证相同通知的幂等接收策略。
+
+级联任务完成墓碑热更新交错已补测：最终升级/抓拍通知 SIP 成功后，若完成墓碑落库失败，`CascadeManager.Apply` 替换旧上级 worker 不会删除已完成运行态路由；路由标记为与旧 worker 逻辑脱离并保留幂等索引，运行态维护器每秒自动补写最多 8 个墓碑，不依赖设备重传，也不重复向新 worker 发送业务通知。补写与设备删除使用相同设备操作锁，删除路由的 retired 标记可阻止已排队补写在删除事务后重建孤儿记录。`TestCascadeCompletedRouteSurvivesWorkerReplacementWhenCompletionPersistenceFails`、`TestCascadeTaskCompletionPersistenceRetriesWithoutDeviceRetransmission`、`TestCascadeTaskCompletionPersistenceRetryIsBounded` 和 `TestCascadeTaskCompletionRetryCannotRecreateRouteAfterDeviceDeletion` 已通过普通及 race 定向测试；真实上级配置热更新、进程崩溃和数据库故障仍需现场验证。
+
+级联升级/抓拍路由的七天 TTL 现按最后成功更新时间计算，数据库索引不再误用创建时间；同一路由 start/pending 与最终 completed 保存由同一锁串行到数据库提交，迟到 pending 写不能覆盖完成墓碑。旧记录缺少更新时间时仍按创建时间兼容恢复，损坏的倒序时间拒绝。阻塞存储交错、更新时间索引和 TTL 边界测试已通过普通及 race 重复验证。
+
+附录 G 恢复压测需同时准备超过 8 条已保存 Response，验证每轮只按“系统、命令、SN”处理一个有界批次，剩余记录可在后续周期继续收敛，关闭不会等待整库同步消费。`TestAnnexGStoredResponseReplayUsesBoundedDeterministicBatches` 已覆盖 10 条本地记录的两批处理；真实数据库延迟和 4096 条容量上限仍须目标环境压测。
+
+附录 G SIP-TLS 现场验收必须使用目标 CA 签发的正常与已撤销服务端证书分别握手，并覆盖叶证书与中间 CA 撤销、有效、过期、错误签名及无适用签发者等 CRL 场景；配置 `TLSCRL` 而缺少 `TLSCA` 必须在启动配置校验阶段拒绝。自动化 `TestAnnexGTLSCRLRejectsRevokedServerCertificate` 和 `TestAnnexGTLSCRLRejectsRevokedIntermediateCertificate` 已证明本地叶证书/中间 CA 撤销门禁，但不能替代真实 CRL 发布、轮换和系统时钟漂移验证。
 
 ### 语音真实设备验证
 

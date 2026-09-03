@@ -38,7 +38,7 @@ GET /devices/{id}/gb/diagnostics
 1. REGISTER 首次、401、鉴权 REGISTER、200、注销和重新注册；
 2. Keepalive 正常、离线判定、恢复；
 3. Catalog 查询、分包响应、目录变化；
-4. UDP 实时点播、ACK、BYE、异常断流；
+4. UDP 实时点播、ACK、BYE、异常断流；同时抓取 RTP/RTCP，核对 RTP+1、SR/RR、SSRC/时间戳、丢包率和丢包/限速下的收敛行为，并记录实际媒体服务器镜像摘要/提交；
 5. PTZ、RecordInfo、历史回放/下载、Alarm；
 6. 查询 `GET /gb28181/metrics`，核对计数与操作次数。
 
@@ -72,11 +72,15 @@ DeviceAllowlist = ["34020000001320000001"]
 ### 2.0（2016）
 
 - 回归 RTP over TCP 主动/被动、语音对讲、PresetQuery、MobilePosition 和 HomePosition；
+- 测试前必须使用已固定且支持 TCP RTP/RTCP RFC 4571 的媒体服务器构建；已审计的 ZLMediaKit `9f90548a67df0a9f1425a1c884186bf48eb7be21` 不满足该前提；
+- RTP over TCP 抓包必须能证明 RTP 和 RTCP 均按 RFC 4571 封装在协商的 TCP 媒体路径中，旁路 UDP RTCP 不计为通过；
 - 确认直接 TCP 下载默认关闭。
 
 ### 3.0（2022）
 
 - 回归 H.265、升级、抓拍、精准 PTZ、存储卡和附录 A.4；
+- 主动 RTP over TCP 首次连接失败时，在平台主动收流和向 `setup:passive` 上级发送级联媒体两条客户端路径中，均确认首次尝试后至少重连 3 次（最多共 4 次尝试）、相邻重连间隔不少于 1 秒；成功建立或会话取消后不得继续重连；
+- RTP over TCP 抓包必须能证明 RTP 和 RTCP 均按 RFC 4571 封装在协商的 TCP 媒体路径中，旁路 UDP RTCP 不计为通过；
 - 目标设备支持时再验证 SIP-TLS。
 
 ## 5. 真实上级与三级级联
@@ -87,8 +91,8 @@ DeviceAllowlist = ["34020000001320000001"]
 
 1. Owl 向上级发起 REGISTER，保存首次请求、401、携带 Digest 的请求、200、续注册、Keepalive 和注销；核对 `X-GB-Ver` 与配置档案一致。
 2. 上级查询平台根和共享通道的 Catalog、DeviceInfo、DeviceStatus、RecordInfo；确认返回编码已映射，不泄露真实下级编码。
-3. 上级分别发起直播、回放和下载，完成 `INVITE → 200 → ACK → INFO（历史）→ BYE`，核对下级实际媒体、停止后 SIP 对话和 RTP 端口均释放。
-4. 1.1+ 执行 Catalog、Alarm、MobilePosition 订阅；3.0 增加 PTZPosition。核对续订、过滤、增量通知、空 terminated NOTIFY 重订和 `Expires: 0` 退订。
+3. 上级分别发起直播、回放和下载，完成 `INVITE → 200 → ACK → INFO（历史）→ BYE`，核对下级实际媒体、停止后 SIP 对话和 RTP/RTCP 端口均释放；四档案 UDP 路径保存 SR/RR 抓包，2.0/3.0 TCP 路径另保存 RTP/RTCP 的 RFC 4571 帧证据。
+4. 1.1+ 执行 Catalog、Alarm、MobilePosition 订阅；3.0 增加 PTZPosition。核对续订、过滤、增量通知、空 terminated NOTIFY 重订和 `Expires: 0` 退订；构造 active/pending 的较短、较长及畸形 `Subscription-State;expires`，确认只接受合法缩短且早到 NOTIFY 的期限不会被最终响应覆盖；terminated 依次使用 `timeout/deactivated/probation/giveup/rejected/noresource`、扩展 reason、合法/畸形 `retry-after`，确认立即、延迟、禁止重订和 SIP 400 行为符合 RFC 3265，等待期间上级续订不能触发提前下级重订。分别让订阅方对 NOTIFY 返回 `202/481/500`、不返回响应以及在本地取消等待，确认 `202` 保留订阅，确定错误/事务超时删除精确订阅并释放引用，本地取消不误删。
 5. 执行语音广播/对讲，必须证明真实上级音频源、Owl 媒体转发和真实下级扬声器可听，不能只保存 SIP 200。
 6. 同时注册两个上级并访问同一共享通道，确认对话所有权隔离、下级订阅引用计数和一方注销/退订不影响另一方。
 
@@ -111,7 +115,7 @@ DeviceAllowlist = ["34020000001320000001"]
 
 ### 5.4 证书 REGISTER 与 CRL
 
-该项只在目标设备或上级明确支持 2016 `Authorization: Capability/Asymmetric` 时启用，且必须和 SIP-TLS 客户端证书分开记录：
+该项只在目标设备或上级明确支持 2011/2014/2016 `Authorization: Capability/Asymmetric` 时启用，且必须和 SIP-TLS 客户端证书分开记录；2022 高安全级别按 GB 35114 另行验收：
 
 1. 记录平台证书、设备证书、签发 CA、CRL 的序列号、有效期和指纹；私钥、注册随机秘密和完整 Authorization 不得进入证据库。
 2. 先在非 Required 模式完成 `Capability/Asymmetric` 双向挑战，核对两段 Base64 nonce、协商算法、平台身份证明、设备秘密解密和最终 response。
@@ -139,6 +143,8 @@ docs/testing/evidence/gb28181/<version>/<vendor>-<model>-<firmware>/
 ├── catalog.sip.txt
 ├── live.sip.txt
 ├── history.sip.txt
+├── media-rtp-rtcp.md
+├── media.pcapng
 ├── alarm.sip.txt
 ├── direct-download.sip.txt
 ├── expected.sha256
@@ -154,6 +160,8 @@ docs/testing/evidence/gb28181/platforms/<version>/<vendor>-<platform>/
 ├── catalog.sip.txt
 ├── live.sip.txt
 ├── history.sip.txt
+├── media-rtp-rtcp.md
+├── media.pcapng
 ├── subscribe.sip.txt
 ├── voice.sip.txt
 ├── signal-digest.md

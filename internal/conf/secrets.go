@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -17,6 +18,10 @@ const (
 	envRTMPSecret    = "OWL_RTMP_SECRET"
 	envSIPPassword   = "OWL_SIP_PASSWORD"
 	envMediaSecret   = "OWL_MEDIA_SECRET"
+	envMediaIP       = "OWL_MEDIA_IP"
+	envMediaHTTPPort = "OWL_MEDIA_HTTP_PORT"
+	envMediaWebhook  = "OWL_MEDIA_WEBHOOK_IP"
+	envMediaSDPIP    = "OWL_MEDIA_SDP_IP"
 	envWebhookSecret = "OWL_WEBHOOK_SECRET"
 )
 
@@ -89,6 +94,16 @@ func SecureRuntimeSecrets(cfg *Bootstrap) error {
 	applyEnv(envSIPPassword, &cfg.Sip.Password)
 	applyEnv(envMediaSecret, &cfg.Media.Secret)
 	applyEnv(envWebhookSecret, &cfg.Server.Webhook.RecvSecret)
+	applyEnv(envMediaIP, &cfg.Media.IP)
+	applyEnv(envMediaWebhook, &cfg.Media.WebHookIP)
+	applyEnv(envMediaSDPIP, &cfg.Media.SDPIP)
+	if value, ok := os.LookupEnv(envMediaHTTPPort); ok && strings.TrimSpace(value) != "" {
+		port, err := strconv.Atoi(value)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("%s must be a valid TCP port", envMediaHTTPPort)
+		}
+		cfg.Media.HTTPPort = port
+	}
 	for name, value := range map[string]string{
 		envAdminPassword: cfg.Server.Password,
 		envJWTSecret:     cfg.Server.HTTP.JwtSecret,

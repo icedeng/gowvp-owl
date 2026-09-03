@@ -1,12 +1,15 @@
 package gbs
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
@@ -39,12 +42,21 @@ type DeviceControlInput struct {
 	TargetID string
 	Action   string
 	Timeout  time.Duration
+	// ExtraInfo 是设备控制消息体尾部的普通文本扩展；2011/2014/2016 编码为 Info，2022 编码为 ExtraInfo。
+	ExtraInfo []string
 
 	// CameraControl 参数（A.2.3.1.2）。
 	PTZCmd      string
 	PTZCmdParam *PTZCmdParam
+	PTZSpeed    uint8
+	PTZPreset   int
+	PTZGroup    uint8
+	PTZAux      uint8
+	PTZValue    uint16
+	// ControlPriority 是 2011 规范性附录 J.6 的 PTZ 控制优先级；2014 修改补充文件继续沿用。
+	ControlPriority *int
 
-	// RecordCmd 参数。
+	// StreamNumber 是 2022 录像控制的可选码流编号；0 为缺省主码流。
 	StreamNumber int
 	// AlarmCmd 附带参数。
 	AlarmMethod string
@@ -126,7 +138,8 @@ type deviceControlA23Request struct {
 	AlarmCmd string                `xml:"AlarmCmd,omitempty"`
 	Info     *deviceControlA23Info `xml:"Info,omitempty"`
 
-	IFrameCmd string `xml:"IFrameCmd,omitempty"`
+	IFameCmd  string `xml:"IFameCmd,omitempty"`  // GB/T 28181-2016 标准原文拼写
+	IFrameCmd string `xml:"IFrameCmd,omitempty"` // GB/T 28181-2022
 
 	DragZoomIn  *deviceControlA23DragZoom `xml:"DragZoomIn,omitempty"`
 	DragZoomOut *deviceControlA23DragZoom `xml:"DragZoomOut,omitempty"`
@@ -142,6 +155,9 @@ type deviceControlA23Request struct {
 	TargetArea  *deviceControlA23DragZoom `xml:"TargetArea,omitempty"`
 
 	DeviceUpgrade *deviceUpgradeConfig `xml:"DeviceUpgrade,omitempty"`
+
+	LegacyInfo []string `xml:"-"`
+	ExtraInfo  []string `xml:"ExtraInfo,omitempty"`
 }
 
 type deviceUpgradeConfig struct {
@@ -152,13 +168,36 @@ type deviceUpgradeConfig struct {
 }
 
 type deviceControlA23Info struct {
-	AlarmMethod string `xml:"AlarmMethod,omitempty"`
-	AlarmType   string `xml:"AlarmType,omitempty"`
+	ControlPriority *int   `xml:"ControlPriority,omitempty"`
+	AlarmMethod     string `xml:"AlarmMethod,omitempty"`
+	AlarmType       string `xml:"AlarmType,omitempty"`
 }
 
 type deviceControlA23PTZCmdParam struct {
 	PresetName      string `xml:"PresetName,omitempty"`
 	CruiseTrackName string `xml:"CruiseTrackName,omitempty"`
+}
+
+func validatePTZCmdParams(command []byte, params *deviceControlA23PTZCmdParam) error {
+	if params == nil {
+		return nil
+	}
+	presetName := strings.TrimSpace(params.PresetName)
+	cruiseTrackName := strings.TrimSpace(params.CruiseTrackName)
+	if presetName != "" && cruiseTrackName != "" {
+		return fmt.Errorf("PTZCmdParams must contain one command-specific name")
+	}
+	if presetName != "" && (len(command) != 8 || command[3] != 0x81) {
+		return fmt.Errorf("PresetName is only valid for the set-preset PTZCmd")
+	}
+	if cruiseTrackName != "" && (len(command) != 8 || command[3] < 0x84 || command[3] > 0x88) {
+		return fmt.Errorf("CruiseTrackName is only valid for a cruise PTZCmd")
+	}
+	return nil
+}
+
+func supportsPTZControlPriority(version GBProtocolVersion) bool {
+	return version == GBVersion10 || version == GBVersion11
 }
 
 type deviceControlA23DragZoom struct {
@@ -182,7 +221,7 @@ type deviceControlA23PTZPrecise struct {
 	Zoom *float64 `xml:"Zoom,omitempty"`
 }
 
-// DeviceControl 执行附录 A.2.3 设备控制命令，并等待设备 Response。
+// DeviceControl 执行附录 A.2.3 设备控制命令；仅对标准规定的有应答命令等待设备 Response。
 func (g *GB28181API) DeviceControl(ctx context.Context, in *DeviceControlInput) (*DeviceControlOutput, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -207,19 +246,14 @@ func (g *GB28181API) DeviceControl(ctx context.Context, in *DeviceControlInput) 
 		targetID = deviceID
 	}
 	action := normalizeDeviceControlAction(in.Action)
-	sn := g.nextControlSN()
 
-	req := deviceControlA23Request{
-		CmdType:  ptzCmdTypeDeviceControl,
-		SN:       sn,
-		DeviceID: targetID,
-	}
-	if err := g.fillDeviceControlRequest(deviceID, action, in, &req); err != nil {
+	version := g.getDeviceGBProtocolVersion(deviceID)
+	req := deviceControlA23Request{CmdType: ptzCmdTypeDeviceControl, DeviceID: targetID}
+	setDeviceControlTextInfoForVersion(&req, version, in.ExtraInfo)
+	if err := validateDeviceControlExtraInfo(deviceControlTextInfo(&req)); err != nil {
 		return nil, err
 	}
-
-	body, err := sip.XMLEncode(req)
-	if err != nil {
+	if err := g.fillDeviceControlRequest(deviceID, action, in, &req); err != nil {
 		return nil, err
 	}
 
@@ -231,18 +265,50 @@ func (g *GB28181API) DeviceControl(ctx context.Context, in *DeviceControlInput) 
 		}
 		target = ch
 	}
+	if err := g.validateTargetTrackChannels(deviceID, targetID, &req); err != nil {
+		return nil, err
+	}
 
-	waitKey := fmt.Sprintf("%s:%d", deviceID, sn)
-	pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1), targetID: targetID}
-	g.pendingDeviceControl.Store(waitKey, pending)
-	defer g.pendingDeviceControl.Delete(waitKey)
-
-	tx, err := g.svr.wrapRequestContext(ctx, target, sip.MethodMessage, &sip.ContentTypeXML, body)
+	requiresBusinessResponse := deviceControlRequiresBusinessResponse(&req)
+	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, deviceID, targetID)
+	defer releaseOperation()
+	var (
+		sn      int
+		waitKey string
+		pending *pendingDeviceControl
+	)
+	if requiresBusinessResponse {
+		sn, waitKey, pending = g.reservePendingDeviceControl(deviceID, targetID, operation)
+		defer g.pendingDeviceControl.CompareAndDelete(waitKey, pending)
+		defer pending.operation.Cancel(nil)
+	} else {
+		sn = g.nextControlSN()
+	}
+	req.SN = sn
+	body, err := encodeDeviceControlRequest(&req, version)
 	if err != nil {
 		return nil, err
 	}
-	if _, err = sipResponseContext(ctx, tx); err != nil {
-		return nil, err
+
+	requestCtx := operation.Context(ctx)
+	tx, err := g.svr.wrapRequestContext(requestCtx, target, sip.MethodMessage, &sip.ContentTypeXML, body)
+	if err != nil {
+		return nil, operation.ErrorOr(err)
+	}
+	if _, err = sipResponseContext(requestCtx, tx); err != nil {
+		return nil, operation.ErrorOr(err)
+	}
+	if !requiresBusinessResponse {
+		out := &DeviceControlOutput{
+			SN:       sn,
+			DeviceID: deviceID,
+			TargetID: targetID,
+			Result:   ptzResultOK,
+		}
+		if !operation.Deliver(func() {}) {
+			return nil, operation.Cause()
+		}
+		return out, nil
 	}
 
 	timer := time.NewTimer(in.Timeout)
@@ -262,12 +328,324 @@ func (g *GB28181API) DeviceControl(ctx context.Context, in *DeviceControlInput) 
 		}, nil
 	case <-g.serviceDone():
 		return nil, ErrServiceStopped
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-operation.Done():
+		return nil, operation.Cause()
 	case <-timer.C:
 		// 统一返回更明确的中文错误，避免调用方误以为命令未发送。
 		return nil, fmt.Errorf("%s", ptzTimeoutErrorMessage)
 	}
+}
+
+func (g *GB28181API) reservePendingDeviceControl(deviceID, targetID string, operation *pendingDeviceOperation) (int, string, *pendingDeviceControl) {
+	for {
+		sn := g.nextControlSN()
+		key := fmt.Sprintf("%s:%d", strings.TrimSpace(deviceID), sn)
+		pending := &pendingDeviceControl{
+			wait:      make(chan *deviceControlResponse, 1),
+			targetID:  strings.TrimSpace(targetID),
+			operation: operation,
+		}
+		if _, loaded := g.pendingDeviceControl.LoadOrStore(key, pending); !loaded {
+			return sn, key, pending
+		}
+	}
+}
+
+func validateDeviceControlExtraInfo(values []string, versions ...GBProtocolVersion) error {
+	if len(values) == 0 {
+		return nil
+	}
+	for _, value := range values {
+		if utf8.RuneCountInString(value) > 1024 {
+			return fmt.Errorf("DeviceControl text extension exceeds 1024 characters")
+		}
+	}
+	return nil
+}
+
+func deviceControlTextInfo(request *deviceControlA23Request) []string {
+	if request == nil {
+		return nil
+	}
+	values := make([]string, 0, len(request.LegacyInfo)+len(request.ExtraInfo))
+	values = append(values, request.LegacyInfo...)
+	values = append(values, request.ExtraInfo...)
+	return values
+}
+
+func setDeviceControlTextInfoForVersion(request *deviceControlA23Request, version GBProtocolVersion, values []string) {
+	if request == nil {
+		return
+	}
+	request.LegacyInfo = nil
+	request.ExtraInfo = nil
+	if version == GBVersion30 {
+		request.ExtraInfo = append([]string(nil), values...)
+		return
+	}
+	request.LegacyInfo = append([]string(nil), values...)
+}
+
+func decodeDeviceControlRequest(body []byte, request *deviceControlA23Request) error {
+	if request == nil {
+		return fmt.Errorf("DeviceControl request is nil")
+	}
+	if err := sip.XMLDecode(body, request); err != nil {
+		return err
+	}
+	request.Info = nil
+	request.LegacyInfo = nil
+	decoder := sip.NewGBXMLDecoder(body)
+	depth := 0
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch value := token.(type) {
+		case xml.StartElement:
+			if depth == 1 && value.Name.Local == "Info" {
+				tokens, readErr := readCascadeXMLElement(decoder, value)
+				if readErr != nil {
+					return readErr
+				}
+				var encoded bytes.Buffer
+				encoder := xml.NewEncoder(&encoded)
+				for _, infoToken := range tokens {
+					if encodeErr := encoder.EncodeToken(infoToken); encodeErr != nil {
+						return encodeErr
+					}
+				}
+				if flushErr := encoder.Flush(); flushErr != nil {
+					return flushErr
+				}
+				structured := false
+				for _, infoToken := range tokens[1 : len(tokens)-1] {
+					if _, ok := infoToken.(xml.StartElement); ok {
+						structured = true
+						break
+					}
+				}
+				if structured {
+					if request.Info != nil {
+						return fmt.Errorf("DeviceControl contains multiple structured Info elements")
+					}
+					var info deviceControlA23Info
+					if decodeErr := sip.XMLDecode(encoded.Bytes(), &info); decodeErr != nil {
+						return decodeErr
+					}
+					request.Info = &info
+				} else {
+					var text string
+					if decodeErr := sip.XMLDecode(encoded.Bytes(), &text); decodeErr != nil {
+						return decodeErr
+					}
+					request.LegacyInfo = append(request.LegacyInfo, text)
+				}
+				continue
+			}
+			depth++
+		case xml.EndElement:
+			depth--
+		}
+	}
+}
+
+func encodeDeviceControlRequest(request *deviceControlA23Request, version GBProtocolVersion) ([]byte, error) {
+	if request == nil {
+		return nil, fmt.Errorf("DeviceControl request is nil")
+	}
+	copyRequest := *request
+	values := deviceControlTextInfo(&copyRequest)
+	setDeviceControlTextInfoForVersion(&copyRequest, version, values)
+	if version == GBVersion30 {
+		// encoding/xml 会因 omitempty 丢弃切片中的空字符串；扩展项允许为空，改为在根节点尾部显式写出。
+		copyRequest.ExtraInfo = nil
+	}
+	body, err := sip.XMLEncode(copyRequest)
+	if err != nil {
+		return body, err
+	}
+	if version == GBVersion30 && len(values) == 0 {
+		return body, nil
+	}
+	decoder := sip.NewGBXMLDecoder(body)
+	var output bytes.Buffer
+	encoder := xml.NewEncoder(&output)
+	depth := 0
+	structuredInfo := make([]xml.Token, 0)
+	for {
+		token, decodeErr := decoder.Token()
+		if decodeErr == io.EOF {
+			break
+		}
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if start, ok := token.(xml.StartElement); ok && version != GBVersion30 && depth == 1 && start.Name.Local == "Info" {
+			tokens, readErr := readCascadeXMLElement(decoder, start)
+			if readErr != nil {
+				return nil, readErr
+			}
+			structuredInfo = append(structuredInfo, tokens...)
+			continue
+		}
+		if _, ok := token.(xml.EndElement); ok && depth == 1 {
+			if version != GBVersion30 {
+				for _, infoToken := range structuredInfo {
+					if encodeErr := encoder.EncodeToken(infoToken); encodeErr != nil {
+						return nil, encodeErr
+					}
+				}
+			}
+			name := "Info"
+			if version == GBVersion30 {
+				name = "ExtraInfo"
+			}
+			for _, value := range values {
+				if encodeErr := encoder.EncodeElement(value, xml.StartElement{Name: xml.Name{Local: name}}); encodeErr != nil {
+					return nil, encodeErr
+				}
+			}
+		}
+		if _, ok := token.(xml.StartElement); ok {
+			depth++
+		} else if _, ok := token.(xml.EndElement); ok {
+			depth--
+		}
+		if encodeErr := encoder.EncodeToken(token); encodeErr != nil {
+			return nil, encodeErr
+		}
+	}
+	if err := encoder.Flush(); err != nil {
+		return nil, err
+	}
+	return sip.EncodeGBXMLDocument(output.Bytes())
+}
+
+// validateTargetTrackChannels 校验 2022 目标跟踪的球机通道及可选全景通道属于同一设备。
+func (g *GB28181API) validateTargetTrackChannels(deviceID, targetID string, request *deviceControlA23Request) error {
+	if request == nil || strings.TrimSpace(request.TargetTrack) == "" {
+		return nil
+	}
+	deviceID = strings.TrimSpace(deviceID)
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" || targetID == deviceID {
+		return fmt.Errorf("target_track requires a ball camera channel target")
+	}
+	if g == nil || g.svr == nil || g.svr.memoryStorer == nil {
+		return ErrChannelNotExist
+	}
+	if _, ok := g.svr.memoryStorer.GetChannel(deviceID, targetID); !ok {
+		return ErrChannelNotExist
+	}
+	panoramaID := strings.TrimSpace(request.DeviceID2)
+	if panoramaID == "" {
+		return nil
+	}
+	if panoramaID == targetID {
+		return fmt.Errorf("target_track device_id2 must differ from the ball camera channel")
+	}
+	if _, ok := g.svr.memoryStorer.GetChannel(deviceID, panoramaID); !ok {
+		return fmt.Errorf("target_track device_id2 must reference a channel of the target device")
+	}
+	return nil
+}
+
+// deviceControlRequiresBusinessResponse 对应各版 9.3 的有/无应答命令矩阵。
+// 明确列出的无应答控制只以 SIP 200 OK 确认接收；未知或后续新增控制默认要求业务应答，避免静默误判成功。
+func deviceControlRequiresBusinessResponse(request *deviceControlA23Request) bool {
+	if request == nil {
+		return false
+	}
+	return !(strings.TrimSpace(request.PTZCmd) != "" ||
+		strings.TrimSpace(request.TeleBoot) != "" ||
+		strings.TrimSpace(request.IFameCmd) != "" ||
+		strings.TrimSpace(request.IFrameCmd) != "" ||
+		request.DragZoomIn != nil ||
+		request.DragZoomOut != nil ||
+		request.PTZPreciseCtrl != nil ||
+		request.FormatSDCard != nil ||
+		strings.TrimSpace(request.TargetTrack) != "")
+}
+
+func deviceControlIFrameCommand(request *deviceControlA23Request) (string, bool, error) {
+	if request == nil {
+		return "", false, nil
+	}
+	legacy := strings.TrimSpace(request.IFameCmd)
+	current := strings.TrimSpace(request.IFrameCmd)
+	if legacy != "" && current != "" {
+		return "", false, fmt.Errorf("DeviceControl must not contain both IFameCmd and IFrameCmd")
+	}
+	if legacy != "" {
+		return legacy, true, nil
+	}
+	if current != "" {
+		return current, true, nil
+	}
+	return "", false, nil
+}
+
+func validateDeviceControlIFrameCommand(request *deviceControlA23Request, version GBProtocolVersion) (string, bool, error) {
+	command, present, err := deviceControlIFrameCommand(request)
+	if err != nil || !present {
+		return command, present, err
+	}
+	if !version.Capabilities().IFrameControl {
+		return "", false, fmt.Errorf("force-I-frame control is not supported by protocol %s", version)
+	}
+	switch version {
+	case GBVersion20:
+		if strings.TrimSpace(request.IFameCmd) == "" {
+			return "", false, fmt.Errorf("protocol 2.0 force-I-frame control requires IFameCmd")
+		}
+	case GBVersion30:
+		if strings.TrimSpace(request.IFrameCmd) == "" {
+			return "", false, fmt.Errorf("protocol 3.0 force-I-frame control requires IFrameCmd")
+		}
+	default:
+		return "", false, fmt.Errorf("force-I-frame control is not supported by protocol %s", version)
+	}
+	if !strings.EqualFold(command, "Send") {
+		return "", false, fmt.Errorf("unsupported force-I-frame command")
+	}
+	return command, true, nil
+}
+
+func setDeviceControlIFrameCommand(request *deviceControlA23Request, version GBProtocolVersion, command string) error {
+	if request == nil {
+		return fmt.Errorf("DeviceControl request is nil")
+	}
+	request.IFameCmd = ""
+	request.IFrameCmd = ""
+	switch version {
+	case GBVersion20:
+		request.IFameCmd = command
+	case GBVersion30:
+		request.IFrameCmd = command
+	default:
+		return fmt.Errorf("force-I-frame control is not supported by protocol %s", version)
+	}
+	return nil
+}
+
+func (g *GB28181API) setDeviceControlRecordCommand(deviceID, command string, streamNumber int, request *deviceControlA23Request) error {
+	if streamNumber < 0 {
+		return fmt.Errorf("stream_number must be >= 0")
+	}
+	request.RecordCmd = command
+	if streamNumber == 0 {
+		return nil
+	}
+	if g.getDeviceGBProtocolVersion(deviceID) != GBVersion30 {
+		return fmt.Errorf("stream_number is only supported by GB/T 28181-2022")
+	}
+	request.StreamNumber = &streamNumber
+	return nil
 }
 
 func normalizeDeviceControlAction(action string) string {
@@ -288,7 +666,7 @@ func normalizeDeviceControlAction(action string) string {
 		return deviceControlActionGuardReset
 	case "reset_alarm":
 		return deviceControlActionAlarmReset
-	case "iframe", "iframe_cmd":
+	case "iframe", "iframe_cmd", "ifame_cmd":
 		return deviceControlActionIFrameSend
 	case "ptz_precise_ctrl":
 		return deviceControlActionPTZPrecise
@@ -304,51 +682,66 @@ func normalizeDeviceControlAction(action string) string {
 func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *DeviceControlInput, req *deviceControlA23Request) error {
 	switch action {
 	case deviceControlActionCameraControl:
-		req.PTZCmd = strings.TrimSpace(in.PTZCmd)
-		if req.PTZCmd == "" {
+		ptzCmd := strings.TrimSpace(in.PTZCmd)
+		if ptzCmd == "" {
 			return fmt.Errorf("camera_control requires ptz_cmd")
 		}
+		if len(ptzCmd) == 16 {
+			if _, err := parsePTZCommand(ptzCmd); err != nil {
+				return err
+			}
+			req.PTZCmd = strings.ToUpper(ptzCmd)
+		} else {
+			encoded, err := encodePTZCommand(&PTZInput{
+				Action: PTZAction(ptzCmd), Speed: in.PTZSpeed, Preset: in.PTZPreset,
+				Group: in.PTZGroup, Aux: in.PTZAux, Value: in.PTZValue,
+			})
+			if err != nil {
+				return err
+			}
+			req.PTZCmd = encoded
+		}
 		if in.PTZCmdParam != nil {
-			presetName := strings.TrimSpace(in.PTZCmdParam.PresetName)
-			cruiseTrackName := strings.TrimSpace(in.PTZCmdParam.CruiseTrackName)
-			if presetName != "" || cruiseTrackName != "" {
+			presetNamePresent := strings.TrimSpace(in.PTZCmdParam.PresetName) != ""
+			cruiseTrackNamePresent := strings.TrimSpace(in.PTZCmdParam.CruiseTrackName) != ""
+			if presetNamePresent || cruiseTrackNamePresent {
 				if err := g.requireGBVersionAtLeast(deviceID, gbVersion2022, "云台控制附加参数"); err != nil {
 					return err
 				}
-				if len(cruiseTrackName) > 32 {
+				if len(in.PTZCmdParam.CruiseTrackName) > 32 {
 					return fmt.Errorf("cruise_track_name must not exceed 32 bytes")
 				}
-				req.PTZCmdParams = &deviceControlA23PTZCmdParam{
-					PresetName:      presetName,
-					CruiseTrackName: cruiseTrackName,
+				params := &deviceControlA23PTZCmdParam{
+					PresetName:      in.PTZCmdParam.PresetName,
+					CruiseTrackName: in.PTZCmdParam.CruiseTrackName,
 				}
+				command, err := parsePTZCommand(req.PTZCmd)
+				if err != nil {
+					return err
+				}
+				if err := validatePTZCmdParams(command, params); err != nil {
+					return err
+				}
+				req.PTZCmdParams = params
 			}
+		}
+		if in.ControlPriority != nil {
+			version := g.getDeviceGBProtocolVersion(deviceID)
+			if !supportsPTZControlPriority(version) {
+				return fmt.Errorf("control_priority is only supported by GB/T 28181-2011/2014")
+			}
+			priority := *in.ControlPriority
+			req.Info = &deviceControlA23Info{ControlPriority: &priority}
 		}
 	case deviceControlActionTeleBoot:
 		req.TeleBoot = "Boot"
 	case deviceControlActionRecordStart:
-		req.RecordCmd = "Record"
-		streamNo := in.StreamNumber
-		if streamNo < 0 || streamNo > 2 {
-			return fmt.Errorf("stream_number must be in [0,2]")
-		}
-		if streamNo != 0 || g.getDeviceGBProtocolVersion(deviceID).AtLeast(GBVersion20) {
-			if err := g.requireGBVersionAtLeast(deviceID, gbVersion2016, "指定录像码流"); err != nil {
-				return err
-			}
-			req.StreamNumber = &streamNo
+		if err := g.setDeviceControlRecordCommand(deviceID, "Record", in.StreamNumber, req); err != nil {
+			return err
 		}
 	case deviceControlActionRecordStop:
-		req.RecordCmd = "StopRecord"
-		streamNo := in.StreamNumber
-		if streamNo < 0 || streamNo > 2 {
-			return fmt.Errorf("stream_number must be in [0,2]")
-		}
-		if streamNo != 0 || g.getDeviceGBProtocolVersion(deviceID).AtLeast(GBVersion20) {
-			if err := g.requireGBVersionAtLeast(deviceID, gbVersion2016, "指定录像码流"); err != nil {
-				return err
-			}
-			req.StreamNumber = &streamNo
+		if err := g.setDeviceControlRecordCommand(deviceID, "StopRecord", in.StreamNumber, req); err != nil {
+			return err
 		}
 	case deviceControlActionGuardSet:
 		req.GuardCmd = "SetGuard"
@@ -378,7 +771,9 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		}); err != nil {
 			return err
 		}
-		req.IFrameCmd = "Send"
+		if err := setDeviceControlIFrameCommand(req, g.getDeviceGBProtocolVersion(deviceID), "Send"); err != nil {
+			return err
+		}
 	case deviceControlActionDragZoomIn:
 		if err := g.requireGBFeature(deviceID, "drag_zoom_control", "拉框放大", func(c GBCapabilities) bool {
 			return c.DragZoomControl
@@ -436,9 +831,7 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		home.Enabled = &enabled
 		if in.HomePosition != nil && in.HomePosition.ResetTime != nil {
 			v := *in.HomePosition.ResetTime
-			if v < 0 {
-				return fmt.Errorf("home_position reset_time must be >= 0")
-			}
+			// A.2.3.1.10 只声明 ResetTime 为 integer，未定义非负范围。
 			home.ResetTime = &v
 		}
 		if in.HomePosition != nil && in.HomePosition.PresetIndex != nil {
@@ -447,6 +840,9 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 				return fmt.Errorf("home_position preset_index must be in [0,255]")
 			}
 			home.PresetIndex = &v
+		}
+		if enabled == 0 && (home.ResetTime != nil || home.PresetIndex != nil) {
+			return fmt.Errorf("home_position reset_time and preset_index require enabled=1")
 		}
 		req.HomePosition = home
 	case deviceControlActionPTZPrecise:
@@ -467,8 +863,8 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		if in.PTZPrecise.Tilt != nil && !validFiniteRange(*in.PTZPrecise.Tilt, -30, 90) {
 			return fmt.Errorf("ptz_precise tilt must be in [-30,90]")
 		}
-		if in.PTZPrecise.Zoom != nil && !validFinite(*in.PTZPrecise.Zoom) {
-			return fmt.Errorf("ptz_precise zoom must be finite")
+		if in.PTZPrecise.Zoom != nil && (!validFinite(*in.PTZPrecise.Zoom) || *in.PTZPrecise.Zoom < 1) {
+			return fmt.Errorf("ptz_precise zoom must be finite and >= 1.0")
 		}
 		req.PTZPreciseCtrl = &deviceControlA23PTZPrecise{
 			Pan:  in.PTZPrecise.Pan,
@@ -513,6 +909,9 @@ func (g *GB28181API) fillDeviceControlRequest(deviceID, action string, in *Devic
 		}
 		if mode == "Manual" && in.TargetTrack.TargetArea == nil {
 			return fmt.Errorf("manual target_track requires target_area")
+		}
+		if mode != "Manual" && in.TargetTrack.TargetArea != nil {
+			return fmt.Errorf("target_area is only valid for manual target_track")
 		}
 		if in.TargetTrack.TargetArea != nil {
 			area := in.TargetTrack.TargetArea

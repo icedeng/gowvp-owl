@@ -2,6 +2,7 @@ package gbs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -22,6 +23,7 @@ type cascadeVoiceSourceSession struct {
 	server      *sms.MediaServer
 	streamID    string
 	ssrc        string
+	ssrcRelease func()
 	sourceID    string
 	callID      string
 	response    *sip.Response
@@ -29,10 +31,16 @@ type cascadeVoiceSourceSession struct {
 	opened      bool
 	upstreamEnd bool
 	identity    *monitorUserIdentity
+	done        chan struct{}
 
-	mu       sync.Mutex
-	stopOnce sync.Once
+	mu         sync.Mutex
+	stopping   bool
+	stopMu     sync.Mutex
+	doneOnce   sync.Once
+	dialogDone bool
 }
+
+var errCascadeVoiceSourceStopped = errors.New("cascade Broadcast source stopped")
 
 func cascadeBroadcastProfile(version GBProtocolVersion) (payload int, mapping string, allowed bool) {
 	switch version {
@@ -50,10 +58,14 @@ func cascadeBroadcastTargetAllowed(platform cascadePlatform, exposedID string) b
 }
 
 func resolveCascadeBroadcastChannel(g *GB28181API, platform cascadePlatform, exposedID string) (*ipc.Channel, *ipc.Device, error) {
+	return resolveCascadeBroadcastChannelContext(context.Background(), g, platform, exposedID)
+}
+
+func resolveCascadeBroadcastChannelContext(ctx context.Context, g *GB28181API, platform cascadePlatform, exposedID string) (*ipc.Channel, *ipc.Device, error) {
 	if g == nil || !cascadeBroadcastTargetAllowed(platform, exposedID) {
 		return nil, nil, fmt.Errorf("cascade Broadcast target is not shared")
 	}
-	return g.resolveCascadeChannel(platform.exposedChannelMap[strings.TrimSpace(exposedID)])
+	return g.resolveCascadeChannelContext(ctx, platform.exposedChannelMap[strings.TrimSpace(exposedID)], "", platform)
 }
 
 func (g *GB28181API) forwardCascadeBroadcast(ctx context.Context, worker *cascadeWorker, request cascadeQueryEnvelope) error {
@@ -63,7 +75,7 @@ func (g *GB28181API) forwardCascadeBroadcast(ctx context.Context, worker *cascad
 	if err := filterUnknowDevices(strings.TrimSpace(request.SourceID)); err != nil {
 		return g.sendCascadeBroadcastResult(ctx, worker, request, "ERROR")
 	}
-	channel, _, err := resolveCascadeBroadcastChannel(g, worker.platform, request.TargetID)
+	channel, _, err := resolveCascadeBroadcastChannelContext(ctx, g, worker.platform, request.TargetID)
 	if err != nil {
 		slog.Warn("resolve cascade Broadcast target failed", "upstream", worker.platform.name, "target", request.TargetID, "err", err)
 		return g.sendCascadeBroadcastResult(ctx, worker, request, "ERROR")
@@ -75,12 +87,25 @@ func (g *GB28181API) forwardCascadeBroadcast(ctx context.Context, worker *cascad
 	if !ok || runtimeChannel == nil || runtimeChannel.device == nil || !runtimeChannel.device.IsOnlineNow() {
 		return g.sendCascadeBroadcastResult(ctx, worker, request, "ERROR")
 	}
+	unlock, err := runtimeChannel.device.lockMediaContext(ctx, runtimeChannel.ChannelID)
+	if err != nil {
+		return g.sendCascadeBroadcastResult(ctx, worker, request, "ERROR")
+	}
+	defer unlock()
+	if !runtimeChannel.device.IsOnlineNow() {
+		return g.sendCascadeBroadcastResult(ctx, worker, request, "ERROR")
+	}
+	channel, err = g.core.GetChannel(ctx, channel.ID)
+	if err != nil {
+		slog.Warn("reload cascade Broadcast target after media lock failed", "upstream", worker.platform.name, "target", request.TargetID, "err", err)
+		return g.sendCascadeBroadcastResult(ctx, worker, request, "ERROR")
+	}
 	if err := g.requireGBFeature(channel.DeviceID, "voice_broadcast", "级联语音广播", func(c GBCapabilities) bool {
 		return c.VoiceBroadcast
 	}); err != nil {
 		return g.sendCascadeBroadcastResult(ctx, worker, request, "ERROR")
 	}
-	mediaServer, err := g.svr.mediaService.GetMediaServer(ctx, sms.DefaultMediaServerID)
+	mediaServer, err := g.svr.mediaService.GetMediaServer(ctx, cascadeMediaServerID(channel))
 	if err != nil {
 		slog.Warn("resolve cascade Broadcast media server failed", "upstream", worker.platform.name, "err", err)
 		return g.sendCascadeBroadcastResult(ctx, worker, request, "ERROR")
@@ -96,7 +121,7 @@ func (g *GB28181API) forwardCascadeBroadcast(ctx context.Context, worker *cascad
 		SourceID: worker.platform.localID, SourceVHost: cascadeSourceVHost,
 		SourceApp: cascadeSourceApp, SourceStream: source.streamID,
 	}
-	session, err := g.newBroadcastSession(input)
+	session, err := g.newBroadcastSessionContext(ctx, input)
 	if err != nil {
 		_ = g.stopCascadeVoiceSource(source, true)
 		return g.sendCascadeBroadcastResult(ctx, worker, request, "ERROR")
@@ -107,10 +132,7 @@ func (g *GB28181API) forwardCascadeBroadcast(ctx context.Context, worker *cascad
 	}
 	session.Version = version
 	session.Cascade = source
-	source.mu.Lock()
-	source.broadcast = session
-	source.mu.Unlock()
-	if _, loaded := g.broadcastSessions.LoadOrStore(session.ChannelID, session); loaded {
+	if !g.attachCascadeVoiceBroadcast(source, session) {
 		_ = g.stopCascadeVoiceSource(source, true)
 		return g.sendCascadeBroadcastResult(ctx, worker, request, "ERROR")
 	}
@@ -142,9 +164,14 @@ func (g *GB28181API) forwardCascadeBroadcast(ctx context.Context, worker *cascad
 		return fail(fmt.Errorf("wait cascade Broadcast receiver INVITE timeout"))
 	}
 
-	g.streams.Store(voiceKey(voiceModeBroadcast, session.DeviceID, session.ChannelID), session.Stream)
-	if g.core.Store() != nil {
-		_ = g.core.EditPlaying(ctx, session.DeviceID, session.ChannelID, true)
+	key := voiceKey(voiceModeBroadcast, session.DeviceID, session.ChannelID)
+	g.streams.Store(key, session.Stream)
+	published, err := g.commitChannelStreamStart(ctx, key, session.Stream)
+	if err != nil {
+		return fail(fmt.Errorf("persist cascade Broadcast playing state: %w", err))
+	}
+	if !published {
+		return fail(fmt.Errorf("cascade Broadcast ended before start commit"))
 	}
 	return g.sendCascadeBroadcastResult(ctx, worker, request, "OK")
 }
@@ -155,104 +182,137 @@ func (g *GB28181API) sendCascadeBroadcastResult(ctx context.Context, worker *cas
 	})
 }
 
-func (g *GB28181API) startCascadeVoiceSource(ctx context.Context, worker *cascadeWorker, server *sms.MediaServer, request cascadeQueryEnvelope) (*cascadeVoiceSourceSession, error) {
+func (g *GB28181API) startCascadeVoiceSource(ctx context.Context, worker *cascadeWorker, server *sms.MediaServer, request cascadeQueryEnvelope) (_ *cascadeVoiceSourceSession, resultErr error) {
 	if g == nil || g.sms == nil || worker == nil || server == nil {
 		return nil, fmt.Errorf("cascade Broadcast media service is unavailable")
 	}
-	ssrc, err := g.getSSRC(0)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	operationCtx, operationCancel := context.WithCancel(ctx)
+	stopWorkerCancel := func() bool { return false }
+	if operationCtx := worker.operationContext(); operationCtx != nil {
+		stopWorkerCancel = context.AfterFunc(operationCtx, operationCancel)
+	}
+	defer func() {
+		stopWorkerCancel()
+		operationCancel()
+	}()
+	ctx = operationCtx
+	ssrc, releaseSSRC, err := g.reserveSSRC(0)
 	if err != nil {
 		return nil, err
 	}
 	ssrcNumber, err := strconv.ParseUint(ssrc, 10, 64)
 	if err != nil {
+		releaseSSRC()
 		return nil, fmt.Errorf("invalid cascade Broadcast SSRC: %w", err)
 	}
 	streamID := cascadeSourceStreamID("voice\x00" + worker.platform.name + "\x00" + request.SourceID + "\x00" + request.TargetID + "\x00" + strconv.Itoa(request.SN) + "\x00" + sip.RandString(12))
 	source := &cascadeVoiceSourceSession{
-		worker: worker, server: server, streamID: streamID, ssrc: ssrc, sourceID: strings.TrimSpace(request.SourceID),
-		identity: monitorUserIdentityFromContext(ctx),
+		worker: worker, server: server, streamID: streamID, ssrc: ssrc, ssrcRelease: releaseSSRC, sourceID: strings.TrimSpace(request.SourceID),
+		identity: monitorUserIdentityFromContext(ctx), done: make(chan struct{}),
 	}
-	opened, err := g.sms.OpenRTPServer(server, zlm.OpenRTPServerRequest{TCPMode: 0, StreamID: streamID, SSRC: ssrcNumber})
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		source.mu.Lock()
+		sendBYE := source.response != nil
+		source.mu.Unlock()
+		resultErr = errors.Join(resultErr, g.stopCascadeVoiceSource(source, sendBYE))
+	}()
+	opened, err := openRTPServerContext(ctx, g.sms, server, zlm.OpenRTPServerRequest{TCPMode: 0, StreamID: streamID, SSRC: ssrcNumber})
 	if err != nil {
 		return nil, fmt.Errorf("open cascade Broadcast RTP receiver: %w", err)
 	}
 	source.opened = true
 	if opened == nil || opened.Port <= 0 || opened.Port > 65535 {
-		_ = g.stopCascadeVoiceSource(source, false)
 		return nil, fmt.Errorf("media server returned invalid cascade Broadcast RTP port")
 	}
 	offer, err := buildCascadeVoiceReceiveSDP(worker.platform.localID, server, worker.protocolVersion(), opened.Port, ssrc)
 	if err != nil {
-		_ = g.stopCascadeVoiceSource(source, false)
 		return nil, err
 	}
 	callID := sip.CallID("cascade-voice-" + sip.RandString(24))
 	invite := newCascadeVoiceInvite(worker, request.SourceID, request.TargetID, offer, &callID, 1, nil, ssrc)
 	if err := worker.platform.monitorUserIdentity.apply(ctx, invite); err != nil {
-		_ = g.stopCascadeVoiceSource(source, false)
 		return nil, err
 	}
 	response, err := worker.exchange(ctx, invite)
 	if err != nil {
-		_ = g.stopCascadeVoiceSource(source, false)
 		return nil, fmt.Errorf("invite cascade Broadcast source: %w", err)
 	}
-	if response.StatusCode() == http.StatusUnauthorized && strings.TrimSpace(worker.platform.password) != "" {
-		auth, authErr := cascadeDigestAuthorization(response, invite, worker.platform.localID, worker.platform.password)
+	if response == nil {
+		return nil, fmt.Errorf("invite cascade Broadcast source returned no SIP response")
+	}
+	if (response.StatusCode() == http.StatusUnauthorized || response.StatusCode() == http.StatusProxyAuthRequired) && worker.platform.password != "" {
+		authHeader, auth, authErr := cascadeRequestDigestAuthorization(response, invite, worker.platform.localID, worker.platform.password)
 		if authErr != nil {
-			_ = g.stopCascadeVoiceSource(source, false)
-			return nil, authErr
+			return nil, fmt.Errorf("cascade Broadcast source Digest challenge: %w", authErr)
 		}
-		invite = newCascadeVoiceInvite(worker, request.SourceID, request.TargetID, offer, &callID, 2, auth, ssrc)
+		invite = newCascadeVoiceInviteWithDigest(worker, request.SourceID, request.TargetID, offer, &callID, 2, authHeader, auth, ssrc)
 		if err := worker.platform.monitorUserIdentity.apply(ctx, invite); err != nil {
-			_ = g.stopCascadeVoiceSource(source, false)
 			return nil, err
 		}
 		response, err = worker.exchange(ctx, invite)
 		if err != nil {
-			_ = g.stopCascadeVoiceSource(source, false)
 			return nil, fmt.Errorf("authenticate cascade Broadcast source: %w", err)
 		}
+		if response == nil {
+			return nil, fmt.Errorf("authenticate cascade Broadcast source returned no SIP response")
+		}
 	}
-	if response.StatusCode() != http.StatusOK {
-		_ = g.stopCascadeVoiceSource(source, false)
+	if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("cascade Broadcast source rejected INVITE: %d %s", response.StatusCode(), response.Reason())
 	}
-	if err := validateCascadeVoiceAnswer(response.Body(), worker.protocolVersion()); err != nil {
-		_ = g.stopCascadeVoiceSource(source, false)
-		return nil, err
-	}
-	responseCallID, ok := response.CallID()
-	if !ok || normalizeCallID(responseCallID) == "" {
-		_ = g.stopCascadeVoiceSource(source, false)
-		return nil, fmt.Errorf("cascade Broadcast source response missing Call-ID")
-	}
-	source.callID = normalizeCallID(responseCallID)
 	source.response = response
-	g.cascadeVoiceDialogs.Store(source.callID, source)
 	ack, err := sip.NewRequestFromResponseChecked(sip.MethodACK, response)
 	if err != nil {
-		_ = g.stopCascadeVoiceSource(source, false)
+		worker.discardInviteTransaction(response)
 		return nil, fmt.Errorf("build cascade Broadcast ACK: %w", err)
 	}
 	prepareCascadeDialogRequest(worker, ack)
 	if err := worker.platform.monitorUserIdentity.apply(ctx, ack); err != nil {
-		_ = g.stopCascadeVoiceSource(source, true)
+		worker.discardInviteTransaction(response)
 		return nil, err
 	}
 	if err := worker.send(ack); err != nil {
-		_ = g.stopCascadeVoiceSource(source, true)
 		return nil, fmt.Errorf("ack cascade Broadcast source: %w", err)
 	}
-	if err := g.waitCascadeVoiceSource(ctx, server, streamID); err != nil {
-		_ = g.stopCascadeVoiceSource(source, true)
+	if err := validateSIPContentType(response, string(sip.ContentTypeSDP)); err != nil {
+		return nil, fmt.Errorf("cascade Broadcast source INVITE response %w", err)
+	}
+	if strings.TrimSpace(string(response.Body())) == "" {
+		return nil, fmt.Errorf("cascade Broadcast source INVITE response SDP body is empty")
+	}
+	if err := validateCascadeVoiceAnswer(response.Body(), worker.protocolVersion(), ssrc); err != nil {
+		return nil, err
+	}
+	responseCallID, ok := response.CallID()
+	if !ok || normalizeCallID(responseCallID) == "" {
+		return nil, fmt.Errorf("cascade Broadcast source response missing Call-ID")
+	}
+	source.callID = normalizeCallID(responseCallID)
+	g.cascadeVoiceDialogs.Store(source.callID, source)
+	if !g.cascadeWorkerAvailable(worker) {
+		return nil, ErrServiceStopped
+	}
+	if err := g.waitCascadeVoiceSource(ctx, server, streamID, source.done); err != nil {
 		return nil, err
 	}
 	return source, nil
 }
 
 func newCascadeVoiceInvite(worker *cascadeWorker, sourceID, receiverID string, body []byte, callID *sip.CallID, cseq uint32, auth *sip.Authorization, ssrc string) *sip.Request {
-	request := worker.newRequest(sip.MethodInvite, &sip.ContentTypeSDP, body, callID, cseq, -1, auth)
+	return newCascadeVoiceInviteWithDigest(worker, sourceID, receiverID, body, callID, cseq, "Authorization", auth, ssrc)
+}
+
+func newCascadeVoiceInviteWithDigest(worker *cascadeWorker, sourceID, receiverID string, body []byte, callID *sip.CallID, cseq uint32, authHeader string, auth *sip.Authorization, ssrc string) *sip.Request {
+	request := worker.newRequest(sip.MethodInvite, &sip.ContentTypeSDP, body, callID, cseq, -1, nil)
+	if auth != nil {
+		request.AppendHeader(&sip.GenericHeader{HeaderName: authHeader, Contents: auth.String()})
+	}
 	target := worker.targetURIForUser(sourceID)
 	request.SetRecipient(target)
 	request.RemoveHeader("To")
@@ -267,6 +327,9 @@ func prepareCascadeDialogRequest(worker *cascadeWorker, request *sip.Request) {
 	if worker == nil || request == nil {
 		return
 	}
+	request.RemoveHeader("X-GB-Ver")
+	version := sip.XGBVer(worker.protocolVersion())
+	request.AppendHeader(&version)
 	remote := worker.remoteDestination()
 	if request.Destination() == nil || (strings.EqualFold(request.Transport(), "TLS") && cascadeTransportForAddr(remote) == "tls") {
 		// TLS 响应源会丢失 TLS/serverName 类型信息；此处恢复已验证的上级目标。
@@ -282,6 +345,9 @@ func buildCascadeVoiceReceiveSDP(localID string, server *sms.MediaServer, versio
 	payload, mapping, allowed := cascadeBroadcastProfile(version)
 	if !allowed || server == nil || port <= 0 || port > 65535 || !validGBSSRC(ssrc) {
 		return nil, fmt.Errorf("invalid cascade Broadcast SDP input")
+	}
+	if ssrc[0] != '0' {
+		return nil, fmt.Errorf("cascade Broadcast Play SDP requires realtime SSRC starting with 0: %s", ssrc)
 	}
 	ipAddress, err := GetIP(server.GetSDPIP())
 	if err != nil {
@@ -306,45 +372,76 @@ func buildCascadeVoiceReceiveSDP(localID string, server *sms.MediaServer, versio
 	return append(body, "f=v/////a/1/8/1\r\n"...), nil
 }
 
-func validateCascadeVoiceAnswer(body []byte, version GBProtocolVersion) error {
+func validateCascadeVoiceAnswer(body []byte, version GBProtocolVersion, expectedSSRC string) error {
 	message, err := sdp.Decode(body)
 	if err != nil {
 		return fmt.Errorf("decode cascade Broadcast source SDP: %w", err)
 	}
-	for index := range message.Medias {
-		media := &message.Medias[index]
-		if !strings.EqualFold(media.Description.Type, "audio") {
-			continue
-		}
-		if !strings.EqualFold(media.Description.Protocol, "RTP/AVP") || media.Description.Port <= 0 || media.Description.Port > 65535 {
-			return fmt.Errorf("cascade Broadcast source returned invalid audio transport")
-		}
-		if media.Flag("recvonly") || media.Flag("inactive") {
-			return fmt.Errorf("cascade Broadcast source SDP must send media")
-		}
-		if _, _, _, err := parseBroadcastPayload(media, version); err != nil {
-			return err
-		}
-		return nil
+	ssrcValues := directTCPSDPLineValues(body, "y")
+	if len(ssrcValues) > 1 {
+		return fmt.Errorf("cascade Broadcast source SDP must not contain multiple y fields")
 	}
-	return fmt.Errorf("cascade Broadcast source response does not contain audio media")
+	ssrc := ""
+	if len(ssrcValues) == 1 {
+		ssrc = ssrcValues[0]
+	}
+	if !validGBSSRC(ssrc) {
+		return fmt.Errorf("cascade Broadcast source returned invalid SSRC %q", ssrc)
+	}
+	if expectedSSRC = strings.TrimSpace(expectedSSRC); expectedSSRC != "" && ssrc != expectedSSRC {
+		return fmt.Errorf("cascade Broadcast source SSRC %s does not match offer %s", ssrc, expectedSSRC)
+	}
+	medias := sdpMediasByType(message, "audio")
+	if len(medias) == 0 {
+		return fmt.Errorf("cascade Broadcast source response does not contain audio media")
+	}
+	if len(medias) > 1 {
+		return fmt.Errorf("cascade Broadcast source response must contain exactly one audio media description")
+	}
+	media := medias[0]
+	if !strings.EqualFold(media.Description.Protocol, "RTP/AVP") || media.Description.Port <= 0 || media.Description.Port > 65535 {
+		return fmt.Errorf("cascade Broadcast source returned invalid audio transport")
+	}
+	direction, err := effectiveSDPDirection(message, media)
+	if err != nil {
+		return fmt.Errorf("invalid cascade Broadcast source direction: %w", err)
+	}
+	if direction == "recvonly" || direction == "inactive" {
+		return fmt.Errorf("cascade Broadcast source SDP must send media")
+	}
+	if _, _, _, err := parseBroadcastPayload(media, version); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (g *GB28181API) waitCascadeVoiceSource(ctx context.Context, server *sms.MediaServer, streamID string) error {
+func (g *GB28181API) waitCascadeVoiceSource(ctx context.Context, server *sms.MediaServer, streamID string, stopped <-chan struct{}) error {
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	timer := time.NewTimer(8 * time.Second)
 	defer timer.Stop()
 	for {
-		items, err := g.sms.GetMediaInfo(server, cascadeSourceApp, streamID)
+		select {
+		case <-stopped:
+			return errCascadeVoiceSourceStopped
+		default:
+		}
+		items, err := getMediaInfoContext(ctx, g.sms, server, cascadeSourceApp, streamID)
 		if err == nil && hasReadyG711Audio(items) {
-			return nil
+			select {
+			case <-stopped:
+				return errCascadeVoiceSourceStopped
+			default:
+				return nil
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-g.serviceDone():
 			return ErrServiceStopped
+		case <-stopped:
+			return errCascadeVoiceSourceStopped
 		case <-timer.C:
 			return fmt.Errorf("cascade Broadcast source stream timeout: %s", streamID)
 		case <-ticker.C:
@@ -356,45 +453,117 @@ func (g *GB28181API) stopCascadeVoiceSource(source *cascadeVoiceSourceSession, s
 	if source == nil {
 		return nil
 	}
-	source.stopOnce.Do(func() {
-		source.mu.Lock()
-		response := source.response
-		ended := source.upstreamEnd
-		opened := source.opened
-		source.opened = false
-		source.mu.Unlock()
-		if source.callID != "" {
-			g.cascadeVoiceDialogs.CompareAndDelete(source.callID, source)
-		}
-		if sendBYE && !ended && response != nil && source.worker != nil {
-			bye, err := sip.NewRequestFromResponseChecked(sip.MethodBYE, response)
-			if err != nil {
-				result = err
-			} else {
+	// 先登记终态所有权，再尝试外部清理。这样 INVITE 建立 Call-ID 之前的失败路径
+	// 即使 CloseRTPServer 瞬时失败，也能由运行态清理器继续重试。
+	g.pendingCascadeVoiceCleanups.Store(source, source)
+	source.stopMu.Lock()
+	defer source.stopMu.Unlock()
+	cleanupCtx := g.mediaPersistenceContext()
+	source.mu.Lock()
+	source.stopping = true
+	response := source.response
+	ended := source.upstreamEnd
+	opened := source.opened
+	done := source.done
+	if !sendBYE || ended || response == nil {
+		source.dialogDone = true
+	}
+	dialogDone := source.dialogDone
+	source.mu.Unlock()
+	if done != nil {
+		source.doneOnce.Do(func() { close(done) })
+	}
+	if !dialogDone {
+		if source.worker == nil {
+			result = errors.Join(result, fmt.Errorf("cascade Broadcast source worker is unavailable"))
+		} else {
+			identityCtx := withMonitorUserIdentity(cleanupCtx, source.identity)
+			bye, err := sip.NewRequestFromResponsePreparedChecked(sip.MethodBYE, response, func(bye *sip.Request) error {
 				prepareCascadeDialogRequest(source.worker, bye)
-				identityCtx := withMonitorUserIdentity(context.Background(), source.identity)
-				if err := source.worker.platform.monitorUserIdentity.apply(identityCtx, bye); err != nil {
-					result = err
-					return
-				}
+				return source.worker.platform.monitorUserIdentity.apply(identityCtx, bye)
+			})
+			if err == nil {
 				ctx, cancel := context.WithTimeout(identityCtx, defaultCascadeRequestTimeout)
-				resp, err := source.worker.exchange(ctx, bye)
+				var resp *sip.Response
+				resp, err = source.worker.exchangeRequestWithDigest(ctx, bye)
 				cancel()
-				if err != nil {
-					result = err
-				} else if resp == nil || resp.StatusCode() != http.StatusOK {
-					result = fmt.Errorf("cascade Broadcast source BYE failed")
+				if err == nil && (resp == nil || resp.StatusCode() != http.StatusOK) {
+					err = fmt.Errorf("cascade Broadcast source BYE failed")
 				}
 			}
-		}
-		if opened && g.sms != nil && source.server != nil {
-			_, err := g.sms.CloseRTPServer(source.server, zlm.CloseRTPServerRequest{StreamID: source.streamID})
-			if result == nil {
-				result = err
+			result = errors.Join(result, err)
+			if err == nil {
+				source.mu.Lock()
+				source.dialogDone = true
+				source.mu.Unlock()
 			}
 		}
-	})
-	return result
+	}
+	if opened {
+		if g.sms == nil || source.server == nil {
+			result = errors.Join(result, fmt.Errorf("cascade Broadcast RTP receiver service is unavailable"))
+		} else {
+			_, err := closeRTPServerContext(cleanupCtx, g.sms, source.server, zlm.CloseRTPServerRequest{StreamID: source.streamID})
+			result = errors.Join(result, err)
+			if err == nil {
+				source.mu.Lock()
+				source.opened = false
+				source.mu.Unlock()
+			}
+		}
+	}
+	if result != nil {
+		return result
+	}
+	source.mu.Lock()
+	complete := source.dialogDone && !source.opened
+	releaseSSRC := source.ssrcRelease
+	if complete {
+		source.ssrcRelease = nil
+	} else {
+		releaseSSRC = nil
+	}
+	source.mu.Unlock()
+	if releaseSSRC != nil {
+		releaseSSRC()
+	}
+	if complete && source.callID != "" {
+		g.cascadeVoiceDialogs.CompareAndDelete(source.callID, source)
+	}
+	if complete {
+		g.pendingCascadeVoiceCleanups.CompareAndDelete(source, source)
+	}
+	return nil
+}
+
+func (g *GB28181API) attachCascadeVoiceBroadcast(source *cascadeVoiceSourceSession, session *broadcastSession) bool {
+	if g == nil || source == nil || session == nil {
+		return false
+	}
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	if source.stopping || source.upstreamEnd {
+		return false
+	}
+	if _, loaded := g.broadcastSessions.LoadOrStore(session.ChannelID, session); loaded {
+		return false
+	}
+	source.broadcast = session
+	return true
+}
+
+func (source *cascadeVoiceSourceSession) beginTermination(upstreamEnded bool) *broadcastSession {
+	if source == nil {
+		return nil
+	}
+	source.mu.Lock()
+	source.stopping = true
+	if upstreamEnded {
+		source.upstreamEnd = true
+	}
+	session := source.broadcast
+	source.mu.Unlock()
+	return session
 }
 
 func (g *GB28181API) handleCascadeVoiceBYE(ctx *sip.Context, callID string) bool {
@@ -407,11 +576,11 @@ func (g *GB28181API) handleCascadeVoiceBYE(ctx *sip.Context, callID string) bool
 		ctx.String(http.StatusForbidden, "cascade voice dialog source mismatch")
 		return true
 	}
-	source.mu.Lock()
-	source.upstreamEnd = true
-	session := source.broadcast
-	source.mu.Unlock()
-	ctx.String(http.StatusOK, "OK")
+	if err := ctx.RespondString(http.StatusOK, "OK"); err != nil {
+		slog.Error("respond cascade voice BYE", "err", err, "call_id", callID, "source_id", source.sourceID)
+		return true
+	}
+	session := source.beginTermination(true)
 	if session != nil {
 		_ = g.stopBroadcastSession(session, true)
 	} else {
@@ -428,19 +597,20 @@ func (g *GB28181API) authorizeCascadeVoiceSource(source *cascadeVoiceSourceSessi
 	if deviceID != source.sourceID && deviceID != source.worker.platform.serverID {
 		return false
 	}
-	state := source.worker.snapshot()
-	return state.Registered && source.worker.remoteAddressMatches(ctx.Source) && outboundDialogTagsMatch(source.response, ctx.Request)
+	return source.worker.registrationActive(time.Now()) && source.worker.remoteAddressMatches(ctx.Source) && outboundDialogTagsMatch(source.response, ctx.Request)
 }
 
 func (g *GB28181API) terminateCascadeVoiceSource(streamID string) {
+	g.terminateCascadeVoiceSourceForMediaServer(streamID, "")
+}
+
+func (g *GB28181API) terminateCascadeVoiceSourceForMediaServer(streamID, mediaServerID string) {
 	g.cascadeVoiceDialogs.Range(func(_, value any) bool {
 		source, _ := value.(*cascadeVoiceSourceSession)
-		if source == nil || source.streamID != strings.TrimSpace(streamID) {
+		if source == nil || source.streamID != strings.TrimSpace(streamID) || !mediaServerEventMatches(source.server, mediaServerID) {
 			return true
 		}
-		source.mu.Lock()
-		session := source.broadcast
-		source.mu.Unlock()
+		session := source.beginTermination(false)
 		if session != nil {
 			_ = g.stopBroadcastSession(session, true)
 		} else {
@@ -456,9 +626,29 @@ func (g *GB28181API) closeCascadeVoiceSessions() {
 		if source == nil {
 			return true
 		}
-		source.mu.Lock()
-		session := source.broadcast
-		source.mu.Unlock()
+		session := source.beginTermination(false)
+		if session != nil {
+			_ = g.stopBroadcastSession(session, true)
+		} else {
+			_ = g.stopCascadeVoiceSource(source, true)
+		}
+		return true
+	})
+}
+
+func (g *GB28181API) removeCascadeVoiceSessions(worker *cascadeWorker) {
+	if g == nil || worker == nil {
+		return
+	}
+	g.cascadeVoiceDialogs.Range(func(key, value any) bool {
+		source, _ := value.(*cascadeVoiceSourceSession)
+		if source == nil || source.worker != worker {
+			return true
+		}
+		if current, ok := g.cascadeVoiceDialogs.Load(key); !ok || current != source {
+			return true
+		}
+		session := source.beginTermination(false)
 		if session != nil {
 			_ = g.stopBroadcastSession(session, true)
 		} else {

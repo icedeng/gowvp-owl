@@ -34,7 +34,7 @@ Vue 3、TypeScript、Vite、Vue Router、Pinia、Axios、Tailwind CSS、Lucide I
 
 ## Capabilities and Constraints
 
-- 支持 GB28181-2011/2016/2022、ONVIF、RTSP、RTMP。
+- 支持 GB28181-2011/2014/2016/2022、ONVIF、RTSP、RTMP。
 - 支持设备与通道管理、实时播放、抓拍、云台控制、语音、设备升级、AI 区域与启停。
 - 支持录像列表、时间轴、月度统计、播放、下载与删除。
 - 支持 AI 事件图片、标签、置信度、时间范围和处理状态展示。

@@ -23,7 +23,7 @@ import (
 )
 
 type WebHookAPI struct {
-	smsCore       sms.Core
+	smsCore       mediaServerHeartbeater
 	ipcCore       ipc.Core
 	recordingCore recording.Core
 	eventCore     event.Core
@@ -35,8 +35,12 @@ type WebHookAPI struct {
 	protocols map[string]ipc.Protocoler
 }
 
+type mediaServerHeartbeater interface {
+	Keepalive(serverID string)
+}
+
 type gbMediaLifecycle interface {
-	OnMediaStreamChanged(ctx context.Context, streamID string, active bool, reason string) error
+	OnMediaServerStreamChanged(ctx context.Context, mediaServerID, streamID string, active bool, reason string) error
 }
 
 func NewWebHookAPI(core sms.Core, conf *conf.Bootstrap, gbs *gbs.Server, ipcBundle IPCBundle, recordingCore recording.Core, eventCore event.Core) WebHookAPI {
@@ -112,8 +116,14 @@ func (w WebHookAPI) onServerStarted(c *gin.Context, _ *struct{}) (DefaultOutput,
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /webhook/on_server_keepalive [post]
 func (w WebHookAPI) onServerKeepalive(_ *gin.Context, in *onServerKeepaliveInput) (DefaultOutput, error) {
-	// TODO: 仅支持默认
-	w.smsCore.Keepalive(sms.DefaultMediaServerID)
+	serverID := ""
+	if in != nil {
+		serverID = strings.TrimSpace(in.MediaServerID)
+	}
+	if serverID == "" {
+		serverID = sms.DefaultMediaServerID
+	}
+	w.smsCore.Keepalive(serverID)
 	return newDefaultOutputOK(), nil
 }
 
@@ -207,12 +217,16 @@ func (w WebHookAPI) onStreamChanged(c *gin.Context, in *onStreamChangedInput) (D
 		if in.Regist {
 			reason = "stream_registered"
 		}
-		_ = w.gbs.OnMediaStreamChanged(ctx, stream, in.Regist, reason)
+		if err := w.gbs.OnMediaServerStreamChanged(ctx, in.MediaServerID, stream, in.Regist, reason); err != nil {
+			w.log.WarnContext(ctx, "handle unpersisted GB28181 media lifecycle", "stream", stream, "active", in.Regist, "reason", reason, "err", err)
+		}
 	}
 
 	if in.Regist {
 		if channelType == ipc.TypeGB28181 && w.gbs != nil {
-			_ = w.gbs.OnMediaStreamChanged(ctx, stream, true, "stream_registered")
+			if err := w.gbs.OnMediaServerStreamChanged(ctx, in.MediaServerID, stream, true, "stream_registered"); err != nil {
+				w.log.WarnContext(ctx, "handle GB28181 media registration", "stream", stream, "err", err)
+			}
 		}
 		// 流注册时根据录像模式决定是否启动录制
 		ch, err := w.ipcCore.GetChannelByAppStreamOrID(ctx, app, stream)
@@ -244,7 +258,13 @@ func (w WebHookAPI) onStreamChanged(c *gin.Context, in *onStreamChangedInput) (D
 	// 每个协议适配器在 OnStreamChanged 中处理自己的状态逻辑
 	protocol, ok := w.protocols[channelType]
 	if ok {
-		if err := protocol.OnStreamChanged(ctx, app, stream); err != nil {
+		var err error
+		if aware, supported := protocol.(ipc.MediaServerAwareHooker); supported {
+			err = aware.OnStreamChangedOnMediaServer(ctx, in.MediaServerID, app, stream)
+		} else {
+			err = protocol.OnStreamChanged(ctx, app, stream)
+		}
+		if err != nil {
 			slog.ErrorContext(ctx, "webhook onStreamChanged", "err", err)
 		}
 	}
@@ -344,13 +364,14 @@ func (w WebHookAPI) onStreamNoneReader(c *gin.Context, in *onStreamNoneReaderInp
 func (w WebHookAPI) onRTPServerTimeout(c *gin.Context, in *onRTPServerTimeoutInput) (DefaultOutput, error) {
 	w.log.InfoContext(c.Request.Context(), "webhook onRTPServerTimeout", "local_port", in.LocalPort, "ssrc", in.SSRC, "stream_id", in.StreamID, "mediaServerID", in.MediaServerID)
 	if w.gbs != nil {
-		_ = w.gbs.OnMediaStreamChanged(c.Request.Context(), in.StreamID, false, "rtp_server_timeout")
+		if err := w.gbs.OnMediaServerStreamChanged(c.Request.Context(), in.MediaServerID, in.StreamID, false, "rtp_server_timeout"); err != nil {
+			w.log.WarnContext(c.Request.Context(), "handle GB28181 RTP server timeout", "stream", in.StreamID, "err", err)
+		}
 	}
 	return newDefaultOutputOK(), nil
 }
 
 // onStreamNotFound 流不存在事件
-// TODO: 重启后立即播放，会出发 "channel not exist" 待处理
 // onStreamNotFound godoc
 // @Summary ZLM 流不存在回调
 // @Tags ZLMWebhook
@@ -379,7 +400,13 @@ func (w WebHookAPI) onStreamNotFound(c *gin.Context, in *onStreamNotFoundInput) 
 	channelType := w.getChannelType(ctx, app, stream)
 	protocol, ok := w.protocols[channelType]
 	if ok {
-		if err := protocol.OnStreamNotFound(ctx, app, stream); err != nil {
+		var err error
+		if aware, supported := protocol.(ipc.MediaServerAwareHooker); supported {
+			err = aware.OnStreamNotFoundOnMediaServer(ctx, in.MediaServerID, app, stream)
+		} else {
+			err = protocol.OnStreamNotFound(ctx, app, stream)
+		}
+		if err != nil {
 			slog.InfoContext(ctx, "webhook onStreamNotFound", "err", err)
 		}
 	}

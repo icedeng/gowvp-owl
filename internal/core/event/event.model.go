@@ -19,6 +19,7 @@ type Event struct {
 	Zones     string   `gorm:"column:zones;notNull;default:'';comment:检测区域，JSON 格式存储边界框信息" json:"zones"`                    // 检测区域，JSON 格式存储边界框信息
 	ImagePath string   `gorm:"column:image_path;notNull;default:'';comment:图片相对路径 (cid/年月日时分秒_随机6位.jpg)" json:"image_path"` // 图片相对路径 (cid/年月日时分秒_随机6位.jpg)
 	Model     string   `gorm:"column:model;notNull;default:'';comment:分析模型名称" json:"model"`                                 // 分析模型名称
+	SourceKey *string  `gorm:"column:source_key;uniqueIndex:idx_events_source_key;comment:外部事件幂等键" json:"-"`                // 外部事件幂等键；普通事件保持 NULL
 	CreatedAt orm.Time `gorm:"column:created_at;notNull;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`          // 创建时间
 	UpdatedAt orm.Time `gorm:"column:updated_at;notNull;default:CURRENT_TIMESTAMP;comment:更新时间" json:"updated_at"`          // 更新时间
 }

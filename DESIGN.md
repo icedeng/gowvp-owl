@@ -25,18 +25,18 @@ colors:
 typography:
   display:
     fontFamily: "Noto Sans SC, sans-serif"
-    fontSize: "24px"
+    fontSize: "28px"
     fontWeight: 700
     lineHeight: 1.25
     letterSpacing: "-0.02em"
   headline:
     fontFamily: "Noto Sans SC, sans-serif"
-    fontSize: "17px"
+    fontSize: "19px"
     fontWeight: 700
     lineHeight: 1.35
   title:
     fontFamily: "Noto Sans SC, sans-serif"
-    fontSize: "13px"
+    fontSize: "16px"
     fontWeight: 700
     lineHeight: 1.45
   body:
@@ -46,9 +46,14 @@ typography:
     lineHeight: 1.55
   label:
     fontFamily: "Noto Sans SC, sans-serif"
-    fontSize: "10px"
+    fontSize: "11px"
     fontWeight: 700
     lineHeight: 1.55
+  control:
+    fontFamily: "Noto Sans SC, sans-serif"
+    fontSize: "13px"
+    fontWeight: 700
+    lineHeight: 1.45
   numeric:
     fontFamily: "Barlow Condensed, Noto Sans SC, sans-serif"
     fontSize: "26px"
@@ -78,17 +83,17 @@ components:
   button-primary:
     backgroundColor: "{colors.blue}"
     textColor: "#ffffff"
-    typography: "{typography.label}"
+    typography: "{typography.control}"
     rounded: "{rounded.control}"
-    padding: "0 13px"
-    height: "36px"
+    padding: "0 14px"
+    height: "38px"
   button-secondary:
     backgroundColor: "{colors.panel}"
     textColor: "{colors.ink}"
-    typography: "{typography.label}"
+    typography: "{typography.control}"
     rounded: "{rounded.control}"
-    padding: "0 13px"
-    height: "36px"
+    padding: "0 14px"
+    height: "38px"
   input:
     backgroundColor: "{colors.panel}"
     textColor: "{colors.ink}"
@@ -99,10 +104,10 @@ components:
   nav-item-active:
     backgroundColor: "{colors.blue-soft}"
     textColor: "{colors.blue}"
-    typography: "{typography.label}"
+    typography: "{typography.control}"
     rounded: "{rounded.control}"
     padding: "0 10px"
-    height: "37px"
+    height: "40px"
   status-online:
     backgroundColor: "{colors.green-soft}"
     textColor: "{colors.green}"
@@ -147,6 +152,7 @@ components:
 - 冷白工作面（`#f4f6f9`）与白色面板（`#ffffff`）组成低反射、长时间可读的 admin 控制台。
 - 工程蓝负责主动作、导航选中和信息态；绿、琥珀、红分别表达健康、注意/异常、危险/离线。
 - 运行态势条先于协议矩阵、待关注对象和趋势内容出现，主动作直达实时监控。
+- 四版本能力、当前运行态和级联注册使用固定槽位、矩阵列与状态文本并列呈现，可快速区分实现证据和真实验收边界。
 - 固定分组导航与粘性顶栏保持位置感；窄屏导航收为遮罩抽屉，数据区域按断点重排。
 - 细边、轻阴影、8–12px 圆角和高密度短标签形成设备控制台的工程质感。
 
@@ -189,11 +195,12 @@ components:
 
 ### Hierarchy
 
-- **Display** (`typography.display`, 24px, 700, 1.25)：页面标题和首要工作结论；窄屏为 21px。
-- **Headline** (`typography.headline`, 17px, 700, 1.35)：运行态势条的核心结论、视频工作区标题。
-- **Title** (`typography.title`, 13px, 700, 1.45)：卡片标题、导航当前项和模块标题。
+- **Display** (`typography.display`, 28px, 700, 1.25)：页面标题和首要工作结论；窄屏为 21px。
+- **Headline** (`typography.headline`, 19px, 700, 1.35)：运行态势条的核心结论、视频工作区标题。
+- **Title** (`typography.title`, 16px, 700, 1.45)：卡片标题和局部模块标题。
 - **Body** (`typography.body`, 14px, 400, 1.55)：页面描述、表单正文与一般操作文本。
-- **Label** (`typography.label`, 10px, 700, 1.55)：分组名、字段名、状态标签和短按钮；操作性辅助信息不低于 10px。
+- **Label** (`typography.label`, 11px, 700, 1.55)：状态、元数据和紧凑技术标签；全局可读性底线会把主要字段名与分组标签提升到 12px。
+- **Control** (`typography.control`, 13px, 700, 1.45)：按钮、导航项和可操作的短标签。
 - **Numeric** (`typography.numeric`, 26px, 700, 1)：态势条、资源摘要、日期和优先级数字。
 - **Mono** (`typography.mono`, 10px, 400, 1.55)：设备编码、流 ID、地址、时间和协议相关标识。
 
@@ -205,7 +212,9 @@ components:
 
 桌面首屏顺序为：页面标题与主动作 → 全宽运行态势条 → 四格资源摘要 → 协议信号矩阵与媒体/存储健康 → 待关注对象与最新事件 → 事件趋势和快捷入口。协议矩阵以四槽位为核心；实时监控采用 `250px / minmax(0, 1fr) / 280px` 的资源树、视频墙、控制栈三列结构。
 
-响应式断点来自现有 CSS：`1180px` 以下收窄侧栏到 `204px`，隐藏演示标记并让控制栈横跨；`900px` 以下侧栏变成从左侧滑入的遮罩抽屉，工作区占满宽度，搜索收为图标，栅格大多降为单列或双列；`640px` 以下顶栏高 `56px`、页面内边距 `12px`，运行态势保持 `2 × 2` 固定槽位，协议矩阵提前到资源指标之前，视频墙转为单画面，工具栏字段全宽。最小视口保持 `320px`。
+响应式断点来自现有 CSS：`1320px` 以下收窄侧栏到 `204px`、隐藏演示标记并让国标设备表转为带字段名的卡片行；`900px` 以下侧栏变成从左侧滑入的遮罩抽屉，工作区占满宽度，搜索收为图标，栅格大多降为单列或双列；`640px` 以下顶栏高 `56px`、页面内边距 `12px`，运行态势保持 `2 × 2` 固定槽位，协议矩阵提前到资源指标之前，视频墙转为单画面，工具栏字段全宽。最小视口保持 `320px`。
+
+国标核验工作台有更精确的局部断点：能力页的运行摘要在 `980px` 变为 `2 × 2`，四版本矩阵在 `600px` 以下保持首列粘性并横向滚动；级联平台行在 `1100px` 以下折为单列，摘要和事实网格在 `760px` 以下变为两列。窄屏不隐藏版本、状态、最近错误或“待真实验收”说明。
 
 **The Scan Order Rule.** 运行态势、协议矩阵和待关注列表是首屏扫描线；新增模块应排在这些信号之后，并保留“对象 → 状态 → 下一步”的阅读顺序。
 
@@ -223,8 +232,8 @@ components:
 
 ### Buttons
 
-- **Shape:** `8px` 圆角；默认高度 `36px`，紧凑按钮 `30px`。
-- **Primary:** 工程蓝底（`colors.blue`）、白字、水平内边距 `13px`；一个动作组中只用于最主要动作，如“进入实时监控”。
+- **Shape:** `8px` 圆角；默认高度 `38px`，页面标题/工具栏中的紧凑按钮 `34px`，移动端操作目标不低于 `44px`。
+- **Primary:** 工程蓝底（`colors.blue`）、白字、水平内边距 `14px`；一个动作组中只用于最主要动作，如“进入实时监控”或“刷新状态”。
 - **Secondary / Ghost:** 白底 + `colors.line-strong` 边线；Ghost 透明无边，适合刷新、筛选和次级入口。
 - **Danger:** `colors.red` 字色配 `colors.red-soft` 底和浅红边，用于删除或危险确认。
 - **Hover / Focus / Disabled:** 悬停转向 `colors.blue-hover` 或浅蓝底，过渡约 `0.16s ease`；全局键盘焦点为 `3px` 半透明蓝环、`2px` 偏移；禁用态降低对比并取消交互。
@@ -254,7 +263,9 @@ components:
 
 ### Navigation
 
-侧栏白底固定，分组标签用 `10–11px` 弱化灰；导航项最小高 `37px`、图标 `16px`。悬停浅蓝灰底；当前项使用工程蓝文字、`colors.blue-soft` 底、700 字重，并在左缘显示 `3px × 20px` 蓝色短线。`900px` 以下导航成为遮罩抽屉，菜单按钮、遮罩和 Escape 均可关闭。
+侧栏白底固定，分组标签为 `12px` 冷灰；导航项最小高 `40px`、图标 `16px`。悬停浅蓝灰底；当前项使用工程蓝文字、`colors.blue-soft` 底、700 字重，并在左缘显示 `3px × 20px` 蓝色短线。桌面侧栏可收为 `72px` 图标轨并在悬停/焦点时显示深蓝提示；`900px` 以下导航成为遮罩抽屉，菜单按钮、遮罩和 Escape 均可关闭。
+
+命令面板由顶栏搜索或 `Ctrl/⌘ K` 打开，宽度不超过 `620px`；结果项最小高 `47px`，当前项使用浅蓝底和左侧 `3px` 工程蓝内线。它必须支持关键词过滤、上下方向键、Enter 打开、Escape 关闭、Tab 焦点循环和关闭后焦点恢复，并让“国标能力”“级联平台”等路由可直接发现。
 
 ### Signal Strip
 
@@ -264,6 +275,15 @@ components:
 
 协议矩阵是四格 `matrix-slot` 槽位，每格显示协议铭牌、在线灯、在线/总数和短注释，可整格进入通道、推流或拉流上下文。实时监控视频墙使用 1/4/9/16 分屏，深海军蓝工具栏和视频背景只服务于画面辨识；资源树和控制栈仍保持浅色卡片，PTZ、抓拍、对讲、AI 和持续录像动作按协议能力启用或禁用。
 
+### Operational Verification Workbenches
+
+- **Runtime Summary:** 国标能力页和级联页都使用白底四槽摘要，标签、窄体值和解释文字固定在同一位置；加载显示省略号，失败显示破折号或明确错误，不把未知值伪装成零。
+- **Four-Version Capability Matrix:** 首列是能力域，后四列固定为 2011、2014、2016、2022。每格同时提供图标、状态标签和证据说明；“代码完成”表示已有自动化证据，“待真实互通”使用琥珀提醒，“兼容或受限”明确边界，“不适用”保持中性。矩阵页脚必须保留真实 RTP/RTCP 抓包、三级级联、证书体系和厂商互通的验收门禁。
+- **Cascade Registration Matrix:** 上级平台行并列显示平台标识、地址、协商/配置版本、注册状态、有效期、最近注册/心跳和最近错误；协商降级必须有文字提示。绿色只用于已注册，琥珀用于启动/注册/重试中，红色用于失败、过期或停止；页面持续明确媒体、目录和订阅仍需真实上级及三级链路验收。
+- **Device & Channel Verification:** 国标设备列表提供在线状态和四版本筛选，并在中窄屏转为字段名可见的卡片行。通道详情用“有效版本”铭牌驱动查询、控制、语音、历史会话、抓拍和升级的显隐/禁用状态；不可用原因、运行中状态和最终响应必须靠文字呈现，不能只靠禁用色。
+
+**The Acceptance Boundary Rule.** “代码完成”“运行时已读取”和“真实环境验收通过”是三个不同结论；任何页面都不得用绿色完成态替代仍待真实设备、上级平台、网络抓包或三级链路验证的事实。
+
 ## Do's and Don'ts
 
 ### Do:
@@ -272,8 +292,9 @@ components:
 - **Do** 首屏先给运行态势条，再给协议信号矩阵、待关注对象和资源趋势；主动作直达实时监控。
 - **Do** 用状态灯、文字、图标或形状共同表达在线、异常、危险和信息，不把颜色当作唯一线索。
 - **Do** 保留协议名、设备 ID、流 ID、时间和地址的技术标识感，并用窄体数字/等宽字体提高核验速度。
-- **Do** 沿用 `14px` 网格间隙、`12px` 主卡片圆角、`36px` 控件高度和 `1px` 冷灰结构线，保持密度一致。
+- **Do** 沿用 `14px` 网格间隙、`12px` 主卡片圆角、`38px` 默认按钮、`36px` 输入和 `1px` 冷灰结构线；移动端操作目标不低于 `44px`。
 - **Do** 在 `900px` 和 `640px` 断点重排内容，保留焦点可见、抽屉遮罩关闭和 `prefers-reduced-motion` 支持。
+- **Do** 把四版本、运行态、协商版本、最近错误和真实验收边界放在同一核验上下文中。
 
 ### Don't:
 
@@ -282,4 +303,5 @@ components:
 - **Don't** 让工程蓝承担警告/危险语义，或在同一动作组放置多个同权重蓝色主按钮。
 - **Don't** 用窄体或等宽字体排版长段中文，也不要把协议铭牌做成装饰性徽章墙。
 - **Don't** 在窄屏简单压缩桌面表格；应按断点转单列、折行、横向滚动或收起次级信息。
+- **Don't** 把“代码完成”或一次接口读取成功写成“真实互通已验收”；待设备、上级平台、网络抓包或三级链路验证时必须显式标注。
 - **Don't** 用厚重渐变、玻璃拟态和高扩散阴影替代清晰的槽位、边线与状态文本。

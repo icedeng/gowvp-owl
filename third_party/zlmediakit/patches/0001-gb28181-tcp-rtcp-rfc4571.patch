@@ -1,0 +1,387 @@
+diff --git a/server/WebApi.cpp b/server/WebApi.cpp
+index 0ae6b155..9cd1adef 100755
+--- a/server/WebApi.cpp
++++ b/server/WebApi.cpp
+@@ -518,7 +518,7 @@ Value makeMediaSourceJson(MediaSource &media) {
+ }
+ 
+ #if defined(ENABLE_RTPPROXY)
+-uint16_t openRtpServer(uint16_t local_port, const mediakit::MediaTuple &tuple, int tcp_mode, const string &local_ip, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex) {
++static uint16_t openRtpServerWithTcpRtcp(uint16_t local_port, const mediakit::MediaTuple &tuple, int tcp_mode, const string &local_ip, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex, bool tcp_rtcp) {
+     auto key = tuple.shortUrl();
+     if (s_rtp_server.find(key)) {
+         // 为了防止RtpProcess所有权限混乱的问题，不允许重复添加相同的key  [AUTO-TRANSLATED:06c7b14c]
+@@ -527,7 +527,7 @@ uint16_t openRtpServer(uint16_t local_port, const mediakit::MediaTuple &tuple, i
+     }
+ 
+     auto server = s_rtp_server.makeWithAction(key, [&](RtpServer::Ptr server) {
+-        server->start(local_port, local_ip.c_str(), tuple, (RtpServer::TcpMode)tcp_mode, re_use_port, ssrc, only_track, multiplex);
++        server->start(local_port, local_ip.c_str(), tuple, (RtpServer::TcpMode)tcp_mode, re_use_port, ssrc, only_track, multiplex, tcp_rtcp);
+     });
+     server->setOnDetach([key](const SockException &ex) {
+         // 设置rtp超时移除事件  [AUTO-TRANSLATED:98d42cf3]
+@@ -540,6 +540,10 @@ uint16_t openRtpServer(uint16_t local_port, const mediakit::MediaTuple &tuple, i
+     return server->getPort();
+ }
+ 
++uint16_t openRtpServer(uint16_t local_port, const mediakit::MediaTuple &tuple, int tcp_mode, const string &local_ip, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex) {
++    return openRtpServerWithTcpRtcp(local_port, tuple, tcp_mode, local_ip, re_use_port, ssrc, only_track, multiplex, false);
++}
++
+ #endif
+ 
+ void getStatisticJson(const function<void(Value &val)> &cb) {
+@@ -1494,8 +1498,8 @@ void installWebApi() {
+         if (!allArgs["local_ip"].empty()) {
+             local_ip = allArgs["local_ip"];
+         }
+-        auto port = openRtpServer(allArgs["port"], tuple, tcp_mode, local_ip, allArgs["re_use_port"].as<bool>(),
+-                                  allArgs["ssrc"].as<uint32_t>(), only_track);
++        auto port = openRtpServerWithTcpRtcp(allArgs["port"], tuple, tcp_mode, local_ip, allArgs["re_use_port"].as<bool>(),
++                                             allArgs["ssrc"].as<uint32_t>(), only_track, false, allArgs["tcp_rtcp"].as<bool>());
+         if (port == 0) {
+             throw InvalidArgsException("This stream already exists");
+         }
+@@ -1534,7 +1538,7 @@ void installWebApi() {
+             local_ip = allArgs["local_ip"];
+         }
+ 
+-        auto port = openRtpServer(allArgs["port"], tuple, tcp_mode, local_ip, true, 0, only_track, true);
++        auto port = openRtpServerWithTcpRtcp(allArgs["port"], tuple, tcp_mode, local_ip, true, 0, only_track, true, allArgs["tcp_rtcp"].as<bool>());
+         if (port == 0) {
+             throw InvalidArgsException("This stream already exists");
+         }
+@@ -1657,6 +1661,7 @@ void installWebApi() {
+         args.data_type = (MediaSourceEvent::SendRtpArgs::DataType)type;
+         args.only_audio = allArgs["only_audio"].as<bool>();
+         args.udp_rtcp_timeout = allArgs["udp_rtcp_timeout"];
++        args.tcp_rtcp = allArgs["tcp_rtcp"];
+         args.recv_stream_id = allArgs["recv_stream_id"];
+         args.close_delay_ms = allArgs["close_delay_ms"];
+         // 记录发送流的app和vhost  [AUTO-TRANSLATED:ee1b41d5]
+diff --git a/src/Common/MediaSource.h b/src/Common/MediaSource.h
+index 8abdfcd4..308e97ab 100644
+--- a/src/Common/MediaSource.h
++++ b/src/Common/MediaSource.h
+@@ -148,6 +148,8 @@ public:
+         // udp发送时，是否开启rr rtcp接收超时判断  [AUTO-TRANSLATED:784982bd]
+         // When sending udp, whether to enable rr rtcp receive timeout judgment
+         bool udp_rtcp_timeout = false;
++        // TCP 发送时按 RFC 4571 在同一连接中复用 RTP/RTCP。默认关闭以兼容旧设备。
++        bool tcp_rtcp = false;
+         // passive被动、tcp主动模式超时时间  [AUTO-TRANSLATED:8886d475]
+         // Passive passive, tcp active mode timeout time
+         uint32_t close_delay_ms = 0;
+diff --git a/src/Rtp/RtpSender.cpp b/src/Rtp/RtpSender.cpp
+index d89df47a..975327ec 100644
+--- a/src/Rtp/RtpSender.cpp
++++ b/src/Rtp/RtpSender.cpp
+@@ -22,6 +22,25 @@ using namespace toolkit;
+ 
+ namespace mediakit{
+ 
++class RtpSenderTcpSplitter : public RtpSplitter {
++public:
++    using OnPacket = function<void(const char *, size_t)>;
++
++    explicit RtpSenderTcpSplitter(OnPacket cb) : _cb(std::move(cb)) {}
++
++    void input(const Buffer::Ptr &buf) {
++        RtpSplitter::input(buf->data(), buf->size());
++    }
++
++protected:
++    void onRtpPacket(const char *data, size_t len) override {
++        _cb(data, len);
++    }
++
++private:
++    OnPacket _cb;
++};
++
+ RtpSender::RtpSender(EventPoller::Ptr poller) {
+     _poller = poller ? std::move(poller) : EventPollerPool::Instance().getPoller();
+     _socket_rtp = Socket::createSocket(_poller, false);
+@@ -276,6 +295,10 @@ void RtpSender::onConnect() {
+             // Close TCP no_delay and enable MSG_MORE to improve sending performance
+             SockUtil::setNoDelay(_socket_rtp->rawFD(), false);
+             _socket_rtp->setSendFlags(SOCKET_DEFAULE_FLAGS | FLAG_MORE);
++            if (_args.tcp_rtcp) {
++                _rtcp_context = std::make_shared<RtcpContextForSend>();
++                _tcp_rtcp_sent = false;
++            }
+         } else if (_args.udp_rtcp_timeout) {
+             createRtcpSocket();
+         }
+@@ -292,6 +315,26 @@ void RtpSender::onConnect() {
+             _rtp_session = std::make_shared<RtpSession>(_socket_rtp);
+             _rtp_session->setParams(ini);
+ 
++        }
++        if (_args.tcp_rtcp && _socket_rtp->sockType() == toolkit::SockNum::Sock_TCP) {
++            _tcp_splitter = std::make_shared<RtpSenderTcpSplitter>([weak_self](const char *data, size_t len) {
++                if (auto strong_self = weak_self.lock()) {
++                    strong_self->onRecvRtpOrRtcpOverTcp(data, len);
++                }
++            });
++
++            _socket_rtp->setOnRead([weak_self](const Buffer::Ptr &buf, struct sockaddr *addr, int addr_len) {
++                auto strong_self = weak_self.lock();
++                if (!strong_self) {
++                    return;
++                }
++                try {
++                    strong_self->_tcp_splitter->input(buf);
++                } catch (std::exception &ex) {
++                    strong_self->onErr(SockException(Err_shutdown, ex.what()));
++                }
++            });
++        } else if (_rtp_session) {
+             _socket_rtp->setOnRead([weak_self](const Buffer::Ptr &buf, struct sockaddr *addr, int addr_len) {
+                 auto strong_self = weak_self.lock();
+                 if (!strong_self) {
+@@ -398,6 +441,43 @@ void RtpSender::onSendRtpUdp(const toolkit::Buffer::Ptr &buf, bool check) {
+     }
+ }
+ 
++void RtpSender::onSendRtpTcp(const toolkit::Buffer::Ptr &buf, bool check) {
++    if (!_args.tcp_rtcp || !_rtcp_context) {
++        return;
++    }
++    auto rtp = static_pointer_cast<RtpPacket>(buf);
++    _rtcp_context->onRtp(rtp->getSeq(), rtp->getStamp(), rtp->ntp_stamp, 90000 /*not used*/, rtp->size());
++    if (!check || (_tcp_rtcp_sent && _rtcp_send_ticker.elapsedTime() <= _args.rtcp_send_interval_ms)) {
++        return;
++    }
++    _tcp_rtcp_sent = true;
++    _rtcp_send_ticker.resetTime();
++    auto rtcp = _rtcp_context->createRtcpSR(stoll(_args.ssrc) + 1);
++    if (!rtcp || rtcp->size() > UINT16_MAX) {
++        WarnL << "Invalid RTCP packet size";
++        return;
++    }
++    string frame(2 + rtcp->size(), '\0');
++    frame[0] = (char)((rtcp->size() >> 8) & 0xFF);
++    frame[1] = (char)(rtcp->size() & 0xFF);
++    memcpy(&frame[2], rtcp->data(), rtcp->size());
++    _socket_rtp->send(std::make_shared<BufferString>(std::move(frame)), nullptr, 0, false);
++}
++
++void RtpSender::onRecvRtpOrRtcpOverTcp(const char *data, size_t len) {
++    if (isRtcp(data, len)) {
++        string packet(data, len);
++        auto rtcp_arr = RtcpHeader::loadFromBytes(&packet[0], packet.size());
++        for (auto rtcp : rtcp_arr) {
++            onRecvRtcp(rtcp);
++        }
++        return;
++    }
++    if (_rtp_session) {
++        _rtp_session->inputRtpOrRtcp(data, len);
++    }
++}
++
+ void RtpSender::onClose(const SockException &ex) {
+     auto cb = _on_close;
+     if (cb) {
+@@ -431,6 +511,7 @@ void RtpSender::onFlushRtpList(shared_ptr<List<Buffer::Ptr>> rtp_list) {
+                 }
+                 case MediaSourceEvent::SendRtpArgs::kTcpActive:
+                 case MediaSourceEvent::SendRtpArgs::kTcpPassive: {
++                    onSendRtpTcp(packet, i == 0);
+                     // tcp模式, rtp over tcp前2个字节可以忽略,只保留后续rtp长度的2个字节  [AUTO-TRANSLATED:a3bc338a]
+                     // TCP mode, the first 2 bytes of rtp over tcp can be ignored, only the subsequent 2 bytes of rtp length are retained
+                     _socket_rtp->send(std::make_shared<BufferRtp>(std::move(packet), 2), nullptr, 0, ++i == size);
+diff --git a/src/Rtp/RtpSender.h b/src/Rtp/RtpSender.h
+index d800c2ac..18c92b85 100644
+--- a/src/Rtp/RtpSender.h
++++ b/src/Rtp/RtpSender.h
+@@ -20,6 +20,7 @@
+ namespace mediakit{
+ 
+ class RtpSession;
++class RtpSenderTcpSplitter;
+ 
+ // rtp发送客户端，支持发送GB28181协议  [AUTO-TRANSLATED:668038b6]
+ // RTP sending client, supporting sending GB28181 protocol
+@@ -112,6 +113,8 @@ private:
+     void createRtcpSocket();
+     void onRecvRtcp(RtcpHeader *rtcp);
+     void onSendRtpUdp(const toolkit::Buffer::Ptr &buf, bool check);
++    void onSendRtpTcp(const toolkit::Buffer::Ptr &buf, bool check);
++    void onRecvRtpOrRtcpOverTcp(const char *data, size_t len);
+     void onClose(const toolkit::SockException &ex);
+ 
+ private:
+@@ -125,6 +128,8 @@ private:
+     toolkit::Ticker _rtcp_send_ticker;
+     toolkit::Ticker _rtcp_recv_ticker;
+     std::shared_ptr<RtpSession> _rtp_session;
++    std::shared_ptr<RtpSenderTcpSplitter> _tcp_splitter;
++    bool _tcp_rtcp_sent = false;
+     std::function<void(const toolkit::SockException &ex)> _on_close;
+     std::weak_ptr<MultiMediaSourceMuxer> _muxer;
+ };
+diff --git a/src/Rtp/RtpServer.cpp b/src/Rtp/RtpServer.cpp
+index 8aaaf494..3d4463f9 100644
+--- a/src/Rtp/RtpServer.cpp
++++ b/src/Rtp/RtpServer.cpp
+@@ -134,7 +134,7 @@ private:
+     std::shared_ptr<struct sockaddr_storage> _rtcp_addr;
+ };
+ 
+-void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTuple &tuple, TcpMode tcp_mode, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex) {
++void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTuple &tuple, TcpMode tcp_mode, bool re_use_port, uint32_t ssrc, int only_track, bool multiplex, bool tcp_rtcp) {
+     // 创建udp服务器  [AUTO-TRANSLATED:99619428]
+     // Create UDP server
+     auto poller = EventPollerPool::Instance().getPoller();
+@@ -215,6 +215,7 @@ void RtpServer::start(uint16_t local_port, const char *local_ip, const MediaTupl
+         (*tcp_server)[RtpSession::kStreamID] = tuple.stream;
+         (*tcp_server)[RtpSession::kSSRC] = ssrc;
+         (*tcp_server)[RtpSession::kOnlyTrack] = only_track;
++        (*tcp_server)[RtpSession::kTcpRtcp] = tcp_rtcp;
+         if (tcp_mode == PASSIVE) {
+             weak_ptr<RtpServer> weak_self = shared_from_this();
+             tcp_server->start<RtpSession>(local_port, local_ip, 1024, [weak_self, processor](std::shared_ptr<RtpSession> &session) {
+diff --git a/src/Rtp/RtpServer.h b/src/Rtp/RtpServer.h
+index 739ecf87..85eb7ce5 100644
+--- a/src/Rtp/RtpServer.h
++++ b/src/Rtp/RtpServer.h
+@@ -57,7 +57,7 @@ public:
+      * [AUTO-TRANSLATED:cb9e0717]
+      */
+     void start(uint16_t local_port, const char *local_ip = "::", const MediaTuple &tuple = MediaTuple{DEFAULT_VHOST, kRtpAppName, "", ""}, TcpMode tcp_mode = PASSIVE,
+-               bool re_use_port = true, uint32_t ssrc = 0, int only_track = 0, bool multiplex = false);
++               bool re_use_port = true, uint32_t ssrc = 0, int only_track = 0, bool multiplex = false, bool tcp_rtcp = false);
+ 
+     /**
+      * 连接到tcp服务(tcp主动模式)
+diff --git a/src/Rtp/RtpSession.cpp b/src/Rtp/RtpSession.cpp
+index 58078ece..1980f046 100644
+--- a/src/Rtp/RtpSession.cpp
++++ b/src/Rtp/RtpSession.cpp
+@@ -14,6 +14,7 @@
+ #include "Network/TcpServer.h"
+ #include "Rtsp/Rtsp.h"
+ #include "Rtsp/RtpReceiver.h"
++#include "Rtcp/Rtcp.h"
+ #include "Common/config.h"
+ 
+ using namespace std;
+@@ -27,6 +28,7 @@ const string RtpSession::kStreamID = "stream_id";
+ const string RtpSession::kSSRC = "ssrc";
+ const string RtpSession::kOnlyTrack = "only_track";
+ const string RtpSession::kUdpRecvBuffer = "udp_recv_socket_buffer";
++const string RtpSession::kTcpRtcp = "tcp_rtcp";
+ 
+ void RtpSession::attachServer(const Server &server) {
+     setParams(const_cast<Server &>(server));
+@@ -38,6 +40,7 @@ void RtpSession::setParams(mINI &ini) {
+     _tuple.stream = ini[kStreamID];
+     _ssrc = ini[kSSRC];
+     _only_track = ini[kOnlyTrack];
++    _tcp_rtcp = ini[kTcpRtcp];
+     int udp_socket_buffer = ini[kUdpRecvBuffer];
+     if (_is_udp) {
+         // 设置udp socket读缓存  [AUTO-TRANSLATED:80cfb6e3]
+@@ -83,6 +86,24 @@ void RtpSession::setRtpProcess(RtpProcess::Ptr process) {
+ }
+ 
+ void RtpSession::onRtpPacket(const char *data, size_t len) {
++    inputRtpOrRtcp(data, len);
++}
++
++void RtpSession::inputRtpOrRtcp(const char *data, size_t len) {
++    if (!_is_udp && _tcp_rtcp && isRtcp(data, len)) {
++        if (!_process) {
++            WarnP(this) << "Ignore RTCP before RTP process is ready";
++            return;
++        }
++        string packet(data, len);
++        auto rtcp_arr = RtcpHeader::loadFromBytes(&packet[0], packet.size());
++        for (auto rtcp : rtcp_arr) {
++            _process->onRtcp(rtcp);
++        }
++        sendRtcpOverTcp();
++        _ticker.resetTime();
++        return;
++    }
+     if (!isRtp(data, len)) {
+         // 忽略非rtp数据  [AUTO-TRANSLATED:771b77d8]
+         // Ignore non-rtp data
+@@ -139,6 +160,7 @@ void RtpSession::onRtpPacket(const char *data, size_t len) {
+             return;
+         }
+         _process->inputRtp(false, getSock(), data, len, (struct sockaddr *)&_addr);
++        sendRtcpOverTcp();
+     } catch (RtpTrack::BadRtpException &ex) {
+         if (!_is_udp) {
+             WarnL << ex.what() << "，开始搜索ssrc以便恢复上下文";
+@@ -150,6 +172,27 @@ void RtpSession::onRtpPacket(const char *data, size_t len) {
+     _ticker.resetTime();
+ }
+ 
++void RtpSession::sendRtcpOverTcp() {
++    if (_is_udp || !_tcp_rtcp || !_process || !_ssrc) {
++        return;
++    }
++    if (_tcp_rtcp_sent && _tcp_rtcp_ticker.elapsedTime() < 5000) {
++        return;
++    }
++    _tcp_rtcp_sent = true;
++    _tcp_rtcp_ticker.resetTime();
++    auto rtcp = _process->createRtcpRR(_ssrc + 1, _ssrc);
++    if (!rtcp || rtcp->size() > UINT16_MAX) {
++        WarnP(this) << "Invalid RTCP packet size";
++        return;
++    }
++    string frame(2 + rtcp->size(), '\0');
++    frame[0] = (char)((rtcp->size() >> 8) & 0xFF);
++    frame[1] = (char)(rtcp->size() & 0xFF);
++    memcpy(&frame[2], rtcp->data(), rtcp->size());
++    send(std::make_shared<BufferString>(std::move(frame)));
++}
++
+ static const char *findSSRC(const char *data, ssize_t len, uint32_t ssrc) {
+     // rtp前面必须预留两个字节的长度字段  [AUTO-TRANSLATED:2af4e647]
+     // Two bytes of length field must be reserved before rtp
+diff --git a/src/Rtp/RtpSession.h b/src/Rtp/RtpSession.h
+index 25d1af91..84dc183f 100644
+--- a/src/Rtp/RtpSession.h
++++ b/src/Rtp/RtpSession.h
+@@ -28,6 +28,7 @@ public:
+     static const std::string kSSRC;
+     static const std::string kOnlyTrack;
+     static const std::string kUdpRecvBuffer;
++    static const std::string kTcpRtcp;
+ 
+     RtpSession(const toolkit::Socket::Ptr &sock);
+     ~RtpSession() override;
+@@ -37,6 +38,7 @@ public:
+     void setParams(toolkit::mINI &ini);
+     void attachServer(const toolkit::Server &server) override;
+     void setRtpProcess(RtpProcess::Ptr process);
++    void inputRtpOrRtcp(const char *data, size_t len);
+ 
+ protected:
+     // 收到rtp回调  [AUTO-TRANSLATED:446b2cda]
+@@ -50,15 +52,19 @@ protected:
+     // 搜寻PS包里的关键帧标头  [AUTO-TRANSLATED:d8e88339]
+     // Search for keyframe header in PS packet
+     const char *searchByPsHeaderFlag(const char *data, size_t len);
++    void sendRtcpOverTcp();
+ 
+ private:
+     bool _is_udp = false;
+     bool _search_rtp = false;
+     bool _search_rtp_finished = false;
+     bool _emit_detach = false;
++    bool _tcp_rtcp = false;
++    bool _tcp_rtcp_sent = false;
+     int _only_track = 0;
+     uint32_t _ssrc = 0;
+     toolkit::Ticker _ticker;
++    toolkit::Ticker _tcp_rtcp_ticker;
+     MediaTuple _tuple;
+     struct sockaddr_storage _addr;
+     RtpProcess::Ptr _process;

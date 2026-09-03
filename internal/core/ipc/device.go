@@ -3,6 +3,7 @@ package ipc
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -105,6 +106,9 @@ func (c Core) GetDeviceByDeviceID(ctx context.Context, deviceID string) (*Device
 
 // AddDevice Insert into database
 func (c Core) AddDevice(ctx context.Context, in *AddDeviceInput) (*Device, error) {
+	if strings.EqualFold(strings.TrimSpace(in.Type), TypeGB28181) && !validGBRTPStreamMode(in.StreamMode) {
+		return nil, reason.ErrBadRequest.SetMsg(fmt.Sprintf("invalid RTP stream mode: %d", in.StreamMode))
+	}
 	var out Device
 	if err := copier.Copy(&out, in); err != nil {
 		slog.ErrorContext(ctx, "Copy", "err", err)
@@ -161,11 +165,34 @@ func (c Core) EditDevice(ctx context.Context, in *EditDeviceInput, id string) (*
 	if err != nil {
 		return nil, err
 	}
+	if dev.IsGB28181() && !validGBRTPStreamMode(in.StreamMode) {
+		return nil, reason.ErrBadRequest.SetMsg(fmt.Sprintf("invalid RTP stream mode: %d", in.StreamMode))
+	}
+	if dev.IsGB28181() && in.DeviceID != dev.DeviceID {
+		return nil, reason.ErrBadRequest.SetMsg("GB28181 device_id 是协议身份，不能原地修改，请删除后重新添加")
+	}
+	var editCoordinator DeviceEditCoordinator
+	if protocol, ok := c.protocols[dev.GetType()]; ok {
+		editCoordinator, _ = protocol.(DeviceEditCoordinator)
+		if editCoordinator != nil {
+			if unlock := editCoordinator.LockDeviceEdit(dev); unlock != nil {
+				defer unlock()
+			}
+		}
+	}
 
+	var before Device
 	var out Device
 	if err := c.store.Device().Update(ctx, &out, func(b *Device) error {
+		before = *b
+		previousPassword := b.Password
 		if err := copier.Copy(b, in); err != nil {
 			slog.ErrorContext(ctx, "Copy", "err", err)
+		}
+		if in.Password == nil {
+			b.Password = previousPassword
+		} else {
+			b.Password = *in.Password
 		}
 		if in.GBVersion != nil {
 			applyManualGBVersion(&b.Ext, manualVersion)
@@ -189,6 +216,11 @@ func (c Core) EditDevice(ctx context.Context, in *EditDeviceInput, id string) (*
 	}, orm.Where("id=?", dev.ID)); err != nil {
 		return nil, reason.ErrDB.Withf(`Edit err[%s] id[%s]`, err.Error(), dev.ID)
 	}
+	if editCoordinator != nil {
+		if err := editCoordinator.DeviceEdited(ctx, &before, &out); err != nil {
+			return nil, reason.ErrDB.Withf(`Finalize edit err[%s] id[%s]`, err.Error(), dev.ID)
+		}
+	}
 
 	protocol, ok := c.protocols[out.GetType()]
 	if ok {
@@ -197,6 +229,10 @@ func (c Core) EditDevice(ctx context.Context, in *EditDeviceInput, id string) (*
 		}
 	}
 	return &out, nil
+}
+
+func validGBRTPStreamMode(streamMode int) bool {
+	return streamMode >= 0 && streamMode <= 2
 }
 
 func normalizeManualGBVersion(value string) (string, bool) {
@@ -255,29 +291,78 @@ func gbVersionYear(version string) string {
 
 // DelDevice Delete object
 func (c Core) DelDevice(ctx context.Context, id string) (*Device, error) {
+	device, _, err := c.delDevice(ctx, id, false)
+	return device, err
+}
+
+// DelDeviceWithChannelIDs 在协议删除锁内捕获最终通道集合，供调用方清理通道级外部资源。
+func (c Core) DelDeviceWithChannelIDs(ctx context.Context, id string) (*Device, []string, error) {
+	return c.delDevice(ctx, id, true)
+}
+
+func (c Core) delDevice(ctx context.Context, id string, captureChannelIDs bool) (*Device, []string, error) {
 	target, err := c.resolveDevice(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	var channelIDs []string
 	if protocol, ok := c.protocols[target.GetType()]; ok {
+		if locker, coordinated := protocol.(DeviceDeleteLocker); coordinated {
+			if unlock := locker.LockDeviceDelete(target); unlock != nil {
+				defer unlock()
+			}
+		}
+		if captureChannelIDs {
+			channelIDs, err = c.channelIDsForDevice(ctx, target.ID)
+			if err != nil {
+				return nil, nil, reason.ErrDB.Withf(`List channels before delete err[%s]`, err.Error())
+			}
+		}
 		if err := protocol.DeleteDevice(ctx, target); err != nil {
-			return nil, reason.ErrDB.Withf(`Cleanup device err[%s]`, err.Error())
+			return nil, channelIDs, reason.ErrDB.Withf(`Cleanup device err[%s]`, err.Error())
+		}
+	} else if captureChannelIDs {
+		channelIDs, err = c.channelIDsForDevice(ctx, target.ID)
+		if err != nil {
+			return nil, nil, reason.ErrDB.Withf(`List channels before delete err[%s]`, err.Error())
 		}
 	}
 
-	var dev Device
+	// 传入已解析的完整设备，避免底层删除逻辑依赖数据库对 DELETE RETURNING 的支持。
+	dev := *target
 	if err := c.store.Device().Delete(ctx, &dev, orm.Where("id=?", target.ID)); err != nil {
-		return nil, reason.ErrDB.Withf(`Del err[%s]`, err.Error())
+		return nil, channelIDs, reason.ErrDB.Withf(`Del err[%s]`, err.Error())
 	}
 
 	// 缓存存储会在 Device.Delete 事务内删除通道；保留兜底删除以兼容直接使用数据库存储的调用方。
 	if err := c.store.Channel().Session(ctx, func(d *gorm.DB) error {
 		return d.Where("did=?", target.ID).Delete(&Channel{}).Error
 	}); err != nil {
-		return nil, reason.ErrDB.Withf(`DelChannel err[%s]`, err.Error())
+		return nil, channelIDs, reason.ErrDB.Withf(`DelChannel err[%s]`, err.Error())
 	}
 
-	return &dev, nil
+	return &dev, channelIDs, nil
+}
+
+func (c Core) channelIDsForDevice(ctx context.Context, deviceID string) ([]string, error) {
+	const pageSize = 500
+	channelIDs := make([]string, 0)
+	for page := 1; ; page++ {
+		items := make([]*Channel, 0, pageSize)
+		query := orm.NewQuery(1).Where("did=?", deviceID).OrderBy("id")
+		total, err := c.store.Channel().List(ctx, &items, web.PagerFilter{Page: page, Size: pageSize}, query.Encode()...)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			if item != nil && strings.TrimSpace(item.ID) != "" {
+				channelIDs = append(channelIDs, item.ID)
+			}
+		}
+		if len(items) == 0 || len(channelIDs) >= int(total) || len(items) < pageSize {
+			return channelIDs, nil
+		}
+	}
 }
 
 func (c Core) QueryCatalog(ctx context.Context, deviceID string) error {

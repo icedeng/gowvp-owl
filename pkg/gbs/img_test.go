@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
@@ -35,6 +36,37 @@ func TestSnapshotUploadRequiresKnownSessionAndCover(t *testing.T) {
 	}
 }
 
+func TestSnapshotUploadRetryDoesNotExceedExpectedCount(t *testing.T) {
+	api := &GB28181API{}
+	sessionID := "snapshot-upload-retry-000000000001"
+	api.storeSnapshotState(SnapshotState{
+		DeviceID: gb10DeviceID, ChannelID: gb10DeviceID, CoverKey: "cover-retry", SessionID: sessionID,
+		Status: "accepted", ExpectedCount: 1,
+	})
+
+	for range 2 {
+		if err := api.MarkSnapshotUploadedContext(t.Context(), gb10DeviceID, sessionID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	state, ok := api.SnapshotState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "uploading" || state.ReceivedCount != state.ExpectedCount {
+		t.Fatalf("retried snapshot upload state = %+v, %v", state, ok)
+	}
+}
+
+func TestBuildSnapshotUploadURLSupportsIPv6WebhookHost(t *testing.T) {
+	api := &GB28181API{boot: &conf.Bootstrap{
+		Server: conf.Server{HTTP: conf.ServerHTTP{Port: 16000}},
+		Media:  conf.Media{WebHookIP: "2001:db8::10"},
+	}}
+	want := "http://[2001:db8::10]:16000/gb28181/snapshot/device/cover/session"
+	if got := api.buildSnapshotUploadURL("device", "cover", "session"); got != want {
+		t.Fatalf("IPv6 snapshot upload URL = %q; want %q", got, want)
+	}
+}
+
 func TestSnapshotFinishedCompletesTrackedSession(t *testing.T) {
 	api, _ := newVersionGateAPI(GBVersion30)
 	sessionID := "snapshot-session-0000000000000002"
@@ -56,6 +88,86 @@ func TestSnapshotFinishedCompletesTrackedSession(t *testing.T) {
 	}
 }
 
+func TestSnapshotFinishedRejectsConflictingTerminalRetransmission(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	sessionID := "snapshot-session-terminal-conflict-1"
+	api.storeSnapshotState(SnapshotState{
+		DeviceID: gb10DeviceID, ChannelID: gb10DeviceID, SessionID: sessionID,
+		Status: "uploading", ExpectedCount: 1,
+	})
+	fileID := gb10DeviceID + "022026082508150000001"
+	success := []byte(`<Notify><CmdType>UploadSnapShotFinished</CmdType><SN>202</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><SnapShotList><SnapShotFileID>` + fileID +
+		`</SnapShotFileID></SnapShotList></Notify>`)
+	assertFlowOK(t, runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "snapshot-terminal-success", success, api.sipMessageSnapshotFinished))
+	assertFlowOK(t, runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "snapshot-terminal-duplicate", success, api.sipMessageSnapshotFinished))
+
+	conflict := []byte(`<Notify><CmdType>UploadSnapShotFinished</CmdType><SN>203</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><SnapShotList/></Notify>`)
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "snapshot-terminal-conflict", conflict, api.sipMessageSnapshotFinished)
+	if !strings.Contains(response, "SIP/2.0 409") {
+		t.Fatalf("conflicting snapshot terminal response = %s", response)
+	}
+	state, ok := api.SnapshotState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "completed" || len(state.FileIDs) != 1 || state.FileIDs[0] != fileID {
+		t.Fatalf("conflicting snapshot notification changed final state = %+v, %v", state, ok)
+	}
+}
+
+func TestSnapshotFinishedPersistsBeforeSIPOKAndRetriesIdempotently(t *testing.T) {
+	api, _ := newVersionGateAPI(GBVersion30)
+	sessionID := "snapshot-session-ack-write-failure-1"
+	api.storeSnapshotState(SnapshotState{
+		DeviceID: gb10DeviceID, ChannelID: gb10DeviceID, SessionID: sessionID,
+		Status: "uploading", ExpectedCount: 1,
+	})
+	fileID := gb10DeviceID + "022026082508150000001"
+	body := []byte(`<Notify><CmdType>UploadSnapShotFinished</CmdType><SN>204</SN><DeviceID>` + gb10DeviceID +
+		`</DeviceID><SessionID>` + sessionID + `</SessionID><SnapShotList><SnapShotFileID>` + fileID +
+		`</SnapShotFileID></SnapShotList></Notify>`)
+	base := newFlowConnection()
+	connection := &blockingFlowResponseConnection{
+		flowConnection: base,
+		started:        make(chan struct{}, 1),
+		release:        make(chan struct{}),
+		writeErr:       errors.New("UploadSnapShotFinished SIP OK write failed"),
+	}
+	request := newFlowRequest(t, base, sip.MethodMessage, "snapshot-ack-write-failure", body)
+	request.SetConnection(connection)
+	done := make(chan struct{})
+	go func() {
+		api.sipMessageSnapshotFinished(&sip.Context{
+			Request: request, Tx: sip.NewTransaction("snapshot-ack-write-failure-tx", connection),
+			DeviceID: gb10DeviceID, Source: base.remote,
+		})
+		close(done)
+	}()
+	select {
+	case <-connection.started:
+	case <-time.After(time.Second):
+		close(connection.release)
+		t.Fatal("UploadSnapShotFinished SIP OK write did not start")
+	}
+	state, ok := api.SnapshotState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "completed" || len(state.FileIDs) != 1 || state.FileIDs[0] != fileID {
+		close(connection.release)
+		t.Fatalf("snapshot state before required 200 response = %+v, %v", state, ok)
+	}
+	committedAt := state.UpdatedAt
+	close(connection.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("UploadSnapShotFinished handler did not return after SIP OK write failure")
+	}
+
+	assertFlowOK(t, runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "snapshot-ack-write-retry", body, api.sipMessageSnapshotFinished))
+	state, ok = api.SnapshotState(gb10DeviceID, sessionID)
+	if !ok || state.Status != "completed" || len(state.FileIDs) != 1 || !state.UpdatedAt.Equal(committedAt) {
+		t.Fatalf("retried snapshot final state = %+v, %v", state, ok)
+	}
+}
+
 func TestSnapshotFinishedDetectsPartialFailure(t *testing.T) {
 	api, _ := newVersionGateAPI(GBVersion30)
 	sessionID := "snapshot-session-0000000000000003"
@@ -63,7 +175,7 @@ func TestSnapshotFinishedDetectsPartialFailure(t *testing.T) {
 		DeviceID: gb10DeviceID, ChannelID: gb10DeviceID, SessionID: sessionID,
 		Status: "accepted", ExpectedCount: 2,
 	})
-	body := []byte(`<Notify><CmdType>UploadSnapShotFinished</CmdType><SN>103</SN><DeviceID>` + gb10DeviceID +
+	body := []byte(`<?xml version="1.0"?><Notify><CmdType>UploadSnapShotFinished</CmdType><SN>103</SN><DeviceID>` + gb10DeviceID +
 		`</DeviceID><SessionID>` + sessionID + `</SessionID><SnapShotList>` +
 		`<SnapShotFileID>` + gb10DeviceID + `022026082508150000001</SnapShotFileID>` +
 		`</SnapShotList></Notify>`)
@@ -134,6 +246,7 @@ func TestSnapshotFinishedRejectsSchemaViolations(t *testing.T) {
 		sn       string
 		cmdType  string
 		files    string
+		list     string
 	}{
 		{name: "non-positive SN", sn: "0", cmdType: "UploadSnapShotFinished"},
 		{name: "wrong root", root: "Response", sn: "1", cmdType: "UploadSnapShotFinished"},
@@ -143,6 +256,10 @@ func TestSnapshotFinishedRejectsSchemaViolations(t *testing.T) {
 		{name: "invalid file", sn: "1", cmdType: "UploadSnapShotFinished", files: `<SnapShotFileID>bad</SnapShotFileID>`},
 		{name: "invalid file timestamp", sn: "1", cmdType: "UploadSnapShotFinished", files: `<SnapShotFileID>` + gb10DeviceID + `022026132508150000001</SnapShotFileID>`},
 		{name: "too many files", sn: "1", cmdType: "UploadSnapShotFinished", files: strings.Repeat("<SnapShotFileID>"+fileID+"</SnapShotFileID>", 11)},
+		{name: "unknown list child", sn: "1", cmdType: "UploadSnapShotFinished", files: `<Unknown/>`},
+		{name: "file attribute", sn: "1", cmdType: "UploadSnapShotFinished", files: `<SnapShotFileID vendor="1">` + fileID + `</SnapShotFileID>`},
+		{name: "nested file", sn: "1", cmdType: "UploadSnapShotFinished", files: `<SnapShotFileID><Value>` + fileID + `</Value></SnapShotFileID>`},
+		{name: "duplicate list", sn: "1", cmdType: "UploadSnapShotFinished", list: `<SnapShotList/><SnapShotList/>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -155,6 +272,9 @@ func TestSnapshotFinishedRejectsSchemaViolations(t *testing.T) {
 				deviceID = gb10DeviceID
 			}
 			list := `<SnapShotList>` + test.files + `</SnapShotList>`
+			if test.list != "" {
+				list = test.list
+			}
 			if test.files == "__NO_LIST__" {
 				list = ""
 			}

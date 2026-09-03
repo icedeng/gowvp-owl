@@ -194,3 +194,32 @@ test("2016 与 2022 管理端显式提供标准双流程语音对讲", () => {
   assert.match(liveViewSource, /router\.push\(\{ name: "channel-detail", params: \{ id: selectedChannel\.value\.id \} \}\)/);
   assert.doesNotMatch(liveViewSource, /api\.voiceStart\(selectedChannel!\.id, \{ mode: 'talk' \}\)/);
 });
+
+test("GB 通道可绑定媒体节点并让实时、历史、语音和级联共用路由语义", () => {
+  assert.match(apiSource, /bindChannelMediaServer:.*\/channels\/\$\{encodeURIComponent\(id\)\}\/media_server/);
+  assert.match(backendApiSource, /func \(a IPCAPI\) editChannelMediaServer/);
+  assert.match(backendApiSource, /a\.ipc\.EditChannelConfig/);
+  assert.match(backendApiSource, /通道存在活动媒体会话/);
+  assert.match(viewSource, /媒体节点路由/);
+  assert.match(viewSource, /直播、回放、下载、快照、语音与级联媒体共用此绑定/);
+  assert.match(viewSource, /selectedMediaServerId\.value = data\.config\?\.media_server_id\?\.trim\(\) \|\| "local"/);
+  assert.match(viewSource, /api\.bindChannelMediaServer\(channel\.value!\.id, mediaServerId\)/);
+  assert.match(viewSource, /v-model="voiceForm\.mediaServerId"/);
+  assert.match(viewSource, /RTP 历史会话将在 \$\{boundMediaServerId\} 节点收流/);
+  assert.match(viewSource, /boundMediaServerState/);
+  assert.match(viewSource, /status === undefined/);
+  assert.match(viewSource, /mediaServerStatusLabel\(item\.status\)/);
+  assert.match(viewSource, /aria-describedby="media-binding-help"/);
+  assert.match(viewSource, /id="media-binding-help"/);
+  assert.match(viewSource, /:aria-disabled="Boolean\(mediaBindingDisabledReason\)/);
+});
+
+test("通道详情在标题和技术档案中展示四版本有效协议", () => {
+  assert.match(viewSource, /const gbVersionLabel = computed\(\(\) =>/);
+  assert.match(viewSource, /2011（1\.0）/);
+  assert.match(viewSource, /2014（1\.1）/);
+  assert.match(viewSource, /2016（2\.0）/);
+  assert.match(viewSource, /2022（3\.0）/);
+  assert.match(viewSource, /title="`有效版本：\$\{gbVersionLabel\}`"/);
+  assert.match(viewSource, /<dt>有效版本<\/dt><dd><span class="protocol-tag blue">\{\{ gbVersionLabel \}\}/);
+});

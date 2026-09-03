@@ -96,6 +96,26 @@ type Device struct {
 	LastRegisterAt  time.Time
 	Expires         int
 
+	// offlinePersistencePending 表示运行态已经因超时安全下线，但持久化离线状态仍需重试。
+	// 只有新的 REGISTER 或离线持久化成功才能清除该标记。
+	offlinePersistencePending bool
+	// registrationClosed 区分 REGISTER 注销/超时与 DeviceStatus 报告的暂时离线。
+	// 已关闭的注册绑定不能被 Keepalive、OPTIONS 或迟到的 DeviceStatus 恢复。
+	registrationClosed bool
+	// deviceStatusPersistencePending 保存已确认但尚未成功持久化的 DeviceStatus 在线状态。
+	// 它不关闭 REGISTER 绑定，周期扫描会在同一设备活动锁内重试。
+	deviceStatusPersistencePending bool
+	pendingDeviceStatusOnline      bool
+	pendingDeviceStatusAt          time.Time
+	// keepalivePersistencePending 保存已确认但尚未成功持久化的最新心跳观测。
+	// 运行态立即使用该观测，周期扫描按 REGISTER 代次补写持久化状态。
+	keepalivePersistencePending bool
+	pendingKeepaliveOnline      bool
+	pendingKeepaliveAt          time.Time
+	pendingKeepaliveAddress     string
+	pendingKeepaliveTransport   string
+	pendingKeepaliveVersion     string
+
 	keepaliveInterval uint16
 	keepaliveTimeout  uint16
 }
@@ -144,17 +164,110 @@ func (d *Device) releaseMediaLockRef(channelID string, entry *channelMediaLock) 
 }
 
 type deviceRuntimeState struct {
-	IsOnline          bool
-	Address           string
-	Password          string
-	Conn              sip.Connection
-	Source            net.Addr
-	To                *sip.Address
-	LastKeepaliveAt   time.Time
-	LastRegisterAt    time.Time
-	Expires           int
-	KeepaliveInterval uint16
-	KeepaliveTimeout  uint16
+	IsOnline                       bool
+	Address                        string
+	Password                       string
+	Conn                           sip.Connection
+	Source                         net.Addr
+	To                             *sip.Address
+	LastKeepaliveAt                time.Time
+	LastRegisterAt                 time.Time
+	Expires                        int
+	KeepaliveInterval              uint16
+	KeepaliveTimeout               uint16
+	OfflinePersistencePending      bool
+	RegistrationClosed             bool
+	DeviceStatusPersistencePending bool
+	PendingDeviceStatusOnline      bool
+	PendingDeviceStatusAt          time.Time
+	KeepalivePersistencePending    bool
+	PendingKeepaliveOnline         bool
+	PendingKeepaliveAt             time.Time
+	PendingKeepaliveAddress        string
+	PendingKeepaliveTransport      string
+	PendingKeepaliveVersion        string
+}
+
+// registrationBindingExpired 判断已知 REGISTER 绑定是否在指定时刻到期。
+// 零时间或非正有效期用于兼容升级前缺少绑定元数据、但仍标记在线的存量记录。
+func registrationBindingExpired(lastRegisterAt time.Time, expires int, now time.Time) bool {
+	return expires > 0 &&
+		!lastRegisterAt.IsZero() &&
+		!now.Before(lastRegisterAt.Add(time.Duration(expires)*time.Second))
+}
+
+func setPersistedRegistrationClosed(device *ipc.Device, closed bool) {
+	if device == nil {
+		return
+	}
+	value := closed
+	device.Ext.GBRegistrationClosed = &value
+}
+
+func persistedRegistrationClosed(device *ipc.Device) bool {
+	if device == nil {
+		return true
+	}
+	if device.Ext.GBRegistrationClosed != nil {
+		return *device.Ext.GBRegistrationClosed
+	}
+	// 升级前没有独立绑定状态，只能沿用旧 IsOnline 语义，避免历史离线设备被误恢复。
+	return !device.IsOnline
+}
+
+func persistedRegistrationBindingActive(device *ipc.Device, now time.Time) bool {
+	return device != nil && !persistedRegistrationClosed(device) &&
+		!registrationBindingExpired(device.RegisteredAt.Time, device.Expires, now)
+}
+
+// SyncRegistrationBindingRuntime 供 MemoryStorer 在运行态提交锁内同步持久化 REGISTER 绑定状态。
+func SyncRegistrationBindingRuntime(runtime *Device, persistent *ipc.Device) {
+	if runtime == nil || persistent == nil {
+		return
+	}
+	runtime.IsOnline = persistent.IsOnline
+	runtime.Address = persistent.Address
+	runtime.Password = persistent.Password
+	runtime.LastKeepaliveAt = persistent.KeepaliveAt.Time
+	runtime.LastRegisterAt = persistent.RegisteredAt.Time
+	runtime.Expires = persistent.Expires
+	runtime.registrationClosed = persistedRegistrationClosed(persistent)
+	if runtime.registrationClosed {
+		clearPendingDeviceStatusLocked(runtime)
+		clearPendingKeepaliveLocked(runtime)
+	}
+}
+
+func runtimeRegistrationBindingActive(state deviceRuntimeState, now time.Time) bool {
+	return !state.RegistrationClosed && !state.OfflinePersistencePending &&
+		!registrationBindingExpired(state.LastRegisterAt, state.Expires, now)
+}
+
+func registeredRuntimeActive(state deviceRuntimeState, now time.Time) bool {
+	return state.IsOnline && runtimeRegistrationBindingActive(state, now)
+}
+
+// clearPendingDeviceStatusLocked 仅在持有设备状态写锁或 MemoryStorer 的运行态提交回调中调用。
+func clearPendingDeviceStatusLocked(device *Device) {
+	if device == nil {
+		return
+	}
+	device.deviceStatusPersistencePending = false
+	device.pendingDeviceStatusOnline = false
+	device.pendingDeviceStatusAt = time.Time{}
+}
+
+// clearPendingKeepaliveLocked 仅在持有设备状态写锁或 MemoryStorer 的运行态提交回调中调用。
+func clearPendingKeepaliveLocked(device *Device) {
+	if device == nil {
+		return
+	}
+	device.keepalivePersistencePending = false
+	device.pendingKeepaliveOnline = false
+	device.pendingKeepaliveAt = time.Time{}
+	device.pendingKeepaliveAddress = ""
+	device.pendingKeepaliveTransport = ""
+	device.pendingKeepaliveVersion = ""
 }
 
 func (d *Device) runtimeSnapshot() deviceRuntimeState {
@@ -164,16 +277,27 @@ func (d *Device) runtimeSnapshot() deviceRuntimeState {
 	d.stateMu.RLock()
 	defer d.stateMu.RUnlock()
 	state := deviceRuntimeState{
-		IsOnline:          d.IsOnline,
-		Address:           d.Address,
-		Password:          d.Password,
-		Conn:              d.conn,
-		Source:            d.source,
-		LastKeepaliveAt:   d.LastKeepaliveAt,
-		LastRegisterAt:    d.LastRegisterAt,
-		Expires:           d.Expires,
-		KeepaliveInterval: d.keepaliveInterval,
-		KeepaliveTimeout:  d.keepaliveTimeout,
+		IsOnline:                       d.IsOnline,
+		Address:                        d.Address,
+		Password:                       d.Password,
+		Conn:                           d.conn,
+		Source:                         d.source,
+		LastKeepaliveAt:                d.LastKeepaliveAt,
+		LastRegisterAt:                 d.LastRegisterAt,
+		Expires:                        d.Expires,
+		KeepaliveInterval:              d.keepaliveInterval,
+		KeepaliveTimeout:               d.keepaliveTimeout,
+		OfflinePersistencePending:      d.offlinePersistencePending,
+		RegistrationClosed:             d.registrationClosed,
+		DeviceStatusPersistencePending: d.deviceStatusPersistencePending,
+		PendingDeviceStatusOnline:      d.pendingDeviceStatusOnline,
+		PendingDeviceStatusAt:          d.pendingDeviceStatusAt,
+		KeepalivePersistencePending:    d.keepalivePersistencePending,
+		PendingKeepaliveOnline:         d.pendingKeepaliveOnline,
+		PendingKeepaliveAt:             d.pendingKeepaliveAt,
+		PendingKeepaliveAddress:        d.pendingKeepaliveAddress,
+		PendingKeepaliveTransport:      d.pendingKeepaliveTransport,
+		PendingKeepaliveVersion:        d.pendingKeepaliveVersion,
 	}
 	if d.to != nil {
 		state.To = d.to.Clone()
@@ -204,8 +328,11 @@ func (d *Device) SerializeRegistrationState(change func() error) error {
 	return change()
 }
 
-// IsOnlineNow 返回并发安全的当前在线状态。
-func (d *Device) IsOnlineNow() bool { return d.runtimeSnapshot().IsOnline }
+// IsOnlineNow 返回并发安全且 REGISTER 绑定仍有效的当前在线状态。
+// 存量记录缺少注册时间或有效期时继续采用持久化在线标记，避免升级后立即误下线。
+func (d *Device) IsOnlineNow() bool {
+	return registeredRuntimeActive(d.runtimeSnapshot(), time.Now())
+}
 
 // PasswordValue 返回并发安全的设备注册密码快照。
 func (d *Device) PasswordValue() string { return d.runtimeSnapshot().Password }
@@ -235,6 +362,7 @@ func NewDevice(conn sip.Connection, d *ipc.Device) *Device {
 		LastRegisterAt:         d.RegisteredAt.Time,
 		Expires:                d.Expires,
 		IsOnline:               d.IsOnline,
+		registrationClosed:     persistedRegistrationClosed(d),
 		Password:               d.Password,
 		gbVersion:              string(deviceProtocolVersion(d.Ext)),
 		gbDisabledCapabilities: gbDisabledCapabilitySet(d.Ext.GBDisabledCapabilities),
@@ -251,7 +379,7 @@ func (d *Device) GBVersion() string {
 }
 
 func (d *Device) setGBVersion(version GBProtocolVersion) {
-	if version.Valid() {
+	if version = version.canonical(); version.Valid() {
 		d.gbVersionMu.Lock()
 		defer d.gbVersionMu.Unlock()
 		d.gbVersion = string(version)
@@ -259,7 +387,7 @@ func (d *Device) setGBVersion(version GBProtocolVersion) {
 }
 
 func (d *Device) setGBProfile(version GBProtocolVersion, disabled []string) {
-	if !version.Valid() {
+	if version = version.canonical(); !version.Valid() {
 		return
 	}
 	d.gbVersionMu.Lock()
@@ -536,14 +664,23 @@ type Channels struct {
 	Active int64  `json:"active"  gorm:"column:active"`
 	URIStr string ` json:"uri"  gorm:"column:uri"`
 
+	hasName              bool
+	hasManufacturer      bool
+	hasModel             bool
+	hasAddress           bool
 	hasOwner             bool
+	hasParental          bool
 	hasSafetyWay         bool
+	hasRegisterWay       bool
 	hasCertNum           bool
 	hasCertifiable       bool
 	hasErrCode           bool
 	hasEndTime           bool
 	hasSecurityLevelCode bool
+	hasSecrecy           bool
 	hasBusinessGroupID   bool
+	hasLongitude         bool
+	hasLatitude          bool
 
 	// 视频编码格式
 	VF string ` json:"vf"  gorm:"column:vf"`
@@ -565,24 +702,51 @@ func (c *Channels) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) er
 	type channelsAlias Channels
 	var value struct {
 		channelsAlias
-		Owner             *string `xml:"Owner"`
-		SafetyWay         *int    `xml:"SafetyWay"`
-		CertNum           *string `xml:"CertNum"`
-		Certifiable       *int    `xml:"Certifiable"`
-		ErrCode           *int    `xml:"ErrCode"`
-		EndTime           *string `xml:"EndTime"`
-		SecurityLevelCode *string `xml:"SecurityLevelCode"`
-		BusinessGroupID   *string `xml:"BusinessGroupID"`
+		Name              *string  `xml:"Name"`
+		Manufacturer      *string  `xml:"Manufacturer"`
+		Model             *string  `xml:"Model"`
+		Address           *string  `xml:"Address"`
+		Owner             *string  `xml:"Owner"`
+		Parental          *int     `xml:"Parental"`
+		SafetyWay         *int     `xml:"SafetyWay"`
+		RegisterWay       *int     `xml:"RegisterWay"`
+		CertNum           *string  `xml:"CertNum"`
+		Certifiable       *int     `xml:"Certifiable"`
+		ErrCode           *int     `xml:"ErrCode"`
+		EndTime           *string  `xml:"EndTime"`
+		SecurityLevelCode *string  `xml:"SecurityLevelCode"`
+		Secrecy           *int     `xml:"Secrecy"`
+		BusinessGroupID   *string  `xml:"BusinessGroupID"`
+		Longitude         *float64 `xml:"Longitude"`
+		Latitude          *float64 `xml:"Latitude"`
 	}
 	if err := decoder.DecodeElement(&value, &start); err != nil {
 		return err
 	}
 	*c = Channels(value.channelsAlias)
+	if value.Name != nil {
+		c.Name, c.hasName = *value.Name, true
+	}
+	if value.Manufacturer != nil {
+		c.Manufacturer, c.hasManufacturer = *value.Manufacturer, true
+	}
+	if value.Model != nil {
+		c.Model, c.hasModel = *value.Model, true
+	}
+	if value.Address != nil {
+		c.Address, c.hasAddress = *value.Address, true
+	}
 	if value.Owner != nil {
 		c.Owner, c.hasOwner = *value.Owner, true
 	}
+	if value.Parental != nil {
+		c.Parental, c.hasParental = *value.Parental, true
+	}
 	if value.SafetyWay != nil {
 		c.SafetyWay, c.hasSafetyWay = *value.SafetyWay, true
+	}
+	if value.RegisterWay != nil {
+		c.RegisterWay, c.hasRegisterWay = *value.RegisterWay, true
 	}
 	if value.CertNum != nil {
 		c.CertNum, c.hasCertNum = *value.CertNum, true
@@ -599,8 +763,17 @@ func (c *Channels) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) er
 	if value.SecurityLevelCode != nil {
 		c.SecurityLevelCode, c.hasSecurityLevelCode = *value.SecurityLevelCode, true
 	}
+	if value.Secrecy != nil {
+		c.Secrecy, c.hasSecrecy = *value.Secrecy, true
+	}
 	if value.BusinessGroupID != nil {
 		c.BusinessGroupID, c.hasBusinessGroupID = *value.BusinessGroupID, true
+	}
+	if value.Longitude != nil {
+		c.Longitude, c.hasLongitude = *value.Longitude, true
+	}
+	if value.Latitude != nil {
+		c.Latitude, c.hasLatitude = *value.Latitude, true
 	}
 	return nil
 }
@@ -641,86 +814,119 @@ type CatalogItemInfo struct {
 	BusinessGroupID          string   `xml:"BusinessGroupID" json:"business_group_id"`
 	RawXML                   string   `xml:",innerxml" json:"-"`
 	hasPositionType          bool
+	hasPTZType               bool
+	hasRoomType              bool
 	hasUseType               bool
+	hasSupplyLightType       bool
+	hasDirectionType         bool
 	hasBusinessGroupID       bool
+	hasMobileDeviceType      bool
+	hasHorizontalFieldAngle  bool
+	hasVerticalFieldAngle    bool
+	hasPointType             bool
+	hasInstallTime           bool
+	hasContactInfo           bool
+	hasRecordSaveDays        bool
 }
 
 func (i *CatalogItemInfo) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
 	var value struct {
-		PTZType                  string  `xml:"PTZType"`
-		PhotoelectricImagingType string  `xml:"PhotoelectricImagingType"`
-		CapturePositionType      string  `xml:"CapturePositionType"`
-		PositionType             *int    `xml:"PositionType"`
-		RoomType                 int     `xml:"RoomType"`
-		UseType                  *int    `xml:"UseType"`
-		SupplyLightType          int     `xml:"SupplyLightType"`
-		DirectionType            int     `xml:"DirectionType"`
-		Resolution               string  `xml:"Resolution"`
-		StreamNumberList         string  `xml:"StreamNumberList"`
-		DownloadSpeed            string  `xml:"DownloadSpeed"`
-		SVCSpaceSupportMode      int     `xml:"SVCSpaceSupportMode"`
-		SVCTimeSupportMode       int     `xml:"SVCTimeSupportMode"`
-		SSVCRatioSupportList     string  `xml:"SSVCRatioSupportList"`
-		MobileDeviceType         int     `xml:"MobileDeviceType"`
-		HorizontalFieldAngle     float64 `xml:"HorizontalFieldAngle"`
-		VerticalFieldAngle       float64 `xml:"VerticalFieldAngle"`
-		MaxViewDistance          float64 `xml:"MaxViewDistance"`
-		GrassrootsCode           string  `xml:"GrassrootsCode"`
-		PointType                int     `xml:"PointType"`
-		PointCommonName          string  `xml:"PointCommonName"`
-		MAC                      string  `xml:"MAC"`
-		FunctionType             string  `xml:"FunctionType"`
-		EncodeType               string  `xml:"EncodeType"`
-		InstallTime              string  `xml:"InstallTime"`
-		ManagementUnit           string  `xml:"ManagementUnit"`
-		ContactInfo              string  `xml:"ContactInfo"`
-		RecordSaveDays           int     `xml:"RecordSaveDays"`
-		IndustrialClassification string  `xml:"IndustrialClassification"`
-		BusinessGroupID          *string `xml:"BusinessGroupID"`
-		RawXML                   string  `xml:",innerxml"`
+		PTZType                  *string  `xml:"PTZType"`
+		PhotoelectricImagingType string   `xml:"PhotoelectricImagingType"`
+		CapturePositionType      string   `xml:"CapturePositionType"`
+		PositionType             *int     `xml:"PositionType"`
+		RoomType                 *int     `xml:"RoomType"`
+		UseType                  *int     `xml:"UseType"`
+		SupplyLightType          *int     `xml:"SupplyLightType"`
+		DirectionType            *int     `xml:"DirectionType"`
+		Resolution               string   `xml:"Resolution"`
+		StreamNumberList         string   `xml:"StreamNumberList"`
+		DownloadSpeed            string   `xml:"DownloadSpeed"`
+		SVCSpaceSupportMode      int      `xml:"SVCSpaceSupportMode"`
+		SVCTimeSupportMode       int      `xml:"SVCTimeSupportMode"`
+		SSVCRatioSupportList     string   `xml:"SSVCRatioSupportList"`
+		MobileDeviceType         *int     `xml:"MobileDeviceType"`
+		HorizontalFieldAngle     *float64 `xml:"HorizontalFieldAngle"`
+		VerticalFieldAngle       *float64 `xml:"VerticalFieldAngle"`
+		MaxViewDistance          float64  `xml:"MaxViewDistance"`
+		GrassrootsCode           string   `xml:"GrassrootsCode"`
+		PointType                *int     `xml:"PointType"`
+		PointCommonName          string   `xml:"PointCommonName"`
+		MAC                      string   `xml:"MAC"`
+		FunctionType             string   `xml:"FunctionType"`
+		EncodeType               string   `xml:"EncodeType"`
+		InstallTime              *string  `xml:"InstallTime"`
+		ManagementUnit           string   `xml:"ManagementUnit"`
+		ContactInfo              *string  `xml:"ContactInfo"`
+		RecordSaveDays           *int     `xml:"RecordSaveDays"`
+		IndustrialClassification string   `xml:"IndustrialClassification"`
+		BusinessGroupID          *string  `xml:"BusinessGroupID"`
+		RawXML                   string   `xml:",innerxml"`
 	}
 	if err := decoder.DecodeElement(&value, &start); err != nil {
 		return err
 	}
 	*i = CatalogItemInfo{
 		XMLName:                  start.Name,
-		PTZTypeList:              strings.TrimSpace(value.PTZType),
 		PhotoelectricImagingType: strings.TrimSpace(value.PhotoelectricImagingType),
 		CapturePositionType:      strings.TrimSpace(value.CapturePositionType),
-		RoomType:                 value.RoomType,
-		SupplyLightType:          value.SupplyLightType,
-		DirectionType:            value.DirectionType,
 		Resolution:               value.Resolution,
 		StreamNumberList:         strings.TrimSpace(value.StreamNumberList),
 		DownloadSpeed:            strings.TrimSpace(value.DownloadSpeed),
 		SVCSpaceSupportMode:      value.SVCSpaceSupportMode,
 		SVCTimeSupportMode:       value.SVCTimeSupportMode,
 		SSVCRatioSupportList:     strings.TrimSpace(value.SSVCRatioSupportList),
-		MobileDeviceType:         value.MobileDeviceType,
-		HorizontalFieldAngle:     value.HorizontalFieldAngle,
-		VerticalFieldAngle:       value.VerticalFieldAngle,
 		MaxViewDistance:          value.MaxViewDistance,
 		GrassrootsCode:           strings.TrimSpace(value.GrassrootsCode),
-		PointType:                value.PointType,
-		PointCommonName:          strings.TrimSpace(value.PointCommonName),
+		PointCommonName:          value.PointCommonName,
 		MAC:                      strings.TrimSpace(value.MAC),
 		FunctionType:             strings.TrimSpace(value.FunctionType),
 		EncodeType:               strings.TrimSpace(value.EncodeType),
-		InstallTime:              strings.TrimSpace(value.InstallTime),
-		ManagementUnit:           strings.TrimSpace(value.ManagementUnit),
-		ContactInfo:              strings.TrimSpace(value.ContactInfo),
-		RecordSaveDays:           value.RecordSaveDays,
+		ManagementUnit:           value.ManagementUnit,
 		IndustrialClassification: strings.TrimSpace(value.IndustrialClassification),
 		RawXML:                   value.RawXML,
+	}
+	if value.PTZType != nil {
+		i.PTZTypeList, i.hasPTZType = strings.TrimSpace(*value.PTZType), true
 	}
 	if value.PositionType != nil {
 		i.PositionType, i.hasPositionType = *value.PositionType, true
 	}
+	if value.RoomType != nil {
+		i.RoomType, i.hasRoomType = *value.RoomType, true
+	}
 	if value.UseType != nil {
 		i.UseType, i.hasUseType = *value.UseType, true
 	}
+	if value.SupplyLightType != nil {
+		i.SupplyLightType, i.hasSupplyLightType = *value.SupplyLightType, true
+	}
+	if value.DirectionType != nil {
+		i.DirectionType, i.hasDirectionType = *value.DirectionType, true
+	}
 	if value.BusinessGroupID != nil {
 		i.BusinessGroupID, i.hasBusinessGroupID = *value.BusinessGroupID, true
+	}
+	if value.MobileDeviceType != nil {
+		i.MobileDeviceType, i.hasMobileDeviceType = *value.MobileDeviceType, true
+	}
+	if value.HorizontalFieldAngle != nil {
+		i.HorizontalFieldAngle, i.hasHorizontalFieldAngle = *value.HorizontalFieldAngle, true
+	}
+	if value.VerticalFieldAngle != nil {
+		i.VerticalFieldAngle, i.hasVerticalFieldAngle = *value.VerticalFieldAngle, true
+	}
+	if value.PointType != nil {
+		i.PointType, i.hasPointType = *value.PointType, true
+	}
+	if value.InstallTime != nil {
+		i.InstallTime, i.hasInstallTime = strings.TrimSpace(*value.InstallTime), true
+	}
+	if value.ContactInfo != nil {
+		i.ContactInfo, i.hasContactInfo = *value.ContactInfo, true
+	}
+	if value.RecordSaveDays != nil {
+		i.RecordSaveDays, i.hasRecordSaveDays = *value.RecordSaveDays, true
 	}
 	if i.PTZTypeList == "" {
 		return nil
@@ -821,11 +1027,12 @@ func parserDevicesFromReqeust(req *sip.Request) (Devices, bool) {
 }
 
 var deviceStatusMap = map[string]string{
-	"ON":     m.DeviceStatusON,
-	"OK":     m.DeviceStatusON,
-	"ONLINE": m.DeviceStatusON,
-	"OFFILE": m.DeviceStatusOFF,
-	"OFF":    m.DeviceStatusOFF,
+	"ON":      m.DeviceStatusON,
+	"OK":      m.DeviceStatusON,
+	"ONLINE":  m.DeviceStatusON,
+	"OFFLINE": m.DeviceStatusOFF,
+	"OFFILE":  m.DeviceStatusOFF,
+	"OFF":     m.DeviceStatusOFF,
 }
 
 func transDeviceStatus(status string) string {

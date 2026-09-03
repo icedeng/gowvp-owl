@@ -3,6 +3,7 @@ package gbs
 import (
 	"context"
 	"encoding/xml"
+	"fmt"
 	"strings"
 
 	"github.com/gowvp/owl/internal/core/ipc"
@@ -13,58 +14,103 @@ import (
 // QueryDeviceInfo 设备信息查询请求
 // GB/T28181 81 页 A.2.4.4
 func (g *GB28181API) QueryDeviceInfo(ctx *sip.Context) {
-	tx, err := ctx.SendRequest(sip.MethodMessage, sip.GetDeviceInfoXML(ctx.DeviceID))
-	if err != nil {
+	if g == nil || g.svr == nil || ctx == nil {
+		return
+	}
+	requestCtx := monitorUserIdentityContextWithParent(g.serviceContext(), ctx)
+	if err := g.QueryDeviceInfoContext(requestCtx, ctx.DeviceID); err != nil {
 		ctx.Log.Error("sipDeviceInfo", "err", err)
-		return
 	}
-	if _, err := sipResponse(tx); err != nil {
-		ctx.Log.Error("sipResponse", "err", err)
-		return
+}
+
+func (g *GB28181API) QueryDeviceInfoContext(ctx context.Context, deviceID string) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if g == nil || g.svr == nil {
+		return fmt.Errorf("GB28181 service is unavailable")
+	}
+	target := g.svr.dialogTarget(deviceID, "")
+	if target == nil {
+		return ErrDeviceNotExist
+	}
+	sn, cancelExpectation := g.reserveAutomaticQueryResponse(deviceID, "DeviceInfo", deviceID)
+	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, deviceID, deviceID)
+	defer releaseOperation()
+	requestCtx := operation.Context(ctx)
+	tx, err := g.svr.wrapRequestContext(requestCtx, target, sip.MethodMessage, &sip.ContentTypeXML, sip.GetDeviceInfoXMLWithSN(deviceID, sn))
+	if err != nil {
+		cancelExpectation()
+		return operation.ErrorOr(err)
+	}
+	if _, err := sipResponseContext(requestCtx, tx); err != nil {
+		cancelExpectation()
+		return operation.ErrorOr(err)
+	}
+	return nil
 }
 
 // MessageDeviceInfoResponse 设备信息查询应答结构
 type MessageDeviceInfoResponse struct {
-	XMLName       xml.Name
-	CmdType       string `xml:"CmdType"`
-	SN            int    `xml:"SN"`
-	DeviceID      string `xml:"DeviceID"`   // 目标设备的编码(必选)
-	DeviceName    string `xml:"DeviceName"` // 目标设备的名称(2014+ 可选)
-	HasDeviceName bool   `xml:"-"`
-	Manufacturer  string `xml:"Manufacturer"` // 设备生产商(可选)
-	Model         string `xml:"Model"`        // 设备型号(可选)
-	Firmware      string `xml:"Firmware"`     // 设备固件版本(可选)
-	Result        string `xml:"Result"`       // 査询结果(必选)
-	Channel       *int   `xml:"Channel"`      // 视频输入通道数(可选)
-	MaxCamera     *int   `xml:"MaxCamera"`    // 标准示例兼容字段
-	MaxAlarm      *int   `xml:"MaxAlarm"`     // 标准示例兼容字段
+	XMLName         xml.Name
+	CmdType         string             `xml:"CmdType"`
+	SN              int                `xml:"SN"`
+	DeviceID        string             `xml:"DeviceID"`   // 目标设备的编码(必选)
+	DeviceName      string             `xml:"DeviceName"` // 目标设备的名称(2014+ 可选)
+	HasDeviceName   bool               `xml:"-"`
+	Manufacturer    string             `xml:"Manufacturer"` // 设备生产商(可选)
+	HasManufacturer bool               `xml:"-"`
+	Model           string             `xml:"Model"` // 设备型号(可选)
+	HasModel        bool               `xml:"-"`
+	Firmware        string             `xml:"Firmware"` // 设备固件版本(可选)
+	HasFirmware     bool               `xml:"-"`
+	Result          string             `xml:"Result"`    // 査询结果(必选)
+	Channel         *int               `xml:"Channel"`   // 视频输入通道数(可选)
+	MaxCamera       *int               `xml:"MaxCamera"` // 标准示例兼容字段
+	MaxAlarm        *int               `xml:"MaxAlarm"`  // 标准示例兼容字段
+	Info            []versionedInfoXML `xml:"Info"`
+	ExtraInfo       []string           `xml:"ExtraInfo"`
 }
 
 func (m *MessageDeviceInfoResponse) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
 	var value struct {
-		CmdType      string  `xml:"CmdType"`
-		SN           int     `xml:"SN"`
-		DeviceID     string  `xml:"DeviceID"`
-		DeviceName   *string `xml:"DeviceName"`
-		Manufacturer string  `xml:"Manufacturer"`
-		Model        string  `xml:"Model"`
-		Firmware     string  `xml:"Firmware"`
-		Result       string  `xml:"Result"`
-		Channel      *int    `xml:"Channel"`
-		MaxCamera    *int    `xml:"MaxCamera"`
-		MaxAlarm     *int    `xml:"MaxAlarm"`
+		CmdType      string             `xml:"CmdType"`
+		SN           int                `xml:"SN"`
+		DeviceID     string             `xml:"DeviceID"`
+		DeviceName   *string            `xml:"DeviceName"`
+		Manufacturer *string            `xml:"Manufacturer"`
+		Model        *string            `xml:"Model"`
+		Firmware     *string            `xml:"Firmware"`
+		Result       string             `xml:"Result"`
+		Channel      *int               `xml:"Channel"`
+		MaxCamera    *int               `xml:"MaxCamera"`
+		MaxAlarm     *int               `xml:"MaxAlarm"`
+		Info         []versionedInfoXML `xml:"Info"`
+		ExtraInfo    []string           `xml:"ExtraInfo"`
 	}
 	if err := decoder.DecodeElement(&value, &start); err != nil {
 		return err
 	}
 	*m = MessageDeviceInfoResponse{
 		XMLName: start.Name, CmdType: value.CmdType, SN: value.SN, DeviceID: value.DeviceID,
-		Manufacturer: value.Manufacturer, Model: value.Model, Firmware: value.Firmware, Result: value.Result,
+		Result:  value.Result,
 		Channel: value.Channel, MaxCamera: value.MaxCamera, MaxAlarm: value.MaxAlarm,
+		Info: value.Info, ExtraInfo: value.ExtraInfo,
 	}
 	if value.DeviceName != nil {
 		m.DeviceName, m.HasDeviceName = *value.DeviceName, true
+	}
+	if value.Manufacturer != nil {
+		m.Manufacturer, m.HasManufacturer = *value.Manufacturer, true
+	}
+	if value.Model != nil {
+		m.Model, m.HasModel = *value.Model, true
+	}
+	if value.Firmware != nil {
+		m.Firmware, m.HasFirmware = *value.Firmware, true
 	}
 	return nil
 }
@@ -94,8 +140,16 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 		return
 	}
 	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
+	if err := validateDeviceInfoResponseStructure(ctx.Request.Body(), version); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 	if msg.HasDeviceName && !version.AtLeast(GBVersion11) {
 		ctx.String(400, "DeviceInfo DeviceName requires protocol 1.1")
+		return
+	}
+	if err := validateVersionedInfo(version, "DeviceInfo", msg.Info, msg.ExtraInfo); err != nil {
+		ctx.String(400, err.Error())
 		return
 	}
 	for _, count := range []*int{msg.Channel, msg.MaxCamera, msg.MaxAlarm} {
@@ -109,16 +163,26 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 		ctx.String(400, err.Error())
 		return
 	}
+	if _, ok := g.pendingDeviceQueryExpectedTarget(ctx.DeviceID, msg.CmdType, msg.SN); !ok {
+		ctx.Log.Warn("ignore unassociated DeviceInfo response", "sn", msg.SN, "target_id", msg.DeviceID)
+		ctx.String(200, "OK")
+		return
+	}
 	isChannelResponse := msg.DeviceID != ctx.DeviceID
 
 	// 为什么: Result 非 OK 代表设备端查询失败，可选字段可能为空或旧值，不应覆盖数据库，避免清空已有厂商/型号等信息。
 	if !strings.EqualFold(msg.Result, "OK") {
 		ctx.Log.Warn("sipMessageDeviceInfo result not ok", "result", msg.Result, "sn", msg.SN)
-		stateDeviceID := firstNonEmpty(msg.DeviceID, ctx.DeviceID)
-		decoded := g.decodeAndStoreQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body(), extended)
-		g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
-		ctx.String(200, "OK")
-		g.persistDecodedQuery(stateDeviceID, msg.CmdType, decoded)
+		if err := ctx.RespondString(200, "OK"); err != nil {
+			ctx.Log.Error("respond DeviceInfo", "err", err, "sn", msg.SN, "target_id", msg.DeviceID)
+			return
+		}
+		unlockCommit, err := g.lockAdmittedInboundDeviceStateCommit(ctx)
+		if err != nil {
+			return
+		}
+		defer unlockCommit()
+		g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decodedDeviceQuery{})
 		return
 	}
 
@@ -130,18 +194,18 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 		}
 		persist = func() error {
 			var channel ipc.Channel
-			return g.core.Store().Channel().Update(context.Background(), &channel, func(item *ipc.Channel) error {
-				if msg.DeviceName != "" {
+			return g.core.Store().Channel().Update(g.serviceContext(), &channel, func(item *ipc.Channel) error {
+				if msg.HasDeviceName {
 					item.Name = msg.DeviceName
 					item.Ext.Name = msg.DeviceName
 				}
-				if msg.Firmware != "" {
+				if msg.HasFirmware {
 					item.Ext.Firmware = msg.Firmware
 				}
-				if msg.Manufacturer != "" {
+				if msg.HasManufacturer {
 					item.Ext.Manufacturer = msg.Manufacturer
 				}
-				if msg.Model != "" {
+				if msg.HasModel {
 					item.Ext.Model = msg.Model
 				}
 				return nil
@@ -149,36 +213,44 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 		}
 	} else {
 		persist = func() error {
-			return g.core.Update(ctx.DeviceID, func(d *ipc.Device) {
-				// 为什么: 可选字段为空时不覆盖，避免把上一次成功拿到的信息抹成空串。
-				if msg.Firmware != "" {
+			return g.core.UpdateContext(g.serviceContext(), ctx.DeviceID, func(d *ipc.Device) {
+				// 可选字段缺省时保留旧值；显式空元素属于设备返回的新值，应允许清除旧元数据。
+				if msg.HasFirmware {
 					d.Ext.Firmware = msg.Firmware
 				}
-				if msg.Manufacturer != "" {
+				if msg.HasManufacturer {
 					d.Ext.Manufacturer = msg.Manufacturer
 				}
-				if msg.Model != "" {
+				if msg.HasModel {
 					d.Ext.Model = msg.Model
 				}
-				if msg.DeviceName != "" {
+				if msg.HasDeviceName {
 					d.Ext.Name = msg.DeviceName
 				}
-
-				d.Address = ctx.Source.String()
-				d.Transport = requestSignalingTransport(ctx)
 			})
 		}
 	}
 
 	// 命中通用查询等待队列（A.2.4 DeviceInfo 查询等待）。
 	stateDeviceID := firstNonEmpty(msg.DeviceID, ctx.DeviceID)
-	decoded := g.decodeAndStoreQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body(), extended)
+	decoded := g.decodeDeviceQueryResult(stateDeviceID, msg.CmdType, ctx.Request.Body(), extended)
+	if err := ctx.RespondString(200, "OK"); err != nil {
+		ctx.Log.Error("respond DeviceInfo", "err", err, "sn", msg.SN, "target_id", msg.DeviceID)
+		return
+	}
+	unlockCommit, err := g.lockAdmittedInboundDeviceStateCommit(ctx)
+	if err != nil {
+		return
+	}
+	defer unlockCommit()
+	g.commitDecodedQueryStateForOwnerLocked(ctx.DeviceID, stateDeviceID, msg.CmdType, decoded)
 	g.resolvePendingDeviceQueryResult(ctx.DeviceID, msg.CmdType, msg.SN, msg.Result, ctx.Request.Body(), msg.DeviceID, decoded)
-	ctx.String(200, "OK")
 	if err := persist(); err != nil {
 		ctx.Log.Error("persist DeviceInfo", "err", err, "target_id", msg.DeviceID)
 	}
-	g.persistDecodedQuery(stateDeviceID, msg.CmdType, decoded)
+	// 运行态按实际目标隔离；附录 A.4 持久化仍归属于已鉴权的父设备。
+	// 不能把通道编码当作设备表主键，否则扩展对象会静默丢失。
+	g.persistDecodedQuery(ctx.DeviceID, msg.CmdType, decoded)
 	// 9.11 事件源侧：设备信息变化通知。
 	g.publishEventNotify(msg.CmdType, ctx.DeviceID, ctx.Request.Body())
 }

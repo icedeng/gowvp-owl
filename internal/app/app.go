@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,7 +54,9 @@ func Run(bc *conf.Bootstrap) {
 	// 每次启动生成进程内随机 UUID，用于 Python AI 回调鉴权
 	bc.AISecret = uuid.New().String()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	ctx, cancel := context.WithCancel(signalCtx)
 	defer cancel()
 
 	// 以可执行文件所在目录为工作目录，防止以服务方式运行时，工作目录切换到其它位置
@@ -82,8 +85,12 @@ func Run(bc *conf.Bootstrap) {
 	versionapi.DBVersion = "0.0.28"
 	versionapi.DBRemark = "gb28181 device heartbeat and register history"
 
-	handler, cleanUp, err := wireApp(bc, log)
+	handler, cleanUp, err := wireApp(ctx, bc, log)
 	if err != nil {
+		if errors.Is(err, context.Canceled) && signalCtx.Err() != nil {
+			slog.Info("程序构建已取消")
+			return
+		}
 		slog.Error("程序构建失败", "err", err)
 		panic(err)
 	}
@@ -95,13 +102,11 @@ func Run(bc *conf.Bootstrap) {
 		server.WriteTimeout(bc.Server.HTTP.Timeout.Duration()),
 	)
 	go svc.Start()
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
 	fmt.Println("服务启动成功 port:", bc.Server.HTTP.Port)
 
 	select {
-	case s := <-interrupt:
-		slog.Info(`<-interrupt`, "signal", s.String())
+	case <-signalCtx.Done():
+		slog.Info("shutdown signal received")
 	case err := <-svc.Notify():
 		system.ErrPrintf("err: %s\n", err.Error())
 		slog.Error(`<-server.Notify()`, "err", err)

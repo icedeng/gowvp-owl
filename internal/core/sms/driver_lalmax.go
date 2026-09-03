@@ -28,12 +28,13 @@ type LalmaxDriver struct {
 func (l *LalmaxDriver) GetStreamLiveAddr(ctx context.Context, ms *MediaServer, httpPrefix string, host string, app string, stream string, token string) StreamLiveAddr {
 	var out StreamLiveAddr
 	out.Label = "StreamSVR"
+	mediaRoute := MediaServerProxyRoute(ms.ID)
 	wsPrefix := strings.Replace(strings.Replace(httpPrefix, "https", "wss", 1), "http", "ws", 1)
-	out.WSFLV = fmt.Sprintf("%s/proxy/sms/%s.flv?token=%s", wsPrefix, stream, token)
-	out.FLV = fmt.Sprintf("%s/proxy/sms/%s.flv?token=%s", httpPrefix, stream, token)
-	out.HLS = fmt.Sprintf("%s/proxy/sms/%s/hls.fmp4.m3u8?token=%s", httpPrefix, stream, token)
+	out.WSFLV = fmt.Sprintf("%s/proxy/sms/%s/%s.flv?token=%s", wsPrefix, mediaRoute, stream, token)
+	out.FLV = fmt.Sprintf("%s/proxy/sms/%s/%s.flv?token=%s", httpPrefix, mediaRoute, stream, token)
+	out.HLS = fmt.Sprintf("%s/proxy/sms/%s/%s/hls.fmp4.m3u8?token=%s", httpPrefix, mediaRoute, stream, token)
 	rtcPrefix := strings.Replace(strings.Replace(httpPrefix, "https", "webrtc", 1), "http", "webrtc", 1)
-	out.WebRTC = fmt.Sprintf("%s/proxy/sms/index/api/webrtc?app=%s&stream=%s&type=play&token=%s", rtcPrefix, app, stream, token)
+	out.WebRTC = fmt.Sprintf("%s/proxy/sms/%s/index/api/webrtc?app=%s&stream=%s&type=play&token=%s", rtcPrefix, mediaRoute, app, stream, token)
 	out.RTMP = fmt.Sprintf("rtmp://%s:%d/%s", host, ms.Ports.RTMP, stream)
 	out.RTSP = fmt.Sprintf("rtsp://%s:%d/%s", host, ms.Ports.RTSP, stream)
 	return out
@@ -91,13 +92,23 @@ func buildLalmaxMediaTracks(group *lalmax.StatGroup) []zlm.MediaTrack {
 		tracks = append(tracks, zlm.MediaTrack{CodecID: codecID, CodecIDName: codec, CodecType: 0, Ready: true, FPS: fps, Width: group.VideoWidth, Height: group.VideoHeight})
 	}
 	if codec := strings.ToUpper(strings.TrimSpace(group.AudioCodec)); codec != "" {
-		codecID := 2
+		codecID := -1
 		sampleRate := 0
 		switch codec {
+		case "AAC", "MPEG4-GENERIC":
+			codecID = 2
 		case "G711A", "PCMA":
 			codecID, sampleRate = 3, 8000
 		case "G711U", "PCMU":
 			codecID, sampleRate = 4, 8000
+		case "SVAC", "SVACA":
+			codecID, sampleRate = 17, 8000
+		case "G722", "G.722", "G722.1", "G.722.1":
+			codecID, sampleRate = 18, 16000
+		case "G723", "G.723", "G723.1", "G.723.1":
+			codecID, sampleRate = 19, 8000
+		case "G729", "G.729":
+			codecID, sampleRate = 21, 8000
 		}
 		tracks = append(tracks, zlm.MediaTrack{CodecID: codecID, CodecIDName: codec, CodecType: 1, Ready: true, Channels: 1, SampleRate: sampleRate})
 	}
@@ -144,7 +155,10 @@ func (l *LalmaxDriver) CloseRTPServer(ctx context.Context, ms *MediaServer, req 
 	return &zlm.CloseRTPServerResponse{Code: 0, Hit: 1}, nil
 }
 
-func (l *LalmaxDriver) StartSendRTP(context.Context, *MediaServer, *zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error) {
+func (l *LalmaxDriver) StartSendRTP(_ context.Context, _ *MediaServer, req *zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error) {
+	if req != nil && req.TCPRTCP {
+		return nil, fmt.Errorf("lalmax: RTP/RTCP over RFC 4571 TCP is not supported")
+	}
 	return nil, fmt.Errorf("lalmax 暂不支持 RTP 发送")
 }
 
@@ -222,6 +236,15 @@ func (l *LalmaxDriver) GetSnapshot(ctx context.Context, ms *MediaServer, req *Ge
 
 // OpenRTPServer implements Driver.
 func (l *LalmaxDriver) OpenRTPServer(ctx context.Context, ms *MediaServer, req *zlm.OpenRTPServerRequest) (*zlm.OpenRTPServerResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("lalmax: open RTP server request is required")
+	}
+	if req.TCPMode == 2 {
+		return nil, fmt.Errorf("lalmax: active TCP RTP receiving is not supported")
+	}
+	if req.TCPRTCP {
+		return nil, fmt.Errorf("lalmax: RTP/RTCP over RFC 4571 TCP is not supported")
+	}
 	engine := l.withConfig(ms)
 
 	resp, err := engine.ApiCtrlStartRtpPub(ctx, lalmax.ApiCtrlStartRtpPubReq{
@@ -239,6 +262,10 @@ func (l *LalmaxDriver) OpenRTPServer(ctx context.Context, ms *MediaServer, req *
 	return &zlm.OpenRTPServerResponse{
 		Port: resp.Data.Port,
 	}, nil
+}
+
+func (l *LalmaxDriver) ConnectRTPServer(context.Context, *MediaServer, *zlm.ConnectRTPServerRequest) (*zlm.ConnectRTPServerResponse, error) {
+	return nil, fmt.Errorf("lalmax: active TCP RTP receiving is not supported")
 }
 
 // Ping implements Driver.

@@ -3,9 +3,12 @@ package conf
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
 type Bootstrap struct {
@@ -125,18 +128,167 @@ type SIP struct {
 
 	StrictSourceCheck       bool                       `comment:"是否校验设备上报源IP与注册源IP一致" json:"strict_source_check"`
 	RequireMessageAuth      bool                       `comment:"是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权" json:"require_message_auth"`
-	PTZWeakConfirm          bool                       `comment:"是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理" json:"ptz_weak_confirm"`
+	PTZWeakConfirm          bool                       `comment:"是否启用级联有应答控制弱确认；下级已返回 SIP 成功但未返回 DeviceControl 业务应答时按成功处理" json:"ptz_weak_confirm"`
 	RegisterRedirect        string                     `comment:"GB/T 28181-2022 注册重定向目标 SIP URI；为空表示不重定向" json:"register_redirect,omitempty"`
-	RegisterCertificateAuth SIPRegisterCertificateAuth `comment:"GB/T 28181-2016 Capability/Asymmetric 数字证书 REGISTER 认证" json:"register_certificate_auth"`
+	RegisterCertificateAuth SIPRegisterCertificateAuth `comment:"GB/T 28181-2011/2014/2016 Capability/Asymmetric 数字证书 REGISTER 认证" json:"register_certificate_auth"`
 	SignalDigest            SIPSignalDigest            `comment:"GB/T 28181 Date+Note 信令数字摘要" json:"signal_digest"`
 	DeviceHistory           DeviceHistoryConfig        `comment:"设备心跳与注册历史保留策略" json:"device_history"`
 	DirectTCPDownload       SIPDirectTCPDownload       `comment:"GB/T 28181-2014 附录 O 裸 TCP 文件下载" json:"direct_tcp_download"`
+	AnnexG                  SIPAnnexG                  `comment:"GB/T 28181-2011/2016 附录 G 外部系统接入；默认关闭" json:"annex_g"`
+	AlarmReceivers          []SIPAlarmReceiver         `comment:"GB/T 28181 9.4 本域已注册接警 SIP 客户端；默认关闭" json:"alarm_receivers,omitempty"`
 	Upstreams               []SIPUpstream              `comment:"上下级平台级联：本平台作为下级注册到上级平台" json:"upstreams,omitempty"`
 	Log                     SIPLog                     `json:"log"`
 }
 
-// SIPRegisterCertificateAuth 控制 GB/T 28181-2016 9.1.2.2 定义的
-// Capability/Asymmetric 数字证书双向 REGISTER 认证。该证书用途独立于 SIP-TLS。
+// SIPAlarmReceiver 描述一个由本平台受理 REGISTER、可接收 9.4 报警分发的 SIP 客户端。
+type SIPAlarmReceiver struct {
+	Name      string   `json:"name" comment:"接警终端配置名称，必须唯一"`
+	Enabled   bool     `json:"enabled" comment:"是否启用报警分发；默认关闭"`
+	DeviceID  string   `json:"device_id" comment:"接警终端已注册的 20 位国标编码"`
+	SourceIDs []string `json:"source_ids,omitempty" comment:"允许分发给该终端的报警设备、通道或 10 位中心编码；空列表不分发"`
+}
+
+// SIPAnnexG 控制规范性附录 G 的外部综合接处警、卡口和城市信息系统接入。
+// Owl 当前只作为管理平台；外部系统必须使用静态身份、来源网段和 Digest 密码。
+type SIPAnnexG struct {
+	Enabled        bool              `comment:"是否启用附录 G 外部系统 SIP MESSAGE 接入" json:"enabled"`
+	MaxSendRecords int               `comment:"单次查询响应最多发送记录数；0 使用默认值 100" json:"max_send_records"`
+	InboundRate    int               `comment:"每个外部系统每秒允许的入向 MESSAGE 数；0 使用默认值 50" json:"inbound_rate"`
+	InboundBurst   int               `comment:"每个外部系统允许的入向 MESSAGE 突发数；0 使用默认值 100" json:"inbound_burst"`
+	PendingTTL     Duration          `comment:"主动交换在途关联保留时间；0 使用默认值 24h" json:"pending_ttl"`
+	MaxPending     int               `comment:"主动交换最大在途数量；0 使用默认值 4096" json:"max_pending"`
+	Systems        []SIPAnnexGSystem `comment:"允许接入的外部系统档案" json:"systems"`
+}
+
+// SIPAnnexGSystem 是一个已授权附录 G 外部系统档案。
+type SIPAnnexGSystem struct {
+	ID                     string   `comment:"外部系统 20 位国标编码" json:"id"`
+	Role                   string   `comment:"emergency_command_system、tollgate_system 或 city_information_system" json:"role"`
+	Version                string   `comment:"1.0、1.1 或 2.0；2022 已删除附录 G" json:"version"`
+	Password               string   `comment:"MESSAGE Digest 共享密码" json:"password"`
+	SignalDigestSeed       string   `comment:"与该外部系统约定的 Date+Note 摘要 seed；为空时使用 Password 或 Sip.SignalDigest.Seed" json:"signal_digest_seed,omitempty"`
+	Realm                  string   `comment:"外部系统 Digest realm；为空时取外部系统 ID 前 10 位" json:"realm"`
+	Address                string   `comment:"平台主动请求使用的外部系统 host:port" json:"address"`
+	Transport              string   `comment:"平台主动请求传输：udp、tcp 或 tls；为空默认 tls" json:"transport"`
+	SourceCIDRs            []string `comment:"允许的来源 IP 或 CIDR，至少一项" json:"source_cidrs"`
+	AllowInsecureTransport bool     `comment:"是否显式允许 UDP/TCP 明文；默认只允许 SIP-TLS" json:"allow_insecure_transport"`
+	TLSCA                  string   `comment:"校验外部系统 SIP-TLS 证书的 CA 文件；为空使用系统 CA" json:"tls_ca,omitempty"`
+	TLSCRL                 string   `comment:"外部系统 SIP-TLS 证书撤销列表；配置时必须同时设置 TLSCA" json:"tls_crl,omitempty"`
+	TLSServerName          string   `comment:"外部系统 SIP-TLS 证书服务端名称；为空使用 address 主机" json:"tls_server_name,omitempty"`
+	TLSCert                string   `comment:"可选 SIP-TLS 客户端证书" json:"tls_cert,omitempty"`
+	TLSKey                 string   `comment:"可选 SIP-TLS 客户端私钥" json:"tls_key,omitempty"`
+}
+
+// ValidateSIPAnnexGConfig 校验附录 G 静态外部系统配置。
+func ValidateSIPAnnexGConfig(config SIPAnnexG, localID string, tlsEnabled bool) error {
+	if !config.Enabled {
+		return nil
+	}
+	if config.MaxSendRecords < 0 || config.MaxSendRecords > 10000 {
+		return fmt.Errorf("附录 G 单次查询记录数应在 0–10000 之间")
+	}
+	if config.InboundRate < 0 || config.InboundRate > 10000 {
+		return fmt.Errorf("附录 G 每系统入向速率应在 0–10000 次/秒之间")
+	}
+	if config.InboundBurst < 0 || config.InboundBurst > 10000 {
+		return fmt.Errorf("附录 G 每系统入向突发量应在 0–10000 之间")
+	}
+	if pendingTTL := config.PendingTTL.Duration(); pendingTTL != 0 && (pendingTTL < time.Minute || pendingTTL > 7*24*time.Hour) {
+		return fmt.Errorf("附录 G 在途关联保留时间应为 1m–168h，0 使用默认值")
+	}
+	if config.MaxPending < 0 || config.MaxPending > 10000 {
+		return fmt.Errorf("附录 G 最大在途数量应在 0–10000 之间")
+	}
+	if len(config.Systems) == 0 {
+		return fmt.Errorf("启用附录 G 时至少配置一个外部系统")
+	}
+	seen := make(map[string]struct{}, len(config.Systems))
+	for index, system := range config.Systems {
+		prefix := fmt.Sprintf("附录 G 外部系统[%d]", index)
+		id := strings.TrimSpace(system.ID)
+		if !isDigitCode(id, 20) {
+			return fmt.Errorf("%s ID 必须是 20 位数字", prefix)
+		}
+		if id == strings.TrimSpace(localID) {
+			return fmt.Errorf("%s ID 不能与本平台相同", prefix)
+		}
+		if _, exists := seen[id]; exists {
+			return fmt.Errorf("%s ID 重复", prefix)
+		}
+		seen[id] = struct{}{}
+		switch strings.TrimSpace(system.Role) {
+		case "emergency_command_system", "tollgate_system", "city_information_system":
+		default:
+			return fmt.Errorf("%s role 不受支持", prefix)
+		}
+		switch strings.TrimSpace(system.Version) {
+		case "1.0", "1.1", "2.0", "2011", "2014", "2016", "2011-supplement-2014":
+		case "3.0", "2022":
+			return fmt.Errorf("%s 使用的 GB/T 28181-2022 已删除附录 G", prefix)
+		default:
+			return fmt.Errorf("%s version 不受支持", prefix)
+		}
+		password := system.Password
+		if password == "" || password == "#" || len(password) > 128 || strings.ContainsAny(password, "\r\n") {
+			return fmt.Errorf("%s password 必须为 1–128 字节、不能使用免鉴权占位符且不能包含换行", prefix)
+		}
+		signalDigestSeed := system.SignalDigestSeed
+		if len(signalDigestSeed) > 128 || strings.ContainsAny(signalDigestSeed, "\r\n") {
+			return fmt.Errorf("%s signal_digest_seed 最多 128 字节且不能包含换行", prefix)
+		}
+		if len(system.SourceCIDRs) == 0 {
+			return fmt.Errorf("%s 至少配置一个来源 IP 或 CIDR", prefix)
+		}
+		for _, source := range system.SourceCIDRs {
+			source = strings.TrimSpace(source)
+			if net.ParseIP(source) != nil {
+				continue
+			}
+			if _, _, err := net.ParseCIDR(source); err != nil {
+				return fmt.Errorf("%s 来源 %q 不是有效 IP 或 CIDR", prefix, source)
+			}
+		}
+		realm := strings.TrimSpace(system.Realm)
+		if realm == "" {
+			realm = id[:10]
+		}
+		if !isDigitCode(realm, 10) {
+			return fmt.Errorf("%s realm 必须是 10 位数字", prefix)
+		}
+		host, portText, err := net.SplitHostPort(strings.TrimSpace(system.Address))
+		if err != nil || strings.TrimSpace(host) == "" {
+			return fmt.Errorf("%s address 必须是有效的 host:port", prefix)
+		}
+		port, err := strconv.Atoi(portText)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("%s address 端口应在 1–65535 之间", prefix)
+		}
+		transport := strings.ToLower(strings.TrimSpace(system.Transport))
+		if transport == "" {
+			transport = "tls"
+		}
+		if transport != "udp" && transport != "tcp" && transport != "tls" {
+			return fmt.Errorf("%s transport 只支持 udp、tcp 或 tls", prefix)
+		}
+		if transport != "tls" && !system.AllowInsecureTransport {
+			return fmt.Errorf("%s 使用明文 transport 时必须显式允许明文传输", prefix)
+		}
+		if (strings.TrimSpace(system.TLSCert) == "") != (strings.TrimSpace(system.TLSKey) == "") {
+			return fmt.Errorf("%s SIP-TLS 客户端证书和私钥必须同时配置", prefix)
+		}
+		if strings.TrimSpace(system.TLSCRL) != "" && strings.TrimSpace(system.TLSCA) == "" {
+			return fmt.Errorf("%s 配置 SIP-TLS 证书撤销列表时必须同时配置 TLS CA", prefix)
+		}
+		if !system.AllowInsecureTransport && !tlsEnabled {
+			return fmt.Errorf("%s 默认要求 SIP-TLS；请启用 SIP TLS 或显式允许明文传输", prefix)
+		}
+	}
+	return nil
+}
+
+// SIPRegisterCertificateAuth 控制 GB/T 28181-2011 9.1.2.2/J.2 定义、
+// 2014 修改补充文件继续沿用且 2016 保留的 Capability/Asymmetric 数字证书双向 REGISTER 认证。
+// 该证书用途独立于 SIP-TLS。
 type SIPRegisterCertificateAuth struct {
 	Enabled            bool              `comment:"是否接受 Capability/Asymmetric REGISTER 认证" json:"enabled"`
 	Required           bool              `comment:"是否强制所有设备使用数字证书 REGISTER 认证；设置后隐式启用" json:"required"`
@@ -206,6 +358,7 @@ type SIPUpstream struct {
 	Version                 string                             `json:"version" comment:"级联档案版本：1.0/1.1/2.0/3.0"`
 	Expires                 int                                `json:"expires" comment:"注册有效期秒数"`
 	KeepaliveInterval       Duration                           `json:"keepalive_interval" comment:"心跳间隔"`
+	AlarmDispatchEnabled    bool                               `json:"alarm_dispatch_enabled" comment:"是否按 GB/T 28181 9.4 向该上级分发共享通道报警；默认关闭"`
 	SharedChannels          []string                           `json:"shared_channels,omitempty" comment:"共享给该上级的本地国标通道编码；空列表表示不共享"`
 	ChannelIDMap            map[string]string                  `json:"channel_id_map,omitempty" comment:"本地通道编码到上级可见国标编码的映射"`
 	MediaAllowedCIDRs       []string                           `json:"media_allowed_cidrs,omitempty" comment:"除上级信令 IP 外允许接收级联媒体的 IP/CIDR 白名单"`
@@ -345,7 +498,7 @@ func isGBUserCode(value string) bool {
 }
 
 // SIPUpstreamRegisterCertificateAuth 控制本平台作为 SIP UA 向上级注册时使用的
-// GB/T 28181-2016 Capability/Asymmetric 数字证书双向认证。
+// GB/T 28181-2011/2014/2016 Capability/Asymmetric 数字证书双向认证。
 type SIPUpstreamRegisterCertificateAuth struct {
 	Enabled    bool   `json:"enabled" comment:"是否向上级声明数字证书认证能力"`
 	Required   bool   `json:"required" comment:"是否拒绝 Digest 或无挑战成功造成的认证降级；设置后隐式启用"`
@@ -446,16 +599,142 @@ func ValidateSIPConfig(config SIP) error {
 			return fmt.Errorf("要求 SIP-TLS 客户端证书时必须配置客户端 CA 文件")
 		}
 	}
+	if err := ValidateSIPRegisterRedirect(config.RegisterRedirect, config.ID); err != nil {
+		return err
+	}
 	if config.DeviceHistory.MaxRecords < 0 || config.DeviceHistory.MaxRecords > 100000 {
 		return fmt.Errorf("设备历史最大记录数应在 0–100000 之间")
 	}
 	if config.DeviceHistory.MaxDays < 0 || config.DeviceHistory.MaxDays > 3650 {
 		return fmt.Errorf("设备历史保留天数应在 0–3650 之间")
 	}
+	if err := ValidateSIPDirectTCPDownloadConfig(config.DirectTCPDownload); err != nil {
+		return err
+	}
 	if err := ValidateRegisterCertificateAuthConfig(config.RegisterCertificateAuth); err != nil {
 		return err
 	}
+	if err := ValidateSIPAnnexGConfig(config.AnnexG, config.ID, config.EnableTLS); err != nil {
+		return err
+	}
+	if err := ValidateSIPAlarmReceivers(config.AlarmReceivers); err != nil {
+		return err
+	}
 	return ValidateSignalDigestConfig(config.SignalDigest)
+}
+
+// ValidateSIPRegisterRedirect 校验 GB/T 28181-2022 REGISTER 重定向 Contact。
+// 配置保存和 REGISTER 运行时复用同一 SIP URI 解析器，避免两套语法判断产生分歧。
+func ValidateSIPRegisterRedirect(value, platformID string) error {
+	raw := value
+	if strings.IndexFunc(raw, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return fmt.Errorf("REGISTER 重定向 URI 不能包含控制字符")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if strings.IndexFunc(value, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	}) >= 0 {
+		return fmt.Errorf("REGISTER 重定向 URI 不能包含空白字符")
+	}
+	uri, err := sip.ParseSipURI(value)
+	if err != nil {
+		return fmt.Errorf("REGISTER 重定向 URI 无效")
+	}
+	if uri.FPassword != nil {
+		return fmt.Errorf("REGISTER 重定向 URI 不能包含密码")
+	}
+	if user := uri.User(); user != nil && user.String() != "" {
+		if platformID = strings.TrimSpace(platformID); platformID != "" && user.String() != platformID {
+			return fmt.Errorf("REGISTER 重定向 URI 用户必须与 SIP 平台 ID 一致")
+		}
+	}
+	if strings.TrimSpace(uri.Host()) == "" {
+		return fmt.Errorf("REGISTER 重定向 URI host 不能为空")
+	}
+
+	transport := ""
+	if uri.FUriParams != nil {
+		if value, exists := uri.FUriParams.Get("transport"); exists {
+			if value == nil || strings.TrimSpace(value.String()) == "" {
+				return fmt.Errorf("REGISTER 重定向 URI transport 不能为空")
+			}
+			transport = strings.ToLower(strings.TrimSpace(value.String()))
+		}
+	}
+	if sipURIParameterCount(value, "transport") > 1 {
+		return fmt.Errorf("REGISTER 重定向 URI 不能重复配置 transport")
+	}
+	if transport != "" && transport != "udp" && transport != "tcp" && transport != "tls" {
+		return fmt.Errorf("REGISTER 重定向 URI transport 只支持 udp、tcp 或 tls")
+	}
+	if uri.FIsEncrypted && transport != "" && transport != "tls" {
+		return fmt.Errorf("REGISTER 重定向 SIPS URI 的 transport 必须为 tls")
+	}
+	return nil
+}
+
+func sipURIParameterCount(value, name string) int {
+	start := strings.IndexByte(value, ';')
+	if start < 0 {
+		return 0
+	}
+	params := value[start+1:]
+	if end := strings.IndexByte(params, '?'); end >= 0 {
+		params = params[:end]
+	}
+	count := 0
+	for _, param := range strings.Split(params, ";") {
+		key, _, _ := strings.Cut(param, "=")
+		if strings.EqualFold(strings.TrimSpace(key), name) {
+			count++
+		}
+	}
+	return count
+}
+
+// ValidateSIPAlarmReceivers 校验本域接警终端及其最小授权范围。
+func ValidateSIPAlarmReceivers(receivers []SIPAlarmReceiver) error {
+	names := make(map[string]struct{}, len(receivers))
+	targets := make(map[string]struct{}, len(receivers))
+	for index, receiver := range receivers {
+		if !receiver.Enabled {
+			continue
+		}
+		name := strings.TrimSpace(receiver.Name)
+		if name == "" {
+			return fmt.Errorf("接警终端 %d 的名称不能为空", index+1)
+		}
+		if _, exists := names[name]; exists {
+			return fmt.Errorf("接警终端名称重复: %s", name)
+		}
+		names[name] = struct{}{}
+		deviceID := strings.TrimSpace(receiver.DeviceID)
+		if !isDigitCode(deviceID, 20) {
+			return fmt.Errorf("接警终端 %s 的 device_id 必须是 20 位数字", name)
+		}
+		if _, exists := targets[deviceID]; exists {
+			return fmt.Errorf("接警终端编码重复: %s", deviceID)
+		}
+		targets[deviceID] = struct{}{}
+		if len(receiver.SourceIDs) == 0 {
+			return fmt.Errorf("接警终端 %s 必须配置至少一个 source_ids", name)
+		}
+		sources := make(map[string]struct{}, len(receiver.SourceIDs))
+		for _, sourceID := range receiver.SourceIDs {
+			sourceID = strings.TrimSpace(sourceID)
+			if !isDigitCode(sourceID, 20) && !isDigitCode(sourceID, 10) {
+				return fmt.Errorf("接警终端 %s 的 source_id %q 必须是 10 位或 20 位数字", name, sourceID)
+			}
+			if _, exists := sources[sourceID]; exists {
+				return fmt.Errorf("接警终端 %s 的 source_id 重复: %s", name, sourceID)
+			}
+			sources[sourceID] = struct{}{}
+		}
+	}
+	return nil
 }
 
 func isDigitCode(value string, length int) bool {
@@ -479,10 +758,15 @@ type DeviceHistoryConfig struct {
 // 该能力默认关闭，并通过设备白名单显式启用，避免影响现有 RTP 下载链路。
 type SIPDirectTCPDownload struct {
 	Enabled              bool     `comment:"是否启用 2014 裸 TCP 文件下载" json:"enabled"`
+	CascadeRelayEnabled  bool     `comment:"是否启用 2014 上级平台裸 TCP 下载中继；独立于设备直连下载开关" json:"cascade_relay_enabled"`
 	DeviceAllowlist      []string `comment:"允许使用裸 TCP 下载的设备国标 ID 白名单" json:"device_allowlist"`
 	StorageDir           string   `comment:"下载文件存储根目录" json:"storage_dir"`
 	RetainDays           int      `comment:"完成文件保留天数" json:"retain_days"`
 	OfferPort            int      `comment:"INVITE SDP 中声明的接收端占位端口" json:"offer_port"`
+	RelayListenIP        string   `comment:"裸 TCP 级联中继监听 IP；可使用 0.0.0.0 或 ::" json:"relay_listen_ip"`
+	RelayAdvertiseIP     string   `comment:"裸 TCP 级联向上级 SDP 宣告的可达 IP；为空时使用 Media.SDPIP" json:"relay_advertise_ip"`
+	RelayPortStart       int      `comment:"裸 TCP 级联中继监听端口范围起点" json:"relay_port_start"`
+	RelayPortEnd         int      `comment:"裸 TCP 级联中继监听端口范围终点" json:"relay_port_end"`
 	MaxFileSize          int64    `comment:"单文件最大字节数" json:"max_file_size"`
 	GlobalConcurrency    int      `comment:"全局最大并发下载数" json:"global_concurrency"`
 	DeviceConcurrency    int      `comment:"单设备最大并发下载数" json:"device_concurrency"`
@@ -492,6 +776,98 @@ type SIPDirectTCPDownload struct {
 	TotalTimeout         Duration `comment:"单次下载总超时" json:"total_timeout"`
 	AllowAddressMismatch bool     `comment:"是否允许 SDP 地址与设备注册地址不一致" json:"allow_address_mismatch"`
 	AllowedAddressCIDRs  []string `comment:"地址不一致时允许连接的 CIDR 白名单" json:"allowed_address_cidrs"`
+}
+
+// ValidateSIPDirectTCPDownloadConfig 校验 2014 附录 O 裸 TCP 下载的资源和地址安全边界。
+// 关闭时允许保留旧版不完整配置；启用前必须提供完整且可执行的限制。
+func ValidateSIPDirectTCPDownloadConfig(config SIPDirectTCPDownload) error {
+	if !config.Enabled && !config.CascadeRelayEnabled {
+		return nil
+	}
+	if len(config.DeviceAllowlist) == 0 {
+		return fmt.Errorf("启用 2014 裸 TCP 下载时必须配置设备白名单")
+	}
+	devices := make(map[string]struct{}, len(config.DeviceAllowlist))
+	for _, value := range config.DeviceAllowlist {
+		deviceID := strings.TrimSpace(value)
+		if !isDigitCode(deviceID, 20) {
+			return fmt.Errorf("2014 裸 TCP 下载设备白名单必须使用 20 位国标编码")
+		}
+		if _, exists := devices[deviceID]; exists {
+			return fmt.Errorf("2014 裸 TCP 下载设备白名单编码重复: %s", deviceID)
+		}
+		devices[deviceID] = struct{}{}
+	}
+	if config.Enabled && strings.TrimSpace(config.StorageDir) == "" {
+		return fmt.Errorf("启用 2014 裸 TCP 下载时必须配置存储目录")
+	}
+	if config.Enabled && config.RetainDays <= 0 {
+		return fmt.Errorf("2014 裸 TCP 下载文件保留天数必须大于 0")
+	}
+	if config.OfferPort < 1 || config.OfferPort > 65535 {
+		return fmt.Errorf("2014 裸 TCP 下载 SDP 端口应在 1–65535 之间")
+	}
+	if config.CascadeRelayEnabled {
+		listenIP := net.ParseIP(strings.TrimSpace(config.RelayListenIP))
+		if listenIP == nil || listenIP.IsMulticast() {
+			return fmt.Errorf("2014 裸 TCP 级联中继监听地址必须是有效的非组播 IP")
+		}
+		if value := strings.TrimSpace(config.RelayAdvertiseIP); value != "" {
+			advertiseIP := net.ParseIP(value)
+			if advertiseIP == nil || advertiseIP.IsUnspecified() || advertiseIP.IsMulticast() {
+				return fmt.Errorf("2014 裸 TCP 级联中继宣告地址必须是有效的单播 IP")
+			}
+		}
+		if config.RelayPortStart < 1 || config.RelayPortStart > 65535 ||
+			config.RelayPortEnd < config.RelayPortStart || config.RelayPortEnd > 65535 {
+			return fmt.Errorf("2014 裸 TCP 级联中继端口范围应在 1–65535 之间且起点不大于终点")
+		}
+	}
+	if config.MaxFileSize <= 0 {
+		return fmt.Errorf("2014 裸 TCP 下载单文件上限必须大于 0")
+	}
+	if config.GlobalConcurrency <= 0 {
+		return fmt.Errorf("2014 裸 TCP 下载全局并发数必须大于 0")
+	}
+	if config.DeviceConcurrency <= 0 || config.DeviceConcurrency > config.GlobalConcurrency {
+		return fmt.Errorf("2014 裸 TCP 下载单设备并发数应在 1–全局并发数之间")
+	}
+	phaseTimeouts := []struct {
+		name  string
+		value Duration
+	}{
+		{name: "连接", value: config.DialTimeout},
+		{name: "首字节", value: config.FirstByteTimeout},
+		{name: "空闲", value: config.IdleTimeout},
+	}
+	for _, timeout := range phaseTimeouts {
+		if timeout.value.Duration() <= 0 {
+			return fmt.Errorf("2014 裸 TCP 下载%s超时必须大于 0", timeout.name)
+		}
+	}
+	if config.TotalTimeout.Duration() <= 0 {
+		return fmt.Errorf("2014 裸 TCP 下载总超时必须大于 0")
+	}
+	for _, timeout := range phaseTimeouts {
+		if config.TotalTimeout.Duration() < timeout.value.Duration() {
+			return fmt.Errorf("2014 裸 TCP 下载总超时不能小于%s超时", timeout.name)
+		}
+	}
+	if config.AllowAddressMismatch && len(config.AllowedAddressCIDRs) == 0 {
+		return fmt.Errorf("允许 2014 裸 TCP 下载地址不一致时必须配置 CIDR 白名单")
+	}
+	cidrs := make(map[string]struct{}, len(config.AllowedAddressCIDRs))
+	for _, value := range config.AllowedAddressCIDRs {
+		value = strings.TrimSpace(value)
+		if _, _, err := net.ParseCIDR(value); err != nil {
+			return fmt.Errorf("2014 裸 TCP 下载允许地址 %q 不是有效 CIDR", value)
+		}
+		if _, exists := cidrs[value]; exists {
+			return fmt.Errorf("2014 裸 TCP 下载允许地址 CIDR 重复: %s", value)
+		}
+		cidrs[value] = struct{}{}
+	}
+	return nil
 }
 
 // GetDomain 返回 SIP 域。

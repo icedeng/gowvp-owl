@@ -1,14 +1,23 @@
 package api
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/gowvp/owl/internal/conf"
+	"github.com/gowvp/owl/internal/core/sms"
+	"github.com/gowvp/owl/internal/core/sms/store/smsdb"
 	"github.com/ixugo/goddd/pkg/web"
+	"gorm.io/gorm"
 )
 
 const testPlaySecret = "unit-test-secret"
@@ -24,6 +33,19 @@ func makePlayToken(t *testing.T, app, stream string, expiresAt time.Time) string
 	)
 	if err != nil {
 		t.Fatalf("生成播放 token 失败: %v", err)
+	}
+	return token
+}
+
+func makePlayTokenForMedia(t *testing.T, app, stream, mediaServerID string) string {
+	t.Helper()
+	token, err := web.NewToken(
+		map[string]any{"stream": stream, "app": app, "media_server_id": mediaServerID},
+		testPlaySecret+"_play",
+		web.WithExpiresAt(time.Now().Add(time.Hour)),
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return token
 }
@@ -137,6 +159,91 @@ func TestVerifyPlayToken(t *testing.T) {
 				t.Errorf("want status %d, got %d, body: %s", tt.wantStatus, w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestProxySMSRoutesBoundMediaServerAndStripsNodePrefix(t *testing.T) {
+	var upstreamPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath = r.URL.Path
+		_, _ = w.Write([]byte("edge media"))
+	}))
+	defer upstream.Close()
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, portText, found := strings.Cut(upstreamURL.Host, ":")
+	if !found {
+		t.Fatalf("unexpected upstream host %q", upstreamURL.Host)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	store := smsdb.NewDB(db).AutoMigrate(true)
+	server := &sms.MediaServer{ID: "edge-zlm-1", IP: host, Ports: sms.MediaServerPorts{HTTP: port}}
+	if err := store.MediaServer().Create(t.Context(), server); err != nil {
+		t.Fatal(err)
+	}
+	core := sms.NewCore(store)
+	t.Cleanup(core.Close)
+	uc := newTestUsecase()
+	uc.SMSAPI = SmsAPI{smsCore: core}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/proxy/sms/*path", uc.proxySMS)
+	proxyServer := httptest.NewServer(router)
+	defer proxyServer.Close()
+	token := makePlayTokenForMedia(t, "rtp", "stream-1", server.ID)
+	response, err := http.Get(proxyServer.URL + "/proxy/sms/_media/edge-zlm-1/rtp/stream-1.live.flv?token=" + url.QueryEscape(token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || string(body) != "edge media" {
+		t.Fatalf("proxy response = %d %q, want edge media", response.StatusCode, body)
+	}
+	if upstreamPath != "/rtp/stream-1.live.flv" {
+		t.Fatalf("upstream path = %q, want stripped media route", upstreamPath)
+	}
+}
+
+func TestVerifyPlayTokenRejectsDifferentMediaServerRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	uc := newTestUsecase()
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	token := makePlayTokenForMedia(t, "rtp", "stream-1", "edge-zlm-1")
+	ctx.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/proxy/sms/_media/edge-zlm-2/rtp/stream-1.live.flv?token="+url.QueryEscape(token),
+		nil,
+	)
+	if err := uc.verifyPlayToken(ctx, "/_media/edge-zlm-2/rtp/stream-1.live.flv"); err == nil {
+		t.Fatal("token bound to edge-zlm-1 accepted edge-zlm-2 route")
+	}
+}
+
+func TestLegacyProxyPathNeverTreatsAppAsMediaServerRoute(t *testing.T) {
+	uc := newTestUsecase()
+	mediaServerID, upstreamPath := uc.inferSMSProxyRoute(t.Context(), "/rtp/stream-1.live.flv")
+	if mediaServerID != sms.DefaultMediaServerID || upstreamPath != "/rtp/stream-1.live.flv" {
+		t.Fatalf("legacy route = %q %q, want unchanged default-node route", mediaServerID, upstreamPath)
 	}
 }
 

@@ -15,9 +15,28 @@ import (
 // that SIP uses (RFC 3261 S.25).
 const abnfWs = " \t"
 
-// The maximum permissible CSeq number in a SIP message (2**31 - 1).
+// MaxCSeq 是 SIP 报文允许的最大 CSeq（2**31 - 1）。
 // C.f. RFC 3261 S. 8.1.1.5.
-const maxCseq = 2147483647
+const MaxCSeq uint32 = 2147483647
+
+const maxCseq = MaxCSeq
+
+// ValidateCSeq 校验程序化构造的 CSeq；文本解析器会执行同一范围校验。
+func ValidateCSeq(seq uint32) error {
+	if seq > MaxCSeq {
+		return fmt.Errorf("CSeq %d exceeds maximum permitted value %d", seq, MaxCSeq)
+	}
+	return nil
+}
+
+// NextCSeq 返回同一 SIP 对话或事务的下一个序号。序号耗尽时必须结束并重建
+// 对话/事务，不能回绕，否则会破坏 RFC 3261 要求的严格单调递增。
+func NextCSeq(current uint32) (uint32, error) {
+	if current >= MaxCSeq {
+		return 0, fmt.Errorf("CSeq is exhausted at maximum permitted value %d", MaxCSeq)
+	}
+	return current + 1, nil
+}
 
 // A Parser converts the raw bytes of SIP messages into core.Message objects.
 // It allows
@@ -163,6 +182,10 @@ func parseCSeq(headerName string, headerText string) (
 		)
 		return
 	}
+	if !isSIPToken(parts[1]) {
+		err = fmt.Errorf("CSeq method is invalid")
+		return
+	}
 
 	var seqno uint64
 	seqno, err = strconv.ParseUint(parts[0], 10, 32)
@@ -170,7 +193,7 @@ func parseCSeq(headerName string, headerText string) (
 		return
 	}
 
-	if seqno > maxCseq {
+	if seqno > uint64(maxCseq) {
 		err = fmt.Errorf("invalid CSeq %d: exceeds maximum permitted value "+
 			"2**31 - 1", seqno)
 		return
@@ -302,7 +325,9 @@ func parseMaxForwards(headerName string, headerText string) (
 ) {
 	var maxForwards MaxForwards
 	var value uint64
-	value, err = strconv.ParseUint(strings.TrimSpace(headerText), 10, 32)
+	// RFC 3261 20.22 将 Max-Forwards 定义为 0..255；在解析层拒绝超界值，
+	// 避免非法请求进入四版本共用的业务 handler。
+	value, err = strconv.ParseUint(strings.TrimSpace(headerText), 10, 8)
 	maxForwards = MaxForwards(value)
 
 	headers = []Header{&maxForwards}
@@ -579,10 +604,35 @@ func parseRecordRouteHeader(headerName string, headerText string) (headers []Hea
 }
 
 type parser struct {
-	out      chan Message
-	in       chan Packet
-	done     chan struct{}
-	stopOnce sync.Once
+	out       chan Message
+	in        chan Packet
+	done      chan struct{}
+	stopOnce  sync.Once
+	inputOnce sync.Once
+}
+
+// malformedHeader keeps wire-level parse evidence inside a message long enough
+// for the common inbound validator to reject it. Silently dropping a malformed
+// optional header (for example Record-Route) would change dialog semantics.
+type malformedHeader struct {
+	raw   string
+	cause string
+}
+
+func (header *malformedHeader) Name() string { return "X-Malformed-Header" }
+
+func (header *malformedHeader) Clone() Header {
+	if header == nil {
+		return (*malformedHeader)(nil)
+	}
+	return &malformedHeader{raw: header.raw, cause: header.cause}
+}
+
+func (header *malformedHeader) String() string { return "X-Malformed-Header: rejected" }
+
+func (header *malformedHeader) Equals(other any) bool {
+	value, ok := other.(*malformedHeader)
+	return ok && header != nil && value != nil && header.raw == value.raw && header.cause == value.cause
 }
 
 func newParser() *parser {
@@ -595,6 +645,11 @@ func (p *parser) stop() {
 	p.stopOnce.Do(func() { close(p.done) })
 }
 
+// finish 表示输入已结束，并让解析器排空已经接收的数据后退出。
+func (p *parser) finish() {
+	p.inputOnce.Do(func() { close(p.in) })
+}
+
 func (p *parser) start() {
 	defer close(p.out)
 	var termErr error
@@ -603,10 +658,14 @@ func (p *parser) start() {
 	for {
 		termErr = nil
 		var packet Packet
+		var ok bool
 		select {
 		case <-p.done:
 			return
-		case packet = <-p.in:
+		case packet, ok = <-p.in:
+			if !ok {
+				return
+			}
 		}
 		startLine, err := packet.nextLine()
 		if err != nil {
@@ -621,14 +680,14 @@ func (p *parser) start() {
 		if isRequest(startLine) {
 			method, recipient, sipVersion, err := ParseRequestLine(startLine)
 			if err == nil {
-				msg = NewRequest("", method, recipient, sipVersion, []Header{}, []byte{})
+				msg = newRequest("", method, recipient, sipVersion, []Header{}, []byte{}, false)
 			} else {
 				termErr = NewError(err, "parserMessage", "ParseRequestLine", startLine)
 			}
 		} else if isResponse(startLine) {
 			sipVersion, statusCode, reason, err := ParseStatusLine(startLine)
 			if err == nil {
-				msg = NewResponse("", sipVersion, statusCode, reason, []Header{}, []byte{})
+				msg = newResponse("", sipVersion, statusCode, reason, []Header{}, []byte{}, false)
 			} else {
 				termErr = NewError(err, "parserMessage", "ParseStatusLine", startLine)
 			}
@@ -642,6 +701,7 @@ func (p *parser) start() {
 		}
 		var buffer bytes.Buffer
 		headers := make([]Header, 0)
+		invalidFramingHeader := false
 
 		flushBuffer := func() {
 			if buffer.Len() > 0 {
@@ -650,6 +710,7 @@ func (p *parser) start() {
 					headers = append(headers, newHeaders...)
 				} else {
 					slog.Error("start flushBuffer", "err", err, "line", buffer.String())
+					headers = append(headers, &malformedHeader{raw: buffer.String(), cause: err.Error()})
 				}
 				buffer.Reset()
 			}
@@ -667,6 +728,13 @@ func (p *parser) start() {
 				break
 			}
 
+			if strings.Contains(abnfWs, string(line[0])) && isContentLengthHeaderLine(line) {
+				// Content-Length cannot be introduced by obsolete header folding. The TCP
+				// framer and logical parser must interpret the same line identically;
+				// otherwise a peer can desynchronize framing from message semantics.
+				invalidFramingHeader = true
+				continue
+			}
 			if !strings.Contains(abnfWs, string(line[0])) {
 				// This line starts a new header.
 				// Parse anything currently in the buffer, then store the new header line in the buffer.
@@ -677,6 +745,10 @@ func (p *parser) start() {
 				buffer.WriteString(" ")
 				buffer.WriteString(line)
 			}
+		}
+		if invalidFramingHeader {
+			slog.Warn("reject SIP packet with folded Content-Length header")
+			continue
 		}
 		// Store the headers in the message object.
 		for _, header := range headers {
@@ -711,6 +783,15 @@ func (p *parser) start() {
 		case p.out <- msg:
 		}
 	}
+}
+
+func isContentLengthHeaderLine(line string) bool {
+	name, _, ok := strings.Cut(strings.TrimSpace(line), ":")
+	if !ok {
+		return false
+	}
+	name = strings.TrimSpace(name)
+	return strings.EqualFold(name, "Content-Length") || strings.EqualFold(name, "l")
 }
 
 // func getStartLine(data []byte) (string, error) {
@@ -760,6 +841,10 @@ func ParseRequestLine(requestLine string) (
 	parts := strings.Split(requestLine, " ")
 	if len(parts) != 3 {
 		err = fmt.Errorf("request line should have 2 spaces: '%s'", requestLine)
+		return
+	}
+	if !isSIPToken(parts[0]) {
+		err = fmt.Errorf("request method is invalid")
 		return
 	}
 
@@ -1068,6 +1153,16 @@ func ParseParams(
 	var key string
 	parsingKey := true // false implies we are parsing a value
 	inQuotes := false
+	addParam := func(name string, value MaybeString) error {
+		if name == "" {
+			return fmt.Errorf("parameter name is empty in params %q", source)
+		}
+		if params.Has(name) {
+			return fmt.Errorf("duplicate parameter %q in params %q", name, source)
+		}
+		params.Add(name, value)
+		return nil
+	}
 parseLoop:
 	for ; consumed < len(source); consumed++ {
 		switch source[consumed] {
@@ -1089,7 +1184,9 @@ parseLoop:
 				continue
 			}
 			if parsingKey && permitSingletons {
-				params.Add(buffer.String(), nil)
+				if err = addParam(buffer.String(), nil); err != nil {
+					return
+				}
 			} else if parsingKey {
 				err = fmt.Errorf(
 					"singleton param '%s' when parsing params which disallow singletons: \"%s\"",
@@ -1098,7 +1195,9 @@ parseLoop:
 				)
 				return
 			} else {
-				params.Add(key, String{Str: buffer.String()})
+				if err = addParam(key, String{Str: buffer.String()}); err != nil {
+					return
+				}
 			}
 			buffer.Reset()
 			parsingKey = true
@@ -1162,12 +1261,12 @@ parseLoop:
 	if inQuotes {
 		err = fmt.Errorf("unclosed quotes in parameter string: %s", source)
 	} else if parsingKey && permitSingletons {
-		params.Add(buffer.String(), nil)
+		err = addParam(buffer.String(), nil)
 	} else if parsingKey {
 		err = fmt.Errorf("singleton param '%s' when parsing params which disallow singletons: \"%s\"",
 			buffer.String(), source)
 	} else {
-		params.Add(key, String{Str: buffer.String()})
+		err = addParam(key, String{Str: buffer.String()})
 	}
 	return
 }
@@ -1183,6 +1282,15 @@ func ParseHeader(headerText string) (headers []Header, err error) {
 	}
 
 	fieldName := strings.TrimSpace(before)
+	if !isSIPToken(fieldName) {
+		err = fmt.Errorf("header field name is invalid: %s", fieldName)
+		return
+	}
+	// RFC 3261 defines compact forms for the headers commonly emitted by
+	// legacy SIP/GB28181 devices. Normalize them before dispatch so callers
+	// can use the canonical header getters (for example `i:` becomes
+	// `Call-ID`, and `o:` becomes `Event`).
+	fieldName = canonicalSIPHeaderName(fieldName)
 	lowerFieldName := strings.ToLower(fieldName)
 	fieldText := strings.TrimSpace(after)
 	if headerParser, ok := defaultHeaderParsers[lowerFieldName]; ok {
@@ -1199,6 +1307,41 @@ func ParseHeader(headerText string) (headers []Header, err error) {
 		headers = []Header{&header}
 	}
 	return
+}
+
+// canonicalSIPHeaderName maps RFC 3261/RFC 3265 compact header names to their
+// full names. Header names are case-insensitive; unknown names retain the
+// spelling supplied by the peer for backwards-compatible GenericHeader
+// handling.
+func canonicalSIPHeaderName(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "i":
+		return "Call-ID"
+	case "m":
+		return "Contact"
+	case "e":
+		return "Content-Encoding"
+	case "l":
+		return "Content-Length"
+	case "c":
+		return "Content-Type"
+	case "f":
+		return "From"
+	case "s":
+		return "Subject"
+	case "k":
+		return "Supported"
+	case "t":
+		return "To"
+	case "v":
+		return "Via"
+	case "o":
+		return "Event"
+	case "u":
+		return "Allow-Events"
+	default:
+		return name
+	}
 }
 
 // SplitByWhitespace Splits the given string into sections, separated by one or more characters

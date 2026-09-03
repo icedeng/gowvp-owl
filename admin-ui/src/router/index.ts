@@ -32,6 +32,7 @@ const router = createRouter({
         { path: 'player-settings', name: 'player-settings', component: () => import('../views/PlayerSettingsView.vue'), meta: { title: '播放器设置', group: '平台运维' } },
         { path: 'sip-settings', name: 'sip-settings', component: () => import('../views/SipSettingsView.vue'), meta: { title: 'SIP 设置', group: '平台运维' } },
         { path: 'gb28181-capabilities', name: 'gb28181-capabilities', component: () => import('../views/GBProtocolCapabilitiesView.vue'), meta: { title: '国标能力', group: '平台运维' } },
+        { path: 'gb28181-cascade', name: 'gb28181-cascade', component: () => import('../views/GBCascadeView.vue'), meta: { title: '级联平台', group: '平台运维' } },
         { path: 'diagnostics', name: 'diagnostics', component: () => import('../views/DiagnosticsView.vue'), meta: { title: '协议诊断', group: '平台运维' } },
         { path: 'upgrade', name: 'upgrade', component: () => import('../views/UpgradeView.vue'), meta: { title: '版本升级', group: '平台运维' } },
         { path: 'account', name: 'account', component: () => import('../views/AccountView.vue'), meta: { title: '账号安全', group: '个人设置' } },

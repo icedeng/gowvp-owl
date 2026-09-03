@@ -379,7 +379,7 @@ onMounted(refresh);
       </div>
       <div v-if="summaryStates.cascade === 'loading' || summaryStates.cascade === 'idle'" class="cascade-empty" aria-live="polite"><LoaderCircle class="animate-spin" /><span>正在读取上级平台注册状态…</span></div>
       <div v-else-if="summaryStates.cascade === 'error'" class="cascade-empty" role="status"><ShieldAlert /><span><strong>级联状态暂不可用</strong><small>配置或状态接口读取失败，请刷新后重试。</small></span><button class="btn btn-sm" type="button" @click="loadSummary">重试</button></div>
-      <div v-else-if="!cascadeStatuses.length" class="cascade-empty"><Network /><span><strong>尚未配置上级平台</strong><small>在 SIP 设置中添加上级平台后，这里会显示版本协商和注册状态。</small></span><RouterLink class="btn btn-sm" to="/sip-settings#upstreams">配置级联</RouterLink></div>
+      <div v-else-if="!cascadeStatuses.length" class="cascade-empty"><Network /><span><strong>尚未启用上级平台</strong><small>在 SIP 设置中启用上级平台后，这里会显示版本协商和注册状态。</small></span><RouterLink class="btn btn-sm" to="/sip-settings#upstreams">配置级联</RouterLink></div>
       <div v-else class="table-wrap cascade-table-wrap">
         <table class="data-table cascade-table">
           <thead><tr><th>上级平台</th><th>地址</th><th>协议版本</th><th>注册状态</th><th>最近注册</th><th>有效期</th><th>最近错误</th></tr></thead>
@@ -396,7 +396,7 @@ onMounted(refresh);
           </tbody>
         </table>
       </div>
-      <footer class="cascade-foot"><span><Activity />级联业务仍需真实上级平台和三级链路抓包验收。</span><RouterLink to="/sip-settings#upstreams">打开 SIP 级联配置</RouterLink></footer>
+      <footer class="cascade-foot"><span><Activity />级联业务仍需真实上级平台和三级链路抓包验收。</span><span class="cascade-links"><RouterLink to="/gb28181-cascade">打开级联平台工作台</RouterLink><RouterLink to="/sip-settings#upstreams">配置 SIP 级联</RouterLink></span></footer>
     </section>
 
     <section class="card audit-workbench">
@@ -483,7 +483,7 @@ onMounted(refresh);
 .cascade-table-wrap { border: 1px solid var(--line); border-radius: 9px; }.cascade-table { min-width: 980px; }
 .cascade-table td, .cascade-table th { vertical-align: top; }.cascade-table .stacked-value strong, .cascade-table .stacked-value small { display: block; }.cascade-table .stacked-value small { margin-top: 3px; color: var(--muted); }
 .version-downgrade { display: block; margin-top: 4px; color: var(--amber); font-size: 10px; }.cascade-error { display: block; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
-.cascade-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 12px; }.cascade-foot span { display: inline-flex; align-items: center; gap: 7px; }.cascade-foot svg { width: 15px; }.cascade-foot a { color: var(--blue); font-weight: 700; }
+.cascade-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 12px; }.cascade-foot span { display: inline-flex; align-items: center; gap: 7px; }.cascade-foot svg { width: 15px; }.cascade-foot a { color: var(--blue); font-weight: 700; }.cascade-links { display: inline-flex; align-items: center; gap: 14px; }
 .audit-disabled { display: flex; align-items: center; gap: 10px; padding: 11px 12px; margin: 12px 0; color: #795416; background: #fff8e9; border: 1px solid #edd9ad; border-radius: 9px; }
 .audit-disabled > svg { width: 18px; }.audit-disabled span { flex: 1; }.audit-disabled strong, .audit-disabled small { display: block; }.audit-disabled small { margin-top: 2px; color: #88692f; }
 .audit-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 14px 0 10px; }

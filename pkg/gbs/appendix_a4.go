@@ -69,10 +69,7 @@ func appendixA4ExtraInfoValues(objects []AppendixA4Object) []string {
 		if !strings.HasSuffix(strings.ToLower(path), "/extrainfo") && !strings.HasSuffix(strings.ToLower(path), "/extralinfo") {
 			continue
 		}
-		value := strings.TrimSpace(object.Fields["value"])
-		if value == "" {
-			continue
-		}
+		value := object.Fields["value"]
 		if _, ok := seen[value]; ok {
 			continue
 		}
@@ -197,10 +194,9 @@ func (g *GB28181API) buildAppendixA4Object(name, cmdType, path string, node a4XM
 }
 
 func (g *GB28181API) buildAppendixA4FromExtraInfo(cmdType, path string, node a4XMLNode) (AppendixA4Object, bool) {
-	text := strings.TrimSpace(collectNodeText(node))
-	if text == "" {
-		return AppendixA4Object{}, false
-	}
+	text := node.Content
+	// ExtraInfo 是普通 string，Schema 只限制最大长度；即使值为空或全空白，
+	// 元素本身也携带有效的多值位置信息，必须进入统一快照和 RecordInfo 元数据。
 	fields := map[string]string{"value": text}
 	for k, v := range parseExtraInfoJSON(text) {
 		fields[k] = v
@@ -305,32 +301,34 @@ func extractNodeFields(node a4XMLNode) map[string]string {
 	fields := map[string]string{}
 	for _, attr := range node.Attrs {
 		k := strings.TrimSpace(attr.Name.Local)
-		v := strings.TrimSpace(attr.Value)
-		if k != "" && v != "" {
-			fields["@"+k] = v
+		if k != "" {
+			fields["@"+k] = attr.Value
 		}
 	}
 	for _, child := range node.Children {
 		key := strings.TrimSpace(child.XMLName.Local)
-		val := strings.TrimSpace(collectNodeText(child))
-		if key == "" || val == "" {
+		if key == "" {
 			continue
 		}
-		if old, ok := fields[key]; ok && old != "" && old != val {
+		val := collectNodeText(child)
+		if old, ok := fields[key]; ok && old != val {
 			fields[key] = old + "," + val
 			continue
 		}
 		fields[key] = val
 	}
 	if len(fields) == 0 {
-		if v := strings.TrimSpace(collectNodeText(node)); v != "" {
-			fields["value"] = v
-		}
+		fields["value"] = collectNodeText(node)
 	}
 	return fields
 }
 
 func collectNodeText(node a4XMLNode) string {
+	if len(node.Children) == 0 {
+		// XML Schema string 默认 whiteSpace=preserve；简单字段应区分缺省、空值、
+		// 全空白和仅首尾空白不同的内容。
+		return node.Content
+	}
 	parts := make([]string, 0, len(node.Children)+1)
 	if v := strings.TrimSpace(node.Content); v != "" {
 		parts = append(parts, v)
@@ -355,31 +353,36 @@ func dedupeAppendixA4Objects(in []AppendixA4Object) []AppendixA4Object {
 	if len(in) == 0 {
 		return nil
 	}
-	uniq := make(map[string]AppendixA4Object, len(in))
+	seen := make(map[string]struct{}, len(in))
+	out := make([]AppendixA4Object, 0, len(in))
 	for _, obj := range in {
 		key := appendixA4ObjectKey(obj)
-		uniq[key] = obj
-	}
-	out := make([]AppendixA4Object, 0, len(uniq))
-	for _, obj := range uniq {
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
 		out = append(out, obj)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].UpdatedAt == out[j].UpdatedAt {
-			return out[i].Type < out[j].Type
-		}
-		return out[i].UpdatedAt > out[j].UpdatedAt
-	})
 	return out
 }
 
 func appendixA4ObjectKey(obj AppendixA4Object) string {
+	path := strings.TrimSpace(obj.Path)
+	if strings.HasSuffix(strings.ToLower(path), "/extrainfo") || strings.HasSuffix(strings.ToLower(path), "/extralinfo") {
+		// ExtraInfo 是有序多值普通 string。去重只能比较原始值，不能把空字符串、
+		// 全空白或仅首尾空白不同的值折叠为同一对象。
+		return strings.Join([]string{strings.TrimSpace(obj.Type), strings.TrimSpace(obj.CmdType), path, obj.Fields["value"]}, "\x00")
+	}
+	raw := obj.RawXML
+	if raw == "" {
+		raw = canonicalFields(obj.Fields)
+	}
 	return strings.Join([]string{
 		strings.TrimSpace(obj.Type),
 		strings.TrimSpace(obj.CmdType),
-		strings.TrimSpace(obj.Path),
-		canonicalFields(obj.Fields),
-	}, "|")
+		path,
+		raw,
+	}, "\x00")
 }
 
 func canonicalFields(fields map[string]string) string {
@@ -393,7 +396,7 @@ func canonicalFields(fields map[string]string) string {
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, k+"="+strings.TrimSpace(fields[k]))
+		parts = append(parts, k+"\x00"+fields[k])
 	}
-	return strings.Join(parts, ";")
+	return strings.Join(parts, "\x00")
 }

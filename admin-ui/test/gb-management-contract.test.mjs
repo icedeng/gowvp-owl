@@ -92,6 +92,8 @@ test("附录 G 启动配置只读展示并提供可执行的配置文件路径�
   assert.match(sipSettingsView, /copyAnnexGConfig/);
   assert.match(sipSettingsView, /复制 TOML 片段/);
   assert.match(sipSettingsView, /replace-with-current-secret/);
+  assert.match(sipSettingsView, /TLSCRL/);
+  assert.match(sipSettingsView, /配置 CRL 时必须同时配置 TLS CA/);
   assert.doesNotMatch(sipSettingsView, /@click="addAnnexGSystem"/);
   assert.doesNotMatch(sipSettingsView, /@click="removeAnnexGSystem/);
   assert.doesNotMatch(sipSettingsView, /\n\s+annex_g:\s*\{/);

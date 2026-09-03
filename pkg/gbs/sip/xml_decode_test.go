@@ -36,3 +36,43 @@ func TestXMLDecodeFailureDoesNotMutateDestination(t *testing.T) {
 		t.Fatalf("failed decode mutated destination: %#v", destination.Items)
 	}
 }
+
+func TestNewGBXMLDecoderAcceptsGB2312WithoutDeclaration(t *testing.T) {
+	source := []byte(`<Response><Name>中文名称</Name></Response>`)
+	encoded, err := Utf8ToGbk(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Name string `xml:"Name"`
+	}
+	if err := NewGBXMLDecoder(encoded).Decode(&decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Name != "中文名称" {
+		t.Fatalf("decoded name = %q", decoded.Name)
+	}
+}
+
+func TestEncodeGBXMLDocumentProducesDeclaredGB2312Bytes(t *testing.T) {
+	encoded, err := EncodeGBXMLDocument([]byte(`<?xml version="1.0" encoding="UTF-8"?><Response><Name>中文名称</Name></Response>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Name string `xml:"Name"`
+	}
+	if err := XMLDecode(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Name != "中文名称" {
+		t.Fatalf("decoded encoded document name = %q", decoded.Name)
+	}
+	utf8Body, err := GbkToUtf8(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(utf8Body); got != `<?xml version="1.0" encoding="GB2312"?><Response><Name>中文名称</Name></Response>` {
+		t.Fatalf("encoded document = %q", got)
+	}
+}

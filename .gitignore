@@ -46,6 +46,10 @@ __pycache__/
 owl
 .DS_Store
 .pnpm-store/
+/.playwright-cli/
+/.impeccable/review/
+/output/
+/tmp/
 .cursor/memory/
 .cursor/scopes/
 graphify-out/

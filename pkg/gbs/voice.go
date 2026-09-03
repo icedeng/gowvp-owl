@@ -3,6 +3,7 @@ package gbs
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -17,8 +18,11 @@ import (
 )
 
 const (
-	voiceModeTalk      = "Talk"
-	voiceModeBroadcast = "Broadcast"
+	voiceModeTalk              = "Talk"
+	voiceModeTalkStandard      = "TalkStandard"
+	voiceModeBroadcast         = "Broadcast"
+	voiceCleanupRetryInterval  = time.Second
+	voiceShutdownRetryInterval = 100 * time.Millisecond
 
 	defaultBroadcastVHost = "__defaultVhost__"
 	defaultBroadcastApp   = "live"
@@ -37,16 +41,85 @@ type rtpMediaService interface {
 	StopSendRTP(*sms.MediaServer, zlm.StopSendRTPRequest) (*zlm.StopSendRTPResponse, error)
 }
 
+type rtpMediaCloserContext interface {
+	CloseRTPServerContext(context.Context, *sms.MediaServer, zlm.CloseRTPServerRequest) (*zlm.CloseRTPServerResponse, error)
+}
+
+type rtpMediaOpenerContext interface {
+	OpenRTPServerContext(context.Context, *sms.MediaServer, zlm.OpenRTPServerRequest) (*zlm.OpenRTPServerResponse, error)
+}
+
+type rtpMediaSenderContext interface {
+	StartSendRTPContext(context.Context, *sms.MediaServer, zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error)
+}
+
+type rtpMediaTalkSenderContext interface {
+	StartSendRTPTalkContext(context.Context, *sms.MediaServer, zlm.StartSendRTPTalkRequest) (*zlm.StartSendRTPResponse, error)
+}
+
+type rtpMediaStopperContext interface {
+	StopSendRTPContext(context.Context, *sms.MediaServer, zlm.StopSendRTPRequest) (*zlm.StopSendRTPResponse, error)
+}
+
+type rtpMediaInfoContext interface {
+	GetMediaInfoContext(context.Context, *sms.MediaServer, string, string) ([]zlm.MediaItem, error)
+}
+
+func openRTPServerContext(ctx context.Context, media rtpMediaService, server *sms.MediaServer, in zlm.OpenRTPServerRequest) (*zlm.OpenRTPServerResponse, error) {
+	if service, ok := media.(rtpMediaOpenerContext); ok {
+		return service.OpenRTPServerContext(ctx, server, in)
+	}
+	return media.OpenRTPServer(server, in)
+}
+
+func closeRTPServerContext(ctx context.Context, media rtpMediaService, server *sms.MediaServer, in zlm.CloseRTPServerRequest) (*zlm.CloseRTPServerResponse, error) {
+	if service, ok := media.(rtpMediaCloserContext); ok {
+		return service.CloseRTPServerContext(ctx, server, in)
+	}
+	return media.CloseRTPServer(server, in)
+}
+
+func stopSendRTPContext(ctx context.Context, media rtpMediaService, server *sms.MediaServer, in zlm.StopSendRTPRequest) (*zlm.StopSendRTPResponse, error) {
+	if service, ok := media.(rtpMediaStopperContext); ok {
+		return service.StopSendRTPContext(ctx, server, in)
+	}
+	return media.StopSendRTP(server, in)
+}
+
+func startSendRTPContext(ctx context.Context, media rtpMediaService, server *sms.MediaServer, in zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error) {
+	if service, ok := media.(rtpMediaSenderContext); ok {
+		return service.StartSendRTPContext(ctx, server, in)
+	}
+	return media.StartSendRTP(server, in)
+}
+
+func startSendRTPTalkContext(ctx context.Context, media rtpMediaService, server *sms.MediaServer, in zlm.StartSendRTPTalkRequest) (*zlm.StartSendRTPResponse, error) {
+	if service, ok := media.(rtpMediaTalkSenderContext); ok {
+		return service.StartSendRTPTalkContext(ctx, server, in)
+	}
+	return media.StartSendRTPTalk(server, in)
+}
+
+func getMediaInfoContext(ctx context.Context, media rtpMediaService, server *sms.MediaServer, app, stream string) ([]zlm.MediaItem, error) {
+	if service, ok := media.(rtpMediaInfoContext); ok {
+		return service.GetMediaInfoContext(ctx, server, app, stream)
+	}
+	return media.GetMediaInfo(server, app, stream)
+}
+
 type VoiceInput struct {
-	Channel      *ipc.Channel
-	SMS          *sms.MediaServer
-	StreamMode   int8
-	Mode         string // Talk/Broadcast
-	Timeout      time.Duration
-	SourceID     string
-	SourceVHost  string
-	SourceApp    string
-	SourceStream string
+	Channel            *ipc.Channel
+	SMS                *sms.MediaServer
+	ResolveMediaServer MediaServerResolver
+	StreamMode         int8
+	Mode               string // Talk/Broadcast
+	Timeout            time.Duration
+	SourceID           string
+	SourceVHost        string
+	SourceApp          string
+	SourceStream       string
+
+	standardTalkPlayKey string
 }
 
 type broadcastNotify struct {
@@ -66,7 +139,8 @@ type broadcastResponse struct {
 }
 
 type pendingBroadcastResponse struct {
-	wait chan *broadcastResponse
+	wait      chan *broadcastResponse
+	operation *pendingDeviceOperation
 }
 
 type broadcastSession struct {
@@ -83,6 +157,8 @@ type broadcastSession struct {
 	CreatedAt    time.Time
 	Version      GBProtocolVersion
 	Cascade      *cascadeVoiceSourceSession
+	// StandardTalkPlayKey 非空时表示该广播会话是标准语音对讲的下行半链路。
+	StandardTalkPlayKey string
 
 	mu         sync.Mutex
 	rtpStarted bool
@@ -90,7 +166,8 @@ type broadcastSession struct {
 	stopped    bool
 	ready      chan error
 	readyOnce  sync.Once
-	stopOnce   sync.Once
+	stopMu     sync.Mutex
+	dialogDone bool
 }
 
 type talkSession struct {
@@ -103,6 +180,7 @@ type talkSession struct {
 	SMS           *sms.MediaServer
 	SSRC          string
 	Stream        *Streams
+	ssrcRelease   func()
 
 	mu             sync.Mutex
 	receiverOpened bool
@@ -111,7 +189,7 @@ type talkSession struct {
 	stopped        bool
 	ready          chan error
 	readyOnce      sync.Once
-	stopOnce       sync.Once
+	stopMu         sync.Mutex
 }
 
 func (s *talkSession) complete(err error) {
@@ -138,6 +216,21 @@ func voiceKey(mode, deviceID, channelID string) string {
 	return "voice:" + mode + ":" + deviceID + ":" + channelID
 }
 
+func standardTalkPlayKey(deviceID, channelID string) string {
+	return voiceKey("TalkUpstream", deviceID, channelID)
+}
+
+func standardTalkStreamID(channel *ipc.Channel) string {
+	if channel == nil {
+		return ""
+	}
+	base := strings.TrimSpace(channel.ID)
+	if base == "" {
+		base = strings.TrimSpace(channel.ChannelID)
+	}
+	return base + "-talk-upstream"
+}
+
 // StartVoice 启动语音会话（9.12），支持 Talk/Broadcast 信令流程。
 func (g *GB28181API) StartVoice(ctx context.Context, in *VoiceInput) error {
 	if ctx == nil {
@@ -149,7 +242,7 @@ func (g *GB28181API) StartVoice(ctx context.Context, in *VoiceInput) error {
 	if in == nil || in.Channel == nil {
 		return fmt.Errorf("invalid voice input")
 	}
-	if in.Mode != voiceModeTalk && in.Mode != voiceModeBroadcast {
+	if in.Mode != voiceModeTalk && in.Mode != voiceModeTalkStandard && in.Mode != voiceModeBroadcast {
 		return fmt.Errorf("invalid voice mode: %s", in.Mode)
 	}
 	ch, ok := g.svr.memoryStorer.GetChannel(in.Channel.DeviceID, in.Channel.ChannelID)
@@ -166,38 +259,121 @@ func (g *GB28181API) StartVoice(ctx context.Context, in *VoiceInput) error {
 		}); err != nil {
 			return err
 		}
-	case voiceModeTalk:
+	case voiceModeTalk, voiceModeTalkStandard:
 		if err := g.requireGBFeature(in.Channel.DeviceID, "voice_intercom", "语音对讲", func(c GBCapabilities) bool {
 			return c.VoiceIntercom
 		}); err != nil {
 			return err
 		}
+		if in.Mode == voiceModeTalkStandard {
+			if err := g.requireGBVersionAtLeast(in.Channel.DeviceID, string(GBVersion20), "标准双流程语音对讲"); err != nil {
+				return err
+			}
+			if err := g.requireGBFeature(in.Channel.DeviceID, "voice_broadcast", "标准语音对讲下行广播", func(c GBCapabilities) bool {
+				return c.VoiceBroadcast
+			}); err != nil {
+				return err
+			}
+		}
 	}
-	if in.Mode == voiceModeTalk {
+	if in.Mode == voiceModeTalk || in.Mode == voiceModeTalkStandard {
 		if err := g.requireMediaTransport(in.Channel.DeviceID, in.StreamMode, "语音会话"); err != nil {
 			return err
 		}
 	}
+	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, in.Channel.DeviceID, in.Channel.ChannelID)
+	defer releaseOperation()
+	requestCtx := operation.Context(ctx)
 
-	unlock, err := ch.device.lockMediaContext(ctx, ch.ChannelID)
+	unlock, err := ch.device.lockMediaContext(requestCtx, ch.ChannelID)
 	if err != nil {
-		return err
+		return operation.ErrorOr(err)
 	}
 	defer unlock()
-	if in.Mode == voiceModeBroadcast {
-		return g.startBroadcast(ctx, ch, in)
+	in.SMS, err = resolveMediaServerAfterLock(requestCtx, in.SMS, in.ResolveMediaServer)
+	if err != nil {
+		return operation.ErrorOr(err)
 	}
-	return g.startTalk(ctx, ch, in)
+	var startErr error
+	if in.Mode == voiceModeBroadcast {
+		startErr = g.startBroadcast(requestCtx, ch, in)
+	} else if in.Mode == voiceModeTalkStandard {
+		startErr = g.startStandardTalk(requestCtx, ch, in)
+	} else {
+		startErr = g.startTalk(requestCtx, ch, in)
+	}
+	if startErr != nil {
+		return operation.ErrorOr(startErr)
+	}
+	if !operation.Deliver(func() {}) {
+		_ = g.stopVoiceNoLock(g.mediaPersistenceContext(), ch, &StopVoiceInput{
+			Channel: in.Channel, Mode: in.Mode,
+		})
+		return operation.Cause()
+	}
+	return nil
+}
+
+func (g *GB28181API) startStandardTalk(ctx context.Context, ch *Channel, in *VoiceInput) (err error) {
+	return g.startStandardTalkWith(ctx, ch, in, g.playNoLock, g.startBroadcast)
+}
+
+func (g *GB28181API) startStandardTalkWith(
+	ctx context.Context,
+	ch *Channel,
+	in *VoiceInput,
+	startPlay func(context.Context, *Channel, *PlayInput) error,
+	startBroadcast func(context.Context, *Channel, *VoiceInput) error,
+) (err error) {
+	playKey := standardTalkPlayKey(in.Channel.DeviceID, in.Channel.ChannelID)
+	// 标准对讲的上行 Play 使用固定会话键。重复启动时必须先完整停止旧的
+	// 标准对讲，否则新 Play 建立后，旧 Broadcast 的联动清理会按同一键
+	// 误停刚创建的新 Play，形成只剩下行广播的半会话。
+	if value, ok := g.broadcastSessions.Load(in.Channel.ChannelID); ok {
+		if previous, valid := value.(*broadcastSession); valid && previous != nil &&
+			strings.TrimSpace(previous.StandardTalkPlayKey) == playKey {
+			if stopErr := g.stopBroadcastSession(previous, true); stopErr != nil {
+				return fmt.Errorf("stop previous standard Talk session: %w", stopErr)
+			}
+		}
+	}
+	playInput := &PlayInput{
+		Channel: in.Channel, SMS: in.SMS, StreamMode: in.StreamMode,
+		sessionKey: playKey, streamID: standardTalkStreamID(in.Channel), audioOnly: true,
+	}
+	if err = startPlay(ctx, ch, playInput); err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			cleanupErr := g.stopPlayContext(context.WithoutCancel(ctx), ch, &StopPlayInput{Channel: in.Channel, sessionKey: playKey})
+			idleErr := g.persistChannelIdleIfNoActive(g.mediaPersistenceContext(), in.Channel.DeviceID, in.Channel.ChannelID)
+			err = errors.Join(err, cleanupErr, idleErr)
+		}
+	}()
+
+	broadcastInput := *in
+	broadcastInput.Mode = voiceModeBroadcast
+	broadcastInput.standardTalkPlayKey = playKey
+	if err = startBroadcast(ctx, ch, &broadcastInput); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (g *GB28181API) startTalk(ctx context.Context, ch *Channel, in *VoiceInput) (err error) {
-	source, err := g.resolveVoiceMediaSource(in)
+	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, in.Channel.DeviceID, in.Channel.ChannelID)
+	defer releaseOperation()
+	requestCtx := operation.Context(ctx)
+	source, err := g.resolveVoiceMediaSourceContext(requestCtx, in)
 	if err != nil {
-		return err
+		return operation.ErrorOr(err)
 	}
 	key := voiceKey(voiceModeTalk, in.Channel.DeviceID, in.Channel.ChannelID)
 	if _, exists := g.streams.Load(key); exists {
-		_ = g.stopVoiceNoLock(ch, &StopVoiceInput{Channel: in.Channel, Mode: voiceModeTalk})
+		if stopErr := g.stopVoiceNoLock(requestCtx, ch, &StopVoiceInput{Channel: in.Channel, Mode: voiceModeTalk}); stopErr != nil {
+			return fmt.Errorf("stop previous Talk session: %w", stopErr)
+		}
 	}
 	stream := &Streams{DeviceID: in.Channel.DeviceID, ChannelID: in.Channel.ChannelID, StreamID: in.Channel.ID, Status: -1}
 	session := &talkSession{
@@ -205,37 +381,67 @@ func (g *GB28181API) startTalk(ctx context.Context, ch *Channel, in *VoiceInput)
 		SourceVHost: source.VHost, SourceApp: source.App, SourceStream: source.Stream,
 		SMS: in.SMS, Stream: stream, ready: make(chan error, 1),
 	}
-	if previous, loaded := g.talkSessions.LoadOrStore(session.ReceiveStream, session); loaded {
-		if old, ok := previous.(*talkSession); ok {
-			_ = g.stopTalkSession(old, fmt.Errorf("Talk session replaced"))
-		}
-		g.talkSessions.Store(session.ReceiveStream, session)
-	}
-	g.streams.Store(key, stream)
 	defer func() {
 		if err == nil {
 			return
 		}
-		if stream.Resp != nil {
-			if req, requestErr := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp); requestErr == nil {
-				if prepareDialogRequestTransport(req, ch) == nil {
-					_, _ = g.svr.Request(req)
-				}
-			}
-		}
-		_ = g.stopTalkSession(session, err)
-		g.streams.CompareAndDelete(key, stream)
+		cleanupErr := g.stopTalkSession(session, err)
+		err = errors.Join(err, cleanupErr)
+		err = errors.Join(err, g.persistChannelIdleIfNoActive(g.mediaPersistenceContext(), session.DeviceID, session.ChannelID))
 	}()
-
-	resp, err := g.sms.OpenRTPServer(in.SMS, zlm.OpenRTPServerRequest{TCPMode: in.StreamMode, StreamID: in.Channel.ID})
+	var (
+		previous any
+		loaded   bool
+	)
+	if !operation.Deliver(func() {
+		previous, loaded = g.talkSessions.LoadOrStore(session.ReceiveStream, session)
+	}) {
+		return operation.Cause()
+	}
+	if loaded {
+		if old, ok := previous.(*talkSession); ok {
+			if stopErr := g.stopTalkSession(old, fmt.Errorf("Talk session replaced")); stopErr != nil {
+				return fmt.Errorf("stop previous Talk session: %w", stopErr)
+			}
+		} else {
+			return fmt.Errorf("previous Talk session has invalid runtime state")
+		}
+		if !operation.Deliver(func() {
+			g.talkSessions.Store(session.ReceiveStream, session)
+		}) {
+			return operation.Cause()
+		}
+	}
+	if !operation.Deliver(func() {
+		g.streams.Store(key, stream)
+	}) {
+		return operation.Cause()
+	}
+	// Talk 接收端口与 SDP offer 必须复用同一个 SSRC，防止其他会话串入音频。
+	receiveSSRC, releaseReceiveSSRC, err := g.reserveSSRC(0)
+	if err != nil {
+		return err
+	}
+	if err := stream.bindSSRCReservation(receiveSSRC, releaseReceiveSSRC); err != nil {
+		return err
+	}
+	receiveSSRCValue, err := strconv.ParseUint(receiveSSRC, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid GB28181 SSRC %q: %w", receiveSSRC, err)
+	}
+	resp, err := openRTPServerContext(requestCtx, g.sms, in.SMS, zlm.OpenRTPServerRequest{
+		TCPMode: in.StreamMode, StreamID: in.Channel.ID,
+		SSRC:    receiveSSRCValue,
+		TCPRTCP: shouldEnableTCPRTCP(g.getDeviceGBProtocolVersion(in.Channel.DeviceID), in.StreamMode != 0),
+	})
 	if err != nil {
 		return err
 	}
 	session.mu.Lock()
 	session.receiverOpened = true
 	session.mu.Unlock()
-	if err = g.sipInviteVoice(ctx, ch, in, resp.Port, stream); err != nil {
-		return err
+	if err = g.sipInviteVoice(requestCtx, ch, in, resp.Port, receiveSSRC, stream); err != nil {
+		return operation.ErrorOr(err)
 	}
 	timeout := in.Timeout
 	if timeout <= 0 {
@@ -248,43 +454,72 @@ func (g *GB28181API) startTalk(ctx context.Context, ch *Channel, in *VoiceInput)
 		if err != nil {
 			return err
 		}
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-requestCtx.Done():
+		return operation.Cause()
 	case <-g.serviceDone():
 		return ErrServiceStopped
 	case <-timer.C:
 		return fmt.Errorf("wait Talk media stream timeout")
 	}
-	if g.core.Store() != nil {
-		_ = g.core.EditPlaying(ctx, session.DeviceID, session.ChannelID, true)
+	streamPublished := false
+	if !operation.Deliver(func() {
+		streamPublished, err = g.commitChannelStreamStart(requestCtx, key, stream)
+	}) {
+		return operation.Cause()
+	}
+	if !streamPublished {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("persist Talk playing state: %w", err)
 	}
 	return nil
 }
 
 func (g *GB28181API) startBroadcast(ctx context.Context, ch *Channel, in *VoiceInput) (err error) {
-	session, err := g.newBroadcastSession(in)
+	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, in.Channel.DeviceID, in.Channel.ChannelID)
+	defer releaseOperation()
+	requestCtx := operation.Context(ctx)
+	session, err := g.newBroadcastSessionContext(requestCtx, in)
 	if err != nil {
-		return err
+		return operation.ErrorOr(err)
 	}
 	if version, ok := ParseGBProtocolVersion(ch.GBVersion()); ok {
 		session.Version = version
 	} else {
 		session.Version = GBVersion11
 	}
-	if existing, loaded := g.broadcastSessions.LoadOrStore(session.ChannelID, session); loaded {
-		if previous, ok := existing.(*broadcastSession); ok {
-			_ = g.stopBroadcastSession(previous, true)
-		}
-		g.broadcastSessions.Store(session.ChannelID, session)
-	}
 	defer func() {
 		if err != nil {
-			_ = g.stopBroadcastSession(session, true)
+			err = errors.Join(err, g.stopBroadcastSession(session, true))
 		}
 	}()
+	var (
+		existing any
+		loaded   bool
+	)
+	if !operation.Deliver(func() {
+		existing, loaded = g.broadcastSessions.LoadOrStore(session.ChannelID, session)
+	}) {
+		return operation.Cause()
+	}
+	if loaded {
+		if previous, ok := existing.(*broadcastSession); ok {
+			if stopErr := g.stopBroadcastSession(previous, true); stopErr != nil {
+				return fmt.Errorf("stop previous Broadcast session: %w", stopErr)
+			}
+		} else {
+			return fmt.Errorf("previous Broadcast session has invalid runtime state")
+		}
+		if !operation.Deliver(func() {
+			g.broadcastSessions.Store(session.ChannelID, session)
+		}) {
+			return operation.Cause()
+		}
+	}
 
-	if err = g.startBroadcastNotification(ctx, ch, in); err != nil {
-		return err
+	if err = g.startBroadcastNotification(requestCtx, ch, in); err != nil {
+		return operation.ErrorOr(err)
 	}
 	timeout := in.Timeout
 	if timeout <= 0 {
@@ -297,34 +532,50 @@ func (g *GB28181API) startBroadcast(ctx context.Context, ch *Channel, in *VoiceI
 		if err != nil {
 			return err
 		}
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-requestCtx.Done():
+		return operation.Cause()
 	case <-g.serviceDone():
 		return ErrServiceStopped
 	case <-timer.C:
-		return fmt.Errorf("wait Broadcast INVITE timeout")
+		return fmt.Errorf("wait Broadcast session establishment timeout")
 	}
 
-	g.streams.Store(voiceKey(voiceModeBroadcast, session.DeviceID, session.ChannelID), session.Stream)
-	if g.core.Store() != nil {
-		_ = g.core.EditPlaying(ctx, session.DeviceID, session.ChannelID, true)
+	var persistErr error
+	streamPublished := false
+	if !operation.Deliver(func() {
+		key := voiceKey(voiceModeBroadcast, session.DeviceID, session.ChannelID)
+		g.streams.Store(key, session.Stream)
+		streamPublished, persistErr = g.commitChannelStreamStart(requestCtx, key, session.Stream)
+	}) {
+		return operation.Cause()
+	}
+	if !streamPublished {
+		return nil
+	}
+	if persistErr != nil {
+		return fmt.Errorf("persist Broadcast playing state: %w", persistErr)
 	}
 	return nil
 }
 
 func (g *GB28181API) newBroadcastSession(in *VoiceInput) (*broadcastSession, error) {
-	source, err := g.resolveVoiceMediaSource(in)
+	return g.newBroadcastSessionContext(context.Background(), in)
+}
+
+func (g *GB28181API) newBroadcastSessionContext(ctx context.Context, in *VoiceInput) (*broadcastSession, error) {
+	source, err := g.resolveVoiceMediaSourceContext(ctx, in)
 	if err != nil {
 		return nil, err
 	}
 	return &broadcastSession{
-		DeviceID:     in.Channel.DeviceID,
-		ChannelID:    in.Channel.ChannelID,
-		SourceID:     source.ID,
-		SourceVHost:  source.VHost,
-		SourceApp:    source.App,
-		SourceStream: source.Stream,
-		SMS:          in.SMS,
+		DeviceID:            in.Channel.DeviceID,
+		ChannelID:           in.Channel.ChannelID,
+		SourceID:            source.ID,
+		SourceVHost:         source.VHost,
+		SourceApp:           source.App,
+		SourceStream:        source.Stream,
+		SMS:                 in.SMS,
+		StandardTalkPlayKey: strings.TrimSpace(in.standardTalkPlayKey),
 		Stream: &Streams{
 			T: 0, DeviceID: in.Channel.DeviceID, ChannelID: in.Channel.ChannelID,
 			StreamID: in.Channel.ID, Status: -1,
@@ -335,6 +586,10 @@ func (g *GB28181API) newBroadcastSession(in *VoiceInput) (*broadcastSession, err
 }
 
 func (g *GB28181API) resolveVoiceMediaSource(in *VoiceInput) (*voiceMediaSource, error) {
+	return g.resolveVoiceMediaSourceContext(context.Background(), in)
+}
+
+func (g *GB28181API) resolveVoiceMediaSourceContext(ctx context.Context, in *VoiceInput) (*voiceMediaSource, error) {
 	cfg := g.configSnapshot()
 	if cfg == nil {
 		return nil, fmt.Errorf("SIP configuration is unavailable")
@@ -364,7 +619,7 @@ func (g *GB28181API) resolveVoiceMediaSource(in *VoiceInput) (*voiceMediaSource,
 	if err := filterUnknowDevices(sourceID); err != nil {
 		return nil, fmt.Errorf("invalid voice source_id: %w", err)
 	}
-	items, err := g.sms.GetMediaInfo(in.SMS, sourceApp, sourceStream)
+	items, err := getMediaInfoContext(ctx, g.sms, in.SMS, sourceApp, sourceStream)
 	if err != nil {
 		return nil, fmt.Errorf("query voice source stream: %w", err)
 	}
@@ -394,7 +649,10 @@ func (g *GB28181API) startBroadcastNotification(ctx context.Context, ch *Channel
 	if cfg == nil {
 		return fmt.Errorf("SIP configuration is unavailable")
 	}
-	sn := g.nextControlSN()
+	operation := newPendingDeviceOperation(ctx, in.Channel.DeviceID, in.Channel.ChannelID)
+	sn, key, pending := g.reservePendingBroadcast(ch.ChannelID, operation)
+	defer g.pendingBroadcast.CompareAndDelete(key, pending)
+	defer pending.operation.Cancel(nil)
 	body, err := sip.XMLEncode(broadcastNotify{
 		CmdType:  "Broadcast",
 		SN:       sn,
@@ -404,16 +662,13 @@ func (g *GB28181API) startBroadcastNotification(ctx context.Context, ch *Channel
 	if err != nil {
 		return err
 	}
-	key := buildPendingBroadcastKey(ch.ChannelID, sn)
-	pending := &pendingBroadcastResponse{wait: make(chan *broadcastResponse, 1)}
-	g.pendingBroadcast.Store(key, pending)
-	defer g.pendingBroadcast.Delete(key)
-	tx, err := g.svr.wrapRequestContext(ctx, ch, sip.MethodMessage, &sip.ContentTypeXML, body)
+	requestCtx := pending.operation.Context(ctx)
+	tx, err := g.svr.wrapRequestContext(requestCtx, ch, sip.MethodMessage, &sip.ContentTypeXML, body)
 	if err != nil {
-		return err
+		return pending.operation.ErrorOr(err)
 	}
-	if _, err = sipResponseContext(ctx, tx); err != nil {
-		return err
+	if _, err = sipResponseContext(requestCtx, tx); err != nil {
+		return pending.operation.ErrorOr(err)
 	}
 	timeout := in.Timeout
 	if timeout <= 0 {
@@ -427,8 +682,8 @@ func (g *GB28181API) startBroadcastNotification(ctx context.Context, ch *Channel
 			return fmt.Errorf("broadcast rejected: %s", response.Result)
 		}
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-pending.operation.Done():
+		return pending.operation.Cause()
 	case <-g.serviceDone():
 		return ErrServiceStopped
 	case <-timer.C:
@@ -449,6 +704,10 @@ func (g *GB28181API) sipMessageBroadcastResponse(ctx *sip.Context) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
+	if err := validateBroadcastResponseStructure(ctx.Request.Body()); err != nil {
+		ctx.String(400, err.Error())
+		return
+	}
 	response.CmdType = strings.TrimSpace(response.CmdType)
 	response.DeviceID = strings.TrimSpace(response.DeviceID)
 	response.Result = strings.TrimSpace(response.Result)
@@ -466,17 +725,42 @@ func (g *GB28181API) sipMessageBroadcastResponse(ctx *sip.Context) {
 		return
 	}
 	key := buildPendingBroadcastKey(response.DeviceID, response.SN)
-	if value, ok := g.pendingBroadcast.Load(key); ok {
-		select {
-		case value.(*pendingBroadcastResponse).wait <- &response:
-		default:
-		}
+	if err := ctx.RespondString(200, "OK"); err != nil {
+		ctx.Log.Error("respond Broadcast", "err", err, "sn", response.SN, "target_id", response.DeviceID)
+		return
 	}
-	ctx.String(200, "OK")
+	unlockCommit, err := g.lockAdmittedInboundDeviceStateCommit(ctx)
+	if err != nil {
+		return
+	}
+	defer unlockCommit()
+	if value, ok := g.pendingBroadcast.Load(key); ok {
+		pending := value.(*pendingBroadcastResponse)
+		pending.operation.Deliver(func() {
+			select {
+			case pending.wait <- &response:
+			default:
+			}
+		})
+	}
 }
 
 func buildPendingBroadcastKey(targetID string, sn int) string {
 	return strings.TrimSpace(targetID) + ":" + fmt.Sprintf("%d", sn)
+}
+
+func (g *GB28181API) reservePendingBroadcast(targetID string, operation *pendingDeviceOperation) (int, string, *pendingBroadcastResponse) {
+	for {
+		sn := g.nextControlSN()
+		key := buildPendingBroadcastKey(targetID, sn)
+		pending := &pendingBroadcastResponse{
+			wait:      make(chan *broadcastResponse, 1),
+			operation: operation,
+		}
+		if _, loaded := g.pendingBroadcast.LoadOrStore(key, pending); !loaded {
+			return sn, key, pending
+		}
+	}
 }
 
 // StopVoice 停止语音会话。
@@ -490,6 +774,9 @@ func (g *GB28181API) StopVoice(ctx context.Context, in *StopVoiceInput) error {
 	if in == nil || in.Channel == nil {
 		return fmt.Errorf("invalid stop voice input")
 	}
+	if in.Mode != voiceModeTalk && in.Mode != voiceModeTalkStandard && in.Mode != voiceModeBroadcast {
+		return fmt.Errorf("invalid voice mode: %s", in.Mode)
+	}
 	ch, ok := g.svr.memoryStorer.GetChannel(in.Channel.DeviceID, in.Channel.ChannelID)
 	if !ok {
 		return ErrChannelNotExist
@@ -499,13 +786,22 @@ func (g *GB28181API) StopVoice(ctx context.Context, in *StopVoiceInput) error {
 		return err
 	}
 	defer unlock()
-	defer func() {
-		_ = g.svr.gb.core.EditPlaying(ctx, in.Channel.DeviceID, in.Channel.ChannelID, false)
-	}()
-	return g.stopVoiceNoLock(ch, in)
+	stopErr := g.stopVoiceNoLock(ctx, ch, in)
+	persistErr := g.persistChannelIdleIfNoActive(ctx, in.Channel.DeviceID, in.Channel.ChannelID)
+	return errors.Join(stopErr, persistErr)
 }
 
-func (g *GB28181API) stopVoiceNoLock(ch *Channel, in *StopVoiceInput) error {
+func (g *GB28181API) stopVoiceNoLock(ctx context.Context, ch *Channel, in *StopVoiceInput) error {
+	if in.Mode == voiceModeTalkStandard {
+		if value, ok := g.broadcastSessions.Load(in.Channel.ChannelID); ok {
+			if session, ok := value.(*broadcastSession); ok && session.StandardTalkPlayKey != "" {
+				return g.stopBroadcastSession(session, true)
+			}
+		}
+		return g.stopPlayContext(ctx, ch, &StopPlayInput{
+			Channel: in.Channel, sessionKey: standardTalkPlayKey(in.Channel.DeviceID, in.Channel.ChannelID),
+		})
+	}
 	if in.Mode == voiceModeBroadcast {
 		if value, ok := g.broadcastSessions.Load(in.Channel.ChannelID); ok {
 			if session, ok := value.(*broadcastSession); ok {
@@ -516,39 +812,44 @@ func (g *GB28181API) stopVoiceNoLock(ch *Channel, in *StopVoiceInput) error {
 		return nil
 	}
 	key := voiceKey(in.Mode, in.Channel.DeviceID, in.Channel.ChannelID)
-	stream, ok := g.streams.LoadAndDelete(key)
+	stream, ok := g.streams.Load(key)
 	if !ok {
 		return nil
 	}
-	var result error
-	if stream.Resp != nil {
-		req, requestErr := sip.NewRequestFromResponseChecked(sip.MethodBYE, stream.Resp)
-		if requestErr != nil {
-			result = requestErr
-		} else {
-			result = prepareDialogRequestTransport(req, ch)
-			if result == nil {
-				_, result = g.svr.Request(req)
-			}
-		}
+	if stream == nil {
+		g.streams.CompareAndDelete(key, nil)
+		return nil
 	}
 	if value, ok := g.talkSessions.Load(stream.StreamID); ok {
-		if session, ok := value.(*talkSession); ok {
-			if err := g.stopTalkSession(session, nil); result == nil {
-				result = err
-			}
+		if session, ok := value.(*talkSession); ok && session != nil && session.Stream == stream {
+			return g.stopTalkSession(session, nil)
 		}
 	}
-	return result
+	g.markMediaStreamStopped(stream, "stopped_by_user", false)
+	complete, result := g.cleanupMediaStreamContext(ctx, key, stream)
+	if result != nil {
+		return result
+	}
+	if !complete {
+		return fmt.Errorf("Talk media cleanup remains pending")
+	}
+	return nil
 }
 
 func (g *GB28181API) startTalkRTP(streamID string) error {
+	return g.startTalkRTPForMediaServer(streamID, "")
+}
+
+func (g *GB28181API) startTalkRTPForMediaServer(streamID, mediaServerID string) error {
 	value, ok := g.talkSessions.Load(strings.TrimSpace(streamID))
 	if !ok {
 		return nil
 	}
 	session, ok := value.(*talkSession)
 	if !ok || session == nil {
+		return nil
+	}
+	if !mediaServerEventMatches(session.SMS, mediaServerID) {
 		return nil
 	}
 	session.mu.Lock()
@@ -558,33 +859,45 @@ func (g *GB28181API) startTalkRTP(streamID string) error {
 	}
 	session.startBusy = true
 	session.mu.Unlock()
-	defer func() {
+	finishStart := func(ssrc string, started bool) bool {
 		session.mu.Lock()
+		if started {
+			session.SSRC = ssrc
+			session.rtpStarted = true
+		}
 		session.startBusy = false
+		stopped := session.stopped
 		session.mu.Unlock()
-	}()
-	ssrc, err := g.getSSRC(0)
+		return stopped
+	}
+	ssrc, releaseSSRC, err := g.reserveSSRC(0)
 	if err != nil {
 		session.complete(err)
+		if finishStart("", false) {
+			return errors.Join(err, g.stopTalkSession(session, nil))
+		}
 		return err
 	}
-	_, err = g.sms.StartSendRTPTalk(session.SMS, zlm.StartSendRTPTalkRequest{
+	_, err = startSendRTPTalkContext(g.serviceContext(), g.sms, session.SMS, zlm.StartSendRTPTalkRequest{
 		Vhost: session.SourceVHost, App: session.SourceApp, Stream: session.SourceStream,
 		SSRC: ssrc, RecvStreamID: session.ReceiveStream, Type: broadcastRTPTypeES, PT: broadcastPCMAPayload, OnlyAudio: true,
 	})
 	if err != nil {
+		releaseSSRC()
 		session.complete(fmt.Errorf("start Talk RTP: %w", err))
+		if finishStart("", false) {
+			return errors.Join(err, g.stopTalkSession(session, nil))
+		}
 		return err
 	}
 	session.mu.Lock()
-	if session.stopped {
-		session.mu.Unlock()
-		_, _ = g.sms.StopSendRTP(session.SMS, zlm.StopSendRTPRequest{Vhost: session.SourceVHost, App: session.SourceApp, Stream: session.SourceStream, SSRC: ssrc})
-		return nil
-	}
-	session.SSRC = ssrc
-	session.rtpStarted = true
+	session.ssrcRelease = releaseSSRC
 	session.mu.Unlock()
+	if finishStart(ssrc, true) {
+		// 停止可能在媒体服务确认发送成功前到达。先记录已创建资源，再交给统一状态机清理，
+		// 这样 StopSendRTP 失败时仍保留会话并由运行态清理器重试。
+		return g.stopTalkSession(session, nil)
+	}
 	session.complete(nil)
 	return nil
 }
@@ -593,77 +906,377 @@ func (g *GB28181API) stopTalkSession(session *talkSession, cause error) (result 
 	if session == nil {
 		return nil
 	}
-	session.stopOnce.Do(func() {
-		session.mu.Lock()
-		started := session.rtpStarted
-		opened := session.receiverOpened
-		ssrc := session.SSRC
-		session.rtpStarted = false
-		session.receiverOpened = false
-		session.stopped = true
-		session.mu.Unlock()
-		if started {
-			_, result = g.sms.StopSendRTP(session.SMS, zlm.StopSendRTPRequest{
-				Vhost: session.SourceVHost, App: session.SourceApp, Stream: session.SourceStream, SSRC: ssrc,
-			})
+	session.stopMu.Lock()
+	defer session.stopMu.Unlock()
+	cleanupCtx := g.mediaPersistenceContext()
+	stream := session.Stream
+	if stream != nil {
+		reason := "talk_stopped"
+		if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+			reason = cause.Error()
 		}
-		if opened {
-			_, err := g.sms.CloseRTPServer(session.SMS, zlm.CloseRTPServerRequest{StreamID: session.ReceiveStream})
-			if result == nil {
-				result = err
+		g.markMediaStreamStopped(stream, reason, false)
+	}
+	session.mu.Lock()
+	session.stopped = true
+	started := session.rtpStarted
+	opened := session.receiverOpened
+	ssrc := session.SSRC
+	session.mu.Unlock()
+	if cause != nil {
+		session.complete(cause)
+	}
+	dialogDone := stream == nil
+	if stream != nil {
+		stream.cleanupMu.Lock()
+		if stream.Resp == nil {
+			stream.dialogStopped = true
+		} else if !stream.dialogStopped {
+			err := g.sendStreamBYEContext(cleanupCtx, stream)
+			result = errors.Join(result, err)
+			if err == nil {
+				stream.dialogStopped = true
 			}
 		}
-		g.talkSessions.CompareAndDelete(session.ReceiveStream, session)
-		if cause != nil {
-			session.complete(cause)
+		dialogDone = stream.dialogStopped
+		stream.cleanupMu.Unlock()
+	}
+	if started {
+		if g.sms == nil || session.SMS == nil {
+			result = errors.Join(result, fmt.Errorf("Talk RTP media service is unavailable"))
+		} else {
+			_, err := stopSendRTPContext(cleanupCtx, g.sms, session.SMS, zlm.StopSendRTPRequest{
+				Vhost: session.SourceVHost, App: session.SourceApp, Stream: session.SourceStream, SSRC: ssrc,
+			})
+			result = errors.Join(result, err)
+			if err == nil {
+				session.mu.Lock()
+				session.rtpStarted = false
+				session.mu.Unlock()
+			}
 		}
-		if g.core.Store() != nil {
-			_ = g.core.EditPlaying(context.Background(), session.DeviceID, session.ChannelID, false)
+	}
+	if opened {
+		if g.sms == nil || session.SMS == nil {
+			result = errors.Join(result, fmt.Errorf("Talk RTP receiver service is unavailable"))
+		} else {
+			_, err := closeRTPServerContext(cleanupCtx, g.sms, session.SMS, zlm.CloseRTPServerRequest{StreamID: session.ReceiveStream})
+			result = errors.Join(result, err)
+			if err == nil {
+				session.mu.Lock()
+				session.receiverOpened = false
+				session.mu.Unlock()
+			}
 		}
-	})
-	return result
+	}
+	if result != nil {
+		return result
+	}
+	session.mu.Lock()
+	complete := !session.rtpStarted && !session.receiverOpened && !session.startBusy && dialogDone
+	releaseSendSSRC := session.ssrcRelease
+	if !session.rtpStarted && !session.startBusy {
+		session.ssrcRelease = nil
+	} else {
+		releaseSendSSRC = nil
+	}
+	session.mu.Unlock()
+	if releaseSendSSRC != nil {
+		releaseSendSSRC()
+	}
+	if !complete {
+		return nil
+	}
+	g.talkSessions.CompareAndDelete(session.ReceiveStream, session)
+	if g.streams != nil && session.Stream != nil {
+		g.compareAndDeleteChannelStream(voiceKey(voiceModeTalk, session.DeviceID, session.ChannelID), session.Stream)
+	}
+	if session.Stream != nil {
+		session.Stream.releaseSSRCReservation()
+	}
+	return g.persistChannelIdleIfNoActive(cleanupCtx, session.DeviceID, session.ChannelID)
 }
 
 func (g *GB28181API) stopBroadcastSession(session *broadcastSession, sendBYE bool) (result error) {
 	if session == nil {
 		return nil
 	}
-	session.stopOnce.Do(func() {
-		session.mu.Lock()
-		dialog := session.Dialog
-		session.mu.Unlock()
-		if sendBYE && dialog != nil {
-			if err := g.sendInboundDialogBYE(dialog); err != nil {
-				result = err
-			}
+	session.stopMu.Lock()
+	defer session.stopMu.Unlock()
+	cleanupCtx := g.mediaPersistenceContext()
+	session.mu.Lock()
+	session.stopped = true
+	dialog := session.Dialog
+	started := session.rtpStarted
+	ssrc := session.SSRC
+	if dialog == nil || !sendBYE {
+		session.dialogDone = true
+	}
+	dialogDone := session.dialogDone
+	cascade := session.Cascade
+	session.mu.Unlock()
+	session.complete(fmt.Errorf("Broadcast session stopped"))
+	if !dialogDone {
+		err := g.sendInboundDialogBYEContext(cleanupCtx, dialog)
+		result = errors.Join(result, err)
+		if err == nil {
+			session.mu.Lock()
+			session.dialogDone = true
+			session.mu.Unlock()
 		}
-		session.mu.Lock()
-		started := session.rtpStarted
-		ssrc := session.SSRC
-		session.rtpStarted = false
-		session.stopped = true
-		session.mu.Unlock()
-		if started && g.sms != nil && session.SMS != nil {
-			_, err := g.sms.StopSendRTP(session.SMS, zlm.StopSendRTPRequest{
+	}
+	if started {
+		if g.sms == nil || session.SMS == nil {
+			result = errors.Join(result, fmt.Errorf("Broadcast RTP media service is unavailable"))
+		} else {
+			_, err := stopSendRTPContext(cleanupCtx, g.sms, session.SMS, zlm.StopSendRTPRequest{
 				Vhost: session.SourceVHost, App: session.SourceApp, Stream: session.SourceStream, SSRC: ssrc,
 			})
-			if result == nil && err != nil {
-				result = err
+			result = errors.Join(result, err)
+			if err == nil {
+				session.mu.Lock()
+				session.rtpStarted = false
+				session.mu.Unlock()
 			}
 		}
-		g.broadcastSessions.CompareAndDelete(session.ChannelID, session)
-		if session.Stream != nil {
-			g.streams.CompareAndDelete(voiceKey(voiceModeBroadcast, session.DeviceID, session.ChannelID), session.Stream)
+	}
+	if cascade != nil {
+		err := g.stopCascadeVoiceSource(cascade, true)
+		result = errors.Join(result, err)
+		if err == nil {
+			session.mu.Lock()
+			session.Cascade = nil
+			session.mu.Unlock()
 		}
-		if g.core.Store() != nil {
-			_ = g.core.EditPlaying(context.Background(), session.DeviceID, session.ChannelID, false)
+	}
+	playKey := strings.TrimSpace(session.StandardTalkPlayKey)
+	if playKey != "" {
+		playHandled := false
+		if g.svr != nil && g.svr.memoryStorer != nil {
+			if ch, ok := g.svr.memoryStorer.GetChannel(session.DeviceID, session.ChannelID); ok {
+				playHandled = true
+				result = errors.Join(result, g.stopPlayContext(g.mediaPersistenceContext(), ch, &StopPlayInput{
+					Channel: &ipc.Channel{DeviceID: session.DeviceID, ChannelID: session.ChannelID}, sessionKey: playKey, skipLinkedVoice: true,
+				}))
+			}
 		}
-		session.complete(fmt.Errorf("Broadcast session stopped"))
-		if err := g.stopCascadeVoiceSource(session.Cascade, true); result == nil && err != nil {
-			result = err
+		if !playHandled {
+			stream, ok := g.streams.Load(playKey)
+			if ok && stream != nil {
+				stream.cleanupMu.Lock()
+				stream.dialogStopped = true
+				if stream.mediaServer == nil || strings.TrimSpace(stream.StreamID) == "" {
+					stream.rtpClosed = true
+				} else if g.sms == nil {
+					result = errors.Join(result, fmt.Errorf("standard Talk RTP media service is unavailable"))
+				} else if !stream.rtpClosed {
+					_, err := closeRTPServerContext(cleanupCtx, g.sms, stream.mediaServer, zlm.CloseRTPServerRequest{StreamID: stream.StreamID})
+					result = errors.Join(result, err)
+					if err == nil {
+						stream.rtpClosed = true
+					}
+				}
+				playComplete := stream.dialogStopped && stream.rtpClosed
+				stream.cleanupMu.Unlock()
+				if playComplete {
+					g.compareAndDeleteChannelStream(playKey, stream)
+					stream.releaseSSRCReservation()
+				}
+			}
 		}
+	}
+	if result != nil {
+		return result
+	}
+	session.mu.Lock()
+	complete := session.dialogDone && !session.rtpStarted && !session.inviteBusy && session.Cascade == nil
+	session.mu.Unlock()
+	if playKey != "" {
+		if _, exists := g.streams.Load(playKey); exists {
+			complete = false
+		}
+	}
+	if !complete {
+		return nil
+	}
+	if dialog != nil {
+		g.inviteDialogs.CompareAndDelete(dialog.CallID, dialog)
+	}
+	g.broadcastSessions.CompareAndDelete(session.ChannelID, session)
+	if session.Stream != nil {
+		if g.streams != nil {
+			g.compareAndDeleteChannelStream(voiceKey(voiceModeBroadcast, session.DeviceID, session.ChannelID), session.Stream)
+		}
+		session.Stream.releaseSSRCReservation()
+	}
+	return g.persistChannelIdleIfNoActive(cleanupCtx, session.DeviceID, session.ChannelID)
+}
+
+// cleanupStoppedVoiceSessions 只重试已经进入终止态的语音对象，避免后台清理误伤活动会话。
+// 返回 true 表示仍有对象保留在运行时索引中，需要后续继续重试。
+func (g *GB28181API) cleanupStoppedVoiceSessions() (pending bool) {
+	if g == nil {
+		return false
+	}
+	g.talkSessions.Range(func(key, value any) bool {
+		session, ok := value.(*talkSession)
+		if !ok || session == nil {
+			g.talkSessions.CompareAndDelete(key, value)
+			return true
+		}
+		session.mu.Lock()
+		stopped := session.stopped
+		session.mu.Unlock()
+		if !stopped {
+			return true
+		}
+		_ = g.stopTalkSession(session, nil)
+		if current, exists := g.talkSessions.Load(key); exists && current == session {
+			pending = true
+		}
+		return true
 	})
-	return result
+	g.broadcastSessions.Range(func(key, value any) bool {
+		session, ok := value.(*broadcastSession)
+		if !ok || session == nil {
+			g.broadcastSessions.CompareAndDelete(key, value)
+			return true
+		}
+		session.mu.Lock()
+		stopped := session.stopped
+		session.mu.Unlock()
+		if !stopped {
+			return true
+		}
+		_ = g.stopBroadcastSession(session, true)
+		if current, exists := g.broadcastSessions.Load(key); exists && current == session {
+			pending = true
+		}
+		return true
+	})
+	g.cascadeVoiceDialogs.Range(func(key, value any) bool {
+		source, ok := value.(*cascadeVoiceSourceSession)
+		if !ok || source == nil {
+			g.cascadeVoiceDialogs.CompareAndDelete(key, value)
+			return true
+		}
+		source.mu.Lock()
+		stopping := source.stopping
+		session := source.broadcast
+		source.mu.Unlock()
+		if !stopping {
+			return true
+		}
+		if session != nil {
+			if current, exists := g.broadcastSessions.Load(session.ChannelID); exists && current == session {
+				// 关联的广播会话由上面的扫描统一重试，避免同一轮重复产生媒体副作用。
+				pending = true
+				return true
+			}
+			_ = g.stopBroadcastSession(session, true)
+		} else {
+			_ = g.stopCascadeVoiceSource(source, true)
+		}
+		if current, exists := g.cascadeVoiceDialogs.Load(key); exists && current == source {
+			pending = true
+		}
+		return true
+	})
+	g.pendingCascadeVoiceCleanups.Range(func(key, value any) bool {
+		source, keyOK := key.(*cascadeVoiceSourceSession)
+		current, valueOK := value.(*cascadeVoiceSourceSession)
+		if !keyOK || !valueOK || source == nil || current != source {
+			g.pendingCascadeVoiceCleanups.CompareAndDelete(key, value)
+			return true
+		}
+		source.mu.Lock()
+		stopping := source.stopping
+		callID := source.callID
+		source.mu.Unlock()
+		if !stopping {
+			return true
+		}
+		if callID != "" {
+			if active, exists := g.cascadeVoiceDialogs.Load(callID); exists && active == source {
+				// 活动索引已经在上一轮扫描中负责重试，避免同一轮重复媒体副作用。
+				pending = true
+				return true
+			}
+		}
+		_ = g.stopCascadeVoiceSource(source, true)
+		if retained, exists := g.pendingCascadeVoiceCleanups.Load(source); exists && retained == source {
+			pending = true
+		}
+		return true
+	})
+	return pending
+}
+
+func (g *GB28181API) pendingVoiceCleanupOwnsStream(key string, stream *Streams) bool {
+	if g == nil || stream == nil {
+		return false
+	}
+	if key == voiceKey(voiceModeTalk, stream.DeviceID, stream.ChannelID) {
+		if value, ok := g.talkSessions.Load(stream.StreamID); ok {
+			session, _ := value.(*talkSession)
+			if session != nil && session.Stream == stream {
+				session.mu.Lock()
+				stopped := session.stopped
+				session.mu.Unlock()
+				return stopped
+			}
+		}
+	}
+	if value, ok := g.broadcastSessions.Load(stream.ChannelID); ok {
+		session, _ := value.(*broadcastSession)
+		if session != nil {
+			session.mu.Lock()
+			stopped := session.stopped
+			ownsStream := session.Stream == stream || strings.TrimSpace(session.StandardTalkPlayKey) == key
+			session.mu.Unlock()
+			return stopped && ownsStream
+		}
+	}
+	return false
+}
+
+func (g *GB28181API) retryStoppedVoiceSessions(ctx context.Context, interval time.Duration) error {
+	if g == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if interval <= 0 {
+		interval = voiceShutdownRetryInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if !g.cleanupStoppedVoiceSessions() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (g *GB28181API) stopStandardTalkForPlayKey(playKey string) {
+	playKey = strings.TrimSpace(playKey)
+	if g == nil || playKey == "" {
+		return
+	}
+	g.broadcastSessions.Range(func(_, value any) bool {
+		session, ok := value.(*broadcastSession)
+		if !ok || session == nil || session.StandardTalkPlayKey != playKey {
+			return true
+		}
+		_ = g.stopBroadcastSession(session, true)
+		return false
+	})
 }
 
 func (g *GB28181API) findBroadcastSession(deviceID string) *broadcastSession {
@@ -707,7 +1320,11 @@ func (g *GB28181API) findBroadcastSessionForInvite(deviceID string, request *sip
 		}
 		return session, nil
 	}
-	return g.findBroadcastSession(deviceID), nil
+	session := g.findBroadcastSession(deviceID)
+	if session != nil && session.Version.AtLeast(GBVersion11) {
+		return session, fmt.Errorf("Subject header is required")
+	}
+	return session, nil
 }
 
 func parseBroadcastPayload(media *sdp.Media, version GBProtocolVersion) (payload int, mapping string, rtpType int, err error) {
@@ -719,7 +1336,11 @@ func parseBroadcastPayload(media *sdp.Media, version GBProtocolVersion) (payload
 		if parseErr != nil || value < 0 || value > 127 {
 			continue
 		}
-		formatName := strings.ToUpper(strings.TrimSpace(media.PayloadFormat(format)))
+		formatName, mappingErr := sdpPayloadFormat(media, value)
+		if mappingErr != nil {
+			return 0, "", 0, fmt.Errorf("invalid Broadcast SDP: %w", mappingErr)
+		}
+		formatName = strings.ToUpper(strings.TrimSpace(formatName))
 		if version == GBVersion11 && (formatName == "PS/90000" || formatName == "" && value == broadcastPSPayload) {
 			return value, "PS/90000", broadcastRTPTypePS, nil
 		}
@@ -733,16 +1354,12 @@ func parseBroadcastPayload(media *sdp.Media, version GBProtocolVersion) (payload
 	return 0, "", 0, fmt.Errorf("Broadcast INVITE does not offer PCMA/8000 audio for protocol %s", version)
 }
 
-func (g *GB28181API) sipInviteVoice(ctx context.Context, ch *Channel, in *VoiceInput, port int, stream *Streams) error {
+func (g *GB28181API) sipInviteVoice(ctx context.Context, ch *Channel, in *VoiceInput, port int, ssrc string, stream *Streams) error {
 	cfg := g.configSnapshot()
 	if cfg == nil {
 		return fmt.Errorf("SIP configuration is unavailable")
 	}
 	ipAddress, err := GetIP(in.SMS.GetSDPIP())
-	if err != nil {
-		return err
-	}
-	ssrc, err := g.getSSRC(0)
 	if err != nil {
 		return err
 	}
@@ -756,7 +1373,7 @@ func (g *GB28181API) sipInviteVoice(ctx context.Context, ch *Channel, in *VoiceI
 	if err != nil {
 		return err
 	}
-	resp, err := sipResponseContext(ctx, tx)
+	resp, err := sipInviteResponseContext(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -766,18 +1383,16 @@ func (g *GB28181API) sipInviteVoice(ctx context.Context, ch *Channel, in *VoiceI
 	stream.ChannelID = in.Channel.ChannelID
 	stream.StreamID = in.Channel.ID
 	stream.Status = 0
-	stream.ssrc = ssrc
 	if callID, ok := resp.CallID(); ok {
 		stream.CallID = normalizeCallID(callID)
 	}
-	ack, err := sip.NewRequestFromResponseChecked(sip.MethodACK, resp)
-	if err != nil {
-		return err
-	}
-	return tx.Request(ack)
+	return g.ackAndConnectActiveRTP(ctx, tx, resp, in.SMS, stream.StreamID, in.StreamMode, "audio", ssrc, g.getDeviceGBProtocolVersion(in.Channel.DeviceID), "8", "0", "9")
 }
 
 func buildVoiceSDP(channelID, ipAddress string, port int, streamMode int8, ssrc string) ([]byte, error) {
+	if streamMode < 0 || streamMode > 2 {
+		return nil, fmt.Errorf("invalid RTP stream mode: %d", streamMode)
+	}
 	protocol := "TCP/RTP/AVP"
 	if streamMode == 0 {
 		protocol = "RTP/AVP"

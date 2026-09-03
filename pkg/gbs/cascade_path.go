@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,6 +13,40 @@ const (
 	cascadeRoutePathHeader     = "X-RoutePath"
 	cascadePreferredPathHeader = "X-PreferredPath"
 )
+
+type cascadeDownstreamInviteError struct {
+	err      error
+	response *sip.Response
+}
+
+func (e *cascadeDownstreamInviteError) Error() string {
+	if e == nil || e.err == nil {
+		return "cascade downstream INVITE failed"
+	}
+	return e.err.Error()
+}
+
+func (e *cascadeDownstreamInviteError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func wrapCascadeDownstreamInviteError(err error, response *sip.Response) error {
+	if err == nil || response == nil {
+		return err
+	}
+	return &cascadeDownstreamInviteError{err: err, response: response}
+}
+
+func cascadeDownstreamInviteResponse(err error) sip.Message {
+	var downstreamErr *cascadeDownstreamInviteError
+	if errors.As(err, &downstreamErr) {
+		return downstreamErr.response
+	}
+	return nil
+}
 
 func validateCascadePlatformIdentifier(value string) error {
 	if !isGBDeviceIdentifier(value) {
@@ -137,12 +172,40 @@ func appendCascadeRoutePath(response *sip.Response, worker *cascadeWorker, downs
 	return nil
 }
 
+// appendCascadeFailureRoutePath 保留失败响应已走过的实际路径。下级未返回路径时，
+// 只能确认指定路径中的第一跳已经收到请求，因此不能把尚未经过的完整路径写入响应。
+func appendCascadeFailureRoutePath(response *sip.Response, worker *cascadeWorker, downstream sip.Message, expectedDownstream string) error {
+	if response == nil || worker == nil || worker.protocolVersion() != GBVersion30 {
+		return nil
+	}
+	raw, err := singleSIPHeaderValue(downstream, cascadeRoutePathHeader)
+	if err != nil {
+		return err
+	}
+	if raw == "" && strings.TrimSpace(expectedDownstream) != "" {
+		expected, parseErr := parseCascadePlatformPath(expectedDownstream)
+		if parseErr != nil {
+			return parseErr
+		}
+		if len(expected) > 0 {
+			fallback := sip.NewResponse("", sip.DefaultSipVersion, http.StatusBadGateway, "Bad Gateway", nil, nil)
+			fallback.AppendHeader(&sip.GenericHeader{HeaderName: cascadeRoutePathHeader, Contents: expected[0]})
+			downstream = fallback
+		}
+	}
+	return appendCascadeRoutePath(response, worker, downstream, "")
+}
+
 func respondCascadeInviteStatus(ctx *sip.Context, worker *cascadeWorker, status int, reason string) {
+	respondCascadeInviteStatusWithRoute(ctx, worker, status, reason, nil, "")
+}
+
+func respondCascadeInviteStatusWithRoute(ctx *sip.Context, worker *cascadeWorker, status int, reason string, downstream sip.Message, expectedDownstream string) {
 	if ctx == nil || ctx.Request == nil || ctx.Tx == nil {
 		return
 	}
 	response := sip.NewResponseFromRequest("", ctx.Request, status, reason, nil)
-	if err := appendCascadeRoutePath(response, worker, nil, ""); err != nil && status < http.StatusInternalServerError {
+	if err := appendCascadeFailureRoutePath(response, worker, downstream, expectedDownstream); err != nil && status < http.StatusInternalServerError {
 		response = sip.NewResponseFromRequest("", ctx.Request, http.StatusInternalServerError, err.Error(), nil)
 	}
 	_ = ctx.Tx.Respond(response)

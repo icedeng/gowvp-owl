@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,13 +21,16 @@ import (
 
 // AIWebhookAPI 处理 AI 分析服务的回调请求
 type AIWebhookAPI struct {
-	log       *slog.Logger
-	conf      *conf.Bootstrap
-	aiTasks   *conc.Map[string, struct{}]
-	limiter   func(identifier string) bool
-	ai        *rpc.AIClient
-	eventCore event.Core
-	ipcCore   ipc.Core
+	log     *slog.Logger
+	conf    *conf.Bootstrap
+	aiTasks *conc.Map[string, struct{}]
+	limiter func(identifier string) bool
+	ai      *rpc.AIClient
+	// startCameraFn/stopCameraFn 仅覆盖 RPC 调用边界，便于验证数据库与外部任务的提交顺序。
+	startCameraFn func(context.Context, *protos.StartCameraRequest) (*protos.StartCameraResponse, error)
+	stopCameraFn  func(context.Context, *protos.StopCameraRequest) (*protos.StopCameraResponse, error)
+	eventCore     event.Core
+	ipcCore       ipc.Core
 	// smsCore 在 StartAISyncLoop 时注入，供 ReloadAITask 使用
 	smsCore      sms.Core
 	smsCoreReady bool
@@ -180,11 +185,10 @@ func (a *AIWebhookAPI) syncAITasks(ctx context.Context, smsCore sms.Core) {
 
 // startAITask 启动单个通道的 AI 检测任务（内部使用，自动构建 RTSP URL）
 func (a *AIWebhookAPI) startAITask(ctx context.Context, smsCore sms.Core, ch *ipc.Channel) error {
-	svr, err := smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
+	rtspURL, err := buildChannelRTSPURL(ctx, smsCore, ch)
 	if err != nil {
-		return fmt.Errorf("get media server: %w", err)
+		return fmt.Errorf("build AI RTSP URL: %w", err)
 	}
-	rtspURL := fmt.Sprintf("rtsp://127.0.0.1:%d/rtp/%s", svr.Ports.RTSP, ch.ID)
 	_, err = a.StartAIDetection(ctx, ch, rtspURL)
 	return err
 }
@@ -196,7 +200,7 @@ func (a *AIWebhookAPI) stopAITask(ctx context.Context, channelID string) error {
 
 // StartAIDetection 启动 AI 检测任务，供外部调用（如 ipc.go 中的 enableAI）
 func (a *AIWebhookAPI) StartAIDetection(ctx context.Context, ch *ipc.Channel, rtspURL string) (*protos.StartCameraResponse, error) {
-	if a.ai == nil {
+	if a.ai == nil && a.startCameraFn == nil {
 		return nil, fmt.Errorf("AI service not initialized")
 	}
 
@@ -211,7 +215,7 @@ func (a *AIWebhookAPI) StartAIDetection(ctx context.Context, ch *ipc.Channel, rt
 		interval = 5.0
 	}
 	cooldown := a.conf.Server.AI.AlertCooldownSeconds
-	resp, err := a.ai.StartCamera(ctx, &protos.StartCameraRequest{
+	request := &protos.StartCameraRequest{
 		CameraId:              ch.ID,
 		CameraName:            ch.Name,
 		RtspUrl:               rtspURL,
@@ -222,9 +226,26 @@ func (a *AIWebhookAPI) StartAIDetection(ctx context.Context, ch *ipc.Channel, rt
 		RetryLimit:            10,
 		CallbackUrl:           fmt.Sprintf("http://127.0.0.1:%d/ai", a.conf.Server.HTTP.Port),
 		CallbackSecret:        a.conf.AISecret,
-	})
+	}
+	var resp *protos.StartCameraResponse
+	var err error
+	if a.startCameraFn != nil {
+		resp, err = a.startCameraFn(ctx, request)
+	} else {
+		resp, err = a.ai.StartCamera(ctx, request)
+	}
 	if err != nil {
 		return nil, err
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("AI service returned an empty start response")
+	}
+	if !resp.GetSuccess() {
+		message := strings.TrimSpace(resp.GetMessage())
+		if message == "" {
+			message = "AI service rejected the start request"
+		}
+		return nil, errors.New(message)
 	}
 
 	a.aiTasks.Store(ch.ID, struct{}{})
@@ -233,15 +254,24 @@ func (a *AIWebhookAPI) StartAIDetection(ctx context.Context, ch *ipc.Channel, rt
 
 // StopAIDetection 停止 AI 检测任务，供外部调用（如 ipc.go 中的 disableAI）
 func (a *AIWebhookAPI) StopAIDetection(ctx context.Context, channelID string) error {
-	if a.ai == nil {
+	if a.ai == nil && a.stopCameraFn == nil {
 		return nil
 	}
-	_, err := a.ai.StopCamera(ctx, &protos.StopCameraRequest{
+	request := &protos.StopCameraRequest{
 		CameraId: channelID,
-	})
-	// 无论是否成功都从内存中删除，避免重复尝试停止已不存在的任务
+	}
+	var err error
+	if a.stopCameraFn != nil {
+		_, err = a.stopCameraFn(ctx, request)
+	} else {
+		_, err = a.ai.StopCamera(ctx, request)
+	}
+	if err != nil {
+		return err
+	}
+	// 只有外部任务确认停止后才释放所有权；失败时由同步器继续重试。
 	a.aiTasks.Delete(channelID)
-	return err
+	return nil
 }
 
 // extractZoneConfig 从通道配置中提取多区域信息，转为 proto AnalysisZone 列表
@@ -272,7 +302,7 @@ func (a *AIWebhookAPI) ReloadAITask(ctx context.Context, ch *ipc.Channel) error 
 		return fmt.Errorf("smsCore not initialized, StartAISyncLoop not called yet")
 	}
 	if err := a.stopAITask(ctx, ch.ID); err != nil {
-		a.log.Warn("ReloadAITask stop failed, continuing to start", "camera_id", ch.ID, "err", err)
+		return fmt.Errorf("stop AI task before reload: %w", err)
 	}
 	return a.startAITask(ctx, a.smsCore, ch)
 }

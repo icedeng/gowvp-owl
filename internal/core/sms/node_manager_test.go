@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gowvp/owl/pkg/zlm"
 	"github.com/ixugo/goddd/pkg/orm"
 )
 
@@ -133,6 +134,11 @@ type nodeManagerTestDriver struct {
 	connects   int
 	setups     int
 	pings      int
+	closeCtx   context.Context
+	stopCtx    context.Context
+	openCtx    context.Context
+	talkCtx    context.Context
+	infoCtx    context.Context
 }
 
 func (d *nodeManagerTestDriver) Protocol() string { return "test" }
@@ -150,6 +156,72 @@ func (d *nodeManagerTestDriver) Setup(context.Context, *MediaServer, string) err
 func (d *nodeManagerTestDriver) Ping(context.Context, *MediaServer) error {
 	d.pings++
 	return d.pingErr
+}
+
+func (d *nodeManagerTestDriver) CloseRTPServer(ctx context.Context, _ *MediaServer, _ *zlm.CloseRTPServerRequest) (*zlm.CloseRTPServerResponse, error) {
+	d.closeCtx = ctx
+	return &zlm.CloseRTPServerResponse{Hit: 1}, nil
+}
+
+func (d *nodeManagerTestDriver) StopSendRTP(ctx context.Context, _ *MediaServer, _ *zlm.StopSendRTPRequest) (*zlm.StopSendRTPResponse, error) {
+	d.stopCtx = ctx
+	return &zlm.StopSendRTPResponse{}, nil
+}
+
+func (d *nodeManagerTestDriver) OpenRTPServer(ctx context.Context, _ *MediaServer, _ *zlm.OpenRTPServerRequest) (*zlm.OpenRTPServerResponse, error) {
+	d.openCtx = ctx
+	return &zlm.OpenRTPServerResponse{Port: 30000}, nil
+}
+
+func (d *nodeManagerTestDriver) StartSendRTPTalk(ctx context.Context, _ *MediaServer, _ *zlm.StartSendRTPTalkRequest) (*zlm.StartSendRTPResponse, error) {
+	d.talkCtx = ctx
+	return &zlm.StartSendRTPResponse{LocalPort: 30000}, nil
+}
+
+func (d *nodeManagerTestDriver) GetMediaInfo(ctx context.Context, _ *MediaServer, _, _ string) ([]zlm.MediaItem, error) {
+	d.infoCtx = ctx
+	return []zlm.MediaItem{{}}, nil
+}
+
+func TestNodeManagerRTPStopOperationsPropagateContext(t *testing.T) {
+	type contextKey struct{}
+	ctx := context.WithValue(t.Context(), contextKey{}, "cleanup")
+	nm := NewNodeManager(&nodeManagerTestStore{})
+	defer nm.Close()
+	driver := &nodeManagerTestDriver{}
+	nm.RegisterDriver("test", driver)
+	server := &MediaServer{Type: "test"}
+
+	if _, err := nm.CloseRTPServerContext(ctx, server, zlm.CloseRTPServerRequest{StreamID: "stream-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nm.StopSendRTPContext(ctx, server, zlm.StopSendRTPRequest{Stream: "stream-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nm.OpenRTPServerContext(ctx, server, zlm.OpenRTPServerRequest{StreamID: "stream-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nm.StartSendRTPTalkContext(ctx, server, zlm.StartSendRTPTalkRequest{Stream: "stream-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nm.GetMediaInfoContext(ctx, server, "live", "stream-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := driver.closeCtx.Value(contextKey{}); got != "cleanup" {
+		t.Fatalf("CloseRTPServer context marker = %v", got)
+	}
+	if got := driver.stopCtx.Value(contextKey{}); got != "cleanup" {
+		t.Fatalf("StopSendRTP context marker = %v", got)
+	}
+	if got := driver.openCtx.Value(contextKey{}); got != "cleanup" {
+		t.Fatalf("OpenRTPServer context marker = %v", got)
+	}
+	if got := driver.talkCtx.Value(contextKey{}); got != "cleanup" {
+		t.Fatalf("StartSendRTPTalk context marker = %v", got)
+	}
+	if got := driver.infoCtx.Value(contextKey{}); got != "cleanup" {
+		t.Fatalf("GetMediaInfo context marker = %v", got)
+	}
 }
 
 func TestNodeManagerConnectionPublishesOnlineOnlyAfterFullSetup(t *testing.T) {

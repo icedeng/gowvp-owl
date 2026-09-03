@@ -42,12 +42,27 @@ func TestSecureRuntimeSecretsRotatesRevokedValues(t *testing.T) {
 func TestSecureRuntimeSecretsEnvironmentOverride(t *testing.T) {
 	t.Setenv(envAdminPassword, "environment-password")
 	t.Setenv(envJWTSecret, "environment-jwt")
+	t.Setenv(envMediaIP, "zlm")
+	t.Setenv(envMediaHTTPPort, "80")
+	t.Setenv(envMediaWebhook, "gowvp")
+	t.Setenv(envMediaSDPIP, "192.0.2.10")
 	cfg := DefaultConfig()
 	if err := SecureRuntimeSecrets(&cfg); err != nil {
 		t.Fatalf("SecureRuntimeSecrets() error = %v", err)
 	}
 	if cfg.Server.Password != "environment-password" || cfg.Server.HTTP.JwtSecret != "environment-jwt" {
 		t.Fatalf("environment overrides not applied")
+	}
+	if cfg.Media.IP != "zlm" || cfg.Media.HTTPPort != 80 || cfg.Media.WebHookIP != "gowvp" || cfg.Media.SDPIP != "192.0.2.10" {
+		t.Fatalf("media environment overrides not applied: %+v", cfg.Media)
+	}
+}
+
+func TestSecureRuntimeSecretsRejectsInvalidMediaHTTPPort(t *testing.T) {
+	t.Setenv(envMediaHTTPPort, "70000")
+	cfg := DefaultConfig()
+	if err := SecureRuntimeSecrets(&cfg); err == nil {
+		t.Fatal("expected invalid media HTTP port to fail")
 	}
 }
 

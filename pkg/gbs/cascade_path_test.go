@@ -99,3 +99,32 @@ func TestCascadePathRejectsInvalidMismatchAndLoop(t *testing.T) {
 		t.Fatal("pre-2022 preferred path was accepted")
 	}
 }
+
+func TestCascadeFailureRoutePathUsesActualOrConfirmedNextHop(t *testing.T) {
+	worker := newCascadeWorker(nil, testSharedCascadePlatform(t))
+	worker.mu.Lock()
+	worker.effective = GBVersion30
+	worker.platform.localID = testCascadePathB
+	worker.mu.Unlock()
+
+	actual := sip.NewResponse("", sip.DefaultSipVersion, http.StatusNotFound, "Not Found", nil, nil)
+	actual.AppendHeader(&sip.GenericHeader{
+		HeaderName: cascadeRoutePathHeader,
+		Contents:   testCascadePathC + "-" + testCascadePathE,
+	})
+	upstream := sip.NewResponse("", sip.DefaultSipVersion, http.StatusBadGateway, "Bad Gateway", nil, nil)
+	if err := appendCascadeFailureRoutePath(upstream, worker, actual, testCascadePathC+"-"+testCascadePathE); err != nil {
+		t.Fatal(err)
+	}
+	if path, err := singleSIPHeaderValue(upstream, cascadeRoutePathHeader); err != nil || path != testCascadePathB+"-"+testCascadePathC+"-"+testCascadePathE {
+		t.Fatalf("actual failure route path = %q, %v", path, err)
+	}
+
+	upstream = sip.NewResponse("", sip.DefaultSipVersion, http.StatusBadGateway, "Bad Gateway", nil, nil)
+	if err := appendCascadeFailureRoutePath(upstream, worker, nil, testCascadePathC+"-"+testCascadePathE); err != nil {
+		t.Fatal(err)
+	}
+	if path, err := singleSIPHeaderValue(upstream, cascadeRoutePathHeader); err != nil || path != testCascadePathB+"-"+testCascadePathC {
+		t.Fatalf("fallback failure route path = %q, %v", path, err)
+	}
+}

@@ -26,10 +26,11 @@ type FindDeviceInput struct {
 }
 
 type EditDeviceInput struct {
-	DeviceID   string `json:"device_id"`   // 20 位国标编号
-	Name       string `json:"name"`        // 设备名称
-	Password   string `json:"password"`    // 注册密码
-	StreamMode int    `json:"stream_mode"` // 数据传输模式
+	DeviceID string `json:"device_id"` // 20 位国标编号
+	Name     string `json:"name"`      // 设备名称
+	// Password 为 nil 时保留当前注册密码；非 nil 时使用传入值，空字符串表示清除设备独立密码。
+	Password   *string `json:"password,omitempty"`
+	StreamMode int     `json:"stream_mode"` // 数据传输模式
 
 	Username string `json:"username"` // 用户名
 	IP       string `json:"ip"`       // ip

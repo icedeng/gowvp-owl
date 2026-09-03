@@ -2,10 +2,8 @@ package ipc_test
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/ipc/store/ipcdb"
 	"github.com/ixugo/goddd/domain/uniqueid"
@@ -15,10 +13,7 @@ import (
 
 func newListFilterCore(t *testing.T) (ipc.Core, *gorm.DB) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())))
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := openIPCTestDatabase(t)
 	store := ipcdb.NewDB(db).AutoMigrate(true)
 	return ipc.NewCore(store, uniqueid.Core{}, nil), db
 }

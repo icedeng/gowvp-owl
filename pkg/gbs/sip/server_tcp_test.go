@@ -2,7 +2,10 @@ package sip
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -27,7 +30,7 @@ func TestProcessTCPConnFramesCaseInsensitiveAndCompactContentLength(t *testing.T
 	go server.ProcessTcpConn(serverConn)
 
 	firstBody := "<Notify><CmdType>Keepalive</CmdType><SN>1</SN><DeviceID>34020000001320000001</DeviceID><Status>OK</Status></Notify>"
-	secondBody := "<Notify><CmdType>Keepalive</CmdType><SN>2</SN><DeviceID>34020000001320000001</DeviceID><Status>OK</Status></Notify>"
+	secondBody := "<Notify><CmdType> Keepalive </CmdType><SN>2</SN><DeviceID>34020000001320000001</DeviceID><Status>OK</Status></Notify>"
 	first := tcpTestRequest("tcp-case-insensitive", 1, "content-length", firstBody)
 	second := tcpTestRequest("tcp-compact", 2, "l", secondBody)
 	if _, err := clientConn.Write([]byte(first + second)); err != nil {
@@ -45,6 +48,73 @@ func TestProcessTCPConnFramesCaseInsensitiveAndCompactContentLength(t *testing.T
 	}
 	if !gotBodies[firstBody] || !gotBodies[secondBody] || len(gotBodies) != 2 {
 		t.Fatalf("TCP SIP bodies = %#v", gotBodies)
+	}
+}
+
+func TestProcessTCPConnValidatesMANSCDPContentTypeBeforeRouting(t *testing.T) {
+	localURI, err := ParseSipURI("sip:34020000002000000001@127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := "<Notify><CmdType>Keepalive</CmdType><SN>1</SN><DeviceID>34020000001320000001</DeviceID><Status>OK</Status></Notify>"
+	tests := []struct {
+		name        string
+		contentType string
+		wantStatus  string
+		wantHandled bool
+	}{
+		{name: "valid parameterized type", contentType: "Content-Type: application/manscdp+xml; charset=UTF-8\r\n", wantStatus: "SIP/2.0 200", wantHandled: true},
+		{name: "missing type", wantStatus: "SIP/2.0 400"},
+		{name: "wrong type", contentType: "Content-Type: application/sdp\r\n", wantStatus: "SIP/2.0 400"},
+		{name: "duplicate type", contentType: "Content-Type: Application/MANSCDP+xml\r\nContent-Type: Application/MANSCDP+xml\r\n", wantStatus: "SIP/2.0 400"},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := NewServer(&Address{URI: &localURI, Params: NewParams()})
+			defer server.Close()
+			handled := make(chan struct{}, 1)
+			server.Message().Handle("Keepalive", func(ctx *Context) {
+				handled <- struct{}{}
+				ctx.String(200, "OK")
+			})
+
+			serverPipe, clientConn := net.Pipe()
+			defer clientConn.Close()
+			serverConn := &sipTestTCPConn{
+				Conn: serverPipe, local: &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 5060},
+				remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 5060},
+			}
+			go server.ProcessTcpConn(serverConn)
+			request := fmt.Sprintf("MESSAGE sip:34020000002000000001@127.0.0.1 SIP/2.0\r\n"+
+				"Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-content-type-%d\r\n"+
+				"From: <sip:34020000001320000001@127.0.0.1>;tag=content-type-%d\r\n"+
+				"To: <sip:34020000002000000001@127.0.0.1>\r\n"+
+				"Call-ID: content-type-%d\r\nCSeq: 1 MESSAGE\r\nMax-Forwards: 70\r\n%sContent-Length: %d\r\n\r\n%s",
+				index, index, index, test.contentType, len(body), body)
+			if _, err := clientConn.Write([]byte(request)); err != nil {
+				t.Fatal(err)
+			}
+			if err := clientConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			status, err := bufio.NewReader(clientConn).ReadString('\n')
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(status, test.wantStatus) {
+				t.Fatalf("content type response = %q, want %q", status, test.wantStatus)
+			}
+			select {
+			case <-handled:
+				if !test.wantHandled {
+					t.Fatal("handler ran for invalid Content-Type")
+				}
+			default:
+				if test.wantHandled {
+					t.Fatal("handler did not run for valid Content-Type")
+				}
+			}
+		})
 	}
 }
 
@@ -124,6 +194,14 @@ func TestProcessTCPConnRejectsMissingRequiredRoutingHeaders(t *testing.T) {
 				"From: <sip:34020000001320000001@127.0.0.1>;tag=duplicate-cseq\r\n" +
 				"To: <sip:34020000002000000001@127.0.0.1>\r\n" +
 				"Call-ID: duplicate-cseq\r\nCSeq: 1 OPTIONS\r\nCSeq: 2 OPTIONS\r\n",
+		},
+		{
+			name: "malformed Record-Route",
+			headers: "Via: SIP/2.0/TCP 127.0.0.1:5061;branch=z9hG4bK-malformed-record-route\r\n" +
+				"From: <sip:34020000001320000001@127.0.0.1>;tag=malformed-record-route\r\n" +
+				"To: <sip:34020000002000000001@127.0.0.1>\r\n" +
+				"Call-ID: malformed-record-route\r\nCSeq: 1 OPTIONS\r\n" +
+				"Record-Route: <sip:broken.example.com\r\n",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -215,6 +293,236 @@ func TestParserStopClosesHandlerOutput(t *testing.T) {
 	}
 }
 
+func TestParserFinishDrainsAcceptedPacket(t *testing.T) {
+	parser := newParser()
+	message := "SIP/2.0 200 OK\r\n" +
+		"Via: SIP/2.0/TCP 192.0.2.10:5060;branch=z9hG4bK-drain\r\n" +
+		"From: <sip:34020000001320000001@192.0.2.10>;tag=drain\r\n" +
+		"To: <sip:34020000002000000001@192.0.2.20>\r\n" +
+		"Call-ID: drain-response\r\n" +
+		"CSeq: 1 MESSAGE\r\n" +
+		"Content-Length: 0\r\n\r\n"
+	base, peer := net.Pipe()
+	defer base.Close()
+	defer peer.Close()
+	connection := NewTCPConnection(base)
+
+	accepted := make(chan struct{})
+	go func() {
+		parser.in <- newPacket([]byte(message), connection.RemoteAddr(), connection)
+		close(accepted)
+	}()
+	<-accepted
+	parser.finish()
+
+	select {
+	case parsed, ok := <-parser.out:
+		if !ok || parsed == nil {
+			t.Fatal("SIP parser discarded an accepted packet while draining")
+		}
+		response, ok := parsed.(*Response)
+		if !ok || response.StatusCode() != 200 {
+			t.Fatalf("drained SIP message = %#v", parsed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SIP parser did not drain an accepted packet")
+	}
+	select {
+	case _, ok := <-parser.out:
+		if ok {
+			t.Fatal("SIP parser output remained open after draining")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SIP parser did not close after draining")
+	}
+}
+
+func TestReadTCPMessageKeepsCompleteFrameWhenDeadlineCleanupFails(t *testing.T) {
+	message := "SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n"
+	base, peer := net.Pipe()
+	defer base.Close()
+	defer peer.Close()
+	connection := &deadlineCleanupErrorConnection{Connection: NewTCPConnection(base)}
+	reader := bufio.NewReader(connection)
+	written := make(chan error, 1)
+	go func() {
+		_, err := peer.Write([]byte(message))
+		written <- err
+	}()
+
+	frame, err := readTCPMessageWithTimeout(connection, reader, time.Second)
+	if err != nil {
+		t.Fatalf("complete SIP frame was discarded: %v", err)
+	}
+	if string(frame) != message {
+		t.Fatalf("SIP frame = %q, want %q", frame, message)
+	}
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReadTCPMessageDrainsBufferedFrameWhenDeadlineSetupFindsClosedPeer(t *testing.T) {
+	message := "SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n"
+	base, peer := net.Pipe()
+	defer base.Close()
+	connection := &deadlineSetupClosedConnection{Connection: NewTCPConnection(base)}
+	reader := bufio.NewReader(connection)
+	written := make(chan error, 1)
+	go func() {
+		_, err := peer.Write([]byte(message))
+		_ = peer.Close()
+		written <- err
+	}()
+
+	frame, err := readTCPMessageWithTimeout(connection, reader, time.Second)
+	if err != nil {
+		t.Fatalf("buffered SIP frame was discarded: %v", err)
+	}
+	if string(frame) != message {
+		t.Fatalf("SIP frame = %q, want %q", frame, message)
+	}
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessTCPConnectionDrainsResponseBeforePeerClose(t *testing.T) {
+	localURI, err := ParseSipURI("sip:34020000002000000001@192.0.2.20:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteURI, err := ParseSipURI("sip:34020000001320000001@192.0.2.10:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &localURI, Params: NewParams()})
+	defer server.Close()
+	serverPipe, peer := net.Pipe()
+	connection := NewTCPConnection(&sipTestTCPConn{
+		Conn:   serverPipe,
+		local:  &net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 5060},
+		remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 5060},
+	})
+	go server.ProcessTCPConnection(connection)
+
+	callID := CallID("peer-close-response")
+	request := NewRequest("", MethodMessage, &remoteURI, DefaultSipVersion,
+		NewHeaderBuilder().
+			SetFrom(&Address{URI: &localURI, Params: NewParams().Add("tag", String{Str: "peer-close"})}).
+			SetTo(&Address{URI: &remoteURI, Params: NewParams()}).
+			SetCallID(&callID).
+			SetMethod(MethodMessage).
+			SetSeqNo(1).
+			AddVia(&ViaHop{
+				ProtocolName: "SIP", ProtocolVersion: "2.0", Transport: "TCP",
+				Host: "192.0.2.20", Port: NewPort(5060),
+				Params: NewParams().Add("branch", String{Str: "z9hG4bK-peer-close"}),
+			}).Build(), nil)
+	request.SetConnection(connection)
+	request.SetSource(connection.LocalAddr())
+	request.SetDestination(connection.RemoteAddr())
+
+	peerDone := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(peer)
+		if _, err := readTCPMessage(reader); err != nil {
+			peerDone <- err
+			return
+		}
+		response := "SIP/2.0 200 OK\r\n" +
+			"Via: SIP/2.0/TCP 192.0.2.20:5060;branch=z9hG4bK-peer-close\r\n" +
+			"From: <sip:34020000002000000001@192.0.2.20:5060>;tag=peer-close\r\n" +
+			"To: <sip:34020000001320000001@192.0.2.10:5060>\r\n" +
+			"Call-ID: peer-close-response\r\n" +
+			"CSeq: 1 MESSAGE\r\n" +
+			"Content-Length: 0\r\n\r\n"
+		_, err := peer.Write([]byte(response))
+		_ = peer.Close()
+		peerDone <- err
+	}()
+
+	tx, err := server.Request(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	response, err := tx.GetResponseContext(ctx)
+	if err != nil {
+		t.Fatalf("response sent before peer close was lost: %v", err)
+	}
+	if response == nil || response.StatusCode() != 200 {
+		t.Fatalf("response before peer close = %#v", response)
+	}
+	if err := <-peerDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReadTCPMessageDrainsPrefetchedFramesAfterPeerClose(t *testing.T) {
+	base, peer := net.Pipe()
+	conn := NewTCPConnection(base)
+	defer conn.Close()
+	first := "MESSAGE sip:first@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n"
+	second := "NOTIFY sip:second@example.com SIP/2.0\r\nContent-Length: 4\r\n\r\ntest"
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := peer.Write([]byte(first + second))
+		_ = peer.Close()
+		writeDone <- err
+	}()
+
+	reader := bufio.NewReaderSize(conn, maxSIPHeaderLineBytes+1)
+	message, err := readTCPMessageWithTimeout(conn, reader, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(message) != first {
+		t.Fatalf("first SIP frame = %q", message)
+	}
+	message, err = readTCPMessageWithTimeout(conn, reader, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(message) != second {
+		t.Fatalf("second SIP frame = %q", message)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readTCPMessageWithTimeout(conn, reader, time.Second); !errors.Is(err, io.EOF) {
+		t.Fatalf("drained closed connection error = %v, want EOF", err)
+	}
+}
+
+type deadlineCleanupErrorConnection struct {
+	Connection
+	readDeadlineCalls int
+}
+
+type deadlineSetupClosedConnection struct {
+	Connection
+	readDeadlineCalls int
+}
+
+func (c *deadlineSetupClosedConnection) SetReadDeadline(deadline time.Time) error {
+	c.readDeadlineCalls++
+	if c.readDeadlineCalls == 2 {
+		return io.ErrClosedPipe
+	}
+	return c.Connection.SetReadDeadline(deadline)
+}
+
+func (c *deadlineCleanupErrorConnection) SetReadDeadline(deadline time.Time) error {
+	c.readDeadlineCalls++
+	if c.readDeadlineCalls == 3 {
+		return fmt.Errorf("injected deadline cleanup failure")
+	}
+	return c.Connection.SetReadDeadline(deadline)
+}
+
 func TestReadTCPMessageEnforcesResourceLimits(t *testing.T) {
 	read := func(input string) ([]byte, error) {
 		reader := bufio.NewReaderSize(strings.NewReader(input), maxSIPHeaderLineBytes+1)
@@ -249,6 +557,8 @@ func TestReadTCPMessageEnforcesResourceLimits(t *testing.T) {
 		{name: "header total", input: oversizedHeaders.String(), wantErr: "headers exceed"},
 		{name: "body length", input: fmt.Sprintf("MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: %d\r\n\r\n", maxSIPBodyBytes+1), wantErr: "exceeds"},
 		{name: "duplicate length", input: "MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\nl: 0\r\n\r\n", wantErr: "multiple Content-Length"},
+		{name: "folded canonical length", input: "MESSAGE sip:test@example.com SIP/2.0\r\nX-Test: value\r\n Content-Length: 5\r\n\r\nhello", wantErr: "folded Content-Length"},
+		{name: "folded compact length", input: "MESSAGE sip:test@example.com SIP/2.0\r\nX-Test: value\r\n\tl: 5\r\n\r\nhello", wantErr: "folded Content-Length"},
 		{name: "truncated body", input: "MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: 5\r\n\r\nabc", wantErr: "read SIP body"},
 	}
 	for _, test := range tests {
@@ -289,6 +599,8 @@ func TestPacketParserRejectsMismatchedAndDuplicateContentLength(t *testing.T) {
 		"MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: 5\r\n\r\nabc",
 		"MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\nabc",
 		"MESSAGE sip:test@example.com SIP/2.0\r\nContent-Length: 3\r\nl: 3\r\n\r\nabc",
+		"MESSAGE sip:test@example.com SIP/2.0\r\nX-Test: value\r\n Content-Length: 3\r\n\r\nabc",
+		"MESSAGE sip:test@example.com SIP/2.0\r\nX-Test: value\r\n\tl: 3\r\n\r\nabc",
 	}
 	for _, input := range tests {
 		parser.in <- newPacket([]byte(input), &net.TCPAddr{}, connection)
@@ -297,6 +609,37 @@ func TestPacketParserRejectsMismatchedAndDuplicateContentLength(t *testing.T) {
 			t.Fatalf("invalid packet was dispatched: %v", message)
 		case <-time.After(50 * time.Millisecond):
 		}
+	}
+}
+
+func TestPacketParserRetainsMalformedOptionalHeaderForValidation(t *testing.T) {
+	parser := newParser()
+	defer parser.stop()
+	base, peer := net.Pipe()
+	defer base.Close()
+	defer peer.Close()
+	connection := NewTCPConnection(base)
+	input := "OPTIONS sip:34020000002000000001@example.com SIP/2.0\r\n" +
+		"Via: SIP/2.0/TCP 192.0.2.10:5060;branch=z9hG4bK-malformed-route\r\n" +
+		"From: <sip:34020000001320000001@example.com>;tag=malformed-route\r\n" +
+		"To: <sip:34020000002000000001@example.com>\r\n" +
+		"Call-ID: malformed-route\r\n" +
+		"CSeq: 1 OPTIONS\r\n" +
+		"Max-Forwards: 70\r\n" +
+		"Record-Route: <sip:broken.example.com\r\n" +
+		"Content-Length: 0\r\n\r\n"
+	parser.in <- newPacket([]byte(input), &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 5060}, connection)
+	select {
+	case message := <-parser.out:
+		request, ok := message.(*Request)
+		if !ok {
+			t.Fatalf("parsed message = %T, want request", message)
+		}
+		if err := validateInboundRequestHeaders(request); err == nil || !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("malformed optional header validation error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parser did not dispatch malformed request for a 400 response")
 	}
 }
 
@@ -597,6 +940,7 @@ func tcpTestRequest(callID string, cseq int, lengthHeader, body string) string {
 		"To: <sip:34020000002000000001@127.0.0.1>\r\n"+
 		"Call-ID: %s\r\n"+
 		"CSeq: %d MESSAGE\r\n"+
+		"Max-Forwards: 70\r\n"+
 		"Content-Type: Application/MANSCDP+xml\r\n"+
 		"%s: %d\r\n\r\n%s",
 		callID, cseq, callID, cseq, lengthHeader, len(body), body)

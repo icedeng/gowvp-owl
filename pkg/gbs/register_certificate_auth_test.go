@@ -77,64 +77,66 @@ func TestRegisterCertificateCapabilityAndAsymmetricRoundTrip(t *testing.T) {
 }
 
 func TestRegisterCertificateHandlerCompletesRequiredAuthentication(t *testing.T) {
-	pki := newRegisterCertificateTestPKI(t, nil, nil)
-	authenticator, err := newRegisterCertificateAuthenticator(conf.SIPRegisterCertificateAuth{
-		Required:     true,
-		PlatformCert: pki.platformCertificatePath,
-		PlatformKey:  pki.platformKeyPath,
-		DeviceCertificates: map[string]string{
-			gb10DeviceID: pki.deviceCertificatePath,
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	api, memory, connection := newRegisterHandlerTestAPI(t, true)
-	api.registerCertificateAuth = authenticator
-	api.cfg.Password = "digest-must-not-be-used"
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20} {
+		t.Run(string(version), func(t *testing.T) {
+			pki := newRegisterCertificateTestPKI(t, nil, nil)
+			authenticator, err := newRegisterCertificateAuthenticator(conf.SIPRegisterCertificateAuth{
+				Required:     true,
+				PlatformCert: pki.platformCertificatePath,
+				PlatformKey:  pki.platformKeyPath,
+				DeviceCertificates: map[string]string{
+					gb10DeviceID: pki.deviceCertificatePath,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			api, memory, connection := newRegisterHandlerTestAPI(t, true)
+			api.registerCertificateAuth = authenticator
+			api.cfg.Password = "digest-must-not-be-used"
 
-	// 使用注销闭环验证同一套 REGISTER 鉴权，避免成功上线后自动发起的设备信息查询
-	// 混入本测试；标准 9.1.2.3 明确注销同样必须先完成认证。
-	first := newRegisterHandlerTestContext(t, connection, "register-certificate-capability", 0)
-	first.XGBVer = string(GBVersion20)
-	first.XGBVerRaw = string(GBVersion20)
-	first.Request.AppendHeader(&sip.GenericHeader{
-		HeaderName: "Authorization",
-		Contents:   fmt.Sprintf(`Capability algorithm="%s"`, registerCertificateSampleCapability),
-	})
-	api.handlerRegister(first)
-	challengePayload := assertRegisterHandlerResponsePayload(t, connection, "SIP/2.0 401 Unauthorized")
-	challengeValue := responseHeaderValue(challengePayload, "WWW-Authenticate")
-	if challengeValue == "" {
-		t.Fatalf("Asymmetric challenge missing: %s", challengePayload)
-	}
-	scheme, challenge, err := parseRegisterAuthorizationHeader(&sip.GenericHeader{HeaderName: "WWW-Authenticate", Contents: challengeValue})
-	if err != nil || scheme != "asymmetric" {
-		t.Fatalf("parse Asymmetric challenge = scheme:%s auth:%v err:%v", scheme, challenge, err)
-	}
-	nonce := challenge.Get("nonce")
-	algorithm, _, err := canonicalRegisterCertificateDigest(challenge.Get("algorithm"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	secret := decryptAndVerifyRegisterCertificateNonce(t, pki, nonce, algorithm)
-	response, err := registerCertificateDigest(algorithm, secret, []byte(nonce))
-	if err != nil {
-		t.Fatal(err)
-	}
+			// 2011 的 9.1.2.2/J.2 定义证书注册，2014 修改补充文件继续沿用，2016 保留。
+			// 使用注销闭环避免成功上线后自动发起的设备信息查询混入测试。
+			first := newRegisterHandlerTestContext(t, connection, "register-certificate-capability-"+string(version), 0)
+			setRegisterHandlerTestVersion(first, string(version))
+			first.Request.AppendHeader(&sip.GenericHeader{
+				HeaderName: "Authorization",
+				Contents:   fmt.Sprintf(`Capability algorithm="%s"`, registerCertificateSampleCapability),
+			})
+			api.handlerRegister(first)
+			challengePayload := assertRegisterHandlerResponsePayload(t, connection, "SIP/2.0 401 Unauthorized")
+			challengeValue := responseHeaderValue(challengePayload, "WWW-Authenticate")
+			if challengeValue == "" {
+				t.Fatalf("Asymmetric challenge missing: %s", challengePayload)
+			}
+			scheme, challenge, err := parseRegisterAuthorizationHeader(&sip.GenericHeader{HeaderName: "WWW-Authenticate", Contents: challengeValue})
+			if err != nil || scheme != "asymmetric" {
+				t.Fatalf("parse Asymmetric challenge = scheme:%s auth:%v err:%v", scheme, challenge, err)
+			}
+			nonce := challenge.Get("nonce")
+			algorithm, _, err := canonicalRegisterCertificateDigest(challenge.Get("algorithm"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			secret := decryptAndVerifyRegisterCertificateNonce(t, pki, nonce, algorithm)
+			response, err := registerCertificateDigest(algorithm, secret, []byte(nonce))
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	second := newRegisterHandlerTestContext(t, connection, "register-certificate-response", 0)
-	second.XGBVer = string(GBVersion20)
-	second.XGBVerRaw = string(GBVersion20)
-	second.Request.AppendHeader(&sip.GenericHeader{
-		HeaderName: "Authorization",
-		Contents: fmt.Sprintf(`Asymmetric nonce="%s",response="%s",algorithm=%s`,
-			nonce, hex.EncodeToString(response), algorithm),
-	})
-	api.handlerRegister(second)
-	assertRegisterHandlerResponse(t, connection, "SIP/2.0 200 OK")
-	if memory.changeCalls != 1 {
-		t.Fatalf("authenticated REGISTER state changes = %d, want 1", memory.changeCalls)
+			second := newRegisterHandlerTestContext(t, connection, "register-certificate-response-"+string(version), 0)
+			setRegisterHandlerTestVersion(second, string(version))
+			second.Request.AppendHeader(&sip.GenericHeader{
+				HeaderName: "Authorization",
+				Contents: fmt.Sprintf(`Asymmetric nonce="%s",response="%s",algorithm=%s`,
+					nonce, hex.EncodeToString(response), algorithm),
+			})
+			api.handlerRegister(second)
+			assertRegisterHandlerResponse(t, connection, "SIP/2.0 200 OK")
+			if memory.changeCalls != 2 {
+				t.Fatalf("authenticated REGISTER state changes = %d, want 2", memory.changeCalls)
+			}
+		})
 	}
 }
 
@@ -335,88 +337,90 @@ func TestCascadeRegisterCertificateRejectsUntrustedServerProof(t *testing.T) {
 }
 
 func TestCascadeWorkerCompletesCertificateRegisterFlow(t *testing.T) {
-	pki := newRegisterCertificateTestPKI(t, nil, nil)
-	deviceKeyPath := writeRegisterCertificatePrivateKey(t, pki.deviceKey)
-	serverAuthenticator, err := newRegisterCertificateAuthenticator(conf.SIPRegisterCertificateAuth{
-		Enabled:      true,
-		PlatformCert: pki.platformCertificatePath,
-		PlatformKey:  pki.platformKeyPath,
-		DeviceCertificates: map[string]string{
-			gb10DeviceID: pki.deviceCertificatePath,
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	platform, err := normalizeCascadePlatform(conf.SIPUpstream{
-		Name:              "certificate-upstream",
-		Enabled:           true,
-		ServerID:          gb10PlatformID,
-		Host:              "192.0.2.30",
-		Port:              5060,
-		LocalID:           gb10DeviceID,
-		LocalHost:         "192.0.2.20",
-		Version:           string(GBVersion20),
-		Expires:           3600,
-		KeepaliveInterval: conf.Duration(60 * time.Second),
-		RegisterCertificateAuth: conf.SIPUpstreamRegisterCertificateAuth{
-			Required:   true,
-			LocalCert:  pki.deviceCertificatePath,
-			LocalKey:   deviceKeyPath,
-			ServerCert: pki.platformCertificatePath,
-		},
-	}, conf.SIP{ID: gb10DeviceID, Domain: "3402000000", Host: "192.0.2.20", Port: 15060}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	worker := newCascadeWorker(nil, platform)
-	requests := 0
-	worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
-		requests++
-		headers := request.GetHeaders("Authorization")
-		if len(headers) != 1 {
-			t.Fatalf("cascade REGISTER Authorization headers = %d, want 1", len(headers))
-		}
-		scheme, authorization, err := parseRegisterAuthorizationHeader(headers[0])
-		if err != nil {
-			t.Fatal(err)
-		}
-		switch requests {
-		case 1:
-			if scheme != "capability" {
-				t.Fatalf("initial cascade REGISTER scheme = %s, want capability", scheme)
-			}
-			nonce, algorithm, err := serverAuthenticator.issue(gb10DeviceID, "", authorization.Get("algorithm"))
+	for _, version := range []GBProtocolVersion{GBVersion10, GBVersion11, GBVersion20} {
+		t.Run(string(version), func(t *testing.T) {
+			pki := newRegisterCertificateTestPKI(t, nil, nil)
+			deviceKeyPath := writeRegisterCertificatePrivateKey(t, pki.deviceKey)
+			serverAuthenticator, err := newRegisterCertificateAuthenticator(conf.SIPRegisterCertificateAuth{
+				Enabled:      true,
+				PlatformCert: pki.platformCertificatePath,
+				PlatformKey:  pki.platformKeyPath,
+				DeviceCertificates: map[string]string{
+					gb10DeviceID: pki.deviceCertificatePath,
+				},
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			response := sip.NewResponseFromRequest("", request, 401, "Unauthorized", nil)
-			response.AppendHeader(&sip.GenericHeader{
-				HeaderName: "WWW-Authenticate",
-				Contents:   fmt.Sprintf(`Asymmetric nonce="%s",algorithm="A:RSA/ECB/PKCS1&%s"`, nonce, algorithm),
-			})
-			return response, nil
-		case 2:
-			if scheme != "asymmetric" {
-				t.Fatalf("second cascade REGISTER scheme = %s, want asymmetric", scheme)
+			platform, err := normalizeCascadePlatform(conf.SIPUpstream{
+				Name:              "certificate-upstream-" + string(version),
+				Enabled:           true,
+				ServerID:          gb10PlatformID,
+				Host:              "192.0.2.30",
+				Port:              5060,
+				LocalID:           gb10DeviceID,
+				LocalHost:         "192.0.2.20",
+				Version:           string(version),
+				Expires:           3600,
+				KeepaliveInterval: conf.Duration(60 * time.Second),
+				RegisterCertificateAuth: conf.SIPUpstreamRegisterCertificateAuth{
+					Required:   true,
+					LocalCert:  pki.deviceCertificatePath,
+					LocalKey:   deviceKeyPath,
+					ServerCert: pki.platformCertificatePath,
+				},
+			}, conf.SIP{ID: gb10DeviceID, Domain: "3402000000", Host: "192.0.2.20", Port: 15060}, "")
+			if err != nil {
+				t.Fatal(err)
 			}
-			fingerprint := registerRequestFingerprint(request, strings.ToLower(authorization.Get("response")))
-			if err := serverAuthenticator.validate(gb10DeviceID, "", authorization, fingerprint); err != nil {
-				t.Fatalf("server rejected cascade certificate REGISTER: %v", err)
+			worker := newCascadeWorker(nil, platform)
+			requests := 0
+			worker.exchange = func(_ context.Context, request *sip.Request) (*sip.Response, error) {
+				requests++
+				headers := request.GetHeaders("Authorization")
+				if len(headers) != 1 {
+					t.Fatalf("cascade REGISTER Authorization headers = %d, want 1", len(headers))
+				}
+				scheme, authorization, err := parseRegisterAuthorizationHeader(headers[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch requests {
+				case 1:
+					if scheme != "capability" {
+						t.Fatalf("initial cascade REGISTER scheme = %s, want capability", scheme)
+					}
+					nonce, algorithm, err := serverAuthenticator.issue(gb10DeviceID, "", authorization.Get("algorithm"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					response := sip.NewResponseFromRequest("", request, 401, "Unauthorized", nil)
+					response.AppendHeader(&sip.GenericHeader{
+						HeaderName: "WWW-Authenticate",
+						Contents:   fmt.Sprintf(`Asymmetric nonce="%s",algorithm="A:RSA/ECB/PKCS1&%s"`, nonce, algorithm),
+					})
+					return response, nil
+				case 2:
+					if scheme != "asymmetric" {
+						t.Fatalf("second cascade REGISTER scheme = %s, want asymmetric", scheme)
+					}
+					fingerprint := registerRequestFingerprint(request, strings.ToLower(authorization.Get("response")))
+					if err := serverAuthenticator.validate(gb10DeviceID, "", authorization, fingerprint); err != nil {
+						t.Fatalf("server rejected cascade certificate REGISTER: %v", err)
+					}
+					return newCascadeRegisterSuccessResponse(t, request, 3600), nil
+				default:
+					t.Fatalf("unexpected cascade REGISTER request %d", requests)
+					return nil, nil
+				}
 			}
-			response := sip.NewResponseFromRequest("", request, 200, "OK", nil)
-			response.AppendHeader(&sip.GenericHeader{HeaderName: "Expires", Contents: "3600"})
-			return response, nil
-		default:
-			t.Fatalf("unexpected cascade REGISTER request %d", requests)
-			return nil, nil
-		}
-	}
-	if err := worker.register(context.Background(), 3600); err != nil {
-		t.Fatal(err)
-	}
-	if requests != 2 || !worker.snapshot().Registered {
-		t.Fatalf("cascade certificate REGISTER requests=%d status=%+v", requests, worker.snapshot())
+			if err := worker.register(context.Background(), 3600); err != nil {
+				t.Fatal(err)
+			}
+			if requests != 2 || !worker.snapshot().Registered {
+				t.Fatalf("cascade certificate REGISTER requests=%d status=%+v", requests, worker.snapshot())
+			}
+		})
 	}
 }
 

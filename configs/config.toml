@@ -113,12 +113,12 @@
   StrictSourceCheck = false
   # 是否要求 MESSAGE/NOTIFY 携带 Digest 鉴权
   RequireMessageAuth = false
-  # 是否启用 PTZ 弱确认模式；命令发送成功但设备未返回 DeviceControl 应答时按成功处理
+  # 是否启用级联有应答控制弱确认；下级已返回 SIP 成功但未返回 DeviceControl 业务应答时按成功处理
   PTZWeakConfirm = false
   # GB/T 28181-2022 注册重定向目标 SIP URI；为空不重定向，仅对声明 3.0 的设备生效
   RegisterRedirect = ''
 
-  # GB/T 28181-2016 9.1.2.2 Capability/Asymmetric 数字证书 REGISTER 认证。
+  # GB/T 28181-2011/2014/2016 Capability/Asymmetric 数字证书 REGISTER 认证。
   # 与 SIP-TLS 证书用途相互独立；修改后需要重启服务。
   [Sip.RegisterCertificateAuth]
     Enabled = false
@@ -182,6 +182,15 @@
     # 地址不一致时必须同时匹配以下 CIDR；空列表保持拒绝
     AllowedAddressCIDRs = []
 
+  # 9.4 报警 MESSAGE 分发属于具体上级平台；在对应 [[Sip.Upstreams]] 中设置
+  # AlarmDispatchEnabled = true 后，仅分发该上级 SharedChannels 中的报警，默认 false。
+  # 本域接警 SIP 客户端也可作为 9.4 目标，但必须已经向本平台注册且在线，并显式授权报警源。
+  # 以下为默认关闭的配置示例；SourceIDs 支持 10 位中心编码或 20 位设备/通道编码：
+  # [[Sip.AlarmReceivers]]
+  #   Name = 'dispatch-center'
+  #   Enabled = false
+  #   DeviceID = '34020000002000000011'
+  #   SourceIDs = ['34020000001320000001']
   # 跨域 Monitor-User-Identity 配置属于具体上级平台，不是全局字符串。
   # 以下为字段示例；请放入对应的 [[Sip.Upstreams]] 表中，默认关闭：
   # [Sip.Upstreams.MonitorUserIdentity]

@@ -110,7 +110,12 @@ var (
 
 // GetDeviceInfoXML 获取设备详情指令
 func GetDeviceInfoXML(id string) []byte {
-	return fmt.Appendf(nil, DeviceInfoXML, RandInt(100000, 999999), id)
+	return GetDeviceInfoXMLWithSN(id, RandInt(100000, 999999))
+}
+
+// GetDeviceInfoXMLWithSN 使用调用方生成的序列号构造设备信息查询。
+func GetDeviceInfoXMLWithSN(id string, sn int) []byte {
+	return fmt.Appendf(nil, DeviceInfoXML, sn, id)
 }
 
 // GetCatalogXML 获取NVR下设备列表指令
@@ -123,39 +128,65 @@ func GetRecordInfoXML(id string, sceqNo int, start, end int64) []byte {
 	return GetRecordInfoXMLWithFilters(id, sceqNo, start, end, RecordInfoQueryFilters{})
 }
 
-// RecordInfoQueryFilters 对应文件目录检索类型及 GB/T 28181-2022 新增过滤条件。
+// RecordInfoQueryFilters 对应各版本文件目录检索的可选字段。
 type RecordInfoQueryFilters struct {
-	Type         string
-	StreamNumber *int
-	AlarmMethod  string
-	AlarmType    string
+	OmitStartTime   bool
+	OmitEndTime     bool
+	FilePath        string
+	Address         string
+	Secrecy         *int
+	Type            string
+	RecorderID      string
+	IndistinctQuery *int
+	StreamNumber    *int
+	AlarmMethod     string
+	AlarmType       string
 }
 
-// GetRecordInfoXMLWithFilters 获取带录像类型及 2022 扩展过滤条件的录像文件列表指令。
+// GetRecordInfoXMLWithFilters 获取带版本化过滤条件的录像文件列表指令。
 func GetRecordInfoXMLWithFilters(id string, sceqNo int, start, end int64, filters RecordInfoQueryFilters) []byte {
 	recordType := strings.ToLower(strings.TrimSpace(filters.Type))
 	if recordType == "" {
 		recordType = "time"
 	}
-	var escapedType strings.Builder
-	_ = xml.EscapeText(&escapedType, []byte(recordType))
-	body := fmt.Appendf(nil, RecordInfoXML, sceqNo, id, FormatGBTime(time.Unix(start, 0), "2006-01-02T15:04:05"), FormatGBTime(time.Unix(end, 0), "2006-01-02T15:04:05"), escapedType.String())
-	closing := []byte("</Query>")
-	index := strings.LastIndex(string(body), string(closing))
-	if index < 0 {
-		return body
-	}
-
-	var extra strings.Builder
+	var body strings.Builder
+	body.WriteString("<?xml version=\"1.0\" encoding=\"GB2312\"?>\n<Query>\n")
 	appendFilter := func(name, value string) {
-		extra.WriteByte('\t')
-		extra.WriteByte('<')
-		extra.WriteString(name)
-		extra.WriteByte('>')
-		_ = xml.EscapeText(&extra, []byte(value))
-		extra.WriteString("</")
-		extra.WriteString(name)
-		extra.WriteString(">\n")
+		body.WriteByte('\t')
+		body.WriteByte('<')
+		body.WriteString(name)
+		body.WriteByte('>')
+		_ = xml.EscapeText(&body, []byte(value))
+		body.WriteString("</")
+		body.WriteString(name)
+		body.WriteString(">\n")
+	}
+	appendFilter("CmdType", "RecordInfo")
+	appendFilter("SN", fmt.Sprintf("%d", sceqNo))
+	appendFilter("DeviceID", id)
+	if !filters.OmitStartTime {
+		appendFilter("StartTime", FormatGBTime(time.Unix(start, 0), "2006-01-02T15:04:05"))
+	}
+	if !filters.OmitEndTime {
+		appendFilter("EndTime", FormatGBTime(time.Unix(end, 0), "2006-01-02T15:04:05"))
+	}
+	if filters.FilePath != "" {
+		appendFilter("FilePath", filters.FilePath)
+	}
+	if filters.Address != "" {
+		appendFilter("Address", filters.Address)
+	}
+	secrecy := 0
+	if filters.Secrecy != nil {
+		secrecy = *filters.Secrecy
+	}
+	appendFilter("Secrecy", fmt.Sprintf("%d", secrecy))
+	appendFilter("Type", recordType)
+	if filters.RecorderID != "" {
+		appendFilter("RecorderID", filters.RecorderID)
+	}
+	if filters.IndistinctQuery != nil {
+		appendFilter("IndistinctQuery", fmt.Sprintf("%d", *filters.IndistinctQuery))
 	}
 	if filters.StreamNumber != nil {
 		appendFilter("StreamNumber", fmt.Sprintf("%d", *filters.StreamNumber))
@@ -166,15 +197,8 @@ func GetRecordInfoXMLWithFilters(id string, sceqNo int, start, end int64, filter
 	if value := strings.TrimSpace(filters.AlarmType); value != "" {
 		appendFilter("AlarmType", value)
 	}
-	if extra.Len() == 0 {
-		return body
-	}
-
-	result := make([]byte, 0, len(body)+extra.Len())
-	result = append(result, body[:index]...)
-	result = append(result, extra.String()...)
-	result = append(result, body[index:]...)
-	return result
+	body.WriteString("</Query>\n")
+	return []byte(body.String())
 }
 
 // RFC3261BranchMagicCookie RFC3261BranchMagicCookie

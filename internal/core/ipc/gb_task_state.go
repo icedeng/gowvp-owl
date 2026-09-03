@@ -66,6 +66,23 @@ func (s *GBTaskStateStore) Load(ctx context.Context, kind, deviceID, sessionID s
 	return &record, true, nil
 }
 
+// List 返回指定任务类型最早更新的记录，供跨进程恢复工作器分批重放。
+func (s *GBTaskStateStore) List(ctx context.Context, kind string, limit int) ([]GBTaskStateRecord, error) {
+	if s == nil || s.db == nil || kind == "" {
+		return nil, errors.New("GB task state store is unavailable")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	var records []GBTaskStateRecord
+	err := s.db.WithContext(ctx).
+		Where("kind = ?", kind).
+		Order("updated_at ASC, id ASC").
+		Limit(limit).
+		Find(&records).Error
+	return records, err
+}
+
 func (s *GBTaskStateStore) Delete(ctx context.Context, kind, deviceID, sessionID string) error {
 	if s == nil || s.db == nil {
 		return nil
@@ -96,17 +113,15 @@ func (s *GBTaskStateStore) Cleanup(ctx context.Context, kind string, cutoff time
 		if limit <= 0 {
 			return nil
 		}
-		var overflow []uint64
-		if err := tx.Model(new(GBTaskStateRecord)).
+		candidates := tx.Model(new(GBTaskStateRecord)).
+			Select("id").
 			Where("kind = ?", kind).
 			Order("updated_at DESC, id DESC").
-			Offset(limit).
-			Pluck("id", &overflow).Error; err != nil {
-			return err
-		}
-		if len(overflow) == 0 {
-			return nil
-		}
-		return tx.Where("id IN ?", overflow).Delete(new(GBTaskStateRecord)).Error
+			Offset(limit)
+		overflow := tx.Table("(?) AS gb_task_state_overflow", candidates).Select("id")
+		// 在同一条 DELETE 中重新计算溢出集合，避免先查询到旧 ID 后，
+		// 并发刷新已经把该任务变成最新状态，清理器仍按陈旧快照误删。
+		// 外层派生表同时兼容 MySQL 对修改目标表直接子查询的限制。
+		return tx.Where("id IN (?)", overflow).Delete(new(GBTaskStateRecord)).Error
 	})
 }

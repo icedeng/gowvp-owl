@@ -67,6 +67,28 @@ func TestLalmaxCloseRTPServer(t *testing.T) {
 	}
 }
 
+func TestLalmaxRejectsActiveTCPRTP(t *testing.T) {
+	driver := NewLalmaxDriver()
+	mediaServer := &MediaServer{IP: "lalmax.test", Ports: MediaServerPorts{HTTP: 80}}
+	if _, err := driver.OpenRTPServer(context.Background(), mediaServer, &zlm.OpenRTPServerRequest{TCPMode: 2, StreamID: "stream-1"}); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("OpenRTPServer error = %v", err)
+	}
+	if _, err := driver.ConnectRTPServer(context.Background(), mediaServer, &zlm.ConnectRTPServerRequest{StreamID: "stream-1", DstURL: "192.0.2.20", DstPort: 9000}); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("ConnectRTPServer error = %v", err)
+	}
+}
+
+func TestLalmaxRejectsTCPRTCP(t *testing.T) {
+	driver := NewLalmaxDriver()
+	mediaServer := &MediaServer{IP: "lalmax.test", Ports: MediaServerPorts{HTTP: 80}}
+	if _, err := driver.OpenRTPServer(context.Background(), mediaServer, &zlm.OpenRTPServerRequest{TCPMode: 1, TCPRTCP: true, StreamID: "stream-1"}); err == nil || !strings.Contains(err.Error(), "RTP/RTCP") {
+		t.Fatalf("OpenRTPServer error = %v", err)
+	}
+	if _, err := driver.StartSendRTP(context.Background(), mediaServer, &zlm.StartSendRTPRequest{TCPRTCP: true}); err == nil || !strings.Contains(err.Error(), "RTP/RTCP") {
+		t.Fatalf("StartSendRTP error = %v", err)
+	}
+}
+
 func TestLalmaxGetMediaInfo(t *testing.T) {
 	client := &http.Client{Transport: lalmaxRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.Method != http.MethodGet || req.URL.Path != "/api/stat/group" || req.URL.Query().Get("app_name") != "rtp" || req.URL.Query().Get("stream_name") != "stream-1" || req.URL.Query().Get("token") != "test-secret" {
@@ -99,6 +121,30 @@ func TestLalmaxGetMediaInfo(t *testing.T) {
 	video, audio := items[0].Tracks[0], items[0].Tracks[1]
 	if video.CodecID != 0 || video.FPS != 25 || video.Width != 1280 || video.Height != 720 || audio.CodecID != 3 || audio.SampleRate != 8000 {
 		t.Fatalf("media tracks = %+v", items[0].Tracks)
+	}
+}
+
+func TestBuildLalmaxMediaTracksMapsGBStandardAudioCodecs(t *testing.T) {
+	tests := []struct {
+		codec      string
+		wantID     int
+		wantSample int
+	}{
+		{codec: "AAC", wantID: 2},
+		{codec: "PCMA", wantID: 3, wantSample: 8000},
+		{codec: "SVACA", wantID: 17, wantSample: 8000},
+		{codec: "G.722.1", wantID: 18, wantSample: 16000},
+		{codec: "G723.1", wantID: 19, wantSample: 8000},
+		{codec: "G729", wantID: 21, wantSample: 8000},
+		{codec: "vendor-audio", wantID: -1},
+	}
+	for _, test := range tests {
+		t.Run(test.codec, func(t *testing.T) {
+			tracks := buildLalmaxMediaTracks(&lalmax.StatGroup{AudioCodec: test.codec})
+			if len(tracks) != 1 || tracks[0].CodecID != test.wantID || tracks[0].SampleRate != test.wantSample || tracks[0].CodecIDName != strings.ToUpper(test.codec) {
+				t.Fatalf("tracks = %+v", tracks)
+			}
+		})
 	}
 }
 

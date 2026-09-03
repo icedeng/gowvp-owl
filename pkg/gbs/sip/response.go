@@ -18,23 +18,6 @@ type Response struct {
 	dialogCSeqLoaded bool
 }
 
-func (res *Response) nextDialogCSeq(initial uint32) (uint32, error) {
-	if res == nil {
-		return 0, fmt.Errorf("response is nil")
-	}
-	res.dialogCSeqMu.Lock()
-	defer res.dialogCSeqMu.Unlock()
-	if !res.dialogCSeqLoaded {
-		res.dialogCSeq = initial
-		res.dialogCSeqLoaded = true
-	}
-	if res.dialogCSeq >= maxCseq {
-		return 0, fmt.Errorf("dialog CSeq exceeds maximum permitted value")
-	}
-	res.dialogCSeq++
-	return res.dialogCSeq, nil
-}
-
 // NewResponseFromRequest NewResponseFromRequest
 func NewResponseFromRequest(
 	resID MessageID,
@@ -95,6 +78,20 @@ func NewResponse(
 	hdrs []Header,
 	body []byte,
 ) *Response {
+	return newResponse(messID, sipVersion, statusCode, reason, hdrs, body, true)
+}
+
+// newResponse 与 newRequest 一样，为解析器保留原始头集合；公开构造的响应
+// 始终携带唯一且准确的 Content-Length。
+func newResponse(
+	messID MessageID,
+	sipVersion string,
+	statusCode int,
+	reason string,
+	hdrs []Header,
+	body []byte,
+	setContentLength bool,
+) *Response {
 	res := new(Response)
 	if messID == "" {
 		res.messID = MessageID(uuid.Must(uuid.NewV4()).String())
@@ -106,10 +103,7 @@ func NewResponse(
 	res.headers = newHeaders(hdrs)
 	res.SetStatusCode(statusCode)
 	res.SetReason(reason)
-
-	if len(body) != 0 {
-		res.SetBody(body, true)
-	}
+	res.SetBody(body, setContentLength)
 
 	return res
 }

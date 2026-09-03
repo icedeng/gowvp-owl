@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gowvp/owl/internal/core/ipc"
@@ -21,11 +24,34 @@ const (
 	cascadeTaskSnapshot  = "snapshot"
 	cascadeTaskRouteTTL  = 7 * 24 * time.Hour
 	maxCascadeTaskRoutes = 1024
+
+	gbTaskKindVideoUploadOutbox  = "video_upload_outbox"
+	gbTaskKindVideoUploadReceipt = "video_upload_receipt"
+	videoUploadOutboxRetention   = 30 * 24 * time.Hour
+	videoUploadReceiptRetention  = 30 * 24 * time.Hour
+	maxVideoUploadOutboxStates   = 10000
+	maxVideoUploadReceipts       = 10000
 )
+
+type videoUploadOutboxState struct {
+	SourceDeviceID      string    `json:"source_device_id"`
+	Body                []byte    `json:"body"`
+	Platforms           []string  `json:"platforms"`
+	ReceivedAt          time.Time `json:"received_at"`
+	BindingRegisteredAt time.Time `json:"binding_registered_at,omitempty"`
+	BindingExpires      int       `json:"binding_expires,omitempty"`
+	HasBinding          bool      `json:"has_binding,omitempty"`
+	Attempt             int       `json:"attempt,omitempty"`
+	NextAttemptAt       time.Time `json:"next_attempt_at,omitempty"`
+	LastError           string    `json:"last_error,omitempty"`
+}
 
 type cascadeTaskRoute struct {
 	notifyMu            sync.Mutex
 	completed           bool
+	completionPending   bool
+	workerDetached      atomic.Bool
+	retired             atomic.Bool
 	startOnce           sync.Once
 	startDone           chan struct{}
 	startResult         string
@@ -42,6 +68,23 @@ type cascadeTaskRoute struct {
 	identity            *monitorUserIdentity
 	localGatewayID      string
 	createdAt           time.Time
+	updatedAtUnixNano   atomic.Int64
+}
+
+func (route *cascadeTaskRoute) setUpdatedAt(value time.Time) {
+	if route != nil && !value.IsZero() {
+		route.updatedAtUnixNano.Store(value.UnixNano())
+	}
+}
+
+func (route *cascadeTaskRoute) lastUpdatedAt() time.Time {
+	if route == nil {
+		return time.Time{}
+	}
+	if value := route.updatedAtUnixNano.Load(); value > 0 {
+		return time.Unix(0, value)
+	}
+	return route.createdAt
 }
 
 func cascadeTaskRouteKey(kind, deviceID, sessionID string) string {
@@ -71,6 +114,12 @@ func (g *GB28181API) registerCascadeTaskRoute(ctx context.Context, kind string, 
 	}
 	if g == nil || worker == nil || channel == nil || !worker.protocolVersion().AtLeast(GBVersion30) {
 		return nil, false, fmt.Errorf("cascade task requires protocol 3.0")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if !g.cascadeWorkerAvailable(worker) {
+		return nil, false, context.Canceled
 	}
 	exposedID = strings.TrimSpace(exposedID)
 	sessionID = strings.TrimSpace(sessionID)
@@ -103,24 +152,34 @@ func (g *GB28181API) registerCascadeTaskRoute(ctx context.Context, kind string, 
 	}
 	downstreamSessionID := sip.RandString(32)
 	localGatewayID, _ := ctx.Value(monitorUserIdentityGatewayContextKey{}).(string)
+	createdAt := time.Now()
 	route := &cascadeTaskRoute{
 		kind: kind, worker: worker, upstreamPlatform: worker.platform.name, downstreamDeviceID: strings.TrimSpace(channel.DeviceID),
 		downstreamTargetID: strings.TrimSpace(channel.ChannelID), exposedID: exposedID,
 		upstreamSessionID: sessionID, downstreamSessionID: downstreamSessionID, requestFingerprint: fingerprint,
-		startDone: make(chan struct{}), createdAt: time.Now(),
+		startDone: make(chan struct{}), createdAt: createdAt,
 		identity: monitorUserIdentityFromContext(ctx), localGatewayID: strings.TrimSpace(localGatewayID),
 	}
+	route.setUpdatedAt(createdAt)
 	downstreamKey := cascadeTaskRouteKey(kind, route.downstreamDeviceID, downstreamSessionID)
 	if err := g.storeCascadeTaskState(ctx, route, initialState...); err != nil {
-		g.deleteCascadeTaskState(route)
-		return nil, false, err
+		cleanupErr := g.deleteCascadeTaskStateContext(g.taskPersistenceContext(), route)
+		return nil, false, errors.Join(err, cleanupErr)
 	}
 	if err := g.persistCascadeTaskRoute(ctx, route); err != nil {
-		g.deleteCascadeTaskState(route)
-		if deleteErr := g.deletePersistedCascadeTaskRoute(context.Background(), route); deleteErr != nil {
-			return nil, false, errors.Join(err, deleteErr)
+		cleanupCtx := g.taskPersistenceContext()
+		stateErr := g.deleteCascadeTaskStateContext(cleanupCtx, route)
+		routeErr := g.deletePersistedCascadeTaskRoute(cleanupCtx, route)
+		return nil, false, errors.Join(err, stateErr, routeErr)
+	}
+	if err := ctx.Err(); err != nil || !g.cascadeWorkerAvailable(worker) {
+		if err == nil {
+			err = context.Canceled
 		}
-		return nil, false, err
+		cleanupCtx := g.taskPersistenceContext()
+		stateErr := g.deleteCascadeTaskStateContext(cleanupCtx, route)
+		routeErr := g.deletePersistedCascadeTaskRoute(cleanupCtx, route)
+		return nil, false, errors.Join(err, stateErr, routeErr)
 	}
 	// 路由及下游任务状态全部可靠落库后再发布内存索引，避免最终通知观察到半初始化路由。
 	g.cascadeTaskRoutes.Store(downstreamKey, route)
@@ -137,19 +196,20 @@ func (route *cascadeTaskRoute) matchesUpstream(worker *cascadeWorker, channel *i
 		return false
 	}
 	// worker 为空仅用于已完成且从持久化恢复的幂等路由，不再依赖已删除的上级配置。
-	return route.worker == nil || route.worker == worker
+	return route.worker == nil || route.worker == worker || route.workerDetached.Load()
 }
 
-func (g *GB28181API) deleteCascadeTaskState(route *cascadeTaskRoute) {
+func (g *GB28181API) deleteCascadeTaskStateContext(ctx context.Context, route *cascadeTaskRoute) error {
 	if g == nil || route == nil {
-		return
+		return nil
 	}
 	switch route.kind {
 	case cascadeTaskUpgrade:
-		g.deleteUpgradeState(context.Background(), route.downstreamDeviceID, route.downstreamSessionID)
+		return g.deleteUpgradeStateContext(ctx, route.downstreamDeviceID, route.downstreamSessionID)
 	case cascadeTaskSnapshot:
-		g.deleteSnapshotState(route.downstreamDeviceID, route.downstreamSessionID)
+		return g.deleteSnapshotStateContext(ctx, route.downstreamDeviceID, route.downstreamSessionID)
 	}
+	return nil
 }
 
 func (g *GB28181API) finishCascadeTaskState(ctx context.Context, route *cascadeTaskRoute, result string, taskErr error) error {
@@ -302,6 +362,7 @@ func (g *GB28181API) deleteCascadeTaskRoute(route *cascadeTaskRoute) {
 }
 
 func (g *GB28181API) deleteCascadeTaskRouteLocked(route *cascadeTaskRoute) {
+	route.retired.Store(true)
 	g.cascadeTaskRoutes.CompareAndDelete(cascadeTaskRouteKey(route.kind, route.downstreamDeviceID, route.downstreamSessionID), route)
 	g.cascadeTaskRoutes.CompareAndDelete(cascadeTaskUpstreamRouteKeyByName(route.kind, route.upstreamPlatform, route.exposedID, route.upstreamSessionID), route)
 }
@@ -329,7 +390,7 @@ func (g *GB28181API) forwardCascadeTaskNotification(ctx context.Context, kind, d
 	route.notifyMu.Lock()
 	defer route.notifyMu.Unlock()
 	if route.completed {
-		return true, nil
+		return true, g.persistCompletedCascadeTaskRouteLocked(ctx, route)
 	}
 	if route.downstreamTargetID != strings.TrimSpace(targetID) {
 		return true, fmt.Errorf("cascade task notification target mismatch")
@@ -349,16 +410,77 @@ func (g *GB28181API) forwardCascadeTaskNotification(ctx context.Context, kind, d
 	if err := route.worker.sendMessage(identityCtx, rewritten); err != nil {
 		return true, err
 	}
-	persisted := route.persistentStateLocked()
-	persisted.Completed = true
-	if err := g.persistCascadeTaskRouteState(ctx, persisted); err != nil {
+	// 上级已确认后先在内存中记忆“已发送”。墓碑落库失败时设备重传
+	// 只重试持久化，不能再次发送相同的最终业务通知。
+	route.completed = true
+	if err := g.persistCompletedCascadeTaskRouteLocked(ctx, route); err != nil {
 		return true, err
 	}
-	route.completed = true
+	return true, nil
+}
+
+func (g *GB28181API) persistCompletedCascadeTaskRouteLocked(ctx context.Context, route *cascadeTaskRoute) error {
+	if g == nil || route == nil || !route.completed {
+		return nil
+	}
+	persisted := route.persistentStateLocked()
+	persisted.Completed = true
+	persisted.UpdatedAt = time.Now()
+	if err := g.persistCascadeTaskRouteState(ctx, persisted); err != nil {
+		route.completionPending = true
+		return err
+	}
+	route.completionPending = false
+	route.setUpdatedAt(persisted.UpdatedAt)
 	g.cascadeTaskRouteMu.Lock()
 	g.cascadeTaskRoutes.CompareAndDelete(cascadeTaskRouteKey(route.kind, route.downstreamDeviceID, route.downstreamSessionID), route)
 	g.cascadeTaskRouteMu.Unlock()
-	return true, nil
+	return nil
+}
+
+// retryPendingCompletedCascadeTaskRoutes 补写已经获得上级 SIP 成功、但完成墓碑
+// 首次落库失败的路由。每轮限制数量，避免数据库恢复后维护循环被大量记录阻塞。
+func (g *GB28181API) retryPendingCompletedCascadeTaskRoutes() {
+	if g == nil {
+		return
+	}
+	const batchSize = 8
+	routes := make([]*cascadeTaskRoute, 0, batchSize)
+	seen := make(map[*cascadeTaskRoute]struct{}, batchSize)
+	g.cascadeTaskRoutes.Range(func(_, value any) bool {
+		route, ok := value.(*cascadeTaskRoute)
+		if !ok || route == nil {
+			return true
+		}
+		if _, exists := seen[route]; exists {
+			return true
+		}
+		route.notifyMu.Lock()
+		pending := route.completed && route.completionPending
+		route.notifyMu.Unlock()
+		if !pending {
+			return true
+		}
+		seen[route] = struct{}{}
+		routes = append(routes, route)
+		return len(routes) < batchSize
+	})
+	for _, route := range routes {
+		unlock := g.lockRegisterOperation(route.downstreamDeviceID)
+		route.notifyMu.Lock()
+		if !route.retired.Load() && route.completed && route.completionPending {
+			if err := g.persistCompletedCascadeTaskRouteLocked(g.taskPersistenceContext(), route); err != nil && !g.serviceStopped() {
+				slog.Warn("retry cascade task completion persistence failed",
+					"kind", route.kind,
+					"device_id", route.downstreamDeviceID,
+					"session_id", route.downstreamSessionID,
+					"err", err,
+				)
+			}
+		}
+		route.notifyMu.Unlock()
+		unlock()
+	}
 }
 
 func (g *GB28181API) restoreCascadeTaskRouteByDownstream(ctx context.Context, kind, deviceID, sessionID string) (*cascadeTaskRoute, bool, error) {
@@ -382,7 +504,14 @@ func (g *GB28181API) restoreCascadeTaskRouteByDownstream(ctx context.Context, ki
 	}
 	if state.Kind != strings.TrimSpace(kind) || state.DownstreamDeviceID != strings.TrimSpace(deviceID) ||
 		state.DownstreamSessionID != strings.TrimSpace(sessionID) {
-		return nil, true, fmt.Errorf("persisted cascade task downstream identity mismatch")
+		invalid := fmt.Errorf("persisted cascade task downstream identity mismatch")
+		if deleteErr := g.deletePersistedCascadeTaskRoute(ctx, &cascadeTaskRoute{
+			kind: strings.TrimSpace(kind), downstreamDeviceID: strings.TrimSpace(deviceID), downstreamSessionID: strings.TrimSpace(sessionID),
+		}); deleteErr != nil {
+			return nil, true, errors.Join(invalid, deleteErr)
+		}
+		slog.Warn("removed mismatched persisted cascade task route", "direction", "downstream", "kind", kind, "device_id", deviceID, "session_id", sessionID)
+		return nil, false, nil
 	}
 	return g.restoreCascadeTaskRouteStateLocked(ctx, state)
 }
@@ -397,14 +526,23 @@ func (g *GB28181API) restoreCascadeTaskRouteByUpstreamLocked(ctx context.Context
 	}
 	if state.Kind != strings.TrimSpace(kind) || state.PlatformName != worker.platform.name ||
 		state.ExposedID != strings.TrimSpace(exposedID) || state.UpstreamSessionID != strings.TrimSpace(sessionID) {
-		return nil, true, fmt.Errorf("persisted cascade task upstream identity mismatch")
+		invalid := fmt.Errorf("persisted cascade task upstream identity mismatch")
+		if deleteErr := g.deletePersistedCascadeTaskRouteByUpstream(ctx, kind, worker.platform.name, exposedID, sessionID); deleteErr != nil {
+			return nil, true, errors.Join(invalid, deleteErr)
+		}
+		slog.Warn("removed mismatched persisted cascade task route", "direction", "upstream", "kind", kind, "platform", worker.platform.name, "session_id", sessionID)
+		return nil, false, nil
 	}
 	return g.restoreCascadeTaskRouteStateLocked(ctx, state)
 }
 
 // restoreCascadeTaskRouteStateLocked 在 cascadeTaskRouteMu 持有期间恢复双向索引。
 func (g *GB28181API) restoreCascadeTaskRouteStateLocked(ctx context.Context, state cascadeTaskRoutePersistentState) (*cascadeTaskRoute, bool, error) {
-	if runtimeStateExpired(state.CreatedAt, time.Now(), cascadeTaskRouteTTL) {
+	updatedAt := state.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = state.CreatedAt
+	}
+	if runtimeStateExpired(updatedAt, time.Now(), cascadeTaskRouteTTL) {
 		route := &cascadeTaskRoute{
 			kind: state.Kind, downstreamDeviceID: state.DownstreamDeviceID, downstreamSessionID: state.DownstreamSessionID,
 		}
@@ -450,6 +588,7 @@ func (g *GB28181API) restoreCascadeTaskRouteStateLocked(ctx context.Context, sta
 		createdAt: state.CreatedAt, completed: state.Completed, startDone: make(chan struct{}),
 		startResult: state.StartResult,
 	}
+	route.setUpdatedAt(updatedAt)
 	if state.StartError != "" {
 		route.startErr = errors.New(state.StartError)
 	}
@@ -488,7 +627,7 @@ func rewriteCascadeTaskFields(body []byte, route *cascadeTaskRoute, snapshot boo
 	if route == nil {
 		return nil, fmt.Errorf("cascade task route is unavailable")
 	}
-	decoder := xml.NewDecoder(bytes.NewReader(body))
+	decoder := sip.NewGBXMLDecoder(body)
 	var output bytes.Buffer
 	encoder := xml.NewEncoder(&output)
 	stack := make([]xml.Name, 0, 8)
@@ -530,7 +669,11 @@ func rewriteCascadeTaskFields(body []byte, route *cascadeTaskRoute, snapshot boo
 	if err := encoder.Flush(); err != nil {
 		return nil, fmt.Errorf("flush cascade task notification: %w", err)
 	}
-	return output.Bytes(), nil
+	encoded, err := sip.EncodeGBXMLDocument(output.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("encode cascade task notification as GB2312: %w", err)
+	}
+	return encoded, nil
 }
 
 func (g *GB28181API) cleanupCascadeTaskRoutes(now time.Time) {
@@ -548,7 +691,7 @@ func (g *GB28181API) cleanupCascadeTaskRoutesLocked(now time.Time) {
 	}
 	g.cascadeTaskRoutes.Range(func(key, value any) bool {
 		route, ok := value.(*cascadeTaskRoute)
-		if !ok || route == nil || runtimeStateExpired(route.createdAt, now, cascadeTaskRouteTTL) {
+		if !ok || route == nil || runtimeStateExpired(route.lastUpdatedAt(), now, cascadeTaskRouteTTL) {
 			if route == nil {
 				g.cascadeTaskRoutes.CompareAndDelete(key, value)
 			} else {
@@ -563,15 +706,39 @@ func (g *GB28181API) removeCascadeTaskRoutes(worker *cascadeWorker) {
 	if g == nil || worker == nil {
 		return
 	}
+	// 先快照候选路由，再逐个取得 notifyMu。不能在持有
+	// cascadeTaskRouteMu 时获取 notifyMu，否则与最终通知路径
+	// （notifyMu -> persist -> cascadeTaskRouteMu）形成锁顺序反转。
+	candidates := make([]*cascadeTaskRoute, 0)
 	g.cascadeTaskRouteMu.Lock()
-	defer g.cascadeTaskRouteMu.Unlock()
 	g.cascadeTaskRoutes.Range(func(_, value any) bool {
 		route, _ := value.(*cascadeTaskRoute)
 		if route != nil && route.worker == worker {
-			g.deleteCascadeTaskRouteLocked(route)
+			candidates = append(candidates, route)
 		}
 		return true
 	})
+	g.cascadeTaskRouteMu.Unlock()
+	for _, route := range candidates {
+		route.notifyMu.Lock()
+		completed := route.completed
+		if completed {
+			// 最终通知已发给上级但完成墓碑可能尚未落库。
+			// 保留幂等路由并标记旧 worker 已脱离，避免热更新后设备重传再次发网。
+			route.workerDetached.Store(true)
+		}
+		if completed {
+			route.notifyMu.Unlock()
+			continue
+		}
+		g.cascadeTaskRouteMu.Lock()
+		// notifyMu 仍由当前协程持有，防止并发完成通知或新 worker 替换误删路由。
+		if route.worker == worker && !route.completed {
+			g.deleteCascadeTaskRouteLocked(route)
+		}
+		g.cascadeTaskRouteMu.Unlock()
+		route.notifyMu.Unlock()
+	}
 }
 
 func (g *GB28181API) removeCascadeTaskRoutesForDevice(deviceID string) {
@@ -599,17 +766,170 @@ func (g *GB28181API) forwardCascadeVideoUploadNotify(ctx context.Context, source
 	}
 	var errs []error
 	for _, worker := range g.svr.cascade.registeredWorkers(GBVersion30) {
-		rewritten, exposedID, err := rewriteCascadeEventBodyForDevice(worker.platform, body, sourceDeviceID)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", worker.platform.name, err))
-			continue
-		}
-		if exposedID == "" {
-			continue
-		}
-		if err := worker.sendMessage(ctx, rewritten); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", worker.platform.name, err))
+		if _, err := g.forwardCascadeVideoUploadNotifyToWorker(ctx, sourceDeviceID, body, worker); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// forwardCascadeVideoUploadNotifyToWorker 返回 true 表示该目标已完成或当前共享规则无需投递。
+func (g *GB28181API) forwardCascadeVideoUploadNotifyToWorker(ctx context.Context, sourceDeviceID string, body []byte, worker *cascadeWorker) (bool, error) {
+	if worker == nil {
+		return false, fmt.Errorf("VideoUploadNotify upstream is unavailable")
+	}
+	platformName := strings.TrimSpace(worker.platform.name)
+	receiptID := videoUploadReceiptID(sourceDeviceID, platformName, body)
+	unlock, err := g.lockAlarmInboxOperation(ctx, "video-upload:"+receiptID)
+	if err != nil {
+		return false, fmt.Errorf("%s: lock VideoUploadNotify delivery: %w", platformName, err)
+	}
+	defer unlock()
+	completed, err := g.videoUploadReceiptExists(ctx, sourceDeviceID, receiptID)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", platformName, err)
+	}
+	if completed {
+		return true, nil
+	}
+	rewritten, exposedID, err := rewriteCascadeEventBodyForDevice(worker.platform, body, sourceDeviceID)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", platformName, err)
+	}
+	if exposedID == "" {
+		return true, nil
+	}
+	if err := worker.sendMessage(ctx, rewritten); err != nil {
+		return false, fmt.Errorf("%s: %w", platformName, err)
+	}
+	completedAt := time.Now()
+	// 上级已经给出 SIP 成功确认后，后续只能重试本地回执落库，不能因为数据库
+	// 瞬时失败再次发送同一业务通知。
+	g.recordPendingVideoUploadReceipt(receiptID, completedAt)
+	if err := g.saveTaskState(g.taskPersistenceContext(), gbTaskKindVideoUploadReceipt, sourceDeviceID, receiptID, []byte(`{"completed":true}`), completedAt); err != nil {
+		return false, fmt.Errorf("%s: persist VideoUploadNotify receipt: %w", platformName, err)
+	}
+	g.recordVideoUploadReceipt(receiptID, completedAt)
+	return true, nil
+}
+
+func videoUploadReceiptID(sourceDeviceID, platformName string, body []byte) string {
+	digest := sha256.New()
+	_, _ = digest.Write([]byte(strings.TrimSpace(sourceDeviceID)))
+	_, _ = digest.Write([]byte{0})
+	_, _ = digest.Write([]byte(strings.TrimSpace(platformName)))
+	_, _ = digest.Write([]byte{0})
+	_, _ = digest.Write(body)
+	return fmt.Sprintf("%x", digest.Sum(nil))
+}
+
+func (g *GB28181API) videoUploadReceiptExists(ctx context.Context, sourceDeviceID, receiptID string) (bool, error) {
+	if g == nil {
+		return false, nil
+	}
+	now := time.Now()
+	g.videoUploadReceiptMu.Lock()
+	completedAt, ok := g.videoUploadReceipts[receiptID]
+	if ok && now.Sub(completedAt) <= videoUploadReceiptRetention {
+		g.videoUploadReceiptMu.Unlock()
+		return true, nil
+	}
+	if ok {
+		delete(g.videoUploadReceipts, receiptID)
+	}
+	pendingAt, pending := g.videoUploadPendingReceipts[receiptID]
+	if pending && now.Sub(pendingAt) > videoUploadReceiptRetention {
+		delete(g.videoUploadPendingReceipts, receiptID)
+		pending = false
+	}
+	g.videoUploadReceiptMu.Unlock()
+	if pending {
+		if err := g.saveTaskState(ctx, gbTaskKindVideoUploadReceipt, sourceDeviceID, receiptID, []byte(`{"completed":true}`), pendingAt); err != nil {
+			return false, err
+		}
+		g.recordVideoUploadReceipt(receiptID, pendingAt)
+		return true, nil
+	}
+	payload, found, err := g.loadTaskState(ctx, gbTaskKindVideoUploadReceipt, sourceDeviceID, receiptID)
+	if err != nil || !found {
+		return found, err
+	}
+	var receipt struct {
+		Completed bool `json:"completed"`
+	}
+	if err := json.Unmarshal(payload, &receipt); err != nil || !receipt.Completed {
+		if err == nil {
+			err = errors.New("VideoUploadNotify receipt is not completed")
+		}
+		if deleteErr := g.deleteTaskState(ctx, gbTaskKindVideoUploadReceipt, sourceDeviceID, receiptID); deleteErr != nil {
+			return false, errors.Join(err, deleteErr)
+		}
+		return false, nil
+	}
+	g.recordVideoUploadReceipt(receiptID, now)
+	return true, nil
+}
+
+func (g *GB28181API) recordPendingVideoUploadReceipt(receiptID string, completedAt time.Time) {
+	if g == nil || strings.TrimSpace(receiptID) == "" {
+		return
+	}
+	g.videoUploadReceiptMu.Lock()
+	if g.videoUploadPendingReceipts == nil {
+		g.videoUploadPendingReceipts = make(map[string]time.Time)
+	}
+	if len(g.videoUploadPendingReceipts) >= maxVideoUploadReceipts {
+		oldestKey := ""
+		var oldestAt time.Time
+		for key, candidate := range g.videoUploadPendingReceipts {
+			if oldestKey == "" || candidate.Before(oldestAt) {
+				oldestKey, oldestAt = key, candidate
+			}
+		}
+		delete(g.videoUploadPendingReceipts, oldestKey)
+	}
+	g.videoUploadPendingReceipts[receiptID] = completedAt
+	g.videoUploadReceiptMu.Unlock()
+}
+
+func (g *GB28181API) recordVideoUploadReceipt(receiptID string, completedAt time.Time) {
+	if g == nil || strings.TrimSpace(receiptID) == "" {
+		return
+	}
+	g.videoUploadReceiptMu.Lock()
+	if g.videoUploadReceipts == nil {
+		g.videoUploadReceipts = make(map[string]time.Time)
+	}
+	if len(g.videoUploadReceipts) >= maxVideoUploadReceipts {
+		oldestKey := ""
+		var oldestAt time.Time
+		for key, candidate := range g.videoUploadReceipts {
+			if oldestKey == "" || candidate.Before(oldestAt) {
+				oldestKey, oldestAt = key, candidate
+			}
+		}
+		delete(g.videoUploadReceipts, oldestKey)
+	}
+	g.videoUploadReceipts[receiptID] = completedAt
+	delete(g.videoUploadPendingReceipts, receiptID)
+	g.videoUploadReceiptMu.Unlock()
+}
+
+func (g *GB28181API) cleanupVideoUploadReceipts(now time.Time) {
+	if g == nil {
+		return
+	}
+	cutoff := now.Add(-videoUploadReceiptRetention)
+	g.videoUploadReceiptMu.Lock()
+	for key, completedAt := range g.videoUploadReceipts {
+		if completedAt.Before(cutoff) {
+			delete(g.videoUploadReceipts, key)
+		}
+	}
+	for key, completedAt := range g.videoUploadPendingReceipts {
+		if completedAt.Before(cutoff) {
+			delete(g.videoUploadPendingReceipts, key)
+		}
+	}
+	g.videoUploadReceiptMu.Unlock()
 }

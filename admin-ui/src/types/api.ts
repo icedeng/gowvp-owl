@@ -369,6 +369,7 @@ export interface SipAnnexGSystem {
   source_cidrs?: string[]
   allow_insecure_transport?: boolean
   tls_ca?: string
+  tls_crl?: string
   tls_server_name?: string
   tls_cert?: string
   tls_key?: string
@@ -419,6 +420,7 @@ export interface SipUpstream {
   port: number
   transport?: "udp" | "tcp" | "tls"
   tls_ca?: string
+  tls_crl?: string
   tls_cert?: string
   tls_key?: string
   tls_server_name?: string

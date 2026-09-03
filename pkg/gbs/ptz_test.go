@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -23,6 +24,11 @@ func TestDeviceControlResponseRejectsInvalidEnvelopeBeforeWait(t *testing.T) {
 		{name: "invalid result", body: `<Response><CmdType>DeviceControl</CmdType><SN>61</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>SUCCESS</Result></Response>`},
 		{name: "unknown target", body: `<Response><CmdType>DeviceControl</CmdType><SN>61</SN><DeviceID>34020000001320000009</DeviceID><Result>OK</Result></Response>`},
 		{name: "other owned target", body: `<Response><CmdType>DeviceControl</CmdType><SN>61</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result></Response>`},
+		{name: "duplicate result", body: `<Response><CmdType>DeviceControl</CmdType><SN>61</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>ERROR</Result><Result>OK</Result></Response>`},
+		{name: "unknown field", body: `<Response><CmdType>DeviceControl</CmdType><SN>61</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>OK</Result><VendorField>value</VendorField></Response>`},
+		{name: "out of order", body: `<Response><CmdType>DeviceControl</CmdType><DeviceID>` + gb10ChannelID + `</DeviceID><SN>61</SN><Result>OK</Result></Response>`},
+		{name: "nested result", body: `<Response><CmdType>DeviceControl</CmdType><SN>61</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result><Value>OK</Value></Result></Response>`},
+		{name: "root attribute", body: `<Response vendor="x"><CmdType>DeviceControl</CmdType><SN>61</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>OK</Result></Response>`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -36,6 +42,78 @@ func TestDeviceControlResponseRejectsInvalidEnvelopeBeforeWait(t *testing.T) {
 	case result := <-pending.wait:
 		t.Fatalf("invalid DeviceControl resolved pending request: %+v", result)
 	default:
+	}
+}
+
+func TestDeviceControlResponseWithoutPendingIsAcknowledged(t *testing.T) {
+	memory := newFlowMemory(gb10DeviceID)
+	memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+	api := &GB28181API{svr: &Server{memoryStorer: memory}}
+	body := `<Response><CmdType>DeviceControl</CmdType><SN>62</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>OK</Result></Response>`
+	response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "device-control-late-response", []byte(body), api.sipMessageDeviceControl)
+	if !strings.Contains(response, "SIP/2.0 200") {
+		t.Fatalf("late DeviceControl response = %s", response)
+	}
+	if countSyncMap(&api.pendingDeviceControl) != 0 {
+		t.Fatal("late DeviceControl response created pending state")
+	}
+}
+
+func TestDeviceControlResponseCompletesOnlyAfterSuccessfulSIPOK(t *testing.T) {
+	tests := []struct {
+		name     string
+		writeErr error
+		complete bool
+	}{
+		{name: "success", complete: true},
+		{name: "write failure", writeErr: errors.New("write failed")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			memory := newFlowMemory(gb10DeviceID)
+			memory.runtime.Channels.Store(gb10ChannelID, &Channel{ChannelID: gb10ChannelID, device: memory.runtime})
+			api := &GB28181API{svr: &Server{memoryStorer: memory}}
+			pending := &pendingDeviceControl{wait: make(chan *deviceControlResponse, 1), targetID: gb10ChannelID}
+			api.pendingDeviceControl.Store(gb10DeviceID+":63", pending)
+			body := []byte(`<Response><CmdType>DeviceControl</CmdType><SN>63</SN><DeviceID>` + gb10ChannelID + `</DeviceID><Result>OK</Result></Response>`)
+			conn, done := startBlockingFlowHandler(t, api, sip.MethodMessage, "device-control-commit-"+test.name, body, api.sipMessageDeviceControl, test.writeErr)
+			completedBeforeSIP := false
+			select {
+			case <-pending.wait:
+				completedBeforeSIP = true
+			default:
+			}
+			finishBlockingFlowHandler(t, conn, done)
+			if completedBeforeSIP {
+				t.Fatal("DeviceControl response completed before SIP 200 was written")
+			}
+			completed := false
+			select {
+			case <-pending.wait:
+				completed = true
+			default:
+			}
+			if completed != test.complete {
+				t.Fatalf("DeviceControl completed = %v, want %v", completed, test.complete)
+			}
+		})
+	}
+}
+
+func TestDeviceControlRequestUsesStandardExtraInfoElement(t *testing.T) {
+	body, err := sip.XMLEncode(deviceControlRequest{
+		CmdType:   ptzCmdTypeDeviceControl,
+		SN:        1,
+		DeviceID:  gb10ChannelID,
+		PTZCmd:    "A50F0100000000B5",
+		ExtraInfo: "vendor",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "<ExtraInfo>vendor</ExtraInfo>") || strings.Contains(text, "<ExtralInfo>") {
+		t.Fatalf("DeviceControl ExtraInfo element = %s", text)
 	}
 }
 

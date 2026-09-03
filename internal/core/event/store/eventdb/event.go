@@ -3,10 +3,12 @@ package eventdb
 
 import (
 	"context"
+	"errors"
 
 	"github.com/gowvp/owl/internal/core/event"
 	"github.com/ixugo/goddd/pkg/orm"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var _ event.EventStorer = Event{}
@@ -32,6 +34,24 @@ func (d Event) Get(ctx context.Context, model *event.Event, opts ...orm.QueryOpt
 // Create implements event.EventStorer.
 func (d Event) Create(ctx context.Context, model *event.Event) error {
 	return d.db.WithContext(ctx).Create(model).Error
+}
+
+// CreateIdempotent 通过 source_key 唯一索引原子去重，并在重复时返回已有事件。
+func (d Event) CreateIdempotent(ctx context.Context, model *event.Event) (bool, error) {
+	if model == nil || model.SourceKey == nil || *model.SourceKey == "" {
+		return false, errors.New("event source key is required")
+	}
+	result := d.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "source_key"}},
+		DoNothing: true,
+	}).Create(model)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected > 0 {
+		return true, nil
+	}
+	return false, d.db.WithContext(ctx).Where("source_key = ?", *model.SourceKey).First(model).Error
 }
 
 // Update implements event.EventStorer.

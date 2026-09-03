@@ -28,4 +28,5 @@ type AddEventInput struct {
 	Zones     string   `json:"zones"`      // 检测区域 JSON
 	ImagePath string   `json:"image_path"` // 图片相对路径
 	Model     string   `json:"model"`      // 分析模型名称
+	SourceKey *string  `json:"-"`          // 外部事件幂等键（仅内部桥接使用）
 }

@@ -82,6 +82,14 @@ func (c *Cache) DeleteGBCascadeTaskRoute(ctx context.Context, kind, deviceID, se
 	return store.Delete(ctx, kind, deviceID, sessionID)
 }
 
+func (c *Cache) DeleteGBCascadeTaskRouteByUpstream(ctx context.Context, kind, platformName, exposedID, sessionID string) error {
+	store, err := c.gbCascadeTaskRouteStore()
+	if err != nil {
+		return err
+	}
+	return store.DeleteUpstream(ctx, kind, platformName, exposedID, sessionID)
+}
+
 func (c *Cache) CleanupGBCascadeTaskRoutes(ctx context.Context, cutoff time.Time, limit int) error {
 	store, err := c.gbCascadeTaskRouteStore()
 	if err != nil {

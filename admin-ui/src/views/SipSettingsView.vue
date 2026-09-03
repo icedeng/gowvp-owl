@@ -168,6 +168,7 @@ const annexGConfigSnippet = computed(() => {
     );
     if (item.signal_digest_seed_configured) lines.push(`SignalDigestSeed = ${stringValue("replace-with-current-seed")}`);
     if (item.tls_ca) lines.push(`TLSCA = ${stringValue(item.tls_ca)}`);
+    if (item.tls_crl) lines.push(`TLSCRL = ${stringValue(item.tls_crl)}`);
     if (item.tls_server_name) lines.push(`TLSServerName = ${stringValue(item.tls_server_name)}`);
     if (item.tls_cert) lines.push(`TLSCert = ${stringValue(item.tls_cert)}`);
     if (item.tls_key) lines.push(`TLSKey = ${stringValue(item.tls_key)}`);
@@ -371,6 +372,7 @@ function editableAnnexGSystem(
     source_cidrs_input: listInput(item.source_cidrs),
     allow_insecure_transport: item.allow_insecure_transport ?? false,
     tls_ca: item.tls_ca || "",
+    tls_crl: item.tls_crl || "",
     tls_server_name: item.tls_server_name || "",
     tls_cert: item.tls_cert || "",
     tls_key: item.tls_key || "",
@@ -399,6 +401,7 @@ function editableUpstream(
     port: item.port ?? 0,
     transport: item.transport || "udp",
     tls_ca: item.tls_ca || "",
+    tls_crl: item.tls_crl || "",
     tls_cert: item.tls_cert || "",
     tls_key: item.tls_key || "",
     tls_server_name: item.tls_server_name || "",
@@ -475,6 +478,7 @@ function upstreamPayload(item: EditableUpstream): SipUpstream {
     port: item.port,
     transport: item.transport || "udp",
     tls_ca: item.tls_ca?.trim(),
+    tls_crl: item.tls_crl?.trim(),
     tls_cert: item.tls_cert?.trim(),
     tls_key: item.tls_key?.trim(),
     tls_server_name: item.tls_server_name?.trim(),
@@ -960,6 +964,7 @@ onUnmounted(() => {
             <label class="toggle-row full"><span><strong>允许明文传输</strong><small>选择 UDP/TCP 时必须显式开启；来源 IP 不能替代密码学身份</small></span><span class="switch"><input v-model="item.allow_insecure_transport" type="checkbox" /><span class="slider" /></span></label>
             <template v-if="item.transport === 'tls'">
               <label class="form-group"><span class="form-label">TLS CA 文件</span><input v-model.trim="item.tls_ca" class="input plain w-full mono" placeholder="留空使用系统 CA" /></label>
+              <label class="form-group"><span class="form-label">TLS CRL 文件</span><input v-model.trim="item.tls_crl" class="input plain w-full mono" :aria-invalid="Boolean(item.tls_crl && !item.tls_ca)" placeholder="可选；配置时必须同时填写 CA" /><span v-if="item.tls_crl && !item.tls_ca" class="field-error" role="alert">配置 CRL 时必须同时配置 TLS CA。</span></label>
               <label class="form-group"><span class="form-label">TLS 服务端名称</span><input v-model.trim="item.tls_server_name" class="input plain w-full mono" placeholder="默认使用 address 主机" /></label>
               <label class="form-group"><span class="form-label">TLS 客户端证书</span><input v-model.trim="item.tls_cert" class="input plain w-full mono" placeholder="可选双向 TLS" /></label>
               <label class="form-group"><span class="form-label">TLS 客户端私钥</span><input v-model.trim="item.tls_key" class="input plain w-full mono" :required="Boolean(item.tls_cert)" /></label>
@@ -1037,6 +1042,7 @@ onUnmounted(() => {
             <label class="form-group"><span class="form-label">上级 SIP 域</span><input v-model.trim="item.domain" class="input plain w-full mono" placeholder="默认取上级 ID 前 10 位" /></label>
             <template v-if="item.transport === 'tls'">
               <label class="form-group"><span class="form-label">TLS CA 文件</span><input v-model.trim="item.tls_ca" class="input plain w-full mono" placeholder="留空使用系统 CA" /></label>
+              <label class="form-group"><span class="form-label">TLS CRL 文件</span><input v-model.trim="item.tls_crl" class="input plain w-full mono" :aria-invalid="Boolean(item.tls_crl && !item.tls_ca)" placeholder="可选；配置时必须同时填写 CA" /><span v-if="item.tls_crl && !item.tls_ca" class="field-error" role="alert">配置 CRL 时必须同时配置 TLS CA。</span></label>
               <label class="form-group"><span class="form-label">TLS 服务端名称</span><input v-model.trim="item.tls_server_name" class="input plain w-full mono" placeholder="默认使用上级地址" /></label>
               <label class="form-group"><span class="form-label">TLS 客户端证书</span><input v-model.trim="item.tls_cert" class="input plain w-full mono" placeholder="双向认证时填写" /></label>
               <label class="form-group"><span class="form-label">TLS 客户端私钥</span><input v-model.trim="item.tls_key" class="input plain w-full mono" placeholder="与客户端证书同时填写" /></label>

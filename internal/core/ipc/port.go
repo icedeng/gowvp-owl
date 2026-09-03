@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"context"
+	"time"
 )
 
 // Protocoler 协议抽象接口（端口）
@@ -39,11 +40,37 @@ type Protocoler interface {
 	Hooker
 }
 
+// DeviceDeleteLocker 可选地把协议清理和持久化删除纳入同一设备操作临界区。
+// 需要与设备注册等异步协议操作串行化的适配器实现此接口。
+type DeviceDeleteLocker interface {
+	LockDeviceDelete(device *Device) func()
+}
+
+// DeviceEditCoordinator 可选地把设备编辑与异步协议状态变更串行化，并在持久化后收敛运行态。
+type DeviceEditCoordinator interface {
+	LockDeviceEdit(device *Device) func()
+	DeviceEdited(ctx context.Context, before, after *Device) error
+}
+
+// ChannelMediaBindingCoordinator 可选地把媒体节点绑定与同通道媒体会话串行化。
+// 管理端在锁内重新读取通道状态，避免绑定结果与实际运行节点发生漂移。
+type ChannelMediaBindingCoordinator interface {
+	LockChannelMedia(ctx context.Context, channel *Channel) (func(), error)
+}
+
 type Hooker interface {
 	OnStreamNotFound(ctx context.Context, app, stream string) error
 	// OnStreamChanged 流注销时调用，用于更新通道状态
 	// app/stream 用于支持自定义 app/stream 的 RTMP/RTSP 通道
 	OnStreamChanged(ctx context.Context, app, stream string) error
+}
+
+// MediaServerAwareHooker 是可选的媒体节点感知 Hook 扩展。
+// 同一 app/stream 可能同时存在于多个媒体节点；携带 mediaServerId 时
+// 按节点隔离生命周期，同时保留 Hooker 旧方法兼容既有适配器。
+type MediaServerAwareHooker interface {
+	OnStreamNotFoundOnMediaServer(ctx context.Context, mediaServerID, app, stream string) error
+	OnStreamChangedOnMediaServer(ctx context.Context, mediaServerID, app, stream string) error
 }
 
 // OnPublisher 推流鉴权接口（可选实现）
@@ -78,14 +105,21 @@ type PTZCapable interface {
 
 // GBDeviceControlInput 是 GB 附录 A.2.3 统一控制输入。
 type GBDeviceControlInput struct {
-	TargetID string
-	Action   string
-	Timeout  int // seconds
+	TargetID  string
+	Action    string
+	Timeout   int // seconds
+	ExtraInfo []string
 
-	PTZCmd      string
-	PTZCmdParam *GBPTZCmdParamInput
+	PTZCmd          string
+	PTZCmdParam     *GBPTZCmdParamInput
+	PTZSpeed        uint8
+	PTZPreset       int
+	PTZGroup        uint8
+	PTZAux          uint8
+	PTZValue        uint16
+	ControlPriority *int
 
-	StreamNumber int
+	StreamNumber int // 2022 录像控制码流编号；0 表示缺省主码流
 	AlarmMethod  string
 	AlarmType    string
 
@@ -145,15 +179,24 @@ type GBDeviceQueryInput struct {
 	Action   string
 	Timeout  int // seconds
 
-	ConfigType   string
-	Interval     int
-	Number       int   // cruise_track 轨迹编号（0 或 1）
-	Start        int64 // record_info start unix seconds
-	End          int64 // record_info end unix seconds
-	Type         string
-	StreamNumber *int
-	AlarmMethod  string
-	AlarmType    string
+	ConfigType         string
+	Interval           int
+	Number             int   // cruise_track 轨迹编号（0 或 1）
+	Start              int64 // catalog/record_info start unix seconds
+	End                int64 // catalog/record_info end unix seconds
+	FilePath           string
+	Address            string
+	Secrecy            *int
+	Type               string
+	RecorderID         string
+	IndistinctQuery    *int
+	StreamNumber       *int
+	AlarmMethod        string
+	AlarmType          string
+	StartAlarmPriority string
+	EndAlarmPriority   string
+	StartAlarmTime     string
+	EndAlarmTime       string
 }
 
 type GBDeviceQueryOutput struct {
@@ -181,6 +224,7 @@ type GBBasicParamInput struct {
 type GBDeviceConfigInput struct {
 	TargetID            string                   `json:"target_id"`
 	Timeout             int                      `json:"timeout"`
+	ExtraInfo           []string                 `json:"extra_info"`
 	BasicParam          *GBBasicParamInput       `json:"basic_param"`
 	VideoParamConfig    *GBVideoParamConfigInput `json:"video_param_config"`
 	AudioParamConfig    *GBAudioParamConfigInput `json:"audio_param_config"`
@@ -261,13 +305,18 @@ type GBAppendixA4SnapshotOutput struct {
 
 // RecordQueryInput 录像目录查询参数。
 type RecordQueryInput struct {
-	StartAt      int64 // unix seconds
-	EndAt        int64 // unix seconds
-	Timeout      int   // seconds
-	Type         string
-	StreamNumber *int
-	AlarmMethod  string
-	AlarmType    string
+	StartAt         int64 // unix seconds
+	EndAt           int64 // unix seconds
+	Timeout         int   // seconds
+	FilePath        string
+	Address         string
+	Secrecy         *int
+	Type            string
+	RecorderID      string
+	IndistinctQuery *int
+	StreamNumber    *int
+	AlarmMethod     string
+	AlarmType       string
 }
 
 // RecordSegment 单段录像时间范围。
@@ -316,17 +365,19 @@ type UpgradeCapable interface {
 }
 
 type HistoryControlInput struct {
-	StartAt int64  // unix seconds
-	EndAt   int64  // unix seconds
-	Mode    string // playback/download
-	Cmd     string // INFO 控制命令（原文透传）
-	Action  string // 结构化动作：play/pause/speed/seek
-	Scale   float64
-	SeekAt  int64 // unix seconds
+	StartAt int64   // unix seconds
+	EndAt   int64   // unix seconds
+	Mode    string  // playback/download
+	Cmd     string  // INFO 控制命令（原文透传）
+	Action  string  // 结构化动作：play/pause/speed/seek
+	Scale   float64 // Action=speed 时使用；负值表示倒放
+	SeekAt  int64   // unix seconds；Action=seek 的目标时间，或 2011 倍速/2022 负倍速的播放起点
 	// Transport 为空或 rtp 时保持现有媒体服务器链路；direct_tcp 仅用于 1.1 文件下载。
 	Transport string
 	// DownloadSpeed 是 Download INVITE 的整数倍速；0 表示使用协议默认 1 倍速。
 	DownloadSpeed int
+	// RecordType 是 SDP u 字段录像/下载类型；nil 默认按时间类型 3。
+	RecordType *int
 }
 
 const (
@@ -340,6 +391,7 @@ type HistoryCapable interface {
 	ControlHistory(ctx context.Context, device *Device, channel *Channel, in *HistoryControlInput) error
 }
 
+// TimeSyncCapable 表示协议适配器支持厂商扩展主动校时。
 type TimeSyncCapable interface {
 	SyncTime(ctx context.Context, device *Device) error
 }
@@ -356,11 +408,44 @@ type SubscribeInput struct {
 	AlarmType          string
 	StartAlarmTime     string
 	EndAlarmTime       string
+	StartTime          string
+	EndTime            string
 	Interval           int
 }
 
 type SubscribeCapable interface {
 	Subscribe(ctx context.Context, device *Device, in *SubscribeInput) error
+}
+
+// SubscriptionState 是平台向协议设备建立的事件订阅运行态。
+type SubscriptionState struct {
+	DeviceID  string    `json:"device_id"`
+	TargetID  string    `json:"target_id"`
+	Event     string    `json:"event"`
+	Status    string    `json:"status"`
+	Expires   int       `json:"expires"`
+	ExpiresAt time.Time `json:"expires_at"`
+	RefreshAt time.Time `json:"refresh_at,omitempty"`
+
+	Refreshing    bool `json:"refreshing"`
+	CancelPending bool `json:"cancel_pending"`
+
+	NotifyCSeq      uint32    `json:"notify_cseq,omitempty"`
+	NotifyExpiresAt time.Time `json:"notify_expires_at,omitempty"`
+
+	StartAlarmPriority string `json:"start_alarm_priority,omitempty"`
+	EndAlarmPriority   string `json:"end_alarm_priority,omitempty"`
+	AlarmMethod        string `json:"alarm_method,omitempty"`
+	AlarmType          string `json:"alarm_type,omitempty"`
+	StartAlarmTime     string `json:"start_alarm_time,omitempty"`
+	EndAlarmTime       string `json:"end_alarm_time,omitempty"`
+	StartTime          string `json:"start_time,omitempty"`
+	EndTime            string `json:"end_time,omitempty"`
+	Interval           int    `json:"interval,omitempty"`
+}
+
+type SubscriptionStateCapable interface {
+	SubscriptionStates(ctx context.Context, device *Device) ([]SubscriptionState, error)
 }
 
 type OptionsProbeInput struct {
@@ -372,7 +457,7 @@ type OptionsProbeCapable interface {
 }
 
 type VoiceControlInput struct {
-	Mode          string // talk/broadcast
+	Mode          string // talk/talk_standard/broadcast
 	MediaServerID string
 	SourceID      string
 	SourceVHost   string

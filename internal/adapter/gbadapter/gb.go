@@ -10,7 +10,13 @@ import (
 	"github.com/gowvp/owl/pkg/gbs"
 )
 
-var _ ipc.Protocoler = (*Adapter)(nil)
+var (
+	_ ipc.Protocoler                     = (*Adapter)(nil)
+	_ ipc.DeviceDeleteLocker             = (*Adapter)(nil)
+	_ ipc.DeviceEditCoordinator          = (*Adapter)(nil)
+	_ ipc.MediaServerAwareHooker         = (*Adapter)(nil)
+	_ ipc.ChannelMediaBindingCoordinator = (*Adapter)(nil)
+)
 
 type Adapter struct {
 	adapter ipc.Adapter
@@ -26,8 +32,61 @@ func (a *Adapter) DeleteDevice(ctx context.Context, device *ipc.Device) error {
 	return a.gbs.CleanupDevice(ctx, device.GetGB28181DeviceID())
 }
 
+// LockDeviceDelete implements ipc.DeviceDeleteLocker.
+func (a *Adapter) LockDeviceDelete(device *ipc.Device) func() {
+	if a == nil || a.gbs == nil || device == nil {
+		return func() {}
+	}
+	return a.gbs.LockDeviceDelete(device.GetGB28181DeviceID())
+}
+
+// LockDeviceEdit implements ipc.DeviceEditCoordinator.
+func (a *Adapter) LockDeviceEdit(device *ipc.Device) func() {
+	if a == nil || a.gbs == nil || device == nil {
+		return func() {}
+	}
+	return a.gbs.LockDeviceEdit(device.GetGB28181DeviceID())
+}
+
+// LockChannelMedia implements ipc.ChannelMediaBindingCoordinator.
+func (a *Adapter) LockChannelMedia(ctx context.Context, channel *ipc.Channel) (func(), error) {
+	if a == nil || a.gbs == nil || channel == nil {
+		return func() {}, nil
+	}
+	return a.gbs.LockChannelMedia(ctx, channel.DeviceID, channel.ChannelID)
+}
+
+// DeviceEdited implements ipc.DeviceEditCoordinator.
+func (a *Adapter) DeviceEdited(ctx context.Context, before, after *ipc.Device) error {
+	if a == nil || a.gbs == nil || !deviceRegistrationCredentialChanged(before, after) {
+		return nil
+	}
+	return a.gbs.FinalizeDeviceCredentialEdit(ctx, after)
+}
+
+func deviceRegistrationCredentialChanged(before, after *ipc.Device) bool {
+	return before != nil && after != nil && before.Password != after.Password
+}
+
 func NewAdapter(adapter ipc.Adapter, gbs *gbs.Server, smsCore sms.Core) *Adapter {
 	return &Adapter{adapter: adapter, gbs: gbs, smsCore: smsCore}
+}
+
+func (a *Adapter) mediaServerResolver(channelID, explicitMediaServerID string) gbs.MediaServerResolver {
+	return func(ctx context.Context) (*sms.MediaServer, error) {
+		mediaServerID := strings.TrimSpace(explicitMediaServerID)
+		if mediaServerID == "" {
+			channel, err := a.adapter.GetChannel(ctx, channelID)
+			if err != nil {
+				return nil, err
+			}
+			mediaServerID = strings.TrimSpace(channel.Config.MediaServerID)
+		}
+		if mediaServerID == "" {
+			mediaServerID = sms.DefaultMediaServerID
+		}
+		return a.smsCore.GetMediaServer(ctx, mediaServerID)
+	}
 }
 
 // InitDevice implements ipc.Protocoler.
@@ -40,12 +99,25 @@ func (a *Adapter) InitDevice(ctx context.Context, device *ipc.Device) error {
 // 流注销时停止播放并更新播放状态（仅在 regist=false 时由 zlm_webhook 调用）
 // stream 可能是普通 channel.ID，也可能是指定路径级联使用的独立流 ID。
 func (a *Adapter) OnStreamChanged(ctx context.Context, app, stream string) error {
+	return a.OnStreamChangedOnMediaServer(ctx, "", app, stream)
+}
+
+// OnStreamChangedOnMediaServer implements ipc.MediaServerAwareHooker.
+// mediaServerID 为空时保留旧版 Hooker 的按流 ID 兼容语义。
+func (a *Adapter) OnStreamChangedOnMediaServer(ctx context.Context, mediaServerID, app, stream string) error {
 	_ = app
-	return a.gbs.OnMediaStreamChanged(ctx, stream, false, "stream_unregistered")
+	return a.gbs.OnMediaServerStreamChanged(ctx, mediaServerID, stream, false, "stream_unregistered")
 }
 
 // OnStreamNotFound implements ipc.Protocoler.
 func (a *Adapter) OnStreamNotFound(ctx context.Context, app string, stream string) error {
+	return a.OnStreamNotFoundOnMediaServer(ctx, "", app, stream)
+}
+
+// OnStreamNotFoundOnMediaServer implements ipc.MediaServerAwareHooker。
+// 播放器从哪个媒体节点触发回调，就在该节点建立 GB RTP 接收端。
+func (a *Adapter) OnStreamNotFoundOnMediaServer(ctx context.Context, mediaServerID, app, stream string) error {
+	_ = app
 	ch, err := a.adapter.GetChannel(ctx, stream)
 	if err != nil {
 		return err
@@ -56,15 +128,10 @@ func (a *Adapter) OnStreamNotFound(ctx context.Context, app string, stream strin
 		return err
 	}
 
-	svr, err := a.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
-	if err != nil {
-		return err
-	}
-
 	return a.gbs.PlayContext(ctx, &gbs.PlayInput{
-		Channel:    ch,
-		StreamMode: dev.StreamMode,
-		SMS:        svr,
+		Channel:            ch,
+		StreamMode:         dev.StreamMode,
+		ResolveMediaServer: a.mediaServerResolver(ch.ID, mediaServerID),
 	})
 }
 
@@ -75,14 +142,10 @@ func (a *Adapter) QueryCatalog(ctx context.Context, device *ipc.Device) error {
 
 // StartPlay implements ipc.Protocoler.
 func (a *Adapter) StartPlay(ctx context.Context, device *ipc.Device, channel *ipc.Channel) (*ipc.PlayResponse, error) {
-	svr, err := a.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
-	if err != nil {
-		return nil, err
-	}
 	if err := a.gbs.PlayContext(ctx, &gbs.PlayInput{
-		Channel:    channel,
-		StreamMode: device.StreamMode,
-		SMS:        svr,
+		Channel:            channel,
+		StreamMode:         device.StreamMode,
+		ResolveMediaServer: a.mediaServerResolver(channel.ID, ""),
 	}); err != nil {
 		return nil, err
 	}
@@ -99,12 +162,15 @@ func (a *Adapter) StopPlay(ctx context.Context, device *ipc.Device, channel *ipc
 
 // ValidateDevice implements ipc.Protocoler.
 func (a *Adapter) ValidateDevice(ctx context.Context, device *ipc.Device) error {
+	if err := gbs.ValidateRTPStreamMode(device.StreamMode); err != nil {
+		return err
+	}
 	disabled, err := gbs.NormalizeGBDisabledCapabilities(device.Ext.GBDisabledCapabilities)
 	if err != nil {
 		return err
 	}
 	device.Ext.GBDisabledCapabilities = disabled
-	a.gbs.RefreshDeviceVersion(device)
+	gbs.ApplyGBVersionProfile(device)
 	return nil
 }
 
@@ -126,20 +192,28 @@ func (a *Adapter) PTZControl(ctx context.Context, device *ipc.Device, channel *i
 // QueryRecords 通过 GB28181 RecordInfo 查询录像目录，并转换为 IPC 统一返回结构。
 func (a *Adapter) QueryRecords(ctx context.Context, device *ipc.Device, channel *ipc.Channel, in *ipc.RecordQueryInput) (*ipc.RecordQueryOutput, error) {
 	out, err := a.gbs.QueryRecordList(ctx, &gbs.RecordQueryInput{
-		DeviceID:     device.DeviceID,
-		ChannelID:    channel.ChannelID,
-		Start:        in.StartAt,
-		End:          in.EndAt,
-		Timeout:      time.Duration(in.Timeout) * time.Second,
-		Type:         in.Type,
-		StreamNumber: in.StreamNumber,
-		AlarmMethod:  in.AlarmMethod,
-		AlarmType:    in.AlarmType,
+		DeviceID:        device.DeviceID,
+		ChannelID:       channel.ChannelID,
+		Start:           in.StartAt,
+		End:             in.EndAt,
+		Timeout:         time.Duration(in.Timeout) * time.Second,
+		FilePath:        in.FilePath,
+		Address:         in.Address,
+		Secrecy:         in.Secrecy,
+		Type:            in.Type,
+		RecorderID:      in.RecorderID,
+		IndistinctQuery: in.IndistinctQuery,
+		StreamNumber:    in.StreamNumber,
+		AlarmMethod:     in.AlarmMethod,
+		AlarmType:       in.AlarmType,
 	})
-	if err != nil {
+	return finishRecordQuery(out, err)
+}
+
+func finishRecordQuery(out *gbs.Records, err error) (*ipc.RecordQueryOutput, error) {
+	if out == nil {
 		return nil, err
 	}
-
 	ret := &ipc.RecordQueryOutput{
 		DayTotal: out.DayTotal,
 		TimeNum:  out.TimeNum,
@@ -159,7 +233,7 @@ func (a *Adapter) QueryRecords(ctx context.Context, device *ipc.Device, channel 
 		}
 		ret.Data = append(ret.Data, item)
 	}
-	return ret, nil
+	return ret, err
 }
 
 func (a *Adapter) Upgrade(ctx context.Context, device *ipc.Device, channel *ipc.Channel, in *ipc.UpgradeInput) (*ipc.UpgradeOutput, error) {
@@ -181,28 +255,24 @@ func (a *Adapter) Upgrade(ctx context.Context, device *ipc.Device, channel *ipc.
 }
 
 func (a *Adapter) StartHistory(ctx context.Context, device *ipc.Device, channel *ipc.Channel, in *ipc.HistoryControlInput) error {
-	var svr *sms.MediaServer
-	if in.Transport != ipc.HistoryTransportDirectTCP {
-		var err error
-		svr, err = a.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
-		if err != nil {
-			return err
-		}
-	}
 	mode := "Playback"
 	if in.Mode == "download" {
 		mode = "Download"
 	}
-	return a.gbs.StartHistory(ctx, &gbs.HistoryInput{
+	historyInput := &gbs.HistoryInput{
 		Channel:       channel,
-		SMS:           svr,
 		StreamMode:    device.StreamMode,
 		StartAt:       time.Unix(in.StartAt, 0),
 		EndAt:         time.Unix(in.EndAt, 0),
 		Mode:          mode,
 		Transport:     in.Transport,
 		DownloadSpeed: in.DownloadSpeed,
-	})
+		RecordType:    in.RecordType,
+	}
+	if in.Transport != ipc.HistoryTransportDirectTCP {
+		historyInput.ResolveMediaServer = a.mediaServerResolver(channel.ID, "")
+	}
+	return a.gbs.StartHistory(ctx, historyInput)
 }
 
 func (a *Adapter) StopHistory(ctx context.Context, _ *ipc.Device, channel *ipc.Channel, in *ipc.HistoryControlInput) error {
@@ -248,8 +318,30 @@ func (a *Adapter) Subscribe(ctx context.Context, device *ipc.Device, in *ipc.Sub
 		AlarmType:          in.AlarmType,
 		StartAlarmTime:     in.StartAlarmTime,
 		EndAlarmTime:       in.EndAlarmTime,
+		StartTime:          in.StartTime,
+		EndTime:            in.EndTime,
 		Interval:           in.Interval,
 	})
+}
+
+func (a *Adapter) SubscriptionStates(ctx context.Context, device *ipc.Device) ([]ipc.SubscriptionState, error) {
+	states, err := a.gbs.OutgoingSubscriptionStates(ctx, device.DeviceID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ipc.SubscriptionState, len(states))
+	for i, state := range states {
+		result[i] = ipc.SubscriptionState{
+			DeviceID: state.DeviceID, TargetID: state.TargetID, Event: state.Event, Status: state.Status,
+			Expires: state.Expires, ExpiresAt: state.ExpiresAt, RefreshAt: state.RefreshAt, Refreshing: state.Refreshing,
+			CancelPending: state.CancelPending, NotifyCSeq: state.NotifyCSeq, NotifyExpiresAt: state.NotifyExpiresAt,
+			StartAlarmPriority: state.StartAlarmPriority, EndAlarmPriority: state.EndAlarmPriority,
+			AlarmMethod: state.AlarmMethod, AlarmType: state.AlarmType,
+			StartAlarmTime: state.StartAlarmTime, EndAlarmTime: state.EndAlarmTime,
+			StartTime: state.StartTime, EndTime: state.EndTime, Interval: state.Interval,
+		}
+	}
+	return result, nil
 }
 
 func (a *Adapter) ProbeOptions(ctx context.Context, device *ipc.Device, in *ipc.OptionsProbeInput) error {
@@ -260,33 +352,29 @@ func (a *Adapter) ProbeOptions(ctx context.Context, device *ipc.Device, in *ipc.
 }
 
 func (a *Adapter) StartVoice(ctx context.Context, device *ipc.Device, channel *ipc.Channel, in *ipc.VoiceControlInput) error {
-	mediaServerID := strings.TrimSpace(in.MediaServerID)
-	if mediaServerID == "" {
-		mediaServerID = sms.DefaultMediaServerID
-	}
-	svr, err := a.smsCore.GetMediaServer(ctx, mediaServerID)
-	if err != nil {
-		return err
-	}
 	mode := "Talk"
-	if in.Mode == "broadcast" {
+	if in.Mode == "talk_standard" {
+		mode = "TalkStandard"
+	} else if in.Mode == "broadcast" {
 		mode = "Broadcast"
 	}
 	return a.gbs.StartVoice(ctx, &gbs.VoiceInput{
-		Channel:      channel,
-		SMS:          svr,
-		StreamMode:   device.StreamMode,
-		Mode:         mode,
-		SourceID:     in.SourceID,
-		SourceVHost:  in.SourceVHost,
-		SourceApp:    in.SourceApp,
-		SourceStream: in.SourceStream,
+		Channel:            channel,
+		ResolveMediaServer: a.mediaServerResolver(channel.ID, in.MediaServerID),
+		StreamMode:         device.StreamMode,
+		Mode:               mode,
+		SourceID:           in.SourceID,
+		SourceVHost:        in.SourceVHost,
+		SourceApp:          in.SourceApp,
+		SourceStream:       in.SourceStream,
 	})
 }
 
 func (a *Adapter) StopVoice(ctx context.Context, _ *ipc.Device, channel *ipc.Channel, in *ipc.VoiceControlInput) error {
 	mode := "Talk"
-	if in.Mode == "broadcast" {
+	if in.Mode == "talk_standard" {
+		mode = "TalkStandard"
+	} else if in.Mode == "broadcast" {
 		mode = "Broadcast"
 	}
 	return a.gbs.StopVoice(ctx, &gbs.StopVoiceInput{
@@ -297,20 +385,27 @@ func (a *Adapter) StopVoice(ctx context.Context, _ *ipc.Device, channel *ipc.Cha
 
 func (a *Adapter) DeviceControl(ctx context.Context, device *ipc.Device, in *ipc.GBDeviceControlInput) (*ipc.GBDeviceControlOutput, error) {
 	out, err := a.gbs.DeviceControl(ctx, &gbs.DeviceControlInput{
-		DeviceID:     device.DeviceID,
-		TargetID:     in.TargetID,
-		Action:       in.Action,
-		Timeout:      time.Duration(in.Timeout) * time.Second,
-		PTZCmd:       in.PTZCmd,
-		PTZCmdParam:  toGBPTZCmdParam(in.PTZCmdParam),
-		StreamNumber: in.StreamNumber,
-		AlarmMethod:  in.AlarmMethod,
-		AlarmType:    in.AlarmType,
-		SDCardID:     in.SDCardID,
-		DragZoom:     toGBDragZoom(in.DragZoom),
-		HomePosition: toGBHomePosition(in.HomePosition),
-		PTZPrecise:   toGBPTZPrecise(in.PTZPrecise),
-		TargetTrack:  toGBTargetTrack(in.TargetTrack),
+		DeviceID:        device.DeviceID,
+		TargetID:        in.TargetID,
+		Action:          in.Action,
+		Timeout:         time.Duration(in.Timeout) * time.Second,
+		ExtraInfo:       append([]string(nil), in.ExtraInfo...),
+		PTZCmd:          in.PTZCmd,
+		PTZCmdParam:     toGBPTZCmdParam(in.PTZCmdParam),
+		PTZSpeed:        in.PTZSpeed,
+		PTZPreset:       in.PTZPreset,
+		PTZGroup:        in.PTZGroup,
+		PTZAux:          in.PTZAux,
+		PTZValue:        in.PTZValue,
+		ControlPriority: in.ControlPriority,
+		StreamNumber:    in.StreamNumber,
+		AlarmMethod:     in.AlarmMethod,
+		AlarmType:       in.AlarmType,
+		SDCardID:        in.SDCardID,
+		DragZoom:        toGBDragZoom(in.DragZoom),
+		HomePosition:    toGBHomePosition(in.HomePosition),
+		PTZPrecise:      toGBPTZPrecise(in.PTZPrecise),
+		TargetTrack:     toGBTargetTrack(in.TargetTrack),
 	})
 	if err != nil {
 		return nil, err
@@ -332,7 +427,7 @@ func toGBTargetTrack(in *ipc.GBTargetTrackInput) *gbs.TargetTrackParam {
 
 func (a *Adapter) DeviceQuery(ctx context.Context, device *ipc.Device, in *ipc.GBDeviceQueryInput) (*ipc.GBDeviceQueryOutput, error) {
 	out, err := a.gbs.DeviceQuery(ctx, toGBDeviceQueryInput(device.DeviceID, in))
-	if err != nil {
+	if out == nil {
 		return nil, err
 	}
 	return &ipc.GBDeviceQueryOutput{
@@ -343,24 +438,33 @@ func (a *Adapter) DeviceQuery(ctx context.Context, device *ipc.Device, in *ipc.G
 		XML:        out.XML,
 		Data:       out.Data,
 		AppendixA4: toIPCAppendixA4(out.AppendixA4),
-	}, nil
+	}, err
 }
 
 func toGBDeviceQueryInput(deviceID string, in *ipc.GBDeviceQueryInput) *gbs.DeviceQueryInput {
 	return &gbs.DeviceQueryInput{
-		DeviceID:     deviceID,
-		TargetID:     in.TargetID,
-		Action:       in.Action,
-		Timeout:      time.Duration(in.Timeout) * time.Second,
-		ConfigType:   in.ConfigType,
-		Interval:     in.Interval,
-		Number:       in.Number,
-		Start:        in.Start,
-		End:          in.End,
-		Type:         in.Type,
-		StreamNumber: in.StreamNumber,
-		AlarmMethod:  in.AlarmMethod,
-		AlarmType:    in.AlarmType,
+		DeviceID:           deviceID,
+		TargetID:           in.TargetID,
+		Action:             in.Action,
+		Timeout:            time.Duration(in.Timeout) * time.Second,
+		ConfigType:         in.ConfigType,
+		Interval:           in.Interval,
+		Number:             in.Number,
+		Start:              in.Start,
+		End:                in.End,
+		FilePath:           in.FilePath,
+		Address:            in.Address,
+		Secrecy:            in.Secrecy,
+		Type:               in.Type,
+		RecorderID:         in.RecorderID,
+		IndistinctQuery:    in.IndistinctQuery,
+		StreamNumber:       in.StreamNumber,
+		AlarmMethod:        in.AlarmMethod,
+		AlarmType:          in.AlarmType,
+		StartAlarmPriority: in.StartAlarmPriority,
+		EndAlarmPriority:   in.EndAlarmPriority,
+		StartAlarmTime:     in.StartAlarmTime,
+		EndAlarmTime:       in.EndAlarmTime,
 	}
 }
 
@@ -383,9 +487,10 @@ func toGBDeviceConfigInput(deviceID string, in *ipc.GBDeviceConfigInput) *gbs.De
 		return nil
 	}
 	input := &gbs.DeviceConfigInput{
-		DeviceID: deviceID,
-		TargetID: in.TargetID,
-		Timeout:  time.Duration(in.Timeout) * time.Second,
+		DeviceID:  deviceID,
+		TargetID:  in.TargetID,
+		Timeout:   time.Duration(in.Timeout) * time.Second,
+		ExtraInfo: append([]string(nil), in.ExtraInfo...),
 	}
 	if in.BasicParam != nil {
 		input.BasicParam = &gbs.BasicParam{

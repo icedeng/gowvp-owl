@@ -32,6 +32,9 @@ func (g *GB28181API) forwardCascadeDeviceConfig(worker *cascadeWorker, body []by
 		channel, err = g.loadCascadeExposedChannel(ctx, worker.platform, request.DeviceID)
 	}
 	if err == nil {
+		err = g.validateCascadeDeviceConfigOverrides(channel.DeviceID, &request)
+	}
+	if err == nil {
 		configure := g.sendCascadeDeviceConfigDownstream
 		if g.cascadeDeviceConfig != nil {
 			configure = g.cascadeDeviceConfig
@@ -93,6 +96,25 @@ func (g *GB28181API) forwardCascadeDeviceConfig(worker *cascadeWorker, body []by
 	}
 }
 
+func (g *GB28181API) validateCascadeDeviceConfigOverrides(deviceID string, request *DeviceConfigRequest) error {
+	if err := g.validateCascadeRuntimeDeviceTarget(deviceID); err != nil {
+		return err
+	}
+	if g != nil && g.svr != nil && g.svr.memoryStorer != nil {
+		downstreamVersion := g.getDeviceGBProtocolVersion(deviceID)
+		if err := validateCascadeDeviceConfigRequest(request, downstreamVersion); err != nil {
+			return fmt.Errorf("cascade DeviceConfig is not supported by downstream %s: %w", downstreamVersion.StandardName(), err)
+		}
+	}
+	if g.isDeviceCapabilityDisabled(deviceID, "config_write") {
+		return fmt.Errorf("cascade DeviceConfig capability config_write is disabled for device")
+	}
+	if request != nil && request.SnapShotConfig != nil && g.isDeviceCapabilityDisabled(deviceID, "snapshot") {
+		return fmt.Errorf("cascade DeviceConfig capability snapshot is disabled for device")
+	}
+	return nil
+}
+
 func cascadeDeviceConfigFingerprint(request *DeviceConfigRequest) (string, error) {
 	if request == nil || request.SnapShotConfig == nil {
 		return "", fmt.Errorf("cascade snapshot request is unavailable")
@@ -125,6 +147,7 @@ func cascadeDeviceConfigInput(channel *ipc.Channel, request *DeviceConfigRequest
 		DeviceID:            channel.DeviceID,
 		TargetID:            channel.ChannelID,
 		Timeout:             8 * time.Second,
+		ExtraInfo:           append([]string(nil), request.ExtraInfo...),
 		BasicParam:          request.BasicParam,
 		VideoParamConfig:    request.VideoParamConfig,
 		AudioParamConfig:    request.AudioParamConfig,
@@ -142,7 +165,7 @@ func cascadeDeviceConfigInput(channel *ipc.Channel, request *DeviceConfigRequest
 }
 
 func validateCascadeDeviceConfigRequest(request *DeviceConfigRequest, version GBProtocolVersion) error {
-	if err := validateCascadeDeviceConfigPayload(request); err != nil {
+	if err := validateCascadeDeviceConfigPayload(request, version); err != nil {
 		return err
 	}
 	if !version.Capabilities().ConfigWrite {
@@ -172,12 +195,13 @@ func validateCascadeDeviceConfigRequest(request *DeviceConfigRequest, version GB
 		}
 	}
 	if request.BasicParam != nil {
-		if version == GBVersion11 && (strings.TrimSpace(request.BasicParam.Name) == "" || request.BasicParam.Expiration <= 0 ||
+		if version == GBVersion11 && (strings.TrimSpace(request.BasicParam.Name) == "" || request.BasicParam.Expiration < minimumStandardRegisterTTL ||
 			request.BasicParam.HeartBeatInterval <= 0 || request.BasicParam.HeartBeatCount <= 0) {
 			return fmt.Errorf("BasicParam requires name, expiration and heartbeat values for %s", version.StandardName())
 		}
-		if version != GBVersion11 && (request.BasicParam.Expiration < 0 || request.BasicParam.HeartBeatInterval < 0 || request.BasicParam.HeartBeatCount < 0) {
-			return fmt.Errorf("BasicParam values must not be negative")
+		if version != GBVersion11 && (request.BasicParam.Expiration != 0 && request.BasicParam.Expiration < minimumStandardRegisterTTL ||
+			request.BasicParam.HeartBeatInterval < 0 || request.BasicParam.HeartBeatCount < 0) {
+			return fmt.Errorf("BasicParam expiration must be zero or at least %d and heartbeat values must not be negative", minimumStandardRegisterTTL)
 		}
 	}
 	extended := request.VideoParamAttribute != nil || request.VideoRecordPlan != nil || request.VideoAlarmRecord != nil ||
@@ -188,7 +212,7 @@ func validateCascadeDeviceConfigRequest(request *DeviceConfigRequest, version GB
 	return nil
 }
 
-func validateCascadeDeviceConfigPayload(request *DeviceConfigRequest) error {
+func validateCascadeDeviceConfigPayload(request *DeviceConfigRequest, version GBProtocolVersion) error {
 	if request == nil || request.XMLName.Local != "Control" || !strings.EqualFold(strings.TrimSpace(request.CmdType), "DeviceConfig") ||
 		request.SN <= 0 || !isGBDeviceIdentifier(strings.TrimSpace(request.DeviceID)) {
 		return fmt.Errorf("invalid cascade DeviceConfig")
@@ -200,15 +224,24 @@ func validateCascadeDeviceConfigPayload(request *DeviceConfigRequest) error {
 	if !legacy && !extended {
 		return fmt.Errorf("DeviceConfig requires at least one configuration section")
 	}
+	if err := validateDeviceConfigExtraInfo(request.ExtraInfo, version); err != nil {
+		return err
+	}
 	if request.BasicParam != nil && (request.BasicParam.Expiration < 0 || request.BasicParam.HeartBeatInterval < 0 || request.BasicParam.HeartBeatCount < 0) {
 		return fmt.Errorf("BasicParam values must not be negative")
 	}
 	if request.VideoParamConfig != nil {
+		if request.VideoParamConfig.Num < 0 || request.VideoParamConfig.Num != len(request.VideoParamConfig.Items) {
+			return fmt.Errorf("VideoParamConfig Num must match Item elements")
+		}
 		if err := validateVideoParamConfig(request.VideoParamConfig); err != nil {
 			return err
 		}
 	}
 	if request.AudioParamConfig != nil {
+		if request.AudioParamConfig.Num < 0 || request.AudioParamConfig.Num != len(request.AudioParamConfig.Items) {
+			return fmt.Errorf("AudioParamConfig Num must match Item elements")
+		}
 		if err := validateAudioParamConfig(request.AudioParamConfig); err != nil {
 			return err
 		}
@@ -218,8 +251,8 @@ func validateCascadeDeviceConfigPayload(request *DeviceConfigRequest) error {
 		value   string
 		present bool
 	}{
-		{"SVACEncodeConfig", cascadeSVACEncodeXML(request.SVACEncodeConfig), request.SVACEncodeConfig != nil},
-		{"SVACDecodeConfig", cascadeSVACDecodeXML(request.SVACDecodeConfig), request.SVACDecodeConfig != nil},
+		{"SVACEncodeConfig", svacEncodeXML(request.SVACEncodeConfig), request.SVACEncodeConfig != nil},
+		{"SVACDecodeConfig", svacDecodeXML(request.SVACDecodeConfig), request.SVACDecodeConfig != nil},
 		{"VideoParamAttribute", innerXML(request.VideoParamAttribute), request.VideoParamAttribute != nil},
 		{"VideoRecordPlan", innerXML(request.VideoRecordPlan), request.VideoRecordPlan != nil},
 		{"VideoAlarmRecord", innerXML(request.VideoAlarmRecord), request.VideoAlarmRecord != nil},
@@ -230,6 +263,12 @@ func validateCascadeDeviceConfigPayload(request *DeviceConfigRequest) error {
 	}
 	for _, fragment := range fragments {
 		if fragment.present {
+			if fragment.name == "SVACEncodeConfig" || fragment.name == "SVACDecodeConfig" {
+				if err := validateSVACConfig(version, fragment.name, fragment.value); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := validateDeviceConfigXMLFragment(fragment.name, fragment.value); err != nil {
 				return err
 			}
@@ -250,18 +289,4 @@ func validateCascadeDeviceConfigPayload(request *DeviceConfigRequest) error {
 		}
 	}
 	return nil
-}
-
-func cascadeSVACEncodeXML(config *SVACEncodeConfig) string {
-	if config == nil {
-		return ""
-	}
-	return strings.TrimSpace(config.InnerXML)
-}
-
-func cascadeSVACDecodeXML(config *SVACDecodeConfig) string {
-	if config == nil {
-		return ""
-	}
-	return strings.TrimSpace(config.InnerXML)
 }

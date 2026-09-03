@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,12 +12,24 @@ import (
 	"gorm.io/gorm"
 )
 
+var deviceHistoryTestDatabaseSequence atomic.Uint64
+
 func newDeviceHistoryTestStore(t *testing.T, cfg DeviceHistoryConfig) *DeviceHistoryStore {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())))
+	dsn := fmt.Sprintf("file:%s-%d?mode=memory&cache=shared", t.Name(), deviceHistoryTestDatabaseSequence.Add(1))
+	db, err := gorm.Open(sqlite.Open(dsn))
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close device history test database: %v", err)
+		}
+	})
 	return NewDeviceHistoryStore(db, cfg, true)
 }
 

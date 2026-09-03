@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <CmdType>RecordInfo</CmdType>
+  <SN>3</SN>
+  <DeviceID>34020000001320000002</DeviceID>
+  <Name>camera-2022</Name>
+  <SumNum>1</SumNum>
+  <RecordList Num="1">
+    <Item>
+      <DeviceID>34020000001320000002</DeviceID>
+      <Name>record-2022</Name>
+      <FilePath>/record/2022.ps</FilePath>
+      <Address>Address 2022</Address>
+      <StartTime>2024-04-01T00:00:00</StartTime>
+      <EndTime>2024-04-01T01:00:00</EndTime>
+      <Secrecy>0</Secrecy>
+      <Type>time</Type>
+      <RecorderID>34020000001320000001</RecorderID>
+      <FileSize>2097152</FileSize>
+      <RecordLocation>34020000001320000001</RecordLocation>
+      <StreamNumber>2</StreamNumber>
+    </Item>
+  </RecordList>
+  <ExtraInfo>{"type":"doorType","DeviceID":"34020000001320000002"}</ExtraInfo>
+</Response>

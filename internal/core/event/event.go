@@ -24,6 +24,12 @@ type EventStorer interface {
 	UpdateWithSession(*gorm.DB, *Event, func(b *Event) error, ...orm.QueryOption) error
 }
 
+// idempotentEventStorer 由支持数据库唯一键原子去重的存储实现提供。
+// 保持为可选接口，避免扩大已有 EventStorer 测试桩和外部实现的要求。
+type idempotentEventStorer interface {
+	CreateIdempotent(context.Context, *Event) (bool, error)
+}
+
 // ListEvents 分页查询事件列表，支持按 CID 和时间范围筛选
 func (c Core) ListEvents(ctx context.Context, in *FindEventInput) ([]*Event, int64, error) {
 	query := orm.NewQuery(4).OrderBy("started_at DESC")
@@ -63,15 +69,32 @@ func (c Core) GetEvent(ctx context.Context, id int64) (*Event, error) {
 
 // CreateEvent 新增事件记录
 func (c Core) CreateEvent(ctx context.Context, in *AddEventInput) (*Event, error) {
+	out, _, err := c.createEvent(ctx, in)
+	return out, err
+}
+
+func (c Core) createEvent(ctx context.Context, in *AddEventInput) (*Event, bool, error) {
 	var out Event
 	if err := copier.Copy(&out, in); err != nil {
 		slog.ErrorContext(ctx, "Copy", "err", err)
 	}
 
-	if err := c.store.Event().Create(ctx, &out); err != nil {
-		return nil, reason.ErrDB.Withf(`Create err[%s]`, err.Error())
+	store := c.store.Event()
+	created := true
+	var err error
+	if out.SourceKey != nil && *out.SourceKey != "" {
+		if idempotent, ok := store.(idempotentEventStorer); ok {
+			created, err = idempotent.CreateIdempotent(ctx, &out)
+		} else {
+			err = store.Create(ctx, &out)
+		}
+	} else {
+		err = store.Create(ctx, &out)
 	}
-	return &out, nil
+	if err != nil {
+		return nil, false, reason.ErrDB.Withf(`Create err[%s]`, err.Error())
+	}
+	return &out, created, nil
 }
 
 // UpdateEvent 更新事件信息

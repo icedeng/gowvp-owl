@@ -33,18 +33,19 @@
 - Keepalive、离线判定和恢复；
 - Catalog、目录更新和通道上下线；
 - UDP 实时点播、ACK、BYE、异常断流；
+- UDP 直播、回放和下载均保存 RTP/RTCP 双向抓包：核对 RTP 与 RTP+1 RTCP 端口、SR/RR、SSRC/时间戳关联、媒体服务器丢包率，以及主动丢包或限速时的收敛行为；证据中记录实际媒体服务器镜像摘要/提交，不能只记录浮动 `master` 标签；
 - PTZ、RecordInfo、历史回放/下载、Alarm；
 - 诊断接口显示的声明版本、有效版本、来源和能力集与预期一致。
 - 对固件缺失能力设置 `gb_disabled_capabilities` 后，对应命令应在发送 SIP 前被拒绝；清空列表后恢复版本默认能力。
 - `GET /gb28181/metrics` 中注册、目录、媒体、断流和下载计数与实际操作一致。
 - 真实上级按版本发起 Catalog/Alarm/MobilePosition/PTZPosition 订阅时，抓取 Owl 向真实下级发送的 SUBSCRIBE、续订和 Expires=0 退订；Catalog 应订阅承载共享通道的 NVR，新增共享通道或将通道迁移到另一 NVR 后应自动补订阅；两个上级订阅同一资源时，确认首个上级退订不会提前取消共享下级订阅；
-- 分别订阅平台根目录和单个共享通道：2011 Catalog 变化通知根节点应为 `Response`，2014/2016/2022 应为 `Notify`；新增、删除、上下线、元数据修改应分别收到 ADD、DEL、ON/OFF、UPDATE，且每包 `SumNum` 等于 `DeviceList Num`；下级发送空消息体 `Subscription-State: terminated` 后 Owl 应返回 200，并在上级订阅仍有效时重新建立下级订阅；
+- 分别订阅平台根目录和单个共享通道：2011 Catalog 变化通知应使用 `Response` 根、完整目录快照且不携带顶层 `Status` 和目录项 `Event`；2014/2016/2022 应使用 `Notify` 根，并对新增、删除、上下线、元数据修改分别发送 ADD、DEL、ON/OFF、UPDATE 增量。多包通知的 `SumNum` 为本次通知总数，`DeviceList Num` 为当前分包条数；下级发送空消息体 `Subscription-State: terminated` 后 Owl 应返回 200，并在上级订阅仍有效时重新建立下级订阅；
 - 2022 上级返回 REGISTER 301/302 和新的 Contact 后，确认 Owl 向新地址完成 Digest 注册，后续 Keepalive/NOTIFY/INVITE 使用新地址，旧地址不再具有上级身份；
 - Alarm 分别使用级别、方式、类型和时间过滤，确认不匹配报警不会发往上级；2011 厂商分别验证 `StartAlarmTime/EndAlarmTime` 和示例别名 `StartTime/EndTime`。
-- 四版本真实上级分别完成 REGISTER（401/Digest/200）、Keepalive、Catalog、DeviceInfo/DeviceStatus、直播、回放、下载、INFO 控制、BYE 和资源释放；1.1+ 再执行订阅，2.0/3.0 再执行 RTP over TCP 与语音流程。
+- 四版本真实上级分别完成 REGISTER（401/Digest/200）、Keepalive、Catalog、DeviceInfo/DeviceStatus、直播、回放、下载、UDP 兼容语音对讲、INFO 控制、BYE 和资源释放；1.1+ 再执行订阅，并验证 active/pending NOTIFY 的较短 `Subscription-State;expires` 会提前本地有效期和续订、较大值不能延长订阅；terminated 分别覆盖 `timeout/deactivated/probation/giveup/rejected/noresource` 和扩展原因，确认 `retry-after` 期间不重订、拒绝/资源消失不自动重订、畸形参数返回 400 且原对话不被删除；2.0/3.0 再执行 RTP over TCP 与标准双流程语音对讲。
 - 3.0 三级路径分别执行直播、回放和下载：上级发送 `X-PreferredPath`，每一跳只消费本级编码并向下转发剩余路径，响应 `X-RoutePath` 顺序与实际路径一致；错误首跳、重复节点、下级确认不匹配和路由环必须被拒绝。
 - `Date + Note` 先以关闭状态建立兼容基线，再分别验证 Enabled 和 Required；至少覆盖双方约定 seed、Base64 与 hex、一个传统摘要算法和 SM3，并保存缺失签名、正文篡改和超时 Date 的拒绝证据。REGISTER 不应被该摘要要求误拦截。
-- 对支持 2016 `Capability/Asymmetric` 的设备及上级分别验证证书 REGISTER：有效证书成功，未知设备证书、错误设备 ID 绑定、过期证书、吊销证书、错误平台证明、重放 nonce 和算法不一致必须失败；Required 模式不得降级到口令 Digest。保存脱敏挑战/应答、证书序列号、CA/CRL 版本和校验结论，不保存私钥或随机秘密。
+- 对支持 2011/2014/2016 `Capability/Asymmetric` 的设备及上级分别验证证书 REGISTER：有效证书成功，未知设备证书、错误设备 ID 绑定、过期证书、吊销证书、错误平台证明、重放 nonce 和算法不一致必须失败；Required 模式不得降级到口令 Digest。保存脱敏挑战/应答、证书序列号、CA/CRL 版本和校验结论，不保存私钥或随机秘密。2022 不沿用该流程，高安全级别按 GB 35114 单独验收。
 - 使用真实用户目录和至少两级类型码 `211` 的安全路由网关验证 `Monitor-User-Identity`：本域身份生成、逐级前置、直接网关绑定、用户类型码 `300-499`、机构/类别/职级授权、缺失/重复头、未知网关、重复网关、超跳和路由环拒绝。UDP/TCP 场景必须同时保存 IPsec 或等价可信网络边界证据；否则只验证 TLS 绑定场景，不得把源 IP 记作密码学身份。
 - 2022 高安全级别应用按 GB 35114 建立独立验收项；SIP-TLS、证书 REGISTER、`Date + Note` 和 `Monitor-User-Identity` 的通过结果不能替代该专项。
 
@@ -53,7 +54,7 @@
 ### 1.0
 
 - 不自动发送 ConfigDownload；
-- 拒绝广播、对讲、RTP over TCP、IFrame、DragZoom 等未定义能力；
+- 执行 UDP `Play + m=audio + sendrecv` 兼容语音对讲，确认双向音频；拒绝广播、标准双流程对讲、RTP over TCP、IFrame、DragZoom 等后续版本能力；
 - 直播、回放、下载 SDP 仅使用 `RTP/AVP`。
 
 ### 1.1
@@ -62,6 +63,7 @@
 - ConfigDownload/BasicParam 写入；
 - Catalog 订阅初始、续订、取消；
 - Broadcast 标准时序；
+- 执行 UDP `Play + m=audio + sendrecv` 兼容语音对讲，确认双向音频；拒绝 2016 才开放的标准广播组合双流程；
 - 使用已就绪的 ZLMediaKit G.711 A-law 音频源，确认设备主动 INVITE、平台返回 `PT 96/PS/90000`、扬声器实际出声、BYE 后 RTP 停止；
 - MediaStatus/121；
 - 直接 TCP 下载：`m=video ... tcp`、发送端地址/端口、`filesize`、文件 SHA-256、取消、断网恢复；
@@ -89,7 +91,7 @@ AllowedAddressCIDRs = []
 
 ### 2.0
 
-- RTP over TCP 主动/被动模式；
+- RTP over TCP 主动/被动模式，并保存 RTP 与 RTCP 的 RFC 4571 帧证据；旁路 UDP RTCP 不计为 TCP 模式通过；
 - 语音对讲；
 - 对讲需分别确认设备上行音频可听、平台下行 `PT 8/PCMA/8000` 可听，并记录 RTP 收发字节数；
 - PresetQuery、MobilePosition、HomePosition；
@@ -103,12 +105,14 @@ AllowedAddressCIDRs = []
 - PTZ 精准位置变化 SUBSCRIBE/NOTIFY，确认 2.0 及更早档案不会发送该订阅；
 - CruiseTrackListQuery/CruiseTrackQuery，核对 0/1 轨迹编号、预置位、停留时间和速度；
 - SDCardStatus/FormatSDCard；
-- ConfigDownload 抓拍配置使用标准 `SnapShotConfig` 节点，并记录厂商是否仅接受旧 `SnapShot` 别名；
+- ConfigDownload 抓拍配置查询应答使用标准 `SnapShot` 节点，并记录厂商是否沿用 DeviceConfig 的 `SnapShotConfig` 节点；
 - `UploadSnapShotFinished` 的文件标识应为“20 位设备编码 + `02` + 17 位真实生成时间 + 2 位序号”，记录设备是否会产生非法日期时间；
-- `VideoUploadNotify` 拒绝超出 WGS-84 范围的经纬度；
+- `DeviceUpgradeResult`、`UploadSnapShotFinished`、`VideoUploadNotify` 使用 SIP `MESSAGE` 承载 Notify XML，SIP `NOTIFY` 不应被设备使用；`VideoUploadNotify` 拒绝超出 WGS-84 范围的经纬度；
+- 四版本 MESSAGE/NOTIFY 非空 MANSCDP 正文均携带唯一 `Application/MANSCDP+xml` Content-Type；补测大小写及 `charset=UTF-8` 参数，并确认缺失、重复、畸形或误写为 `application/sdp` 时平台在业务处理前拒绝且不改变状态；
 - 附录 A.4 扩展对象；
 - SIP-TLS（目标设备支持时）。
 - 广播/对讲沿用 `PT 8/PCMA/8000`，确认双向音频和停止清理。
+- RTP over TCP 主动/被动模式保存 RTP 与 RTCP 的 RFC 4571 帧证据；旁路 UDP RTCP 不计为 TCP 模式通过。
 
 ## 4. 证据目录约定
 
@@ -119,6 +123,8 @@ docs/testing/evidence/gb28181/<version>/<vendor>-<model>-<firmware>/
 ├── catalog.sip.txt
 ├── live.sip.txt
 ├── history.sip.txt
+├── media-rtp-rtcp.md
+├── media.pcapng
 ├── alarm.sip.txt
 ├── voice.sip.txt
 ├── voice-rtp.md
@@ -132,6 +138,8 @@ docs/testing/evidence/gb28181/platforms/<version>/<vendor>-<platform>/
 ├── catalog.sip.txt
 ├── live.sip.txt
 ├── history.sip.txt
+├── media-rtp-rtcp.md
+├── media.pcapng
 ├── subscribe.sip.txt
 ├── voice.sip.txt
 ├── signal-digest.md
