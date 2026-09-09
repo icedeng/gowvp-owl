@@ -1,0 +1,21 @@
+FROM alpine:3.22
+
+ARG TARGETARCH
+
+ENV TZ=Asia/Shanghai
+
+RUN apk add --no-cache \
+    ca-certificates \
+    ffmpeg \
+    tzdata
+
+WORKDIR /app
+
+COPY build/deploy-v1/${TARGETARCH}/service/owl ./owl
+
+RUN chmod +x ./owl && \
+    mkdir -p configs logs
+
+EXPOSE 15123 15060 15060/udp 15061 3702/udp 30200-30300
+
+ENTRYPOINT ["./owl"]

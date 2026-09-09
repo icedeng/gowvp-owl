@@ -1,0 +1,239 @@
+# ==============================================================================
+# Owl / WVP 真机测试配置
+# ==============================================================================
+# 发布前优先修改带有“必改”标记的配置：
+#   1. Sip.Host：真机能够访问的宿主机局域网 IP
+#   2. Sip.ID：本平台 20 位国标编码
+#   3. Sip.Domain：本平台 10 位国标域，通常是 Sip.ID 的前 10 位
+#   4. Sip.Password：设备注册密码；留空表示不限制注册密码
+#
+# deploy/v1/.env 会覆盖登录密码、JWT/RTMP/Webhook 密钥以及 Media 下的
+# IP、HTTPPort、Secret、WebHookIP、SDPIP。不要在本文件重复保存这些密钥。
+# 修改本文件后重启 gowvp 服务生效：
+#   docker compose --project-directory deploy/v1 restart gowvp
+# ==============================================================================
+
+[Server]
+  # 正式/真机测试建议关闭调试模式。
+  Debug = false
+  # 由 deploy/v1/.env 的 OWL_RTMP_SECRET 覆盖。
+  RTMPSecret = ''
+  # 由 deploy/v1/.env 的 OWL_ADMIN_USERNAME/OWL_ADMIN_PASSWORD 覆盖。
+  Username = 'admin'
+  Password = ''
+
+  [Server.AI]
+    # v1 编排暂未包含 AI 服务，因此默认禁用。
+    Disabled = true
+    # AI 事件保留天数，0 使用程序默认策略。
+    RetainDays = 0
+    # 分析间隔（秒）：1=每秒1张，5=每5秒1张。
+    AnalysisInterval = 5
+    # 同类告警冷却时间（秒）。
+    AlertCooldownSeconds = 30
+
+  [Server.HTTP]
+    # 容器内部 HTTP 端口；宿主机入口由 deploy/v1/.env 的 OWL_HTTP_PORT 控制。
+    Port = 15123
+    Timeout = '1m0s'
+    # 由 deploy/v1/.env 的 OWL_JWT_SECRET 覆盖。
+    JwtSecret = ''
+    # 第三方认证服务地址，留空表示使用内置登录认证。
+    AuthURL = ''
+
+    [Server.HTTP.PProf]
+      # 性能诊断接口默认关闭；启用后务必限制访问 IP。
+      Enabled = false
+      AccessIps = ['::1', '127.0.0.1']
+
+  [Server.Recording]
+    # true=全局关闭录像；真机测试默认开启。
+    Disabled = false
+    # 通道未单独设置时的录像模式：always、ai、none。
+    DefaultMode = 'always'
+    # Owl 与 ZLM 共享的容器内录像路径，不建议修改。
+    StorageDir = './configs/recordings'
+    # 录像保留天数。
+    RetainDays = 3
+    # 磁盘使用率超过该百分比后执行循环覆盖。
+    DiskUsageThreshold = 95.0
+    # MP4 分片时长（秒），建议不小于 60。
+    SegmentSeconds = 300
+
+  [Server.Webhook]
+    # 告警推送目标，例如：
+    # Targets = ['http://192.168.1.20:8080/events?secret=your-secret']
+    Targets = []
+    MaxRetry = 3
+    BufferSize = 64
+    # 由 deploy/v1/.env 的 OWL_WEBHOOK_SECRET 覆盖。
+    RecvSecret = ''
+
+[Data]
+  [Data.Database]
+    # 默认使用 SQLite，文件持久化在 deploy/v1/data/configs/data.db。
+    Dsn = './configs/data.db'
+    MaxIdleConns = 10
+    MaxOpenConns = 50
+    ConnMaxLifetime = '6h0m0s'
+    SlowThreshold = '200ms'
+
+[Log]
+  # 宿主机目录为 deploy/v1/data/logs。
+  Dir = './logs'
+  # 可选：debug、info、warn、error；真机联调建议 info，抓问题时临时改 debug。
+  Level = 'info'
+  # MaxAge 为旧版兼容字段；新部署主要使用 MaxDays。
+  MaxAge = '168h0m0s'
+  MaxDays = 7
+  RotationTime = '12h0m0s'
+  MaxSize = 100
+
+[Sip]
+  # 【必改】对设备/上级宣告的宿主机局域网 IP，不能填 127.0.0.1 或容器名。
+  Host = '192.168.1.100'
+  # SIP TCP/UDP 监听端口，与 compose 端口映射保持一致。
+  Port = 15060
+  # 【必改】本平台 20 位国标 ID。
+  ID = '34010000002000000001'
+  # 【必改】10 位国标域；留空时会从 ID 前 10 位派生。
+  Domain = '3401000000'
+  # 【按需修改】设备 REGISTER 的全局 Digest 密码；空串允许免密码接入。
+  # 也可在 deploy/v1/.env 中设置 OWL_SIP_PASSWORD 覆盖。
+  Password = ''
+
+  # SIP-TLS 默认关闭；开启前先把证书放入 deploy/v1/data/configs/certs/。
+  EnableTLS = false
+  TLSPort = 15061
+  TLSCert = ''
+  TLSKey = ''
+  TLSClientCA = ''
+  TLSRequireClientCert = false
+
+  # true 时 MESSAGE/NOTIFY 来源 IP 必须与注册来源一致。
+  StrictSourceCheck = false
+  # true 时 MESSAGE/NOTIFY 必须携带 Digest 鉴权；建议完成基础互通后再开启。
+  RequireMessageAuth = false
+  # 级联控制弱确认兼容开关，默认关闭。
+  PTZWeakConfirm = false
+  # 仅 GB/T 28181-2022 使用；为空表示不做 REGISTER 重定向。
+  RegisterRedirect = ''
+
+  [Sip.RegisterCertificateAuth]
+    # 2011/2014/2016 Capability/Asymmetric 证书注册认证，默认关闭。
+    Enabled = false
+    Required = false
+    PlatformCert = ''
+    PlatformKey = ''
+    DeviceCA = ''
+    CRL = ''
+
+    [Sip.RegisterCertificateAuth.DeviceCertificates]
+      # 设备 ID 到证书路径的映射示例：
+      # '34020000001320000001' = './configs/certs/device-34020000001320000001.crt'
+
+  [Sip.SignalDigest]
+    # GB/T 28181 Date + Note 信令摘要；先 Enabled 灰度，再考虑 Required。
+    Enabled = false
+    Required = false
+    Seed = ''
+    # 支持 MD5、SHA-1、SHA-256、SM3。
+    Algorithm = 'MD5'
+    # 标准使用 base64；hex 仅用于兼容部分厂商。
+    Encoding = 'base64'
+    AcceptLegacyHex = true
+    Window = '10m'
+
+  [Sip.DeviceHistory]
+    # 每台设备最多保留的心跳/注册历史；0 表示不限制。
+    MaxRecords = 1000
+    # 最多保留天数；0 表示不限制。
+    MaxDays = 30
+
+  [Sip.DirectTCPDownload]
+    # GB/T 28181-2014 附录 O 裸 TCP 下载；默认关闭。
+    Enabled = false
+    # 级联裸 TCP 中继默认关闭。
+    CascadeRelayEnabled = false
+    # 启用时必须填写允许的 20 位设备 ID。
+    DeviceAllowlist = []
+    StorageDir = './configs/downloads/gb28181'
+    RetainDays = 7
+    OfferPort = 9
+    RelayListenIP = '0.0.0.0'
+    # 级联中继对上级宣告的地址；为空时使用 Media.SDPIP。
+    RelayAdvertiseIP = ''
+    # compose 已映射该 TCP 端口段。
+    RelayPortStart = 30200
+    RelayPortEnd = 30300
+    # 单文件最大 10 GiB。
+    MaxFileSize = 10737418240
+    GlobalConcurrency = 4
+    DeviceConcurrency = 1
+    DialTimeout = '5s'
+    FirstByteTimeout = '15s'
+    IdleTimeout = '30s'
+    TotalTimeout = '2h0m0s'
+    AllowAddressMismatch = false
+    # AllowAddressMismatch=true 时必须配置可信 CIDR。
+    AllowedAddressCIDRs = []
+
+  [Sip.AnnexG]
+    # 2011/2014/2016 附录 G 外部系统接入，默认关闭；2022 不支持。
+    Enabled = false
+    MaxSendRecords = 100
+    InboundRate = 50
+    InboundBurst = 100
+    PendingTTL = '24h0m0s'
+    MaxPending = 4096
+    # 启用时还必须配置一个或多个 [[Sip.AnnexG.Systems]]。
+
+  [Sip.Log]
+    # 真机抓包排障时可临时开启 SIP 报文日志，注意脱敏。
+    Enabled = false
+    Dir = './logs/sip'
+    MaxAge = '72h0m0s'
+    RotationTime = '8h0m0s'
+    RotationSize = 50
+
+# 上级平台级联示例。需要时取消注释并按现场参数修改，可配置多组。
+# [[Sip.Upstreams]]
+#   Name = 'upstream-01'
+#   Enabled = true
+#   ServerID = '34020000002000000001'
+#   Domain = '3402000000'
+#   Host = '192.168.1.200'
+#   Port = 5060
+#   Transport = 'udp' # udp、tcp、tls
+#   LocalID = '34010000002000000001'
+#   LocalDomain = '3401000000'
+#   LocalHost = '192.168.1.100'
+#   LocalPort = 15060
+#   Password = 'CHANGE_ME'
+#   Version = '3.0' # 1.0=2011，1.1=2014，2.0=2016，3.0=2022
+#   Expires = 3600
+#   KeepaliveInterval = '60s'
+#   AlarmDispatchEnabled = false
+#   SharedChannels = []
+#   MediaAllowedCIDRs = ['192.168.1.0/24']
+
+# 本域接警 SIP 客户端示例。启用时客户端必须已向本平台注册。
+# [[Sip.AlarmReceivers]]
+#   Name = 'alarm-center'
+#   Enabled = true
+#   DeviceID = '34010000002000000011'
+#   SourceIDs = ['3401000000']
+
+[Media]
+  # 以下连接参数均由 deploy/v1/.env/Compose 覆盖；保留值便于脱离 Compose 排查。
+  IP = 'zlm'
+  HTTPPort = 80
+  Secret = ''
+  Type = 'zlm'
+  # 设备直接上传抓拍图片的公网/局域网回调基础地址，按需填写。
+  GBSnapshotBaseURL = ''
+  GBSnapshotFFmpegConcurrency = 2
+  WebHookIP = 'gowvp'
+  RTPPortRange = '20000-20100'
+  # 【必改】应与 Sip.Host、deploy/v1/.env 的 OWL_MEDIA_SDP_IP 一致。
+  SDPIP = '192.168.1.100'

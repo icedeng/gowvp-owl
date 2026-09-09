@@ -1,0 +1,4 @@
+*
+!build/
+!build/deploy-v1/
+!build/deploy-v1/**

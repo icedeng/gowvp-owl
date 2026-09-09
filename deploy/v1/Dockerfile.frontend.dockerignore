@@ -1,0 +1,7 @@
+*
+!build/
+!build/deploy-v1/
+!build/deploy-v1/**
+!deploy/
+!deploy/v1/
+!deploy/v1/nginx.conf
