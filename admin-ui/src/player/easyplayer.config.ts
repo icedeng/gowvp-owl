@@ -1,6 +1,7 @@
 export const PLAYER_PROTOCOLS = ['ws-flv', 'http-flv', 'webrtc', 'hls'] as const
 
 export type StreamProtocol = typeof PLAYER_PROTOCOLS[number]
+export type MediaProtocol = StreamProtocol | 'mp4'
 export type EasyPlayerDecoderMode = 'auto' | 'mse' | 'wcs' | 'wasm'
 
 export const EASYPLAYER_BUTTON_NAMES = [
@@ -233,7 +234,7 @@ export function isEasyPlayerAdvancedOptions(value: string) {
 
 export function buildEasyPlayerOptions(
   settings: EasyPlayerSettings,
-  runtime: { muted: boolean; protocol: StreamProtocol; poster?: string }
+  runtime: { muted: boolean; protocol: MediaProtocol; poster?: string }
 ): Record<string, unknown> {
   const advanced = parseEasyPlayerAdvancedOptions(settings.advancedOptions)
   const advancedButtons = isRecord(advanced.btns) ? advanced.btns : {}
@@ -279,9 +280,9 @@ export function buildEasyPlayerOptions(
     loadTimeOut: settings.loadTimeOut,
     loadTimeReplay: settings.loadTimeReplay,
     // FLV 在自动模式下优先使用浏览器 MSE，避免回落到需要额外 WASM 初始化的路径。
-    MSE: settings.decoderMode === 'mse' || autoMse,
-    WCS: settings.decoderMode === 'wcs',
-    WASM: settings.decoderMode === 'wasm',
+    MSE: runtime.protocol === 'mp4' || settings.decoderMode === 'mse' || autoMse,
+    WCS: runtime.protocol !== 'mp4' && settings.decoderMode === 'wcs',
+    WASM: runtime.protocol !== 'mp4' && settings.decoderMode === 'wasm',
     WASMSIMD: settings.wasmSimd,
     gpuDecoder: settings.gpuDecoder,
     webGPU: settings.webGPU,
@@ -301,8 +302,8 @@ export function buildEasyPlayerOptions(
       ...advancedButtons,
       ...settings.buttons,
     },
-    // 由平台运行态决定，避免高级 JSON 意外破坏实时播放链路。
-    isLive: true,
+    // 文件录像使用点播控制栏；设备推流回放仍使用流式播放并由后端控制进度。
+    isLive: runtime.protocol !== 'mp4',
     // EasyPlayer 的 isMute 参数实际表示“初始非静音”（内部映射为 isNotMute）。
     // 统一以组件的 muted 语义传入，避免与原生 HLS 适配器行为相反。
     isMute: !runtime.muted,

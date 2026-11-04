@@ -2,7 +2,7 @@
 
 用于 `192.168.6.20`（EasyTier：`10.144.0.20`），部署设计和实施记录见 [服务器部署方案](../server-192.168.6.20.md)。本目录不含真实凭据或业务数据库。
 
-当前版本（2026-11-04）：Owl 服务镜像为 `v1-20261104-deviceui3`（设备列表操作列留白修正），后端版本保持 `v1-20261104-resourcecodes2`（补齐录像、告警、会话/任务/命令记录和订阅的编码定位），ZLM 保持 `v1-20261103-manualrecord1`，独立 PostgreSQL 17.11（`owl-v1-postgres:17-20261104`）。设备、通道、录像索引、心跳和注册历史已从 SQLite 迁移到 PostgreSQL；已补齐录像与通道复合索引，并移除时间轴/月统计的固定条数截断。默认手动录像、媒体 `30000-50000/tcp+udp`、无人观看默认 180 秒断流等行为保留。日常启动命令：
+当前版本（2026-11-05）：Owl 服务镜像与后端版本统一为 `v2.2.3`，系统状态热门API请求量固定右列，地址超长省略、悬停可看完整内容；侧栏平台运维分组移除左侧图标，保留展开箭头；设备详情通道列表新增实际直播推流状态与刷新入口，区分在线状态、历史回放及节点查询失败；播放器开始/重试统一为播放图标加圆形边框，移除按钮文字；全平台播放器统一为 StreamPlayer / EasyPlayer Pro，录像点播和实时监控布局、共享 PTZ 控件全部纳入；保留已发布的设备图标样式、PTZ 探测纠正与自动停止、录像分区及回放流隔离。正式版本从根目录 `VERSION` 读取，统一采用 `v主版本.次版本.修订号`，不再使用日期加功能名。ZLM 保持 `v1-20261103-manualrecord1`，独立 PostgreSQL 17.11（`owl-v1-postgres:17-20261104`）。设备、通道、录像索引、心跳和注册历史已迁移到 PostgreSQL；录像与通道复合索引、无固定条数截断的查询、默认手动录像、媒体 `30000-50000/tcp+udp`、无人观看默认 180 秒断流均保留。发布证据和回滚见 [v2.2.3 发布记录](../releases/v2.2.3.md)。日常启动命令：
 
 ```bash
 cd /www2/gowvp-v1
@@ -55,7 +55,7 @@ curl -fsS http://192.168.6.20:15123/health
 docker compose -p owl-v1 --env-file .env -f docker-compose.yml restart gowvp
 ```
 
-更新镜像前完成备份，导入对应镜像，再修改 `.env` 标签，执行 `./run.sh up`。`OWL_SERVICE_IMAGE_TAG`、`OWL_ZLM_IMAGE_TAG` 优先于 `OWL_IMAGE_TAG`；当前分别为 `v1-20261104-deviceui3`、`v1-20261103-manualrecord1`。PostgreSQL 通过独立变量 `OWL_POSTGRES_IMAGE` 固定版本，升级数据库大版本需单独执行迁移，不能直接换标签。不要使用通用 `deploy.sh release/up` 启动本服务器，不要重新执行首次准备脚本。
+更新镜像前完成备份，导入对应镜像，再修改 `.env` 标签，执行 `./run.sh up`。`OWL_SERVICE_IMAGE_TAG`、`OWL_ZLM_IMAGE_TAG` 优先于 `OWL_IMAGE_TAG`；当前分别为 `v2.2.3`、`v1-20261103-manualrecord1`。PostgreSQL 通过独立变量 `OWL_POSTGRES_IMAGE` 固定版本，升级数据库大版本需单独执行迁移，不能直接换标签。不要使用通用 `deploy.sh release/up` 启动本服务器，不要重新执行首次准备脚本。
 
 此前 apibasefix1 仅更新前端，修复开发环境 `/api` 代理前缀混入生产构建、导致开放平台和系统状态等接口 404 的问题。`admin-ui/.env.production` 将生产默认 API 地址设为同源 `/`，保留本地开发配置；生产构建需检查编译后的实际 API base，再用管理员身份检查页面接口，不能只检查静态文件和容器健康。无后端或数据库修改，ZLM、PG 容器未重启。交付目录为 `packages/apibasefix1-20261104/`，更新前环境配置和运行信息位于 `backups/before-apibasefix1-20261104/`。紧急回滚可恢复最近正常的 `v1-20261104-openplatformdocs1` 并仅更新 gowvp；不要回退到带有错误代理前缀的 openplatformui1，不恢复数据库或更换密钥。
 
@@ -157,3 +157,11 @@ ZLM 持久化配置 `data/zlm-config/config.ini` 中，`[http]` 的 `allow_ip_ra
 ## 设备列表操作列留白（2026-11-04）
 
 发布 `v1-20261104-deviceui3`：操作列固定104px，右侧留白16px、按钮间距8px，桌面触屏列128px，避免图标溢出。构建、519静态文件和6项HTTP资源检查通过，后端/PG/ZLM保持。包目录 `packages/deviceui3-20261104/`，备份 `backups/before-deviceui3-20261104/`；回滚恢复本轮备份.env后仅重建gowvp至deviceui2。页面效果由人工验收。
+
+## 心跳与注册记录弹层（2026-11-04）
+
+发布 `v1-20261104-historymodal1`：设备列表和详情的历史记录固定标题栏、仅内容区滚动，保留键盘聚焦和关闭行为。生产构建、519静态文件及10项HTTP资源检查通过，后端/PG/ZLM保持。包目录 `packages/historymodal1-20261104/`，备份 `backups/before-historymodal1-20261104/`；回滚恢复本轮备份.env后仅重建gowvp至deviceui3。实际页面由人工验收。
+
+发布 `v1-20261104-channeltabs1`：通道详情Tab与内容统一连续白底外框，桌面16px/窄屏12px内边距。生产构建、519静态文件及6项HTTP资源检查通过，后端/PG/ZLM保持。包目录 `packages/channeltabs1-20261104/`，备份 `backups/before-channeltabs1-20261104/`；回滚恢复本轮备份.env后仅重建gowvp至historymodal1。实际页面由人工验收。
+
+发布 `v1-20261104-recordworkspace1`：云端录像与设备本地录像分区，月历目录/当天时段及点击推流回放，关闭停止会话；下载和自定义参数按需展开。前后端独立构建排除在途PTZ修改，目标Go/3项日期路径测试、生产构建及519静态文件/6项HTTP资源检查通过，PG/ZLM保持。包 `packages/recordworkspace1-20261104/`，备份 `backups/before-recordworkspace1-20261104/`；回滚至channeltabs1。真实设备回放由人工验收。

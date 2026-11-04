@@ -97,6 +97,8 @@ type PTZControlInput struct {
 	Group   uint8
 	Aux     uint8
 	Value   uint16
+	// StopManaged 表示调用方已有独立停止调度（开放平台租约），避免重复计时。
+	StopManaged bool
 }
 
 type PTZCapable interface {

@@ -140,6 +140,12 @@ const docTemplate = `{
                         "description": "协议类型",
                         "name": "type",
                         "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "查询媒体节点实际直播推流状态",
+                        "name": "include_stream_status",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1844,7 +1850,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "对指定通道发送一次轻量 PTZ 命令探测实际控制能力，默认使用 ` + "`" + `stop` + "`" + ` 动作。\n调用前置条件：1. 通道存在；2. 设备已在线；3. 对应协议适配器实现了 PTZ 控制。\n失败场景：1. 通道不存在；2. 设备离线；3. 协议不支持 PTZ；4. 设备未返回应答。\n成功后会持久化 ` + "`" + `ptz_verified=true` + "`" + `，后续设备/通道查询接口会直接返回该状态。\n请求示例：` + "`" + `{ \"action\": \"stop\", \"timeout\": 5 }` + "`" + `\n响应示例：` + "`" + `{ \"channel_id\": \"GB_34020000001320000001\", \"ptz_capable\": true, \"ptz_verified\": true, \"verified_now\": true, \"message\": \"ok\" }` + "`" + `",
+                "description": "仅发送停止命令检查信令连通性。signaling_ok 表示设备接受信令；ptz_verified 和 verified_now 始终为 false，不证明实际转动。",
                 "consumes": [
                     "application/json"
                 ],
@@ -4281,13 +4287,35 @@ const docTemplate = `{
                 }
             }
         },
+        "api.channelStreamStatus": {
+            "description": "通道列表项；仅 include_stream_status=true 时返回 stream_status。",
+            "allOf": [
+                {
+                    "$ref": "#/definitions/ipc.Channel"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "stream_status": {
+                            "description": "streaming 为媒体节点已注册直播流，idle 为未推流，unknown 为查询失败或不支持；历史回放与下载不计入。",
+                            "type": "string",
+                            "enum": [
+                                "streaming",
+                                "idle",
+                                "unknown"
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
         "api.SwaggerChannelsResponse": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/ipc.Channel"
+                        "$ref": "#/definitions/api.channelStreamStatus"
                     }
                 },
                 "total": {
@@ -5469,22 +5497,27 @@ const docTemplate = `{
                 "message": {
                     "description": "探测结果说明",
                     "type": "string",
-                    "example": "ok"
+                    "example": "设备已接受停止信令，实际云台能力仍需观察画面确认"
                 },
                 "ptz_capable": {
-                    "description": "静态或探测后判断的 PTZ 能力",
+                    "description": "设备声明的 PTZ 能力，未知时为 false",
                     "type": "boolean",
-                    "example": true
+                    "example": false
                 },
                 "ptz_verified": {
-                    "description": "是否已通过实际命令验证",
+                    "description": "兼容旧字段，信令应答不能验证实际运动",
+                    "type": "boolean",
+                    "example": false
+                },
+                "signaling_ok": {
+                    "description": "本次设备是否接受停止信令",
                     "type": "boolean",
                     "example": true
                 },
                 "verified_now": {
-                    "description": "本次是否探测成功",
+                    "description": "兼容旧字段，始终为 false",
                     "type": "boolean",
-                    "example": true
+                    "example": false
                 }
             }
         },

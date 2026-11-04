@@ -24,7 +24,7 @@
 - `#/transport-devices`：部标设备能力入口；当前后端开放对应设备类型后自动展示。
 - `#/channels/:id`：通道播放、PTZ、AI、录像和设备端录像；兼容路由 `#/channels` 会跳转实时监控。
 - `#/push-streams`、`#/pull-streams`：RTMP 推流与 RTSP 拉流配置。
-- `#/media-servers`：默认媒体节点、带宽、存储和会话摘要。
+- `#/media-servers`、`#/media-servers/:id`：节点列表与只读运行详情，按概览、媒体流、网络会话、RTP 服务、代理任务和运行诊断分区查看，支持搜索、分页和按需刷新；接口与数据口径见 [媒体节点只读巡检](../docs/api/media-nodes.md)。
 - `#/system-status`：服务构建、资源、API 与依赖服务状态。
 - `#/sip-settings`、`#/diagnostics`、`#/upgrade`：SIP、协议诊断和版本升级。
 - `#/account`：单管理员账号安全。
@@ -81,8 +81,10 @@ EasyPlayer 的常用配置可在管理端“平台运维 → 播放器设置”�
 
 当前适配器包括：
 
-- EasyPlayer：支持 HTTP-FLV、WS-FLV、HLS 和 ZLMediaKit WebRTC；从 `public/easyplayer` 按需加载。
+- EasyPlayer：支持 HTTP-FLV、WS-FLV、HLS、ZLMediaKit WebRTC 和 MP4 点播；从 `public/easyplayer` 按需加载。
 - 浏览器原生 HLS：在 Safari 等原生支持 HLS 的环境作为无额外依赖的降级方案。
+
+通道预览、实时分屏、录像中心、通道云端录像和设备本地回放全部使用 `StreamPlayer.vue`。默认统一浅灰空态、加载与错误层，播放中的画面保留深色衬底。直播地址由 `result` 传入，云端 MP4 由 `src` 传入；组件通过 `loading`、`error` 和 `retry` 统一处理页面请求状态，关闭或切换资源时调用 `destroy()`。MP4 使用 EasyPlayer 点播模式，保留暂停、拖动进度、倍速及 `ended` 连续播放事件；设备推流回放的暂停、倍速和跳转仍通过设备历史会话接口执行。
 
 EasyPlayer 运行文件来自 [EasyDarwin/EasyPlayer.js](https://github.com/EasyDarwin/EasyPlayer.js) `main` 分支提交 `75c66d620036b4b5edc0a68e855c56ba7370c898`，存放在 `public/easyplayer`，默认地址为 `./easyplayer/EasyPlayer-pro.js`。如需使用 CDN 或其他部署位置，可在构建环境覆盖：
 

@@ -46,8 +46,9 @@ func registerSms(g gin.IRouter, api SmsAPI, handler ...gin.HandlerFunc) {
 		group := g.Group("/media_servers", handler...)
 		group.GET("", web.WrapH(api.listMediaServers))
 		group.PUT("/:id", web.WrapH(api.updateMediaServer))
+		group.GET("/:id", web.WrapH(api.mediaServerDetail))
+		group.GET("/:id/inspect/:resource", web.WrapH(api.inspectMediaServer))
 
-		// group.GET("/:id", web.WrapH(api.getMediaServer))
 		// group.POST("", web.WrapH(api.createMediaServer))
 		// group.DELETE("/:id", web.WrapH(api.deleteMediaServer))
 	}
@@ -57,7 +58,14 @@ func registerSms(g gin.IRouter, api SmsAPI, handler ...gin.HandlerFunc) {
 
 func (a SmsAPI) listMediaServers(c *gin.Context, in *sms.FindMediaServerInput) (any, error) {
 	items, total, err := a.smsCore.ListMediaServers(c.Request.Context(), in)
-	return gin.H{"items": items, "total": total}, err
+	if err != nil {
+		return nil, err
+	}
+	output := make([]mediaServerListItem, 0, len(items))
+	for _, item := range items {
+		output = append(output, mediaServerListItem{MediaServer: item})
+	}
+	return gin.H{"items": output, "total": total}, nil
 }
 
 func (a SmsAPI) getMediaServer(c *gin.Context, in *mediaServerIDInput) (any, error) {

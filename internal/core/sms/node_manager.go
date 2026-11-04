@@ -492,9 +492,14 @@ func (n *NodeManager) StopRecord(server *MediaServer, in zlm.StopRecordRequest) 
 
 // GetMediaList 批量获取所有在线流列表（含录制状态）
 func (n *NodeManager) GetMediaList(server *MediaServer) (*zlm.GetMediaListResponse, error) {
+	return n.GetMediaListContext(context.Background(), server)
+}
+
+// GetMediaListContext 按调用方的取消信号查询节点，不影响其他节点的状态。
+func (n *NodeManager) GetMediaListContext(ctx context.Context, server *MediaServer) (*zlm.GetMediaListResponse, error) {
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
 	}
-	return driver.GetMediaList(context.Background(), server)
+	return driver.GetMediaList(ctx, server)
 }

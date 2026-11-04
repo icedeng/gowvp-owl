@@ -1117,8 +1117,10 @@ func fillDeviceRecordMode(items []*ipc.Device) {
 			continue
 		}
 		dev.Ext.RecordMode = dev.Ext.GetRecordMode()
-		dev.PTZVerified = dev.Ext.PTZVerified
-		dev.PTZCapable = dev.PTZVerified || dev.IsOnvif()
+		// 旧标记仅由停止命令的应答产生，不能作为实际运动能力的证据。
+		dev.Ext.PTZVerified = false
+		dev.PTZVerified = false
+		dev.PTZCapable = dev.IsOnvif()
 		for _, ch := range dev.Children {
 			if ch == nil {
 				continue
@@ -1140,12 +1142,14 @@ func fillChannelPTZStatus(ch *ipc.Channel) {
 	if ch == nil {
 		return
 	}
-	ch.PTZVerified = ch.Ext.PTZVerified
+	ch.Ext.PTZVerified = false
+	ch.PTZVerified = false
 	switch {
 	case ch.IsOnvif():
 		ch.PTZCapable = true
 	case ch.IsGB28181():
-		ch.PTZCapable = ch.PTZType > 0 || ch.PTZVerified
+		// 3 为固定枪机；未知类型和旧停止应答不能证明可转动。
+		ch.PTZCapable = ch.PTZType > 0 && ch.PTZType != 3
 	default:
 		ch.PTZCapable = false
 	}
@@ -1163,6 +1167,7 @@ func fillChannelPTZStatus(ch *ipc.Channel) {
 // @Param did query string false "设备ID"
 // @Param key query string false "关键字"
 // @Param type query string false "协议类型"
+// @Param include_stream_status query bool false "查询媒体节点实际直播推流状态"
 // @Success 200 {object} SwaggerChannelsResponse
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels [get]
@@ -1178,6 +1183,9 @@ func (a IPCAPI) findChannel(c *gin.Context, in *ipc.FindChannelInput) (any, erro
 	// 为 RTMP 类型通道生成推流地址
 	a.fillRTMPPushAddr(c, items)
 
+	if c.Query("include_stream_status") == "true" {
+		return gin.H{"items": a.channelStreamStatuses(c.Request.Context(), items), "total": total}, nil
+	}
 	return gin.H{"items": items, "total": total}, nil
 }
 
@@ -1667,14 +1675,15 @@ type ptzControlInput struct {
 type ptzProbeInput struct {
 	Action  string `json:"action" example:"stop"` // 探测动作，默认 stop
 	Speed   uint8  `json:"speed" example:"30"`    // 速度值
-	Timeout int    `json:"timeout" example:"5"`   // 等待设备应答超时时间，单位秒
+	Timeout int    `json:"timeout" example:"5"`   // 兼容旧探测参数，停止命令不执行计时移动
 }
 
 type ptzProbeOutput struct {
 	ChannelID   string `json:"channel_id"`   // 通道 ID
 	PTZCapable  bool   `json:"ptz_capable"`  // 是否具备 PTZ 能力
-	PTZVerified bool   `json:"ptz_verified"` // 是否已通过实际命令验证
-	VerifiedNow bool   `json:"verified_now"` // 本次是否探测成功
+	PTZVerified bool   `json:"ptz_verified"` // 兼容旧字段，信令应答不能验证实际运动，始终为 false
+	VerifiedNow bool   `json:"verified_now"` // 兼容旧字段，始终为 false
+	SignalingOK bool   `json:"signaling_ok"` // 本次控制信令是否收到成功应答
 	Message     string `json:"message"`      // 探测结果说明
 }
 
@@ -2095,6 +2104,14 @@ func (a IPCAPI) startHistory(c *gin.Context, in *historyControlInput) (any, erro
 		return nil, ErrDevice.SetMsg(err.Error())
 	}
 	out := gin.H{"msg": "ok"}
+	if strings.EqualFold(strings.TrimSpace(in.Mode), "playback") {
+		playback, playErr := a.historyPlaybackOutput(c, channelID)
+		if playErr != nil {
+			_ = a.ipc.StopHistory(context.WithoutCancel(c.Request.Context()), channelID, &ipc.HistoryControlInput{Mode: "playback"})
+			return nil, playErr
+		}
+		out["playback"] = playback
+	}
 	if strings.EqualFold(strings.TrimSpace(in.Mode), "download") && a.uc != nil && a.uc.SipServer != nil {
 		channel, getErr := a.ipc.GetChannel(c.Request.Context(), channelID)
 		if getErr == nil {
@@ -3037,17 +3054,17 @@ func (a IPCAPI) ptzControl(c *gin.Context, in *ptzControlInput) (any, error) {
 	if err != nil {
 		return nil, ErrDevice.SetMsg(err.Error())
 	}
-	return gin.H{"msg": "ok"}, nil
+	return gin.H{"msg": "设备已接受控制信令，请观察画面确认是否执行"}, nil
 }
 
 // ptzProbe godoc
 // @Summary PTZ 能力探测
-// @Description 对指定通道发送一次轻量 PTZ 命令探测实际控制能力，默认使用 `stop` 动作。
+// @Description 对指定通道发送一次停止命令检查控制信令连通性，不能验证实际转动能力。
 // @Description 调用前置条件：1. 通道存在；2. 设备已在线；3. 对应协议适配器实现了 PTZ 控制。
 // @Description 失败场景：1. 通道不存在；2. 设备离线；3. 协议不支持 PTZ；4. 设备未返回应答。
-// @Description 成功后会持久化 `ptz_verified=true`，后续设备/通道查询接口会直接返回该状态。
+// @Description `signaling_ok` 表示设备接受信令；兼容字段 `ptz_verified/verified_now` 始终为 false，不再持久化能力验证标记。
 // @Description 请求示例：`{ "action": "stop", "timeout": 5 }`
-// @Description 响应示例：`{ "channel_id": "GB_34020000001320000001", "ptz_capable": true, "ptz_verified": true, "verified_now": true, "message": "ok" }`
+// @Description 响应示例：`{ "channel_id": "GB_34020000001320000001", "ptz_capable": false, "ptz_verified": false, "verified_now": false, "signaling_ok": true, "message": "设备已接受停止信令，实际云台能力仍需观察画面确认" }`
 // @Tags PTZ
 // @Security BearerAuth
 // @Accept json
@@ -3070,6 +3087,12 @@ func (a IPCAPI) ptzProbe(c *gin.Context, in *ptzProbeInput) (any, error) {
 }
 
 func (a IPCAPI) probeChannelPTZ(ctx context.Context, channelID string, in *ptzProbeInput) (*ptzProbeOutput, error) {
+	if in == nil {
+		in = &ptzProbeInput{}
+	}
+	if action := strings.ToLower(strings.TrimSpace(in.Action)); action != "" && action != "stop" {
+		return nil, reason.ErrBadRequest.SetMsg("信令探测仅允许 stop；转动请使用云台控制")
+	}
 	ch, err := a.ipc.GetChannel(ctx, channelID)
 	if err != nil {
 		return nil, err
@@ -3077,12 +3100,9 @@ func (a IPCAPI) probeChannelPTZ(ctx context.Context, channelID string, in *ptzPr
 	fillChannelPTZStatus(ch)
 
 	req := &ipc.PTZControlInput{
-		Action:  strings.TrimSpace(in.Action),
+		Action:  "stop",
 		Speed:   in.Speed,
 		Timeout: in.Timeout,
-	}
-	if req.Action == "" {
-		req.Action = "stop"
 	}
 
 	out := &ptzProbeOutput{
@@ -3097,15 +3117,8 @@ func (a IPCAPI) probeChannelPTZ(ctx context.Context, channelID string, in *ptzPr
 		return out, nil
 	}
 
-	verifiedChannel, err := a.ipc.MarkPTZVerified(ctx, channelID)
-	if err == nil {
-		ch = verifiedChannel
-	}
-	fillChannelPTZStatus(ch)
-	out.PTZCapable = ch.PTZCapable
-	out.PTZVerified = ch.PTZVerified
-	out.VerifiedNow = true
-	out.Message = "ok"
+	out.SignalingOK = true
+	out.Message = "设备已接受停止信令，实际云台能力仍需观察画面确认"
 	return out, nil
 }
 
@@ -3169,7 +3182,7 @@ func (a IPCAPI) devicePTZProbe(c *gin.Context, in *ptzProbeInput) (any, error) {
 			}
 		}
 		resp.Items = append(resp.Items, item)
-		if item.VerifiedNow {
+		if item.SignalingOK {
 			resp.SuccessCount++
 		} else {
 			resp.FailedCount++

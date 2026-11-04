@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -63,7 +64,7 @@ type PTZInput struct {
 	ChannelID string
 	Action    PTZAction
 	Speed     uint8
-	Timeout   time.Duration
+	Timeout   time.Duration // 连续移动时长；大于 0 时到期自动停止，0 表示由调用方停止
 	Preset    int
 	Group     uint8
 	Aux       uint8
@@ -116,7 +117,24 @@ func (g *GB28181API) PTZContext(ctx context.Context, in *PTZInput) (*PTZOutput, 
 		return nil, errors.New("invalid ptz input")
 	}
 	var out *PTZOutput
-	err := ipcmodel.CoordinateGBPTZ(ctx, in.DeviceID, in.ChannelID, func(callCtx context.Context) error { var e error; out, e = g.ptzRaw(callCtx, in); return e })
+	input := *in
+	err := ipcmodel.CoordinateGBPTZ(ctx, input.DeviceID, input.ChannelID, func(callCtx context.Context) error {
+		return g.withPTZSession(callCtx, input.DeviceID, input.ChannelID, func(session *ptzSession) error {
+			var err error
+			out, err = g.ptzRaw(callCtx, &input)
+			if err != nil {
+				return err
+			}
+			stopAction := timedPTZStopAction(input.Action)
+			if stopAction != "" || replacesPTZMotion(input.Action) {
+				session.cancelPendingStop()
+			}
+			if stopAction != "" && input.Timeout > 0 {
+				g.schedulePTZStop(callCtx, session, input, stopAction)
+			}
+			return nil
+		})
+	})
 	return out, err
 }
 func (g *GB28181API) ptzRaw(ctx context.Context, in *PTZInput) (*PTZOutput, error) {
@@ -156,6 +174,7 @@ func (g *GB28181API) ptzRaw(ctx context.Context, in *PTZInput) (*PTZOutput, erro
 	if err != nil {
 		return nil, err
 	}
+	slog.InfoContext(ctx, "下发 GB28181 云台信令", "device_id", in.DeviceID, "channel_id", in.ChannelID, "action", in.Action, "ptz_cmd", cmd, "sn", sn)
 
 	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, in.DeviceID, in.ChannelID)
 	defer releaseOperation()
@@ -165,11 +184,13 @@ func (g *GB28181API) ptzRaw(ctx context.Context, in *PTZInput) (*PTZOutput, erro
 		return nil, operation.ErrorOr(err)
 	}
 	if _, err = sipResponseContext(requestCtx, tx); err != nil {
+		slog.WarnContext(ctx, "GB28181 云台信令未确认", "device_id", in.DeviceID, "channel_id", in.ChannelID, "action", in.Action, "sn", sn, "err", err)
 		return nil, operation.ErrorOr(err)
 	}
 	if !operation.Deliver(func() {}) {
 		return nil, operation.Cause()
 	}
+	slog.InfoContext(ctx, "设备已接受 GB28181 云台信令", "device_id", in.DeviceID, "channel_id", in.ChannelID, "action", in.Action, "sn", sn)
 	return &PTZOutput{
 		SN:       sn,
 		DeviceID: in.DeviceID,

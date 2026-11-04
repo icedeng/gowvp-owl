@@ -567,6 +567,7 @@ watch([query, status, version], () => {
       :open="Boolean(statisticDevice)"
       :title="`${statisticDevice?.name || statisticDevice?.device_id || '设备'} · ${statisticTitle}`"
       description="按时间倒序展示后端持久化的最近 100 条记录。"
+      scroll-body
       @close="statisticDevice = null"
     >
       <div class="history-summary">

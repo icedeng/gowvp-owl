@@ -106,6 +106,8 @@ type GB28181API struct {
 	streams *conc.Map[string, *Streams]
 	// key=deviceID:sn，用于等待 DeviceControl 的业务响应。
 	pendingDeviceControl sync.Map
+	// ptzSessions 串行化同一设备通道的下发与延时停止，防止旧停止打断新控制。
+	ptzSessions sync.Map
 	// key=deviceID:cmdType:sn，用于等待设备查询响应。
 	pendingDeviceQuery sync.Map
 	// key=deviceID:cmdType:sn，用于取消 Catalog/RecordInfo 的 SIP 确认及分包等待。

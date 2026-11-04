@@ -26,7 +26,6 @@ import {
   UploadCloud,
   Video,
   Truck,
-  Wrench,
   X,
 } from "@lucide/vue";
 import CommandPalette from "../components/CommandPalette.vue";
@@ -105,6 +104,7 @@ function active(name: string) {
     (route.name === "device-detail" && name === "devices") ||
     (route.name === "transport-device-detail" && name === "transport-devices") ||
     (route.name === "channel-detail" && name === "devices") ||
+    (route.name === "media-server-detail" && name === "media-servers") ||
     (route.name === "open-platform-detail" && name === "open-platform")
   );
 }
@@ -245,7 +245,6 @@ onBeforeUnmount(() => {
             title="平台运维"
             @click="toggleOperations"
           >
-            <Wrench aria-hidden="true" />
             <span>{{ group.label }}</span>
             <ChevronDown class="nav-group-chevron" :class="{ rotated: operationsOpen }" aria-hidden="true" />
           </button>

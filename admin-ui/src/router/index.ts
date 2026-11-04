@@ -29,6 +29,7 @@ const router = createRouter({
         { path: 'push-streams', name: 'push-streams', component: () => import('../views/PushStreamsView.vue'), meta: { title: 'RTMP 推流', group: '资源管理' } },
         { path: 'pull-streams', name: 'pull-streams', component: () => import('../views/PullStreamsView.vue'), meta: { title: 'RTSP 拉流', group: '资源管理' } },
         { path: 'media-servers', name: 'media-servers', component: () => import('../views/MediaServersView.vue'), meta: { title: '媒体节点', group: '平台运维' } },
+        { path: 'media-servers/:id', name: 'media-server-detail', component: () => import('../views/MediaServerDetailView.vue'), meta: { title: '媒体节点详情', group: '平台运维' } },
         { path: 'open-platform', name: 'open-platform', component: () => import('../views/OpenPlatformView.vue'), meta: { title: '开放平台', group: '平台运维' } },
         { path: 'open-platform/apps/:id', name: 'open-platform-detail', component: () => import('../views/OpenPlatformView.vue'), meta: { title: '应用详情', group: '平台运维' } },
         { path: 'system-status', name: 'system-status', component: () => import('../views/SystemStatusView.vue'), meta: { title: '系统状态', group: '平台运维' } },

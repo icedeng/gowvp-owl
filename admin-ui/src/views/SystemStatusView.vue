@@ -231,17 +231,21 @@ onMounted(load);
           <Activity />
         </div>
         <div class="table-wrap">
-          <table class="data-table">
+          <table class="data-table system-api-table">
+            <colgroup>
+              <col />
+              <col class="system-api-count-col" />
+            </colgroup>
             <thead>
               <tr>
-                <th>接口</th>
-                <th>请求量</th>
+                <th scope="col">接口</th>
+                <th scope="col" class="system-api-count">请求量</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="item in endpoints" :key="item.name">
-                <td class="mono">{{ item.name }}</td>
-                <td>{{ item.count }}</td>
+                <td class="mono"><span class="system-api-endpoint" :title="item.name">{{ item.name }}</span></td>
+                <td class="system-api-count">{{ item.count }}</td>
               </tr>
             </tbody>
           </table>
@@ -305,3 +309,27 @@ onMounted(load);
     </section>
   </main>
 </template>
+
+<style scoped>
+.data-table.system-api-table {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.system-api-count-col {
+  width: 112px;
+}
+
+.system-api-table .system-api-count {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.system-api-endpoint {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

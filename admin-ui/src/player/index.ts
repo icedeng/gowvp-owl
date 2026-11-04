@@ -6,12 +6,13 @@ import {
   isEasyPlayerPosterUrl,
   type EasyPlayerSettings,
   type StreamProtocol,
+  type MediaProtocol,
 } from './easyplayer.config'
 
-export type { StreamProtocol } from './easyplayer.config'
+export type { StreamProtocol, MediaProtocol } from './easyplayer.config'
 
 export interface StreamSource {
-  protocol: StreamProtocol
+  protocol: MediaProtocol
   url: string
   label: string
 }
@@ -27,7 +28,14 @@ export interface PlayerAdapter {
   play: (
     container: HTMLElement,
     source: StreamSource,
-    options: { muted: boolean; poster?: string; settings: EasyPlayerSettings }
+    options: {
+      muted: boolean
+      poster?: string
+      duration?: number
+      settings: EasyPlayerSettings
+      onError?: (message: string) => void
+      onEnded?: () => void
+    }
   ) => Promise<PlayerSession>
 }
 
@@ -94,8 +102,11 @@ export function normalizeStreamSources(result?: PlayResult | null) {
 
 interface EasyPlayerInstance {
   destroy: () => void | Promise<void>
-  play: (url: string) => void | Promise<void>
+  play: (url: string, options?: Record<string, unknown>) => void | Promise<void>
+  setRate: (rate: number) => void | Promise<void>
   setMute?: (muted: boolean) => void
+  on: (event: string, listener: (...args: unknown[]) => void) => void
+  off?: (event: string, listener: (...args: unknown[]) => void) => void
 }
 
 type EasyPlayerConstructor = new (
@@ -175,14 +186,61 @@ const easyPlayerAdapter: PlayerAdapter = {
       container,
       easyPlayerOptions
     )
-    try {
-      await player.play(source.url)
-    } catch (cause) {
+    let disposed = false
+    let started = false
+    let ended = false
+    let rejectStartup: (cause: Error) => void = () => {}
+    const startupError = new Promise<never>((_, reject) => { rejectStartup = reject })
+    // 不把 SDK 的错误参数或带票据的播放地址直接展示给用户。
+    const onError = () => {
+      if (disposed) return
+      const message = source.protocol === 'mp4'
+        ? '录像暂时无法播放，请重试或下载后查看。'
+        : '视频播放异常，请重试。'
+      if (started) options.onError?.(message)
+      else rejectStartup(new Error(message))
+    }
+    const onEnded = () => {
+      if (disposed || ended || source.protocol !== 'mp4') return
+      ended = true
+      options.onEnded?.()
+    }
+    const onRate = (value: unknown) => {
+      if (disposed || source.protocol !== 'mp4') return
+      const rate = Number(value)
+      if (Number.isFinite(rate) && rate > 0) {
+        void Promise.resolve(player.setRate(rate)).catch(onError)
+      }
+    }
+    player.on('error', onError)
+    player.on('playbackEnd', onEnded)
+    player.on('playbackRate', onRate)
+    const destroy = async () => {
+      disposed = true
+      player.off?.('error', onError)
+      player.off?.('playbackEnd', onEnded)
+      player.off?.('playbackRate', onRate)
       await player.destroy()
-      throw cause
+    }
+    try {
+      // SDK 要求绝对地址；文件路径上的鉴权查询参数由 URL 原样保留。
+      const playbackOptions = source.protocol === 'mp4' ? {
+        controlType: 'simple',
+        duration: Math.max(0, options.duration || 0),
+        startTime: 0,
+        showControl: true,
+        showRateBtn: true,
+      } : undefined
+      await Promise.race([player.play(new URL(source.url, document.baseURI).toString(), playbackOptions), startupError])
+      started = true
+    } catch {
+      await destroy()
+      throw new Error(source.protocol === 'mp4'
+        ? '录像暂时无法播放，请重试或下载后查看。'
+        : '视频播放失败，请重试。')
     }
     return {
-      destroy: () => player.destroy(),
+      destroy,
       setMuted: (muted) => player.setMute?.(muted),
     }
   },
@@ -211,21 +269,26 @@ const nativeHlsAdapter: PlayerAdapter = {
     video.style.height = '100%'
     video.style.objectFit = 'contain'
     container.appendChild(video)
-    try {
-      await video.play()
-    } catch (cause) {
+    const onError = () => options.onError?.('视频播放异常，请重试。')
+    const onEnded = () => options.onEnded?.()
+    video.addEventListener('error', onError)
+    video.addEventListener('ended', onEnded)
+    const destroy = () => {
+      video.removeEventListener('error', onError)
+      video.removeEventListener('ended', onEnded)
+      video.pause()
       video.removeAttribute('src')
       video.load()
       video.remove()
+    }
+    try {
+      await video.play()
+    } catch (cause) {
+      destroy()
       throw cause
     }
     return {
-      destroy() {
-        video.pause()
-        video.removeAttribute('src')
-        video.load()
-        video.remove()
-      },
+      destroy,
       setMuted(muted) {
         video.muted = muted
       },
@@ -240,7 +303,7 @@ export const playerAdapters: PlayerAdapter[] = [easyPlayerAdapter, nativeHlsAdap
 
 export function playbackCandidates(
   sources: StreamSource[],
-  priority: StreamProtocol[] = DEFAULT_PROTOCOL_PRIORITY
+  priority: MediaProtocol[] = DEFAULT_PROTOCOL_PRIORITY
 ) {
   const ordered = [...sources].sort(
     (left, right) => {

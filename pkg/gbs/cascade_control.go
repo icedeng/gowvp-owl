@@ -146,9 +146,14 @@ func (g *GB28181API) sendCascadeDeviceControlDownstream(ctx context.Context, cha
 	if channel != nil && request != nil && (request.PTZCmd != "" || request.PTZPreciseCtrl != nil || request.DragZoomIn != nil || request.DragZoomOut != nil || request.HomePosition != nil || request.TargetTrack != "") {
 		var out string
 		err := ipc.CoordinatePTZ(ctx, channel.ID, func(c context.Context) error {
-			var e error
-			out, e = g.sendCascadeDeviceControlRaw(c, channel, request)
-			return e
+			return g.withPTZSession(c, channel.DeviceID, channel.ChannelID, func(session *ptzSession) error {
+				var err error
+				out, err = g.sendCascadeDeviceControlRaw(c, channel, request)
+				if err == nil && out == ptzResultOK && (request.PTZCmd == "" || ptzCommandReplacesMotion(request.PTZCmd)) {
+					session.cancelPendingStop()
+				}
+				return err
+			})
 		})
 		return out, err
 	}

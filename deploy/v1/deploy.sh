@@ -49,6 +49,15 @@ detect_arch() {
   esac
 }
 
+release_version() {
+  local version="${OWL_RELEASE_VERSION:-}"
+  if [[ -z "$version" && -f "${ROOT_DIR}/VERSION" ]]; then
+    version="$(tr -d '\r\n' < "${ROOT_DIR}/VERSION")"
+  fi
+  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail "正式版本须为 v主版本.次版本.修订号，请设置 VERSION 或 OWL_RELEASE_VERSION"
+  printf '%s' "$version"
+}
+
 compose() {
   docker compose \
     --project-name "$PROJECT_NAME" \
@@ -65,7 +74,8 @@ init_env() {
   fi
 
   local media_ip="${2:-CHANGE_ME}"
-  local image_tag="v1-$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || printf 'local')"
+  local image_tag
+  image_tag="$(release_version)"
   local database_password
   database_password="$(generate_secret 32)"
   umask 077
@@ -137,9 +147,12 @@ build_artifacts() {
 
   local artifact_dir="${ROOT_DIR}/build/deploy-v1/${TARGETARCH}"
   local version branch hash build_time
-  version="$(git -C "$ROOT_DIR" describe --tags --always --dirty 2>/dev/null || printf 'v1-local')"
+  version="$(release_version)"
   branch="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'unknown')"
   hash="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+  if [[ -n "$(git -C "$ROOT_DIR" status --porcelain 2>/dev/null)" ]]; then
+    hash="${hash}-dirty"
+  fi
   build_time="$(date +%s)"
 
   case "$artifact_dir" in
@@ -170,7 +183,9 @@ build_images() {
   require_cmd docker
   docker compose version >/dev/null
   validate_build_env
-  export TARGETARCH
+  # 镜像标签与服务健康接口使用同一正式版本，不再混入日期或功能后缀。
+  export TARGETARCH OWL_IMAGE_TAG
+  OWL_IMAGE_TAG="$(release_version)"
   TARGETARCH="$(detect_arch)"
   build_artifacts
   log "生成本地 Docker 镜像"

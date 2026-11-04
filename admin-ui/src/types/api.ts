@@ -94,6 +94,7 @@ export interface ApiChannel {
   ptztype?: number
   is_online?: boolean
   is_playing?: boolean
+  stream_status?: 'streaming' | 'idle' | 'unknown'
   type?: string
   app?: string
   stream?: string
@@ -116,6 +117,22 @@ export interface GBOperationOutput {
   data?: unknown
   appendix_a4?: unknown[]
   incomplete?: Record<string, unknown>
+}
+
+export interface PTZProbeOutput {
+  channel_id: string
+  ptz_capable: boolean
+  ptz_verified: boolean
+  verified_now: boolean
+  signaling_ok: boolean
+  message: string
+}
+
+export interface PTZBatchProbeOutput {
+  total: number
+  success_count: number
+  failed_count: number
+  items: PTZProbeOutput[]
 }
 
 export interface GBSubscriptionState {
@@ -207,6 +224,14 @@ export interface GBHistoryDownloadState {
 export interface GBHistoryStartOutput {
   msg?: string
   download?: GBHistoryDownloadState
+  playback?: PlayResult
+}
+
+export interface DeviceRecordQueryOutput {
+  daynum: number
+  timenum: number
+  list: { date: string; items: { start: number; end: number }[] }[]
+  incomplete?: { received_count?: number; expected_count?: number }
 }
 
 export interface ApiEvent {
@@ -284,6 +309,16 @@ export interface MediaServer {
   auto_config?: boolean
   secret?: string
   hook_alive_interval?: number
+}
+
+export type MediaInspectionResource = 'version' | 'streams' | 'sessions' | 'rtp_servers' | 'pull_proxies' | 'push_proxies' | 'ffmpeg' | 'threads' | 'work_threads' | 'statistics' | 'apis' | 'stream_info' | 'stream_players' | 'rtp_info'
+
+export interface MediaInspectionResult {
+  resource: MediaInspectionResource
+  status: 'ok' | 'unsupported' | 'unavailable'
+  message?: string
+  data: unknown
+  fetched_at: string
 }
 
 export interface SipConfig {

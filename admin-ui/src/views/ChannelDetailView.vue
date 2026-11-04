@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import {
   Aperture,
   ArrowLeft,
   Camera,
-  ChevronUp,
   Copy,
   Cpu,
   ExternalLink,
@@ -32,7 +31,6 @@ import { api, collectPages, errorMessage, typeLabel } from "../services/api";
 import type {
   ApiChannel,
   ApiDevice,
-  ApiRecording,
   GBHistoryDownloadState,
   GBOperationOutput,
   GBSnapshotState,
@@ -42,8 +40,12 @@ import type {
   Zone,
 } from "../types/api";
 import { formatBytes, formatDate } from "../utils/format";
+import type { PTZRequest } from "../utils/ptz";
 import { useUiStore } from "../stores/ui";
 import StreamPlayer from "../components/StreamPlayer.vue";
+import ModalDialog from "../components/ModalDialog.vue";
+import ChannelRecordingsWorkspace from "../components/ChannelRecordingsWorkspace.vue";
+import ChannelPTZPanel from "../components/ChannelPTZPanel.vue";
 import type { StreamProtocol } from "../player";
 
 const route = useRoute();
@@ -51,17 +53,15 @@ const router = useRouter();
 const ui = useUiStore();
 const loading = ref(false);
 const actionLoading = ref("");
+const ptzFeedback = ref("");
 const loadError = ref("");
 const channel = ref<ApiChannel | null>(null);
 const device = ref<ApiDevice | null>(null);
-const recordings = ref<ApiRecording[]>([]);
-const recordingTotal = ref(0);
 const zones = ref<Zone[]>([]);
 const play = ref<PlayResult | null>(null);
 const snapshotUrl = ref("");
 const aiEnabled = ref(false);
 const recordMode = ref("none");
-const remoteRecords = ref<Record<string, unknown> | null>(null);
 const gbQueryResult = ref<GBOperationOutput | null>(null);
 const gbControlResult = ref<GBOperationOutput | null>(null);
 const snapshotSessionId = ref("");
@@ -69,11 +69,17 @@ const snapshotState = ref<GBSnapshotState | null>(null);
 const upgradeSessionId = ref("");
 const upgradeState = ref<GBUpgradeState | null>(null);
 const historyActive = ref(false);
+const historyPlayerOpen = ref(false);
+const historyPlay = ref<PlayResult | null>(null);
+const historyPlayer = ref<InstanceType<typeof StreamPlayer>>();
+const historyPlayerError = ref("");
+let historySessionChannel = "";
+let historyRequestSequence = 0;
 const historyState = ref<GBHistoryDownloadState | null>(null);
 const mediaServers = ref<MediaServer[]>([]);
 const selectedMediaServerId = ref("local");
-const resourceErrors = reactive({ device: "", recordings: "", zones: "", remote: "", history: "", media: "" });
-const resourceLoading = reactive({ recordings: false, zones: false, remote: false, media: false });
+const resourceErrors = reactive({ device: "", zones: "", history: "", media: "" });
+const resourceLoading = reactive({ zones: false, media: false });
 const zoneError = ref("");
 type ChannelTab = "live" | "ai" | "recordings" | "gb" | "technical";
 const activeTab = ref<ChannelTab>("live");
@@ -154,12 +160,12 @@ function localDateTimeInput(value: Date) {
 }
 const historyNow = new Date();
 const historyForm = reactive({
-  mode: "playback" as "playback" | "download",
+  mode: "download" as "playback" | "download",
   startAt: localDateTimeInput(new Date(historyNow.getTime() - 60 * 60_000)),
   endAt: localDateTimeInput(historyNow),
   transport: "rtp" as "rtp" | "direct_tcp",
   downloadSpeed: 1,
-  recordType: 3,
+  recordType: 0,
   controlAction: "pause" as "play" | "pause" | "speed" | "seek",
   scale: 2,
   seekAt: localDateTimeInput(new Date(historyNow.getTime() - 30 * 60_000)),
@@ -192,7 +198,6 @@ const mediaBindingDisabledReason = computed(() => {
   if (resourceErrors.media) return resourceErrors.media;
   return "";
 });
-const supportsPtz = computed(() => Boolean(channel.value?.ptz_capable));
 const canUseRealtime = computed(() => Boolean(channel.value?.is_online) && !actionLoading.value);
 const gbCapabilityDeclaration = computed<string[] | undefined>(() => {
   const deviceCapabilities = device.value?.ext?.gb_version_capabilities;
@@ -356,7 +361,7 @@ const supportsPositionedSpeed = computed(() => historyForm.controlAction === "sp
   (effectiveGbVersion.value === "1.0" || effectiveGbVersion.value === "3.0" && Number(historyForm.scale) < 0));
 const historyControlValid = computed(() => {
   if (!historyScaleValid.value) return false;
-  if (historyForm.controlAction === "seek") return historyUnix(historyForm.seekAt) > 0;
+  if (historyForm.controlAction === "seek") { const at = historyUnix(historyForm.seekAt); return at >= historyUnix(historyForm.startAt) && at < historyUnix(historyForm.endAt); }
   if (historyForm.controlAction === "speed" && supportsPositionedSpeed.value && historyForm.speedAt) {
     return historyUnix(historyForm.speedAt) > 0;
   }
@@ -407,11 +412,6 @@ const supportsVoiceBroadcast = computed(() =>
     ? gbCapabilities.value.includes("voice_broadcast")
     : ["1.1", "2.0", "3.0"].includes(effectiveGbVersion.value)
 );
-const ptzDisabledReason = computed(() => {
-  if (!channel.value?.is_online) return "通道离线，无法发送控制指令";
-  if (!supportsPtz.value) return "当前设备未声明 PTZ 能力";
-  return "";
-});
 const voiceDisabledReason = computed(() => {
   if (!isGb.value) return "语音对讲仅支持 GB28181 通道";
   if (!channel.value?.is_online) return "通道离线，无法建立语音会话";
@@ -479,12 +479,9 @@ async function onTabKeydown(event: KeyboardEvent, index: number) {
 function clearContext() {
   channel.value = null;
   device.value = null;
-  recordings.value = [];
-  recordingTotal.value = 0;
   zones.value = [];
   play.value = null;
   snapshotUrl.value = "";
-  remoteRecords.value = null;
   gbQueryResult.value = null;
   gbControlResult.value = null;
   snapshotSessionId.value = "";
@@ -496,7 +493,7 @@ function clearContext() {
   mediaServers.value = [];
   selectedMediaServerId.value = "local";
   voiceForm.mediaServerId = "local";
-  Object.assign(resourceErrors, { device: "", recordings: "", zones: "", remote: "", history: "", media: "" });
+  Object.assign(resourceErrors, { device: "", zones: "", history: "", media: "" });
   activeTab.value = "live";
 }
 
@@ -516,22 +513,6 @@ async function loadMediaServers(sequence = loadSequence) {
     if (sequence === loadSequence) resourceErrors.media = errorMessage(cause, "媒体节点暂时无法读取");
   } finally {
     if (sequence === loadSequence) resourceLoading.media = false;
-  }
-}
-
-async function loadRecordings(id: string, sequence = loadSequence) {
-  resourceLoading.recordings = true;
-  resourceErrors.recordings = "";
-  try {
-    const response = await api.recordings({ page: 1, size: 100, cid: id });
-    if (sequence === loadSequence) {
-      recordings.value = response.data?.items || [];
-      recordingTotal.value = Number(response.data?.total ?? recordings.value.length);
-    }
-  } catch (cause) {
-    if (sequence === loadSequence) resourceErrors.recordings = errorMessage(cause, "平台录像暂时无法读取");
-  } finally {
-    if (sequence === loadSequence) resourceLoading.recordings = false;
   }
 }
 
@@ -558,9 +539,10 @@ function applyHistoryState(state: GBHistoryDownloadState | null) {
 }
 
 async function restoreHistoryState(id: string, sequence = loadSequence) {
+  const requestSequence = historyRequestSequence;
   try {
     const response = await api.historyStatus(id);
-    if (sequence === loadSequence) applyHistoryState(response.data || null);
+    if (sequence === loadSequence && requestSequence === historyRequestSequence && !historySessionChannel) applyHistoryState(response.data || null);
   } catch (cause) {
     const status = Number((cause as { response?: { status?: number } })?.response?.status || 0);
     if (sequence === loadSequence && status !== 400 && status !== 404) {
@@ -570,6 +552,7 @@ async function restoreHistoryState(id: string, sequence = loadSequence) {
 }
 
 async function load() {
+  ptzFeedback.value = "";
   const sequence = ++loadSequence;
   const id = String(route.params.id || "");
   clearContext();
@@ -585,7 +568,6 @@ async function load() {
     aiEnabled.value = Boolean(data.ext?.enabled_ai);
     recordMode.value = data.ext?.record_mode || "none";
 
-    void loadRecordings(data.id, sequence);
     void loadZones(data.id, sequence);
     void restoreHistoryState(data.id, sequence);
     void loadMediaServers(sequence);
@@ -603,6 +585,44 @@ async function load() {
     if (sequence === loadSequence) loadError.value = errorMessage(cause, "通道数据暂不可用");
   } finally {
     if (sequence === loadSequence) loading.value = false;
+  }
+}
+
+async function controlPTZ(request: PTZRequest) {
+  if (!channel.value || actionLoading.value) return;
+  const currentChannel = channel.value;
+  const sequence = loadSequence;
+  actionLoading.value = request.kind === "probe" ? "PTZ 信令探测" : "PTZ 控制";
+  ptzFeedback.value = "正在下发控制信令…";
+  try {
+    let message = "设备已接受控制信令，请观察画面确认是否执行";
+    if (request.kind === "probe") {
+      const { data } = await api.ptzProbe(currentChannel.id, request.body);
+      if (!data?.signaling_ok) throw new Error(data?.message || "设备未接受停止信令");
+      message = data.message;
+    } else if (request.kind === "gb") {
+      if (!device.value) throw new Error("所属设备信息尚未就绪");
+      await api.gbControl(device.value.id, {
+        ...request.body,
+        target_id: currentChannel.channel_id || currentChannel.id,
+        timeout: 8,
+      });
+    } else {
+      const { data } = await api.ptz(currentChannel.id, request.body);
+      message = data?.msg || message;
+    }
+    // 切换通道后，旧请求的结果不能显示在新通道面板上。
+    if (sequence === loadSequence) {
+      ptzFeedback.value = message;
+      ui.toast(message);
+    }
+  } catch (cause) {
+    if (sequence === loadSequence) {
+      ptzFeedback.value = errorMessage(cause, "云台信令下发失败");
+      ui.toast(ptzFeedback.value);
+    }
+  } finally {
+    actionLoading.value = "";
   }
 }
 
@@ -837,7 +857,12 @@ async function toggleAI() {
 
 async function saveRecordMode() {
   if (!channel.value) return;
-  await runAction("保存录像模式", () => api.recordMode(channel.value!.id, recordMode.value));
+  const id = channel.value.id;
+  const mode = recordMode.value;
+  const succeeded = await runAction("保存录像模式", () => api.recordMode(id, mode));
+  if (succeeded && channel.value?.id === id) {
+    channel.value.ext = { ...channel.value.ext, record_mode: mode };
+  }
 }
 
 async function addZone() {
@@ -867,27 +892,6 @@ async function addZone() {
   }
 }
 
-async function queryRemoteRecords() {
-  if (!channel.value || actionLoading.value) return;
-  const end = Math.floor(Date.now() / 1000);
-  resourceLoading.remote = true;
-  resourceErrors.remote = "";
-  actionLoading.value = "查询设备录像";
-  try {
-    remoteRecords.value = (await api.queryDeviceRecords(channel.value.id, {
-      start_at: end - 86400,
-      end_at: end,
-      timeout: 10,
-    })).data || {};
-    ui.toast("设备端录像目录查询完成");
-  } catch (cause) {
-    resourceErrors.remote = errorMessage(cause, "设备录像查询失败");
-  } finally {
-    resourceLoading.remote = false;
-    actionLoading.value = "";
-  }
-}
-
 function historyUnix(value: string) {
   const time = new Date(value).getTime();
   return Number.isFinite(time) ? Math.floor(time / 1000) : 0;
@@ -910,9 +914,17 @@ async function startHistorySession() {
     return;
   }
   const downloadSpeed = hasGBCapability("download_speed") ? Number(historyForm.downloadSpeed) : 1;
+  const id = channel.value.id;
+  const mode = historyForm.mode;
+  const sequence = ++historyRequestSequence;
+  if (mode === "playback") {
+    historyPlayerOpen.value = true;
+    historyPlay.value = null;
+    historyPlayerError.value = "";
+  }
   actionLoading.value = "启动历史会话";
   try {
-    const { data } = await api.historyStart(channel.value.id, {
+    const { data } = await api.historyStart(id, {
       mode: historyForm.mode,
       start_at: startAt,
       end_at: endAt,
@@ -920,12 +932,34 @@ async function startHistorySession() {
       download_speed: historyForm.mode === "download" ? downloadSpeed : 0,
       record_type: historyForm.recordType,
     });
+    if (sequence !== historyRequestSequence || channel.value?.id !== id) {
+      if (mode === "playback") {
+        try { await api.historyStop(id, { mode }); }
+        catch (cause) {
+          historySessionChannel = id;
+          historyActive.value = true;
+          historyForm.mode = "playback";
+          historyPlayerOpen.value = true;
+          historyPlayerError.value = errorMessage(cause, "设备停止推流失败，请点击停止并关闭重试。");
+        }
+      }
+      return;
+    }
     historyActive.value = true;
     historyState.value = null;
+    if (mode === "playback") {
+      historySessionChannel = id;
+      historyPlay.value = data?.playback || null;
+      if (!data?.playback?.items?.length) historyPlayerError.value = "设备已接受回放请求，但未返回播放地址，请停止后重试。";
+    }
     if (data?.download) applyHistoryState({ ...data.download, transport: historyForm.transport });
     ui.toast(historyForm.mode === "download" ? "下载会话已启动" : "历史回放会话已启动");
   } catch (cause) {
-    ui.toast(errorMessage(cause, "历史会话启动失败"));
+    if (sequence === historyRequestSequence) {
+      const message = errorMessage(cause, "设备回放启动失败，请确认该时间段存在录像后重试。");
+      if (mode === "playback") historyPlayerError.value = message;
+      else ui.toast(message);
+    }
   } finally {
     actionLoading.value = "";
   }
@@ -956,6 +990,8 @@ async function stopHistorySession() {
       await api.historyStop(channel.value.id, { mode: historyForm.mode });
     }
     historyActive.value = false;
+    historySessionChannel = "";
+    historyPlay.value = null;
     if (historyState.value) {
       historyState.value = {
         ...historyState.value,
@@ -964,8 +1000,10 @@ async function stopHistorySession() {
       };
     }
     ui.toast(historyForm.mode === "download" ? "下载会话已停止" : "历史回放会话已停止");
+    return true;
   } catch (cause) {
     ui.toast(errorMessage(cause, "历史会话停止失败"));
+    return false;
   } finally {
     actionLoading.value = "";
   }
@@ -993,6 +1031,58 @@ async function controlHistorySession() {
     actionLoading.value = "";
   }
 }
+
+
+async function playDeviceRange(range: { start: number; end: number }) {
+  if (historyActive.value || actionLoading.value) return;
+  historyForm.mode = "playback";
+  // 保留设备返回的秒级时间边界，不能用分钟输入截断片段。
+  historyForm.startAt = new Date(range.start * 1000 - new Date(range.start * 1000).getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
+  historyForm.endAt = new Date(range.end * 1000 - new Date(range.end * 1000).getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
+  historyForm.recordType = 0;
+  await startHistorySession();
+}
+
+async function closeHistoryPlayer() {
+  if (historySessionChannel) {
+    if (actionLoading.value) return;
+    const stopped = await stopHistorySession();
+    if (!stopped) return;
+  }
+  historyRequestSequence += 1;
+  historyPlayerOpen.value = false;
+  historyPlay.value = null;
+}
+
+async function retryHistoryPlayback() {
+  if (actionLoading.value) return;
+  historyPlayerError.value = "";
+  if (historyPlay.value?.items?.length) {
+    await historyPlayer.value?.play();
+  } else {
+    if (historyActive.value && !await stopHistorySession()) return;
+    await startHistorySession();
+  }
+}
+async function leaveHistoryPlayback() {
+  if (actionLoading.value === "启动历史会话") {
+    ui.toast("正在建立设备历史会话，请稍候再离开。");
+    return false;
+  }
+  if (historySessionChannel) {
+    if (actionLoading.value) return false;
+    if (!await stopHistorySession()) return false;
+  }
+  historyRequestSequence += 1;
+  historyPlayerOpen.value = false;
+}
+onBeforeRouteLeave(leaveHistoryPlayback);
+onBeforeRouteUpdate(leaveHistoryPlayback);
+onBeforeUnmount(() => {
+  historyRequestSequence += 1;
+  loadSequence += 1;
+  if (historySessionChannel) void api.historyStop(historySessionChannel, { mode: "playback" }).catch(() => ui.toast("离开页面时停止设备回放失败，请检查该通道历史会话。"));
+});
 
 watch(() => historyForm.mode, (mode) => {
   if (mode === "playback") historyForm.transport = "rtp";
@@ -1073,18 +1163,18 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
 
       <section v-if="activeTab === 'live'" id="channel-panel-live" class="channel-detail-section" role="tabpanel" aria-labelledby="channel-tab-live" tabindex="0">
         <div class="channel-live-grid">
-          <article class="card video-workspace">
-            <div class="video-tile active !border-0 !aspect-video">
-              <StreamPlayer :result="play" :poster="snapshotUrl" :autoplay="Boolean(play)" :protocol-priority="liveProtocolPriority" @error="(message) => ui.toast(message)" />
+          <article class="card video-workspace channel-video-workspace">
+            <div class="video-tile !border-0 !aspect-video">
+              <StreamPlayer :result="play" :poster="snapshotUrl" :autoplay="Boolean(play)" :protocol-priority="liveProtocolPriority" :loading="actionLoading === '开始预览'" loading-text="正在开始预览…" idle-action="开始预览" :idle-hint="channel.is_online ? '点击开始预览，查看实时画面' : '通道离线，暂时无法预览'" :disabled="!channel.is_online || Boolean(actionLoading)" @request-play="startPlay" @retry="startPlay" @error="(message) => ui.toast(message)" />
               <span class="video-meta"><span class="status" :class="channel.is_online ? 'online' : 'offline'">{{ channel.is_online ? "在线" : "离线" }}</span><span v-if="recordMode !== 'none'" class="rec">REC</span></span>
             </div>
             <div class="video-foot channel-video-foot">
               <div class="stream-context">
                 <strong>{{ playAddresses.length ? "实时流已建立" : channel.is_online ? "尚未开始预览" : "通道离线，暂时无法预览" }}</strong>
-                <span>{{ play ? "可在播放器中调节音量或切换全屏" : "点击开始预览，查看实时画面" }}</span>
+                <span v-if="play">可在播放器中调节音量或切换全屏</span>
               </div>
               <div class="stream-actions">
-                <button class="stream-link stream-primary" type="button" :disabled="!channel.is_online || Boolean(actionLoading)" @click="startPlay"><LoaderCircle v-if="actionLoading === '开始预览'" class="animate-spin" /><Video v-else />{{ play ? "重新预览" : "开始预览" }}</button>
+                <button v-if="play" class="stream-link stream-primary" type="button" :disabled="!channel.is_online || Boolean(actionLoading)" @click="startPlay"><LoaderCircle v-if="actionLoading === '开始预览'" class="animate-spin" /><Video v-else />重新预览</button>
                 <button class="stream-link" type="button" :disabled="!canUseRealtime" @click="refreshSnapshot"><Aperture />抓拍</button>
               </div>
             </div>
@@ -1108,18 +1198,17 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
           </details>
 
           <aside class="control-stack channel-control-stack">
-            <article class="card control-panel">
-              <div class="card-head"><div><h3 class="card-title">云台控制</h3><p class="card-sub">方向控制与能力探测</p></div><span class="status" :class="supportsPtz ? 'online' : ''">{{ supportsPtz ? "可用" : "不可用" }}</span></div>
-              <div v-if="supportsPtz" class="ptz" :aria-disabled="Boolean(ptzDisabledReason)">
-                <button class="up" type="button" aria-label="云台向上" :disabled="Boolean(ptzDisabledReason) || Boolean(actionLoading)" @click="runAction('云台向上', () => api.ptz(channel!.id, { action: 'up', speed: 30, timeout: 1 }))"><ChevronUp /></button>
-                <button class="right" type="button" aria-label="云台向右" :disabled="Boolean(ptzDisabledReason) || Boolean(actionLoading)" @click="runAction('云台向右', () => api.ptz(channel!.id, { action: 'right', speed: 30, timeout: 1 }))"><ChevronUp /></button>
-                <button class="down" type="button" aria-label="云台向下" :disabled="Boolean(ptzDisabledReason) || Boolean(actionLoading)" @click="runAction('云台向下', () => api.ptz(channel!.id, { action: 'down', speed: 30, timeout: 1 }))"><ChevronUp /></button>
-                <button class="left" type="button" aria-label="云台向左" :disabled="Boolean(ptzDisabledReason) || Boolean(actionLoading)" @click="runAction('云台向左', () => api.ptz(channel!.id, { action: 'left', speed: 30, timeout: 1 }))"><ChevronUp /></button>
-                <button class="center" type="button" aria-label="停止云台" :disabled="Boolean(ptzDisabledReason) || Boolean(actionLoading)" @click="runAction('停止云台', () => api.ptz(channel!.id, { action: 'stop', speed: 30, timeout: 1 }))"><Square /></button>
-              </div>
-              <p class="capability-reason">{{ ptzDisabledReason || (channel.ptz_verified ? "能力已通过实际命令验证" : "能力来自设备静态声明") }}</p>
-              <button class="btn w-full" type="button" :disabled="!channel.is_online || Boolean(actionLoading)" @click="runAction('PTZ 能力探测', () => api.ptzProbe(channel!.id, { action: 'stop', speed: 30, timeout: 5 }))"><RefreshCw />重新探测</button>
-            </article>
+            <ChannelPTZPanel
+              :key="channel.id"
+              :channel="channel"
+              :gb-version="effectiveGbVersion"
+              :gb-capabilities="gbCapabilityDeclaration"
+              :device-available="Boolean(device)"
+              :busy="Boolean(actionLoading)"
+              :feedback="ptzFeedback"
+              @control="controlPTZ"
+              @invalid="ui.toast($event)"
+            />
 
             <details class="card control-panel resource-disclosure">
               <summary><span><Mic aria-hidden="true" />语音对讲与广播</span></summary>
@@ -1171,40 +1260,10 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
       </section>
 
       <section v-else-if="activeTab === 'recordings'" id="channel-panel-recordings" class="channel-detail-section" role="tabpanel" aria-labelledby="channel-tab-recordings" tabindex="0">
-        <div class="detail-section-head"><div><h2>录像与回看</h2><p>集中管理平台录像策略、录像片段和 GB28181 设备端录像。</p></div><RouterLink class="btn btn-primary" :to="`/recordings?channel=${encodeURIComponent(channel.id)}`"><Film />进入录像中心</RouterLink></div>
-        <div class="channel-recording-summary">
-          <div><small>当前策略</small><strong>{{ recordMode === "always" ? "手动录像已开启" : "不录制" }}</strong></div>
-          <div><small>平台片段</small><strong>{{ resourceErrors.recordings ? "—" : recordingTotal }}</strong></div>
-          <div><small>最近录像</small><strong>{{ resourceErrors.recordings ? "读取失败" : formatDate(recordings[0]?.started_at, "暂无") }}</strong></div>
-        </div>
-        <div class="channel-recording-grid">
-          <article class="card form-section">
-            <div class="card-head"><div><h3 class="card-title">手动录像</h3><p class="card-sub">默认不录像。手动开启后持续录制，直至手动停止；关闭页面不会停止录像。</p></div><Film /></div>
-            <label class="form-group"><span class="form-label">录像开关</span><select v-model="recordMode" class="select w-full"><option value="always">开启手动录像</option><option value="none">停止录像</option><option value="ai" disabled>AI 触发（暂不可用）</option></select></label>
-            <p class="card-sub mt-4">手动录像期间不因无人观看而断流；停止录像后恢复无人观看自动断流。</p>
-            <button class="btn btn-primary mt-4" type="button" :disabled="Boolean(actionLoading)" @click="saveRecordMode"><Save />应用录像开关</button>
-          </article>
-
-          <article class="card card-pad">
-            <div class="card-head"><div><h3 class="card-title">平台录像</h3><p class="card-sub">最近录制的通道片段</p></div><Film /></div>
-            <div v-if="resourceErrors.recordings" class="inline-resource-error" role="alert"><span>{{ resourceErrors.recordings }}</span><button class="btn btn-sm" type="button" @click="loadRecordings(channel.id)">重试</button></div>
-            <div v-else-if="resourceLoading.recordings" class="empty-state compact" role="status"><LoaderCircle class="animate-spin" />正在读取录像…</div>
-            <div v-else-if="recordings.length" class="channel-recording-list"><div v-for="item in recordings.slice(0, 5)" :key="item.id"><span><strong>{{ formatDate(item.started_at) }}</strong><small>{{ item.app || channel.app || "—" }} / {{ item.stream || channel.stream || channel.id }}</small></span><a class="device-row-action" :href="api.recordingDownloadUrl(item.id)" download aria-label="下载录像"><ExternalLink /></a></div></div>
-            <div v-else class="empty-state compact">{{ recordMode === "none" ? "当前未开启平台录像" : "已开启录像，但暂时没有片段" }}</div>
-          </article>
-
-          <article class="card card-pad">
-            <div class="card-head"><div><h3 class="card-title">设备端录像</h3><p class="card-sub">查询最近 24 小时的 GB28181 设备录像目录</p></div><Camera /></div>
-            <button class="btn" type="button" :disabled="!isGb || !channel.is_online || Boolean(actionLoading)" @click="queryRemoteRecords"><LoaderCircle v-if="resourceLoading.remote" class="animate-spin" /><RefreshCw v-else />查询设备录像</button>
-            <p v-if="!isGb" class="capability-reason">设备端录像查询仅支持 GB28181 通道。</p>
-            <p v-else-if="!channel.is_online" class="capability-reason">通道离线，暂时无法查询设备录像。</p>
-            <div v-if="resourceErrors.remote" class="inline-resource-error mt-4" role="alert">{{ resourceErrors.remote }}</div>
-            <details v-else-if="remoteRecords" class="detail-raw-card mt-4"><summary>查看设备技术响应</summary><pre>{{ JSON.stringify(remoteRecords, null, 2) }}</pre></details>
-            <div v-else class="read-only mt-4">尚未查询。查询完成后可核验设备端录像目录；当前后端没有全量下载任务列表接口。</div>
-          </article>
-
-          <article class="card form-section history-session-card">
-            <div class="card-head"><div><h3 class="card-title">设备历史会话</h3><p class="card-sub">四版本回放、RTP 下载与 2014 附录 O 裸 TCP 下载</p></div><Gauge /></div>
+        <ChannelRecordingsWorkspace :channel="channel" :is-gb="isGb" v-model:record-mode="recordMode" :busy="Boolean(actionLoading)" :history-active="historyActive" @save="saveRecordMode" @play-device="playDeviceRange">
+          <template #advanced>
+          <article class="history-session-card">
+            <div class="card-head"><div><h3 class="card-title">自定义设备会话</h3><p class="card-sub">常规回放请直接选择上方录像时段；此处用于自定义范围和设备录像下载。</p></div><Gauge /></div>
             <div v-if="resourceErrors.history" class="warning-box"><ShieldAlert /><span>{{ resourceErrors.history }}</span></div>
             <div class="form-grid history-session-fields">
               <label class="form-group"><span class="form-label">会话类型</span><select v-model="historyForm.mode" class="select w-full" :disabled="historyActive"><option value="playback">历史回放</option><option value="download">录像下载</option></select></label>
@@ -1237,7 +1296,8 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
               <p v-if="historyState.error" class="field-error" role="alert">{{ historyState.error }}</p>
             </section>
           </article>
-        </div>
+          </template>
+        </ChannelRecordingsWorkspace>
       </section>
 
       <section v-else-if="activeTab === 'gb'" id="channel-panel-gb" class="channel-detail-section" role="tabpanel" aria-labelledby="channel-tab-gb" tabindex="0">
@@ -1334,5 +1394,19 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
         </div>
       </section>
     </template>
+    <ModalDialog :open="historyPlayerOpen" :title="`${channel?.name || '通道'} · 设备本地录像回放`" :description="`${historyForm.startAt.replace('T', ' ')} 至 ${historyForm.endAt.replace('T', ' ')}`" size="wide" scroll-body @close="closeHistoryPlayer">
+      <div class="media-player-stage">
+        <StreamPlayer ref="historyPlayer" :result="historyPlay" :autoplay="Boolean(historyPlay)" :protocol-priority="liveProtocolPriority" :loading="actionLoading === '启动历史会话'" loading-text="正在通知设备推流…" :error="historyPlayerError" idle-hint="回放会话已停止" :disabled="Boolean(actionLoading)" @error="message => historyPlayerError = message" @retry="retryHistoryPlayback" />
+      </div>
+      <div v-if="historyActive && historyForm.mode === 'playback'" class="history-control-panel">
+        <label class="form-group"><span class="form-label">回放控制</span><select v-model="historyForm.controlAction" class="select"><option value="play">继续播放</option><option value="pause">暂停推流</option><option value="speed">播放倍速</option><option value="seek">跳转时间</option></select></label>
+        <label v-if="historyForm.controlAction === 'speed'" class="form-group"><span class="form-label">倍率</span><input v-model.number="historyForm.scale" class="input plain" type="number" min="-16" max="16" step="0.25" /><small v-if="!historyScaleValid" class="field-error">绝对值应为 0.25–16，不能为 0。</small></label>
+        <label v-if="supportsPositionedSpeed" class="form-group"><span class="form-label">{{ effectiveGbVersion === '1.0' ? '倍速起点（可选）' : '倒放起点（可选）' }}</span><input v-model="historyForm.speedAt" class="input plain" type="datetime-local" /></label>
+        <label v-if="historyForm.controlAction === 'seek'" class="form-group"><span class="form-label">跳转到</span><input v-model="historyForm.seekAt" class="input plain" type="datetime-local" :min="historyForm.startAt" :max="historyForm.endAt" /></label>
+        <button class="btn" :disabled="Boolean(actionLoading) || !historyControlValid" @click="controlHistorySession">应用控制</button>
+        <button class="btn" :disabled="Boolean(actionLoading)" @click="closeHistoryPlayer"><Square />停止并关闭</button>
+      </div>
+      <p class="capability-reason">回放由设备推流提供，暂停、倍速和跳转取决于设备支持情况；关闭弹窗会停止本次回放。</p>
+    </ModalDialog>
   </main>
 </template>

@@ -1,7 +1,8 @@
 import { http } from './http'
 import { recordingMediaPath } from '../utils/recordings'
+import type { PTZProbeOutput, PTZBatchProbeOutput } from '../types/api'
 import type {
-  ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord,
+  ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord, MediaInspectionResource, MediaInspectionResult,
   ApiChannel as Channel, DeviceExt, GbMetrics, GBHistoryDownloadState, GBHistoryStartOutput, GBOperationOutput, GBSnapshotState, GBSubscriptionState, GBUpgradeOutput, GBUpgradeState, HealthInfo, MediaServer, MonthlyStats,
   CascadePlatformStatus, PlayResult, SipAccessInfo, SipConfig, SipSecretStatus, TimelineRange, VersionCheck, Zone,
   ResourceStats, SnapshotRefreshOutput, AnnexGAlarmAudit, AnnexGDefenceAudit, AnnexGDefenceState, AnnexGAuditPage,
@@ -89,7 +90,7 @@ export const api = {
   subscribe: (id: string, body: Record<string, unknown>) => http.post(`/devices/${encodeURIComponent(id)}/subscribe`, body),
   subscriptionStates: (id: string) => http.get<{ items?: GBSubscriptionState[]; total?: number }>(`/devices/${encodeURIComponent(id)}/subscriptions`),
   optionsProbe: (id: string, body: Record<string, unknown> = {}) => http.post(`/devices/${encodeURIComponent(id)}/options_probe`, body),
-  devicePtzProbe: (id: string, body: Record<string, unknown> = {}) => http.post(`/devices/${encodeURIComponent(id)}/ptz_probe`, body),
+  devicePtzProbe: (id: string, body: Record<string, unknown> = {}) => http.post<PTZBatchProbeOutput>(`/devices/${encodeURIComponent(id)}/ptz_probe`, body),
   gbConfig: (id: string, body: Record<string, unknown>) => http.post(`/devices/${encodeURIComponent(id)}/gb/config`, body),
   gbControl: (id: string, body: Record<string, unknown>) => http.post<GBOperationOutput>(`/devices/${encodeURIComponent(id)}/gb/control`, body),
   gbQuery: (id: string, body: Record<string, unknown>) => http.post<GBOperationOutput>(`/devices/${encodeURIComponent(id)}/gb/query`, body),
@@ -114,8 +115,8 @@ export const api = {
     withToken(apiUrl(`/channels/${encodeURIComponent(id)}/snapshot`)),
     cacheBust ? { t: cacheBust } : undefined,
   ),
-  ptz: (id: string, body: Record<string, unknown>) => http.post(`/channels/${encodeURIComponent(id)}/ptz`, body),
-  ptzProbe: (id: string, body: Record<string, unknown> = {}) => http.post(`/channels/${encodeURIComponent(id)}/ptz_probe`, body),
+  ptz: (id: string, body: Record<string, unknown>) => http.post<{ msg: string }>(`/channels/${encodeURIComponent(id)}/ptz`, body),
+  ptzProbe: (id: string, body: Record<string, unknown> = {}) => http.post<PTZProbeOutput>(`/channels/${encodeURIComponent(id)}/ptz_probe`, body),
   enableAI: (id: string) => http.post(`/channels/${encodeURIComponent(id)}/ai/enable`),
   disableAI: (id: string) => http.post(`/channels/${encodeURIComponent(id)}/ai/disable`),
   recordMode: (id: string, mode: string) => http.post(`/channels/${encodeURIComponent(id)}/record_mode`, { mode }),
@@ -123,13 +124,13 @@ export const api = {
   addZone: (id: string, body: Zone) => http.post<{ items?: Zone[] }>(`/channels/${encodeURIComponent(id)}/zones`, body),
   voiceStart: (id: string, body: Record<string, unknown> = {}) => http.post(`/channels/${encodeURIComponent(id)}/voice/start`, body),
   voiceStop: (id: string, body: Record<string, unknown> = {}) => http.post(`/channels/${encodeURIComponent(id)}/voice/stop`, body),
-  historyStart: (id: string, body: Record<string, unknown>) => http.post<GBHistoryStartOutput>(`/channels/${encodeURIComponent(id)}/history/start`, body),
+  historyStart: (id: string, body: Record<string, unknown>) => http.post<GBHistoryStartOutput>(`/channels/${encodeURIComponent(id)}/history/start`, body, { timeout: 45000 }),
   historyStop: (id: string, body: Record<string, unknown>) => http.post(`/channels/${encodeURIComponent(id)}/history/stop`, body),
   historyControl: (id: string, body: Record<string, unknown>) => http.post(`/channels/${encodeURIComponent(id)}/history/control`, body),
   historyStatus: (id: string) => http.get<GBHistoryDownloadState>(`/channels/${encodeURIComponent(id)}/history/status`),
   directDownloadState: (sessionId: string) => http.get<GBHistoryDownloadState>(`/gb28181/downloads/${encodeURIComponent(sessionId)}`),
   cancelDirectDownload: (sessionId: string) => http.delete(`/gb28181/downloads/${encodeURIComponent(sessionId)}`),
-  queryDeviceRecords: (id: string, body: Record<string, unknown>) => http.post<Record<string, unknown>>(`/channels/${encodeURIComponent(id)}/records/query`, body),
+  queryDeviceRecords: (id: string, body: Record<string, unknown>) => http.post<import('../types/api').DeviceRecordQueryOutput>(`/channels/${encodeURIComponent(id)}/records/query`, body, { timeout: 25000 }),
   upgradeDevice: (id: string, body: Record<string, unknown>) => http.post<GBUpgradeOutput>(`/channels/${encodeURIComponent(id)}/upgrade`, body),
   upgradeDeviceState: (id: string, sessionId: string) => http.get<GBUpgradeState>(`/channels/${encodeURIComponent(id)}/upgrade/${encodeURIComponent(sessionId)}`),
 
@@ -149,6 +150,8 @@ export const api = {
   hlsPlaylist: (cid: string, startMs: number, endMs: number) => apiUrl(`/recordings/channels/${encodeURIComponent(cid)}/index.m3u8?start_ms=${startMs}&end_ms=${endMs}`),
 
   mediaServers: (params?: ListParams) => http.get<ApiPage<MediaServer>>('/media_servers', { params }),
+  mediaServer: (id: string) => http.get<MediaServer>(`/media_servers/${encodeURIComponent(id)}`),
+  inspectMediaServer: (id: string, resource: MediaInspectionResource, params?: ListParams) => http.get<MediaInspectionResult>(`/media_servers/${encodeURIComponent(id)}/inspect/${resource}`, { params }),
   editMediaServer: (id: string, body: Record<string, unknown>) => http.put<MediaServer>(`/media_servers/${encodeURIComponent(id)}`, body),
   configInfo: () => http.get<{ sip?: SipConfig; sip_secrets?: SipSecretStatus; access_info?: SipAccessInfo; media?: { stream_none_reader_delay_seconds: number } }>('/configs/info'),
   updateMedia: (seconds: number) => http.put('/configs/info/media', { stream_none_reader_delay_seconds: seconds }),

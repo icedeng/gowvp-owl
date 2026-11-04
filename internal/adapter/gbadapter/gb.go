@@ -175,12 +175,16 @@ func (a *Adapter) ValidateDevice(ctx context.Context, device *ipc.Device) error 
 }
 
 func (a *Adapter) PTZControl(ctx context.Context, device *ipc.Device, channel *ipc.Channel, in *ipc.PTZControlInput) error {
+	duration := time.Duration(in.Timeout) * time.Second
+	if in.StopManaged {
+		duration = 0
+	}
 	_, err := a.gbs.PTZ(ctx, &gbs.PTZInput{
 		DeviceID:  device.DeviceID,
 		ChannelID: channel.ChannelID,
 		Action:    gbs.PTZAction(in.Action),
 		Speed:     in.Speed,
-		Timeout:   time.Duration(in.Timeout) * time.Second,
+		Timeout:   duration,
 		Preset:    in.Preset,
 		Group:     in.Group,
 		Aux:       in.Aux,

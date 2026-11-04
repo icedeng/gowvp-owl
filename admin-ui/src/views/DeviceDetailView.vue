@@ -432,7 +432,7 @@ async function load() {
     channelFilters.status = "all";
     channelError.value = "";
     const [channelResponse, onlineChannelResponse, heartbeatResponse, registerResponse] = await Promise.allSettled([
-      api.channels({ did: data.id, page: 1, size: CHANNEL_PAGE_SIZE }),
+      api.channels({ did: data.id, page: 1, size: CHANNEL_PAGE_SIZE, include_stream_status: true }),
       countItems(api.channels, { did: data.id, is_online: true }),
       api.deviceHistory(data.id, "heartbeat", { page: 1, size: 6 }),
       api.deviceHistory(data.id, "register", { page: 1, size: 6 }),
@@ -581,6 +581,7 @@ async function changeChannelPage(next: number, force = false) {
       did: device.value.id,
       page: target,
       size: CHANNEL_PAGE_SIZE,
+      include_stream_status: true,
       key: channelFilters.key || undefined,
       is_online: channelFilters.status === "all" ? undefined : channelFilters.status === "online",
     });
@@ -615,6 +616,22 @@ async function runAction(
   } catch (cause) {
     ui.toast(errorMessage(cause, `${name}失败`));
     return false;
+  } finally {
+    actionLoading.value = "";
+  }
+}
+
+async function probePTZ() {
+  if (!device.value || actionLoading.value) return;
+  actionLoading.value = "PTZ 探测";
+  try {
+    const { data } = await api.devicePtzProbe(device.value.id, { action: "stop", timeout: 5 });
+    if (!data) throw new Error("探测结果为空");
+    const failed = data.items.filter((item) => !item.signaling_ok);
+    ui.toast(`停止信令：${data.success_count}/${data.total} 路收到成功应答；实际转动未验证${failed.length ? `。失败原因：${failed[0]?.message}` : ""}`);
+    await load();
+  } catch (cause) {
+    ui.toast(errorMessage(cause, "PTZ 信令探测失败"));
   } finally {
     actionLoading.value = "";
   }
@@ -915,7 +932,7 @@ onMounted(load);
                 <div class="card-head"><div><h3 class="card-title">能力就绪度</h3><p class="card-sub">按版本声明与探测结果汇总</p></div><ShieldCheck /></div>
                 <div class="detail-capability-list">
                   <div class="ready"><Play /><span><strong>实时播放</strong><small>统一播放链路可用</small></span><b>可用</b></div>
-                  <div :class="device.ptz_capable ? 'ready' : 'pending'"><Activity /><span><strong>PTZ 控制</strong><small>{{ device.ptz_verified ? "设备通道已验证" : device.ptz_capable ? "设备声明支持" : "尚未完成探测" }}</small></span><b>{{ device.ptz_capable ? "支持" : "待探测" }}</b></div>
+                  <div :class="device.ptz_capable ? 'ready' : 'pending'"><Activity /><span><strong>PTZ 控制</strong><small>{{ device.ptz_capable ? "设备声明支持，实际转动未验证" : "云台能力未确认" }}</small></span><b>{{ device.ptz_capable ? "声明支持" : "未知" }}</b></div>
                   <div class="ready"><Camera /><span><strong>快照与录像</strong><small>进入具体通道执行</small></span><b>可用</b></div>
                   <div v-if="isGb" :class="effectiveCapabilities.size ? 'ready' : 'pending'"><Settings2 /><span><strong>版本扩展</strong><small>{{ declaredCapabilities ? `${declaredCapabilities.length} 项能力声明` : `${effectiveCapabilities.size} 项按版本推断` }}</small></span><b>{{ protocolVersion }}</b></div>
                   <div v-else class="ready"><Settings2 /><span><strong>协议接入</strong><small>当前设备按 {{ protocolLabel }} 模型管理</small></span><b>已识别</b></div>
@@ -950,6 +967,7 @@ onMounted(load);
                 <button class="btn" type="submit"><Search />查询</button>
                 <button v-if="channelFilters.key || channelFilters.status !== 'all'" class="btn" type="button" @click="applyChannelFilters(true)">重置</button>
                 <span class="toolbar-spacer" />
+                <button class="btn" type="button" :disabled="channelLoading || loading" @click="changeChannelPage(channelPage, true)"><RefreshCcw />刷新状态</button>
                 <button v-if="isGb" class="btn" type="button" :disabled="loading || Boolean(actionLoading)" @click="runAction('同步通道', () => api.catalog(device!.id), true)"><LoaderCircle v-if="actionLoading === '同步通道'" class="animate-spin" /><RefreshCcw v-else />同步通道</button>
               </form>
               <div v-if="channelError" class="inline-resource-error" role="alert"><span>{{ channelError }}</span><button type="button" class="btn btn-sm" @click="changeChannelPage(channelPage, true)">重试</button></div>
@@ -957,13 +975,14 @@ onMounted(load);
               <div v-else class="table-wrap">
                 <table class="data-table device-channel-table">
                   <caption class="sr-only">设备通道资源，支持在全部通道中按名称、编码和在线状态筛选</caption>
-                  <thead><tr><th scope="col">通道名称</th><th scope="col">通道编码</th><th scope="col">状态</th><th scope="col">云台能力</th><th scope="col">AI 分析</th><th scope="col" class="resource-actions-cell">操作</th></tr></thead>
+                  <thead><tr><th scope="col">通道名称</th><th scope="col">通道编码</th><th scope="col">在线状态</th><th scope="col" title="媒体节点实际收到的直播流；点击刷新状态更新">推流状态</th><th scope="col">云台能力</th><th scope="col">AI 分析</th><th scope="col" class="resource-actions-cell">操作</th></tr></thead>
                   <tbody>
                     <tr v-for="channel in relatedChannels" :key="channel.id">
                       <td data-label="通道名称"><RouterLink class="resource-name-link" :to="`/channels/${encodeURIComponent(channel.id)}`">{{ channel.name || "未命名通道" }}</RouterLink></td>
                       <td data-label="通道编码" class="mono">{{ channel.channel_id || channel.id }}</td>
-                      <td data-label="状态"><span class="status" :class="channel.is_online ? 'online' : 'offline'">{{ channel.is_online ? "在线" : "离线" }}</span></td>
-                      <td data-label="云台能力">{{ channel.ptz_verified ? "已验证" : channel.ptz_capable ? "声明支持" : "不支持" }}</td>
+                      <td data-label="在线状态"><span class="status" :class="channel.is_online ? 'online' : 'offline'">{{ channel.is_online ? "在线" : "离线" }}</span></td>
+                      <td data-label="推流状态"><span class="status" :class="{ online: channel.stream_status === 'streaming' }" :title="channel.stream_status === 'streaming' ? '媒体节点已收到直播流' : channel.stream_status === 'idle' ? '媒体节点当前没有此通道的直播流' : '暂时无法获取媒体节点状态，请刷新重试'">{{ channel.stream_status === 'streaming' ? '推流中' : channel.stream_status === 'idle' ? '未推流' : '未知' }}</span></td>
+                      <td data-label="云台能力">{{ channel.ptz_capable ? "声明支持" : "未确认" }}</td>
                       <td data-label="AI 分析"><span :class="{ 'text-green-700': channel.ext?.enabled_ai }">{{ channel.ext?.enabled_ai ? "已启用" : "未启用" }}</span></td>
                       <td data-label="操作" class="resource-actions-cell"><div class="resource-inline-actions">
                         <RouterLink class="device-row-action" :to="`/channels/${encodeURIComponent(channel.id)}`" :aria-label="`查看${channel.name || channel.channel_id || '通道'}`" title="进入通道 · 预览与控制"><ChevronRight aria-hidden="true" /></RouterLink>
@@ -1098,7 +1117,7 @@ onMounted(load);
               <article class="card detail-operation-card">
                 <div class="card-head"><div><h3 class="card-title">能力探测</h3><p class="card-sub">仅在线设备可执行</p></div><Search /></div>
                 <div class="operation-row"><span><strong>OPTIONS 探测</strong><small>刷新版本和能力协商</small></span><button class="btn btn-sm" :disabled="!device.is_online || actionLoading === 'OPTIONS 探测'" @click="runAction('OPTIONS 探测', () => api.optionsProbe(device!.id, { timeout: 5 }), true)">重测</button></div>
-                <div class="operation-row"><span><strong>PTZ stop 探测</strong><small>核验通道控制能力</small></span><button class="btn btn-sm" :disabled="!device.is_online || actionLoading === 'PTZ 探测'" @click="runAction('PTZ 探测', () => api.devicePtzProbe(device!.id, { action: 'stop', speed: 30, timeout: 5 }), true)">重测</button></div>
+                <div class="operation-row"><span><strong>PTZ 停止信令探测</strong><small>检查信令连通性，不验证实际转动</small></span><button class="btn btn-sm" :disabled="!device.is_online || Boolean(actionLoading)" @click="probePTZ">检测</button></div>
                 <div class="operation-row"><span><strong>A.4 扩展快照</strong><small>{{ a4Availability.reason }}</small></span><button class="btn btn-sm" :disabled="!a4Availability.available || actionLoading === '查询 A.4 快照'" :title="!a4Availability.available ? a4Availability.reason : undefined" @click="queryA4">查询</button></div>
               </article>
               <article class="card detail-raw-card">
@@ -1113,6 +1132,7 @@ onMounted(load);
         :open="Boolean(historyKind)"
         :title="`${device.name || device.device_id || '设备'} · ${historyTitle}`"
         description="按时间倒序展示后端持久化的最近 100 条记录。"
+        scroll-body
         @close="historyKind = null"
       >
         <div class="history-summary">

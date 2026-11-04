@@ -25,6 +25,7 @@ import {
 import { useUiStore } from "../stores/ui";
 import RemoteChannelSelect from "../components/RemoteChannelSelect.vue";
 import ModalDialog from "../components/ModalDialog.vue";
+import StreamPlayer from "../components/StreamPlayer.vue";
 
 const ui = useUiStore();
 const route = useRoute();
@@ -56,7 +57,7 @@ const playerRecord = ref<ApiRecording | null>(null);
 const playerUrl = ref(""),
   playerError = ref(""),
   playerLoading = ref(false);
-const video = ref<HTMLVideoElement>();
+const player = ref<InstanceType<typeof StreamPlayer>>();
 const continuous = ref(false),
   queueLoading = ref(false);
 const queue = ref<ApiRecording[]>([]);
@@ -124,7 +125,7 @@ function playable(record: ApiRecording) {
 }
 function closePlayer() {
   playerSequence += 1;
-  video.value?.pause();
+  void player.value?.destroy();
   playerRecord.value = null;
   playerUrl.value = "";
   playerError.value = "";
@@ -287,7 +288,7 @@ function timelineStyle(item: TimelineRange) {
 async function playRecord(record: ApiRecording, keepQueue = false) {
   if (!playable(record))
     return ui.toast("此录像待清理或缺少文件信息，暂时无法播放");
-  video.value?.pause();
+  void player.value?.destroy();
   const sequence = ++playerSequence;
   if (!keepQueue) {
     continuous.value = false;
@@ -301,8 +302,10 @@ async function playRecord(record: ApiRecording, keepQueue = false) {
   try {
     // 直接播放支持 Range 的原始 MP4，避免 HLS 时间边界查询遗漏片段。
     await api.checkRecordingMedia(record.path!);
-    if (sequence === playerSequence)
+    if (sequence === playerSequence) {
       playerUrl.value = api.recordingMediaUrl(record.path!);
+      playerLoading.value = false;
+    }
   } catch (cause) {
     if (sequence !== playerSequence) return;
     const status = (cause as { response?: { status?: number } })?.response
@@ -363,10 +366,9 @@ function onEnded() {
     ui.toast("当天录像已播放完毕");
   }
 }
-function onMediaError() {
+function onMediaError(message: string) {
   playerLoading.value = false;
-  playerError.value =
-    "浏览器无法播放此录像，请重试；若格式不兼容，可下载后使用本地播放器查看。";
+  playerError.value = message;
 }
 async function download(record: ApiRecording) {
   downloading.value = record.id;
@@ -796,37 +798,26 @@ onBeforeUnmount(() => {
           : ''
       "
       size="wide"
+      scroll-body
       @close="closePlayer"
     >
       <div v-if="playerRecord" class="recording-player-content">
-        <div class="recording-video-stage">
-          <video
-            v-if="playerUrl"
-            :key="playerUrl"
-            ref="video"
+        <div class="media-player-stage">
+          <StreamPlayer
+            ref="player"
             :src="playerUrl"
-            controls
-            autoplay
-            playsinline
-            preload="metadata"
-            aria-label="录像播放器"
-            @canplay="playerLoading = false"
+            :duration="playerRecord.duration || 0"
+            :loading="playerLoading"
+            :error="playerError"
+            loading-text="正在读取录像…"
+            @retry="playRecord(playerRecord, continuous)"
             @error="onMediaError"
             @ended="onEnded"
           />
-          <div
-            v-if="playerLoading"
-            class="recording-video-loading"
-            role="status"
-          >
-            <LoaderCircle class="animate-spin" />正在读取录像…
-          </div>
         </div>
-        <div v-if="playerError" class="recording-player-error" role="alert">
-          <ShieldAlert /><span>{{ playerError }}</span
-          ><button class="btn btn-sm" @click="playRecord(playerRecord)">
-            重试播放</button
-          ><button
+        <div class="media-player-foot">
+          <p>{{ playerError ? '如重试后仍无法播放，可下载录像后查看。' : continuous ? '按时间顺序播放当天片段，自动跳过无录像的间隔。' : '支持暂停、拖动进度、倍速和全屏。' }}</p>
+          <button
             class="btn btn-sm"
             :disabled="downloading === playerRecord.id"
             @click="download(playerRecord)"
@@ -834,13 +825,6 @@ onBeforeUnmount(() => {
             <Download />下载录像
           </button>
         </div>
-        <p v-else class="recording-player-help">
-          {{
-            continuous
-              ? "按时间顺序播放当天片段，自动跳过无录像的间隔。"
-              : "支持暂停、拖动进度和全屏；浏览器未自动播放时，点击播放器内的播放按钮。"
-          }}
-        </p>
       </div>
     </ModalDialog>
   </main>
@@ -1062,58 +1046,6 @@ onBeforeUnmount(() => {
 }
 .recording-time-track button.unavailable {
   background: var(--muted);
-}
-.recording-video-stage {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  max-height: 65dvh;
-  background: #0b1422;
-}
-.recording-video-stage video {
-  width: 100%;
-  height: 100%;
-  max-height: 65dvh;
-  object-fit: contain;
-}
-.recording-video-loading {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 8px;
-  color: white;
-  font-size: 13px;
-  pointer-events: none;
-}
-.recording-video-loading svg {
-  width: 18px;
-}
-.recording-player-help {
-  padding: 10px 16px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-.recording-player-error {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 16px;
-  color: var(--red);
-  font-size: 13px;
-}
-.recording-player-error > svg {
-  width: 16px;
-  flex-shrink: 0;
-}
-.recording-player-error > span {
-  flex: 1;
-  min-width: 160px;
 }
 @media (max-width: 1200px) and (min-width: 901px) {
   .recording-workspace {

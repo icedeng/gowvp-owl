@@ -369,5 +369,5 @@ func (d *ZLMDriver) StopRecord(ctx context.Context, ms *MediaServer, req *zlm.St
 // GetMediaList 批量获取所有在线流列表（含录制状态）
 func (d *ZLMDriver) GetMediaList(ctx context.Context, ms *MediaServer) (*zlm.GetMediaListResponse, error) {
 	engine := d.withConfig(ms)
-	return engine.GetMediaList()
+	return engine.GetMediaListContext(ctx)
 }

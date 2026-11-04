@@ -227,7 +227,7 @@ func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
 	}
 	streamID := strings.TrimSpace(in.streamID)
 	if streamID == "" {
-		streamID = in.Channel.ID
+		streamID = HistoryStreamID(in.Mode, in.Channel.ID)
 	}
 	stream.DeviceID = in.Channel.DeviceID
 	stream.ChannelID = in.Channel.ChannelID

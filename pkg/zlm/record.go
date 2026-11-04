@@ -128,8 +128,13 @@ type GetMediaListResponse struct {
 // GetMediaList 批量获取所有在线流列表（含录制状态）
 // 一次请求获取全部流的 isRecordingMP4 状态，避免逐流查询
 func (e *Engine) GetMediaList() (*GetMediaListResponse, error) {
+	return e.GetMediaListContext(context.Background())
+}
+
+// GetMediaListContext 允许调用方限制媒体状态查询耗时。
+func (e *Engine) GetMediaListContext(ctx context.Context) (*GetMediaListResponse, error) {
 	var resp GetMediaListResponse
-	if err := e.post(getMediaListPath, nil, &resp); err != nil {
+	if err := e.postContext(ctx, getMediaListPath, nil, &resp); err != nil {
 		return nil, err
 	}
 	if err := e.ErrHandle(resp.Code, resp.Msg); err != nil {

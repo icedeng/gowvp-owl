@@ -28,9 +28,14 @@ func (c Core) ListMediaServers(ctx context.Context, in *FindMediaServerInput) ([
 	}
 
 	for _, item := range items {
+		item.Status = false
 		value, ok := c.cacheServers.Load(item.ID)
 		if ok {
-			item.Status, _, _ = value.status()
+			online, updatedAt, _ := value.status()
+			item.Status = online
+			if !updatedAt.IsZero() {
+				item.LastKeepaliveAt.Time = updatedAt
+			}
 		}
 	}
 	return items, total, nil

@@ -2,7 +2,7 @@
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { X } from '@lucide/vue'
 
-const props = defineProps<{ open: boolean; title: string; description?: string; size?: 'wide' }>()
+const props = defineProps<{ open: boolean; title: string; description?: string; size?: 'wide'; scrollBody?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const panel = ref<HTMLElement>()
 const closeButton = ref<HTMLButtonElement>()
@@ -63,12 +63,13 @@ onBeforeUnmount(() => {
   <Teleport to="body">
     <Transition name="palette">
       <div v-if="open" class="modal-backdrop" role="presentation" @mousedown.self="emit('close')">
-        <section ref="panel" class="modal" :class="{ 'modal-wide': size === 'wide' }" role="dialog" aria-modal="true" :aria-label="title" @mousedown.stop>
+        <section ref="panel" class="modal" :class="{ 'modal-wide': size === 'wide', 'modal-scroll-body': scrollBody }" role="dialog" aria-modal="true" :aria-label="title" @mousedown.stop>
           <div class="modal-head">
             <div><h2>{{ title }}</h2><p v-if="description">{{ description }}</p></div>
             <button ref="closeButton" type="button" class="icon-btn" aria-label="关闭对话框" @click="emit('close')"><X /></button>
           </div>
-          <slot />
+          <div v-if="scrollBody" class="modal-body" role="region" :aria-label="`${title}内容`" tabindex="0"><slot /></div>
+          <slot v-else />
           <footer v-if="$slots.footer" class="modal-foot"><slot name="footer" /></footer>
         </section>
       </div>
@@ -77,6 +78,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.modal-scroll-body { display: flex; flex-direction: column; overflow: hidden; }
+.modal-scroll-body > .modal-head, .modal-scroll-body > .modal-foot { flex-shrink: 0; }
+.modal-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.modal-body:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .modal-wide { width: min(1040px, 100%); max-height: calc(100dvh - 36px); }
 @media (max-width: 640px) { .modal-wide { max-height: calc(100dvh - 24px); } }
 </style>

@@ -159,7 +159,7 @@ func (h openHost) Capabilities(ctx context.Context, id string) ([]string, error)
 	return []string{}, nil
 }
 func (h openHost) PTZ(ctx context.Context, id string, in op.PTZInput) error {
-	return h.uc.GB28181API.ipc.PTZControl(ipc.PTZBypass(ctx), id, &ipc.PTZControlInput{Action: in.Action, Speed: uint8(int(in.Speed) * 255 / 100), Timeout: 1, Preset: in.Preset, Group: in.Group, Aux: in.Aux, Value: in.Value})
+	return h.uc.GB28181API.ipc.PTZControl(ipc.PTZBypass(ctx), id, &ipc.PTZControlInput{Action: in.Action, Speed: uint8(int(in.Speed) * 255 / 100), Timeout: 1, Preset: in.Preset, Group: in.Group, Aux: in.Aux, Value: in.Value, StopManaged: true})
 }
 func (h openHost) RecordingPath(ctx context.Context, id int64) (string, error) {
 	var row recording.Recording

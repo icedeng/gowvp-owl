@@ -240,7 +240,16 @@ func (g *GB28181API) DeviceControl(ctx context.Context, in *DeviceControlInput) 
 		if target == "" {
 			target = in.DeviceID
 		}
-		err := ipcmodel.CoordinateGBPTZ(ctx, in.DeviceID, target, func(c context.Context) error { var e error; out, e = g.deviceControlRaw(c, in); return e })
+		err := ipcmodel.CoordinateGBPTZ(ctx, in.DeviceID, target, func(c context.Context) error {
+			return g.withPTZSession(c, in.DeviceID, target, func(session *ptzSession) error {
+				var err error
+				out, err = g.deviceControlRaw(c, in)
+				if err == nil && (action != deviceControlActionCameraControl || ptzCommandReplacesMotion(in.PTZCmd)) {
+					session.cancelPendingStop()
+				}
+				return err
+			})
+		})
 		return out, err
 	}
 	return g.deviceControlRaw(ctx, in)

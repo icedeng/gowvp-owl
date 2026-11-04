@@ -200,7 +200,7 @@ watch(() => playerSettings.revision, syncForm)
           <section class="player-watermark-panel" aria-labelledby="player-watermark-title">
             <div class="player-watermark-panel-head">
               <div><h3 id="player-watermark-title">常规文字水印</h3><p>适合通道名称、平台标识或责任单位。</p></div>
-              <span class="switch"><input v-model="form.watermark.enabled" type="checkbox" aria-label="启用常规文字水印" /><span class="slider" /></span>
+              <label class="switch"><input v-model="form.watermark.enabled" type="checkbox" aria-label="启用常规文字水印" /><span class="slider" /></label>
             </div>
             <div class="player-watermark-fields">
               <label class="form-group player-watermark-wide"><span class="form-label">水印文字</span><input v-model.trim="form.watermark.text" class="input plain w-full" type="text" maxlength="100" placeholder="例如：国标视频管理平台" :disabled="!form.watermark.enabled" /></label>
@@ -213,7 +213,7 @@ watch(() => playerSettings.revision, syncForm)
           <section class="player-watermark-panel" aria-labelledby="player-fullscreen-watermark-title">
             <div class="player-watermark-panel-head">
               <div><h3 id="player-fullscreen-watermark-title">全屏防录屏水印</h3><p>进入全屏后以低透明度平铺显示，适合账号或使用者标识。</p></div>
-              <span class="switch"><input v-model="form.fullscreenWatermark.enabled" type="checkbox" aria-label="启用全屏防录屏水印" /><span class="slider" /></span>
+              <label class="switch"><input v-model="form.fullscreenWatermark.enabled" type="checkbox" aria-label="启用全屏防录屏水印" /><span class="slider" /></label>
             </div>
             <div class="player-watermark-fields">
               <label class="form-group player-watermark-wide"><span class="form-label">水印文字</span><input v-model.trim="form.fullscreenWatermark.text" class="input plain w-full" type="text" maxlength="100" placeholder="例如：仅限授权人员使用" :disabled="!form.fullscreenWatermark.enabled" /></label>

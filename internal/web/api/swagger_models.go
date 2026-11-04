@@ -31,8 +31,8 @@ type SwaggerDevicesResponse struct {
 
 // SwaggerChannelsResponse 是通道列表响应。
 type SwaggerChannelsResponse struct {
-	Items []*ipc.Channel `json:"items"`
-	Total int64          `json:"total"`
+	Items []*channelStreamStatus `json:"items"`
+	Total int64                  `json:"total"`
 }
 
 // SwaggerMediaServersResponse 是流媒体服务器列表响应。
@@ -384,10 +384,11 @@ type SwaggerPTZProbeInput struct {
 // SwaggerPTZProbeOutput 是 PTZ 能力探测响应。
 type SwaggerPTZProbeOutput struct {
 	ChannelID   string `json:"channel_id" example:"GB_34020000001320000001"` // 通道 ID
-	PTZCapable  bool   `json:"ptz_capable" example:"true"`                   // 静态或探测后判断的 PTZ 能力
-	PTZVerified bool   `json:"ptz_verified" example:"true"`                  // 是否已通过实际命令验证
-	VerifiedNow bool   `json:"verified_now" example:"true"`                  // 本次是否探测成功
-	Message     string `json:"message" example:"ok"`                         // 探测结果说明
+	PTZCapable  bool   `json:"ptz_capable" example:"false"`                  // 设备声明的 PTZ 能力，未知时为 false
+	PTZVerified bool   `json:"ptz_verified" example:"false"`                 // 兼容旧字段，信令应答不能验证实际运动
+	VerifiedNow bool   `json:"verified_now" example:"false"`                 // 兼容旧字段，始终为 false
+	SignalingOK bool   `json:"signaling_ok" example:"true"`                  // 本次设备是否接受停止信令
+	Message     string `json:"message" example:"设备已接受停止信令，实际云台能力仍需观察画面确认"`   // 探测结果说明
 }
 
 // SwaggerPTZBatchProbeOutput 是设备级批量 PTZ 探测响应。

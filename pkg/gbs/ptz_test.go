@@ -1,12 +1,82 @@
 package gbs
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
+
+func TestPTZTimedStopUsesRealSIPAfterRequestCancellation(t *testing.T) {
+	fixture := newCascadeDownstreamSIPFixture(t, GBVersion10)
+	t.Cleanup(func() { fixture.api.beginClose(); fixture.api.lifecycleWG.Wait() })
+	ctx, cancel := context.WithCancel(t.Context())
+	observed := make(chan cascadeDownstreamSIPObservation, 2)
+	go func() {
+		for range 2 {
+			observeCascadeDownstreamSIP(fixture.peer, GBVersion10, "DeviceControl", func(string) ([]byte, error) { return nil, nil }, observed)
+		}
+	}()
+	_, err := fixture.api.PTZContext(ctx, &PTZInput{DeviceID: gb10DeviceID, ChannelID: testCascadeChannelID, Action: PTZActionRight, Speed: 30, Timeout: 30 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel() // HTTP 结束不应取消安全停止。
+	first := awaitCascadeDownstreamSIPObservation(t, observed)
+	second := awaitCascadeDownstreamSIPObservation(t, observed)
+	for i, observation := range []cascadeDownstreamSIPObservation{first, second} {
+		if observation.err != nil {
+			t.Fatal(observation.err)
+		}
+		var request deviceControlRequest
+		if err := sip.XMLDecode(cascadeDownstreamSIPBody(observation.request), &request); err != nil {
+			t.Fatal(err)
+		}
+		wantAction := PTZActionRight
+		if i == 1 {
+			wantAction = PTZActionStop
+		}
+		want, _ := encodePTZCommand(&PTZInput{Action: wantAction, Speed: 30})
+		if request.DeviceID != testCascadeChannelID || request.PTZCmd != want {
+			t.Fatalf("command %d = %+v, want %s", i, request, want)
+		}
+	}
+}
+
+func TestPTZNewCommandCancelsOldTimedStop(t *testing.T) {
+	fixture := newCascadeDownstreamSIPFixture(t, GBVersion10)
+	t.Cleanup(func() { fixture.api.beginClose(); fixture.api.lifecycleWG.Wait() })
+	observed := make(chan cascadeDownstreamSIPObservation, 4)
+	go func() {
+		for range 4 {
+			observeCascadeDownstreamSIP(fixture.peer, GBVersion10, "DeviceControl", func(string) ([]byte, error) { return nil, nil }, observed)
+		}
+	}()
+	for _, input := range []PTZInput{
+		{Action: PTZActionRight, Timeout: 60 * time.Millisecond},
+		{Action: PTZActionLeft, Timeout: 500 * time.Millisecond},
+	} {
+		input.DeviceID, input.ChannelID = gb10DeviceID, testCascadeChannelID
+		if _, err := fixture.api.PTZContext(t.Context(), &input); err != nil {
+			t.Fatal(err)
+		}
+		if observation := awaitCascadeDownstreamSIPObservation(t, observed); observation.err != nil {
+			t.Fatal(observation.err)
+		}
+	}
+	select {
+	case unexpected := <-observed:
+		t.Fatalf("old timer stopped a newer movement: %+v", unexpected)
+	case <-time.After(110 * time.Millisecond):
+	}
+	stop := awaitCascadeDownstreamSIPObservation(t, observed)
+	if stop.err != nil || !strings.Contains(string(cascadeDownstreamSIPBody(stop.request)), "A50F0100000000B5") {
+		t.Fatalf("new timer did not send stop: %+v", stop)
+	}
+}
 
 func TestDeviceControlResponseRejectsInvalidEnvelopeBeforeWait(t *testing.T) {
 	memory := newFlowMemory(gb10DeviceID)
