@@ -2,7 +2,7 @@
 
 用于 `192.168.6.20`（EasyTier：`10.144.0.20`），部署设计和实施记录见 [服务器部署方案](../server-192.168.6.20.md)。本目录不含真实凭据或业务数据库。
 
-当前版本（2026-11-05）：Owl 服务镜像与后端版本统一为 `v2.2.3`，系统状态热门API请求量固定右列，地址超长省略、悬停可看完整内容；侧栏平台运维分组移除左侧图标，保留展开箭头；设备详情通道列表新增实际直播推流状态与刷新入口，区分在线状态、历史回放及节点查询失败；播放器开始/重试统一为播放图标加圆形边框，移除按钮文字；全平台播放器统一为 StreamPlayer / EasyPlayer Pro，录像点播和实时监控布局、共享 PTZ 控件全部纳入；保留已发布的设备图标样式、PTZ 探测纠正与自动停止、录像分区及回放流隔离。正式版本从根目录 `VERSION` 读取，统一采用 `v主版本.次版本.修订号`，不再使用日期加功能名。ZLM 保持 `v1-20261103-manualrecord1`，独立 PostgreSQL 17.11（`owl-v1-postgres:17-20261104`）。设备、通道、录像索引、心跳和注册历史已迁移到 PostgreSQL；录像与通道复合索引、无固定条数截断的查询、默认手动录像、媒体 `30000-50000/tcp+udp`、无人观看默认 180 秒断流均保留。发布证据和回滚见 [v2.2.3 发布记录](../releases/v2.2.3.md)。日常启动命令：
+当前版本（2026-11-05）：Owl 服务镜像与后端版本统一为 `v2.3.0`，新增媒体节点六分区只读管理和 14 类查询，提供完整快照搜索、筛选、分页、全部字段与独立刷新，不提供 ZLM 配置操作。此前已上线的 PTZ、录像工作区、统一 StreamPlayer / EasyPlayer Pro、实际推流状态、侧栏和水印开关修复全部保留并纳入 Git。正式版本从根目录 `VERSION` 读取，采用 `v主版本.次版本.修订号`。ZLM 保持 `v1-20261103-manualrecord1`，独立 PostgreSQL 17.11（`owl-v1-postgres:17-20261104`）。设备、通道、录像索引、心跳和注册历史使用 PostgreSQL；录像与通道复合索引、完整录像查询、默认手动录像、媒体 `30000-50000/tcp+udp`、无人观看默认 180 秒断流均保留。发布证据和回滚见 [v2.3.0 发布记录](../releases/v2.3.0.md)。日常启动命令：
 
 ```bash
 cd /www2/gowvp-v1
@@ -55,7 +55,7 @@ curl -fsS http://192.168.6.20:15123/health
 docker compose -p owl-v1 --env-file .env -f docker-compose.yml restart gowvp
 ```
 
-更新镜像前完成备份，导入对应镜像，再修改 `.env` 标签，执行 `./run.sh up`。`OWL_SERVICE_IMAGE_TAG`、`OWL_ZLM_IMAGE_TAG` 优先于 `OWL_IMAGE_TAG`；当前分别为 `v2.2.3`、`v1-20261103-manualrecord1`。PostgreSQL 通过独立变量 `OWL_POSTGRES_IMAGE` 固定版本，升级数据库大版本需单独执行迁移，不能直接换标签。不要使用通用 `deploy.sh release/up` 启动本服务器，不要重新执行首次准备脚本。
+更新镜像前完成备份，导入对应镜像，再修改 `.env` 标签，执行 `./run.sh up`。`OWL_SERVICE_IMAGE_TAG`、`OWL_ZLM_IMAGE_TAG` 优先于 `OWL_IMAGE_TAG`；当前分别为 `v2.3.0`、`v1-20261103-manualrecord1`。PostgreSQL 通过独立变量 `OWL_POSTGRES_IMAGE` 固定版本，升级数据库大版本需单独执行迁移，不能直接换标签。不要使用通用 `deploy.sh release/up` 启动本服务器，不要重新执行首次准备脚本。
 
 此前 apibasefix1 仅更新前端，修复开发环境 `/api` 代理前缀混入生产构建、导致开放平台和系统状态等接口 404 的问题。`admin-ui/.env.production` 将生产默认 API 地址设为同源 `/`，保留本地开发配置；生产构建需检查编译后的实际 API base，再用管理员身份检查页面接口，不能只检查静态文件和容器健康。无后端或数据库修改，ZLM、PG 容器未重启。交付目录为 `packages/apibasefix1-20261104/`，更新前环境配置和运行信息位于 `backups/before-apibasefix1-20261104/`。紧急回滚可恢复最近正常的 `v1-20261104-openplatformdocs1` 并仅更新 gowvp；不要回退到带有错误代理前缀的 openplatformui1，不恢复数据库或更换密钥。
 
