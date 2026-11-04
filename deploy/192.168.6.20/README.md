@@ -2,7 +2,7 @@
 
 用于 `192.168.6.20`（EasyTier：`10.144.0.20`），部署设计和实施记录见 [服务器部署方案](../server-192.168.6.20.md)。本目录不含真实凭据或业务数据库。
 
-当前版本（2026-11-04）：Owl 服务镜像为 `v1-20261104-deviceui2`（设备详情布局修正），后端版本保持 `v1-20261104-resourcecodes2`（补齐录像、告警、会话/任务/命令记录和订阅的编码定位），ZLM 保持 `v1-20261103-manualrecord1`，独立 PostgreSQL 17.11（`owl-v1-postgres:17-20261104`）。设备、通道、录像索引、心跳和注册历史已从 SQLite 迁移到 PostgreSQL；已补齐录像与通道复合索引，并移除时间轴/月统计的固定条数截断。默认手动录像、媒体 `30000-50000/tcp+udp`、无人观看默认 180 秒断流等行为保留。日常启动命令：
+当前版本（2026-11-04）：Owl 服务镜像为 `v1-20261104-deviceui3`（设备列表操作列留白修正），后端版本保持 `v1-20261104-resourcecodes2`（补齐录像、告警、会话/任务/命令记录和订阅的编码定位），ZLM 保持 `v1-20261103-manualrecord1`，独立 PostgreSQL 17.11（`owl-v1-postgres:17-20261104`）。设备、通道、录像索引、心跳和注册历史已从 SQLite 迁移到 PostgreSQL；已补齐录像与通道复合索引，并移除时间轴/月统计的固定条数截断。默认手动录像、媒体 `30000-50000/tcp+udp`、无人观看默认 180 秒断流等行为保留。日常启动命令：
 
 ```bash
 cd /www2/gowvp-v1
@@ -55,7 +55,7 @@ curl -fsS http://192.168.6.20:15123/health
 docker compose -p owl-v1 --env-file .env -f docker-compose.yml restart gowvp
 ```
 
-更新镜像前完成备份，导入对应镜像，再修改 `.env` 标签，执行 `./run.sh up`。`OWL_SERVICE_IMAGE_TAG`、`OWL_ZLM_IMAGE_TAG` 优先于 `OWL_IMAGE_TAG`；当前分别为 `v1-20261104-deviceui2`、`v1-20261103-manualrecord1`。PostgreSQL 通过独立变量 `OWL_POSTGRES_IMAGE` 固定版本，升级数据库大版本需单独执行迁移，不能直接换标签。不要使用通用 `deploy.sh release/up` 启动本服务器，不要重新执行首次准备脚本。
+更新镜像前完成备份，导入对应镜像，再修改 `.env` 标签，执行 `./run.sh up`。`OWL_SERVICE_IMAGE_TAG`、`OWL_ZLM_IMAGE_TAG` 优先于 `OWL_IMAGE_TAG`；当前分别为 `v1-20261104-deviceui3`、`v1-20261103-manualrecord1`。PostgreSQL 通过独立变量 `OWL_POSTGRES_IMAGE` 固定版本，升级数据库大版本需单独执行迁移，不能直接换标签。不要使用通用 `deploy.sh release/up` 启动本服务器，不要重新执行首次准备脚本。
 
 此前 apibasefix1 仅更新前端，修复开发环境 `/api` 代理前缀混入生产构建、导致开放平台和系统状态等接口 404 的问题。`admin-ui/.env.production` 将生产默认 API 地址设为同源 `/`，保留本地开发配置；生产构建需检查编译后的实际 API base，再用管理员身份检查页面接口，不能只检查静态文件和容器健康。无后端或数据库修改，ZLM、PG 容器未重启。交付目录为 `packages/apibasefix1-20261104/`，更新前环境配置和运行信息位于 `backups/before-apibasefix1-20261104/`。紧急回滚可恢复最近正常的 `v1-20261104-openplatformdocs1` 并仅更新 gowvp；不要回退到带有错误代理前缀的 openplatformui1，不恢复数据库或更换密钥。
 
@@ -153,3 +153,7 @@ ZLM 持久化配置 `data/zlm-config/config.ini` 中，`[http]` 的 `allow_ip_ra
 ## 设备详情布局修正（2026-11-04）
 
 发布 `v1-20261104-deviceui2`：Tab与当前内容共享连续面板，桌面/窄屏内边距16/12px；通道名称和编码独立成列，查询框填满分配宽度。生产构建及519个静态文件、6项HTTP资源校验通过，后端保持resourcecodes2，数据库及媒体容器未重启。包目录 `packages/deviceui2-20261104/`，备份 `backups/before-deviceui2-20261104/`；回滚恢复本轮备份.env后仅重建gowvp至resourcecodes2。页面效果由人工验收。
+
+## 设备列表操作列留白（2026-11-04）
+
+发布 `v1-20261104-deviceui3`：操作列固定104px，右侧留白16px、按钮间距8px，桌面触屏列128px，避免图标溢出。构建、519静态文件和6项HTTP资源检查通过，后端/PG/ZLM保持。包目录 `packages/deviceui3-20261104/`，备份 `backups/before-deviceui3-20261104/`；回滚恢复本轮备份.env后仅重建gowvp至deviceui2。页面效果由人工验收。

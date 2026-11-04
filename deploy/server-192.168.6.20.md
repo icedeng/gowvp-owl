@@ -653,3 +653,11 @@ ZLM 离开原桥接网络后，Owl 动态地址曾从 `172.19.0.3` 变成 `.2`�
 文档一致性、Vue类型、Vite生产构建、CSS语法、生产API根路径和源码差异检查通过。发布后519个静态文件摘要与产物一致，入口、主JS/CSS、DeviceDetailView、AppShell、HTTP共6项HTTP资源摘要匹配；容器健康，未登录设备接口401。本次为样式和局部模板修正，未新增或运行业务测试，未启动浏览器，页面效果由人工验收。
 
 配置及一致性数据库备份位于 `backups/before-deviceui2-20261104/`，归档SHA256 `ef582b8383bbdb7bf7124c2afa947d23a0fb613c048ef04344bcfa7b45db9d41`。发布包 `packages/deviceui2-20261104.tar.gz` SHA256 `ab0c39a089cb0f91f04105556504e0c4f68b642494a94b761b10762e7fed2258`；目录含前端、Dockerfile、摘要、构建日志及失败回滚脚本。回滚恢复本轮备份.env后仅重建gowvp至resourcecodes2，不恢复数据库或更换凭据。临时SSH私钥副本于交付前删除。
+
+### 10.29 2026-11-04 设备列表操作列右侧留白
+
+17:36:23 发布 `owl-v1-service:v1-20261104-deviceui3`，镜像摘要 `sha256:235c3b577891a908a45d837a26579414128ac481d5c42a01e963497bb546f93a`。操作列原6%宽度扣除单元格内边距后不足以容纳两个图标按钮，导致向右溢出；现桌面固定104px，左右16px留白，按钮间距8px并右对齐，首列承接剩余宽度。桌面触屏列宽128px以容纳两个44px按钮；900px以下卡片布局保持。
+
+生产构建（文档一致性、Vue类型、Vite）、CSS语法、生产API根路径及差异检查通过。发布后519静态文件摘要、入口/主JS/CSS/DevicesView/AppShell/HTTP共6项HTTP资源匹配，容器健康。局部样式未新增或运行业务测试，未启动浏览器，效果由人工验收。仅基于现网deviceui2覆盖前端，后端resourcecodes2及SHA256 `2d964553bf10ab2cd4817222578a941ec661836c8d986e342f84a750fb0e164f` 保持；PG/ZLM容器ID和启动时间不变。
+
+发布包 `packages/deviceui3-20261104.tar.gz` SHA256 `0ba5ec43fd1016b8c20d6d5deb9a272bdfb9516af96d4568af638154fd905930`。配置及一致性数据库备份 `backups/before-deviceui3-20261104/`，归档SHA256 `8f42b9537f971c559fdf968e79d1715f765a757088cb6e294ed723d8ccfdea8c`。发布脚本具备失败回滚；正常回滚恢复本轮备份.env后仅重建gowvp至deviceui2，不恢复数据库或更换凭据。临时SSH私钥副本于交付前删除。
