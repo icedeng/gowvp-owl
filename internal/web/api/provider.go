@@ -102,7 +102,7 @@ func NewHTTPHandler(uc *Usecase) http.Handler {
 	// 将 SIP 层 GB 报警上报桥接到事件中心，统一落库到 events 表。
 	setupGBAlarmBridge(uc)
 	uc.Version.RecordVersion()
-	return g // 返回配置好的 Gin 实例作为 http.Handler
+	return setupOpenPlatform(g, uc)
 }
 
 // setupGBAlarmBridge 注册 GB 报警回调，并把报警转成标准事件记录。

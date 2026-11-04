@@ -107,7 +107,7 @@ function protocolVersionLabel(device: ApiDevice) {
 
 function registrationState(device: ApiDevice) {
   if (device.is_online) {
-    return { label: "在线", tone: "online", note: "注册绑定有效" };
+    return { label: "在线", tone: "online", note: "" };
   }
   if (device.ext?.gb_registration_closed === true) {
     return { label: "绑定已关闭", tone: "offline", note: "设备已注销或 REGISTER 有效期已结束" };
@@ -320,7 +320,7 @@ watch([query, status, version], () => {
       <div>
         <h1 class="page-title">国标设备</h1>
         <p class="page-desc">
-          管理 GB/T 28181 设备的注册状态、信令地址、流传输模式、通道规模与协议版本。
+          查看设备状态与通道资源，管理国标接入。
         </p>
       </div>
       <div class="head-actions">
@@ -399,25 +399,40 @@ watch([query, status, version], () => {
         <table class="data-table gb-device-data-table">
           <thead>
             <tr>
-              <th>设备</th>
-              <th>厂商 / 型号</th>
-              <th>接入链路</th>
-              <th>通道数</th>
-              <th>状态</th>
-              <th>统计</th>
-              <th>协议版本</th>
-              <th>操作</th>
+              <th scope="col">设备名称 / 编码</th>
+              <th scope="col">状态</th>
+              <th scope="col">通道数</th>
+              <th scope="col">接入链路</th>
+              <th scope="col">厂商 / 型号</th>
+              <th scope="col">最近活动</th>
+              <th scope="col">协议版本</th>
+              <th scope="col">操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="device in pagedRows" :key="device.id">
-              <td data-label="设备">
+              <td data-label="设备名称 / 编码">
                 <div class="row-title compact">
                   <span>
-                    <strong>{{ device.name || "未命名设备" }}</strong>
+                    <RouterLink class="resource-name-link" :to="`/devices/${encodeURIComponent(device.id)}`">{{ device.name || "未命名设备" }}</RouterLink>
                     <small class="mono">{{ device.device_id || device.id }}</small>
                   </span>
                 </div>
+              </td>
+              <td data-label="状态">
+                <span class="stacked-value">
+                  <span class="status" :class="registrationState(device).tone">
+                    {{ registrationState(device).label }}
+                  </span>
+                  <small v-if="registrationState(device).note" class="resource-state-note">{{ registrationState(device).note }}</small>
+                </span>
+              </td>
+              <td data-label="通道数">{{ device.channels || device.children?.length || 0 }} 路</td>
+              <td data-label="接入链路">
+                <span class="stacked-value">
+                  <strong class="mono">{{ deviceAddress(device) }}</strong>
+                  <small>{{ streamMode(device) }}</small>
+                </span>
               </td>
               <td data-label="厂商 / 型号">
                 <span class="stacked-value">
@@ -425,22 +440,7 @@ watch([query, status, version], () => {
                   <small>{{ device.ext?.model || "—" }}</small>
                 </span>
               </td>
-              <td data-label="接入链路">
-                <span class="stacked-value">
-                  <strong class="mono">{{ deviceAddress(device) }}</strong>
-                  <small>{{ streamMode(device) }}</small>
-                </span>
-              </td>
-              <td data-label="通道数">{{ device.channels || device.children?.length || 0 }} 路</td>
-              <td data-label="状态">
-                <span class="stacked-value">
-                  <span class="status" :class="registrationState(device).tone">
-                    {{ registrationState(device).label }}
-                  </span>
-                  <small>{{ registrationState(device).note }}</small>
-                </span>
-              </td>
-              <td data-label="统计">
+              <td data-label="最近活动">
                 <div class="stat-actions">
                   <button
                     type="button"
@@ -460,12 +460,6 @@ watch([query, status, version], () => {
               </td>
               <td data-label="协议版本">
                 <strong>{{ protocolVersionLabel(device) }}</strong>
-                <small v-if="device.ext?.gb_effective_version || device.ext?.gb_version" class="mono block">
-                  {{ device.ext?.gb_effective_version || device.ext?.gb_version }}
-                </small>
-                <small v-if="device.ext?.gb_version_source" class="block text-slate-500">
-                  {{ device.ext.gb_version_source }}
-                </small>
               </td>
               <td data-label="操作">
                 <div class="device-row-actions">
@@ -481,9 +475,11 @@ watch([query, status, version], () => {
                     <RefreshCcw v-else />
                   </button>
                   <RouterLink
-                    class="device-row-detail"
+                    class="device-row-action"
                     :to="`/devices/${encodeURIComponent(device.id)}`"
-                  >详情<ChevronRight /></RouterLink>
+                    :aria-label="`查看${device.name || device.device_id || '设备'}的通道`"
+                    title="进入设备 · 通道资源"
+                  ><ChevronRight aria-hidden="true" /></RouterLink>
                 </div>
               </td>
             </tr>

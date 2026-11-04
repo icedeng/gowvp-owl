@@ -95,6 +95,9 @@ func Run(bc *conf.Bootstrap) {
 		panic(err)
 	}
 	defer cleanUp()
+	if closer, ok := handler.(interface{ Close() error }); ok {
+		defer closer.Close()
+	}
 
 	svc := server.New(handler,
 		server.Port(strconv.Itoa(bc.Server.HTTP.Port)),

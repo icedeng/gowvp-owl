@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Component } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import {
@@ -26,6 +26,7 @@ import {
   UploadCloud,
   Video,
   Truck,
+  Wrench,
   X,
 } from "@lucide/vue";
 import CommandPalette from "../components/CommandPalette.vue";
@@ -46,6 +47,7 @@ const userMenuOpen = ref(false);
 const userMenu = ref<HTMLElement | null>(null);
 const userMenuTrigger = ref<HTMLButtonElement | null>(null);
 const mobileMenuButton = ref<HTMLButtonElement | null>(null);
+const operationsOpen = ref(false);
 const eventBadge = computed(() =>
   eventCount.value > 99 ? "99+" : String(eventCount.value)
 );
@@ -56,7 +58,7 @@ type NavItem = {
   icon: Component;
   badge?: boolean;
 };
-const nav: { label: string; items: NavItem[] }[] = [
+const nav: { label: string; collapsible?: boolean; items: NavItem[] }[] = [
   {
     label: "工作台",
     items: [{ name: "overview", label: "运行总览", icon: CircleGauge }],
@@ -80,8 +82,10 @@ const nav: { label: string; items: NavItem[] }[] = [
   },
   {
     label: "平台运维",
+    collapsible: true,
     items: [
       { name: "media-servers", label: "媒体节点", icon: Server },
+      { name: "open-platform", label: "开放平台", icon: KeyRound },
       { name: "system-status", label: "系统状态", icon: Activity },
       { name: "player-settings", label: "播放器设置", icon: MonitorCog },
       { name: "sip-settings", label: "SIP 设置", icon: SlidersHorizontal },
@@ -100,8 +104,25 @@ function active(name: string) {
     route.name === name ||
     (route.name === "device-detail" && name === "devices") ||
     (route.name === "transport-device-detail" && name === "transport-devices") ||
-    (route.name === "channel-detail" && name === "devices")
+    (route.name === "channel-detail" && name === "devices") ||
+    (route.name === "open-platform-detail" && name === "open-platform")
   );
+}
+
+// 常用业务保持展开；从搜索或链接进入运维页面时展开当前分组，保留导航位置感。
+watch(() => route.name, () => {
+  if (nav.some(group => group.collapsible && group.items.some(item => active(item.name)))) {
+    operationsOpen.value = true;
+  }
+}, { immediate: true });
+
+function toggleOperations() {
+  if (ui.sidebarCollapsed && window.matchMedia("(min-width: 901px)").matches) {
+    ui.toggleSidebarCollapsed();
+    operationsOpen.value = true;
+    return;
+  }
+  operationsOpen.value = !operationsOpen.value;
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -213,26 +234,47 @@ onBeforeUnmount(() => {
       </RouterLink>
       <nav class="nav" aria-label="功能导航">
         <section v-for="group in nav" :key="group.label" class="nav-group">
-          <p class="nav-label">{{ group.label }}</p>
-          <RouterLink
-            v-for="item in group.items"
-            :key="item.name"
-            class="nav-link"
-            :to="{ name: item.name }"
-            :class="{ active: active(item.name) }"
-            :aria-label="item.label"
-            :data-tooltip="item.label"
-            @click="ui.closeSidebar"
+          <button
+            v-if="group.collapsible"
+            type="button"
+            class="nav-group-toggle"
+            :class="{ 'has-active': group.items.some(item => active(item.name)) }"
+            :aria-expanded="operationsOpen"
+            aria-controls="operations-nav"
+            :aria-label="`${operationsOpen ? '收起' : '展开'}平台运维`"
+            title="平台运维"
+            @click="toggleOperations"
           >
-            <component :is="item.icon" aria-hidden="true" />
-            <span>{{ item.label }}</span>
-            <span
-              v-if="item.badge && eventCount"
-              class="nav-badge"
-              :aria-label="`过去 24 小时 ${eventCount} 条事件`"
-              >{{ eventBadge }}</span
+            <Wrench aria-hidden="true" />
+            <span>{{ group.label }}</span>
+            <ChevronDown class="nav-group-chevron" :class="{ rotated: operationsOpen }" aria-hidden="true" />
+          </button>
+          <p v-else class="nav-label">{{ group.label }}</p>
+          <div
+            v-show="!group.collapsible || operationsOpen"
+            :id="group.collapsible ? 'operations-nav' : undefined"
+            class="nav-items"
+          >
+            <RouterLink
+              v-for="item in group.items"
+              :key="item.name"
+              class="nav-link"
+              :to="{ name: item.name }"
+              :class="{ active: active(item.name) }"
+              :aria-label="item.label"
+              :title="item.label"
+              @click="ui.closeSidebar"
             >
-          </RouterLink>
+              <component :is="item.icon" aria-hidden="true" />
+              <span>{{ item.label }}</span>
+              <span
+                v-if="item.badge && eventCount"
+                class="nav-badge"
+                :aria-label="`过去 24 小时 ${eventCount} 条事件`"
+                >{{ eventBadge }}</span
+              >
+            </RouterLink>
+          </div>
         </section>
       </nav>
     </aside>
@@ -298,12 +340,13 @@ onBeforeUnmount(() => {
               ref="userMenuTrigger"
               type="button"
               class="user-chip"
+              aria-label="用户菜单"
               aria-haspopup="menu"
               aria-controls="user-menu"
               :aria-expanded="userMenuOpen"
               @click="toggleUserMenu"
             >
-              <strong>{{ session.user || "管理员" }}</strong>
+              <strong>管理员</strong>
               <ChevronDown :class="{ rotated: userMenuOpen }" />
             </button>
             <Transition name="user-menu">
@@ -316,7 +359,7 @@ onBeforeUnmount(() => {
               >
                 <div class="user-menu-identity">
                   <strong>系统管理员</strong>
-                  <span>{{ session.user || "管理员" }}</span>
+                  <span>登录账号：{{ session.user || "—" }}</span>
                 </div>
                 <div class="user-menu-divider" />
                 <RouterLink

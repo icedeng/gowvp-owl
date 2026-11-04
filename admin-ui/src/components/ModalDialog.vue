@@ -2,14 +2,14 @@
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { X } from '@lucide/vue'
 
-const props = defineProps<{ open: boolean; title: string; description?: string }>()
+const props = defineProps<{ open: boolean; title: string; description?: string; size?: 'wide' }>()
 const emit = defineEmits<{ close: [] }>()
 const panel = ref<HTMLElement>()
 const closeButton = ref<HTMLButtonElement>()
 let previousFocus: HTMLElement | null = null
 let previousBodyOverflow = ''
 
-const focusableSelector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+const focusableSelector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), video[controls], [tabindex]:not([tabindex="-1"])'
 
 function focusFirst() {
   const first = panel.value?.querySelector<HTMLElement>(focusableSelector)
@@ -63,7 +63,7 @@ onBeforeUnmount(() => {
   <Teleport to="body">
     <Transition name="palette">
       <div v-if="open" class="modal-backdrop" role="presentation" @mousedown.self="emit('close')">
-        <section ref="panel" class="modal" role="dialog" aria-modal="true" :aria-label="title" @mousedown.stop>
+        <section ref="panel" class="modal" :class="{ 'modal-wide': size === 'wide' }" role="dialog" aria-modal="true" :aria-label="title" @mousedown.stop>
           <div class="modal-head">
             <div><h2>{{ title }}</h2><p v-if="description">{{ description }}</p></div>
             <button ref="closeButton" type="button" class="icon-btn" aria-label="关闭对话框" @click="emit('close')"><X /></button>
@@ -75,3 +75,8 @@ onBeforeUnmount(() => {
     </Transition>
   </Teleport>
 </template>
+
+<style scoped>
+.modal-wide { width: min(1040px, 100%); max-height: calc(100dvh - 36px); }
+@media (max-width: 640px) { .modal-wide { max-height: calc(100dvh - 24px); } }
+</style>

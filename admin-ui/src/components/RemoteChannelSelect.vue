@@ -40,6 +40,7 @@ const emit = defineEmits<{
 
 const root = ref<HTMLElement | null>(null);
 const trigger = ref<HTMLButtonElement | null>(null);
+const popoverStyle = ref<Record<string, string>>({});
 const searchInput = ref<HTMLInputElement | null>(null);
 const open = ref(false);
 const loading = ref(false);
@@ -180,11 +181,35 @@ async function ensureSelected(value: string) {
   }
 }
 
+// 固定定位保留原有 DOM 和焦点顺序，并让下拉框避开表格、弹窗的滚动裁剪。
+function positionPicker() {
+  if (!open.value || !trigger.value) return;
+  const rect = trigger.value.getBoundingClientRect();
+  const viewport = window.visualViewport;
+  const viewportTop = viewport?.offsetTop || 0;
+  const viewportLeft = viewport?.offsetLeft || 0;
+  const viewportWidth = viewport?.width || window.innerWidth;
+  const viewportBottom = viewportTop + (viewport?.height || window.innerHeight);
+  const width = Math.min(Math.max(rect.width, 280), 360, viewportWidth - 24);
+  const below = viewportBottom - rect.bottom - 18;
+  const above = rect.top - viewportTop - 18;
+  const upward = below < 200 && above > below;
+  popoverStyle.value = {
+    left: `${Math.max(viewportLeft + 12, Math.min(rect.left, viewportLeft + viewportWidth - width - 12))}px`,
+    top: `${upward ? rect.top - 6 : rect.bottom + 6}px`,
+    width: `${width}px`,
+    maxHeight: `${Math.max(0, Math.min(420, upward ? above : below))}px`,
+    transform: upward ? "translateY(-100%)" : "none",
+  };
+}
+
 async function openPicker() {
   open.value = true;
-  await load();
   await nextTick();
+  if (!open.value) return;
+  positionPicker();
   searchInput.value?.focus();
+  void load();
 }
 
 function closePicker(restoreFocus = false) {
@@ -211,6 +236,7 @@ function selectValue(value: string) {
 function onSearchKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
     event.preventDefault();
+    event.stopPropagation();
     closePicker(true);
     return;
   }
@@ -258,11 +284,26 @@ watch(
   (value) => void ensureSelected(value),
   { immediate: true }
 );
+watch(activeIndex, async (index) => {
+  if (index < 0 || !open.value) return;
+  await nextTick();
+  document.getElementById(`${baseId}-option-${index}`)?.scrollIntoView({ block: "nearest" });
+});
 
-onMounted(() => document.addEventListener("pointerdown", onDocumentPointerDown));
+onMounted(() => {
+  document.addEventListener("pointerdown", onDocumentPointerDown);
+  window.addEventListener("resize", positionPicker);
+  window.addEventListener("scroll", positionPicker, true);
+  window.visualViewport?.addEventListener("resize", positionPicker);
+  window.visualViewport?.addEventListener("scroll", positionPicker);
+});
 onBeforeUnmount(() => {
   window.clearTimeout(searchTimer);
   document.removeEventListener("pointerdown", onDocumentPointerDown);
+  window.removeEventListener("resize", positionPicker);
+  window.removeEventListener("scroll", positionPicker, true);
+  window.visualViewport?.removeEventListener("resize", positionPicker);
+  window.visualViewport?.removeEventListener("scroll", positionPicker);
 });
 </script>
 
@@ -280,7 +321,7 @@ onBeforeUnmount(() => {
     >
       <span>{{ selectedLabel }}</span><ChevronDown />
     </button>
-    <div v-if="open" class="remote-select-popover">
+    <div v-if="open" class="remote-select-popover" :style="popoverStyle" @keydown.esc.stop.prevent="closePicker(true)">
       <label class="field remote-select-search">
         <Search />
         <input

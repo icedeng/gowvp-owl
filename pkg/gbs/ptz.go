@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	ipcmodel "github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
@@ -105,6 +106,20 @@ func (g *GB28181API) PTZ(in *PTZInput) (*PTZOutput, error) {
 
 // PTZContext 下发云台控制；按标准在收到 SIP 200 OK 后即返回成功。
 func (g *GB28181API) PTZContext(ctx context.Context, in *PTZInput) (*PTZOutput, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if in == nil {
+		return nil, errors.New("invalid ptz input")
+	}
+	var out *PTZOutput
+	err := ipcmodel.CoordinateGBPTZ(ctx, in.DeviceID, in.ChannelID, func(callCtx context.Context) error { var e error; out, e = g.ptzRaw(callCtx, in); return e })
+	return out, err
+}
+func (g *GB28181API) ptzRaw(ctx context.Context, in *PTZInput) (*PTZOutput, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -285,6 +300,15 @@ func encodePTZCommand(in *PTZInput) (string, error) {
 	cmd[2] = 0x01
 
 	switch action {
+	case "fi_stop":
+		cmd[3] = 0x40
+		return finalizePTZCmd(cmd), nil
+	case "cruise_stop":
+		cmd[3] = 0x88
+		return finalizePTZCmd(cmd), nil
+	case "scan_stop":
+		cmd[3] = 0x89
+		return finalizePTZCmd(cmd), nil
 	case PTZActionCruiseAdd:
 		if preset < 1 || preset > 255 {
 			return "", fmt.Errorf("preset must be in [1,255]")

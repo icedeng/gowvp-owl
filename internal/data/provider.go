@@ -25,7 +25,10 @@ func SetupDB(c *conf.Bootstrap) (*gorm.DB, error) {
 	if dsn := strings.TrimSpace(os.Getenv("OWL_DATABASE_DSN")); dsn != "" {
 		cfg.Dsn = dsn
 	}
-	dial, isSQLite := getDialector(cfg.Dsn)
+	dial, isSQLite, err := getDialector(cfg.Dsn)
+	if err != nil {
+		return nil, err
+	}
 	if isSQLite {
 		cfg.MaxIdleConns = 1
 		cfg.MaxOpenConns = 1
@@ -44,16 +47,23 @@ func SetupDB(c *conf.Bootstrap) (*gorm.DB, error) {
 }
 
 // getDialector 返回 dial 和 是否 sqlite
-func getDialector(dsn string) (gorm.Dialector, bool) {
+func getDialector(dsn string) (gorm.Dialector, bool, error) {
 	switch true {
 	case strings.HasPrefix(dsn, "postgres"):
 		return postgres.New(postgres.Config{
 			DriverName: "pgx",
 			DSN:        dsn,
-		}), false
+		}), false, nil
 	case strings.HasPrefix(dsn, "mysql"):
-		return mysql.Open(dsn), false
+		normalized, e := NormalizeMySQLDSN(dsn)
+		if e != nil {
+			return nil, false, e
+		}
+		return mysql.Open(normalized), false, nil
 	default:
-		return sqlite.Open(filepath.Join(system.Getwd(), dsn)), true
+		if filepath.IsAbs(dsn) {
+			return sqlite.Open(dsn), true, nil
+		}
+		return sqlite.Open(filepath.Join(system.Getwd(), dsn)), true, nil
 	}
 }

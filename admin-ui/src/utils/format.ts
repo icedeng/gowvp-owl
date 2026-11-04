@@ -37,8 +37,14 @@ export function formatDuration(value?: number) {
 
 export function formatUptime(start?: string) {
   if (!start) return '—'
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(start).getTime()) / 1000))
-  const days = Math.floor(seconds / 86400)
-  const hours = Math.floor((seconds % 86400) / 3600)
-  return days > 0 ? `${days} 天 ${hours} 小时` : `${hours} 小时`
+  const startedAt = new Date(start).getTime()
+  if (!Number.isFinite(startedAt)) return '—'
+  const minutes = Math.max(0, Math.floor((Date.now() - startedAt) / 60000))
+  if (minutes < 1) return '不足 1 分钟'
+  if (minutes < 60) return `${minutes} 分钟`
+  const days = Math.floor(minutes / 1440)
+  const hours = Math.floor((minutes % 1440) / 60)
+  if (days > 0) return `${days} 天 ${hours} 小时`
+  const remainingMinutes = minutes % 60
+  return remainingMinutes ? `${hours} 小时 ${remainingMinutes} 分钟` : `${hours} 小时`
 }

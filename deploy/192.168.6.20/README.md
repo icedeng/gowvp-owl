@@ -2,7 +2,7 @@
 
 用于 `192.168.6.20`（EasyTier：`10.144.0.20`），部署设计和实施记录见 [服务器部署方案](../server-192.168.6.20.md)。本目录不含真实凭据或业务数据库。
 
-当前版本（2026-11-04）：Owl 为 `v1-20261104-queryindex1`，ZLM 保持 `v1-20261103-manualrecord1`，独立 PostgreSQL 17.11（`owl-v1-postgres:17-20261104`）。设备、通道、录像索引、心跳和注册历史已从 SQLite 迁移到 PostgreSQL；已补齐录像与通道复合索引，并移除时间轴/月统计的固定条数截断。默认手动录像、媒体 `30000-50000/tcp+udp`、无人观看默认 180 秒断流等行为保留。日常启动命令：
+当前版本（2026-11-04）：Owl 服务镜像为 `v1-20261104-deviceui2`（设备详情布局修正），后端版本保持 `v1-20261104-resourcecodes2`（补齐录像、告警、会话/任务/命令记录和订阅的编码定位），ZLM 保持 `v1-20261103-manualrecord1`，独立 PostgreSQL 17.11（`owl-v1-postgres:17-20261104`）。设备、通道、录像索引、心跳和注册历史已从 SQLite 迁移到 PostgreSQL；已补齐录像与通道复合索引，并移除时间轴/月统计的固定条数截断。默认手动录像、媒体 `30000-50000/tcp+udp`、无人观看默认 180 秒断流等行为保留。日常启动命令：
 
 ```bash
 cd /www2/gowvp-v1
@@ -55,9 +55,32 @@ curl -fsS http://192.168.6.20:15123/health
 docker compose -p owl-v1 --env-file .env -f docker-compose.yml restart gowvp
 ```
 
-更新镜像前完成备份，导入对应镜像，再修改 `.env` 标签，执行 `./run.sh up`。`OWL_SERVICE_IMAGE_TAG`、`OWL_ZLM_IMAGE_TAG` 优先于 `OWL_IMAGE_TAG`；当前分别为 `v1-20261104-queryindex1`、`v1-20261103-manualrecord1`。PostgreSQL 通过独立变量 `OWL_POSTGRES_IMAGE` 固定版本，升级数据库大版本需单独执行迁移，不能直接换标签。不要使用通用 `deploy.sh release/up` 启动本服务器，不要重新执行首次准备脚本。
+更新镜像前完成备份，导入对应镜像，再修改 `.env` 标签，执行 `./run.sh up`。`OWL_SERVICE_IMAGE_TAG`、`OWL_ZLM_IMAGE_TAG` 优先于 `OWL_IMAGE_TAG`；当前分别为 `v1-20261104-deviceui2`、`v1-20261103-manualrecord1`。PostgreSQL 通过独立变量 `OWL_POSTGRES_IMAGE` 固定版本，升级数据库大版本需单独执行迁移，不能直接换标签。不要使用通用 `deploy.sh release/up` 启动本服务器，不要重新执行首次准备脚本。
 
-本次仅更新后端时使用 `docker compose -p owl-v1 --env-file .env -f docker-compose.yml up -d --no-deps --no-build --pull never --wait gowvp`，保留 ZLM、PG 容器。`sql/20261104-recording-query-indexes.sql` 已执行，两条索引均有效。交付目录 `packages/queryindex1-20261104/` 包含服务镜像归档、二进制及校验文件；更新前备份在 `backups/before-queryindex1-20261104/`。需要回滚时只把 `OWL_SERVICE_IMAGE_TAG` 恢复为 `v1-20261104-postgres1` 并更新 `gowvp`，兼容索引保留，不恢复旧库覆盖新数据。
+此前 apibasefix1 仅更新前端，修复开发环境 `/api` 代理前缀混入生产构建、导致开放平台和系统状态等接口 404 的问题。`admin-ui/.env.production` 将生产默认 API 地址设为同源 `/`，保留本地开发配置；生产构建需检查编译后的实际 API base，再用管理员身份检查页面接口，不能只检查静态文件和容器健康。无后端或数据库修改，ZLM、PG 容器未重启。交付目录为 `packages/apibasefix1-20261104/`，更新前环境配置和运行信息位于 `backups/before-apibasefix1-20261104/`。紧急回滚可恢复最近正常的 `v1-20261104-openplatformdocs1` 并仅更新 gowvp；不要回退到带有错误代理前缀的 openplatformui1，不恢复数据库或更换密钥。
+
+## 紧凑界面发布（2026-11-04）
+
+14:59:54 发布 `owl-v1-service:v1-20261104-compactui1`，统一全局配色、按钮/表单密度、响应式与运维菜单折叠。基于现网 apibasefix1 镜像仅覆盖前端，并保留旧哈希资源，避免未刷新页面加载异步模块时 404。后端二进制、API 根地址 `/`、数据库和媒体配置保持不变，ZLM、PostgreSQL 容器未重启。
+
+发布前在线数据库备份已通过 `pg_restore --list`；发布后 517 个静态文件与交付摘要一致，HTTP 获取的 17 个关键资源与本地产物一致，加密管理员登录及系统状态、媒体节点、资源列表、开放平台读取正常，未登录保护接口返回 401。4 台设备全部在线、128 个通道保留，启动日志未发现 ERROR/panic/fatal。页面视觉、触屏与视频业务由人工验收；刷新浏览器加载新界面。
+
+交付目录为 `packages/compactui1-20261104/`，更新前备份位于 `backups/before-compactui1-20261104/`。镜像摘要为 `sha256:5d24eb9718799db0c6df4c6e166eaad40b5b7d16ed75a27f8a1b7f7be6e821f9`。如需回滚，将 `.env` 的 `OWL_SERVICE_IMAGE_TAG` 恢复为 `v1-20261104-apibasefix1`，只更新 gowvp，不恢复数据库或更换密钥：
+
+```bash
+cd /www2/gowvp-v1
+docker compose -p owl-v1 --env-file .env -f docker-compose.yml up -d --no-deps --no-build --pull never --wait gowvp
+```
+
+## 三方应用开放平台
+
+- 完整开发文档：`http://10.144.0.20:15123/web/#/open-platform/docs`，无需管理员登录，包含全部接口参数、返回值、权限与示例，以及签名、回调和客户端下载。公开元信息 `/open-platform/docs/config` 仅含 enabled/public_url/audience/allow_http，不公开凭据或设备数据。
+- 应用详情独立打开为 `/web/#/open-platform/apps/{id}`；分区通过 `tab` 查询参数保留，返回列表恢复搜索条件与页码。
+- 已启用，管理入口 `http://10.144.0.20:15123/web/#/open-platform`；API `/openapi/v1/`，受控媒体 `/openmedia/v1/`。
+- 按用户要求保留 HTTP，`.env` 设置 `OWL_OPEN_PLATFORM_ALLOW_HTTP=true`、`OWL_OPEN_PLATFORM_PUBLIC_URL=http://10.144.0.20:15123`，Audience 为 `owl-192-168-6-20`。HTTP 开关同时允许 HTTP 回调和密钥的一次性响应；HMAC 仅签名，不加密传输。
+- 独立主密钥文件 `data/configs/open-platform-keyring.json`，权限 `0600`，容器内 `/app/configs/open-platform-keyring.json`；每日受控备份已加入该文件。密钥丢失将无法恢复应用 SK，不得提交或输出密钥内容。
+- 15 张 `open_*` 表已通过迁移工具建立，原业务表结构未变。当前无预置三方应用；从页面创建、授权设备和 Scope，再生成 AK/SK 并启用。
+- 旧业务、媒体端口与来源放行保持现状，未建立只允许三方访问新入口的网络隔离；应用级媒体授权只覆盖新 `/openmedia/v1` 入口。完整接入与人工验收重点见 [开放平台说明](../../docs/open-platform/README.md)。
 
 ## 维护与访问控制
 
@@ -69,7 +92,7 @@ systemctl start owl-v1-monitor.service
 journalctl -u owl-v1-monitor.service -n 30 --no-pager
 ```
 
-启用 timer 后，每日 03:30 左右使用 PostgreSQL 容器内同版本 `pg_dump` 生成在线一致性备份（`gowvp.dump`），并执行 `pg_restore --list` 检查，连同配置和凭据归档；保留约 7 天日备份、4 周周备份，位置为 `backups/daily`、`backups/weekly`。旧日期的备份仍可能包含 SQLite `configs/data.db`，恢复前先确认备份格式。归档含密钥，保持目录 `0700`、文件 `0600`，不得提交 Git；不含录像。定期异机备份的目标地址仍需另行配置。
+启用 timer 后，每日 03:30 左右使用 PostgreSQL 容器内同版本 `pg_dump` 生成在线一致性备份（`gowvp.dump`），并执行 `pg_restore --list` 检查，连同配置、管理员凭据和开放平台主密钥环归档；保留约 7 天日备份、4 周周备份，位置为 `backups/daily`、`backups/weekly`。旧日期的备份仍可能包含 SQLite `configs/data.db`，恢复前先确认备份格式。归档含密钥，保持目录 `0700`、文件 `0600`，不得提交 Git；不含录像。定期异机备份的目标地址仍需另行配置。
 
 心跳、成功注册事件写入 `device_history_records`，按设备、事件类型、时间建立联合索引；设备当前在线状态、最近心跳及注册有效期仍保存于 `devices`。沿用现有保留设置：每台设备每种事件最多 1000 条、最长 30 天，两者先到先清理，可在 SIP 设置的历史保留区修改。当前不引入 TimescaleDB 或分区，详见 [PostgreSQL 与时序历史方案](../postgresql.md)。
 
@@ -86,3 +109,47 @@ GoWVP 保留现网桥接地址 `172.19.0.3`，网桥子网固定 `172.19.0.0/16`
 ZLM 持久化配置 `data/zlm-config/config.ini` 中，`[http]` 的 `allow_ip_range` 置空（允许任意 IP），`[general]` 的 `listen_ip=0.0.0.0`，`[rtc]` 的 `interfaces` 为空。迁移或重新初始化 ZLM 配置时须保留这些值；镜像默认的 HTTP 内网白名单需要清空。API 密钥、管理登录及推流认证不受影响。`rtc.externIP` 和 `Media.SDPIP` 是媒体宣告地址，并非来源白名单；当前仍宣告 `192.168.6.20`，播放端须有到该地址的路由。
 
 `prepare-host.sh` 仅用于容器运行时为空的首次准备，已部署后会拒绝重复执行。它保留原 containerd 数据与配置，将新镜像存储放在 `/www2/containerd`，并增加挂载依赖；不要在已有容器运行后再次迁移。
+
+## 运行总览浅色优化（2026-11-04 15:14:00）
+
+发布 `owl-v1-service:v1-20261104-overviewlight1`，移除总览深色态势条和实蓝快捷入口标题，协议及媒体服务区统一白底；不足一小时运行时长显示分钟，顶栏、总览、系统状态和升级页共用。517 个静态文件校验一致，加密登录与总览相关只读接口正常，4 台设备在线、128 个通道保留；后端、ZLM、PostgreSQL 保持原样。页面效果由人工验收。
+
+包目录 `packages/overviewlight1-20261104/`，备份 `backups/before-overviewlight1-20261104/`。镜像摘要 `sha256:dfea62d3159c31867890f15978bf443d12df1f4a61b6f390bb2acc1714049ef0`。回滚时恢复本轮备份 `.env`，仅重建 gowvp 至 `v1-20261104-compactui1`，不恢复数据库。
+
+## 顶栏身份文案（2026-11-04 15:18:35）
+
+发布 `owl-v1-service:v1-20261104-userlabel1`，顶栏显示“管理员”，账号移至用户菜单并标注“登录账号”。生产构建、517 个静态文件及 6 个 HTTP 关键资源校验通过，容器健康；后端和依赖容器保持原样。发布包 `packages/userlabel1-20261104/`，备份 `backups/before-userlabel1-20261104/`；回滚恢复本轮备份 .env 后仅重建 gowvp 至 overviewlight1，不恢复数据库。
+
+## 录像中心检索与回放（2026-11-04 15:36:43）
+
+发布 `owl-v1-service:v1-20261104-recordings2`，默认展示最新录像，完整月历标记有录像日期，支持通道/月/日检索及页内MP4回放、当天连续播放。浏览器已验证单片段正常播放和自动切至下一片段；518个静态文件、9个HTTP关键资源校验通过，后端与PG/ZLM容器保持原样。包目录 `packages/recordings2-20261104/`，备份 `backups/before-recordings2-20261104/`；回滚恢复本轮备份.env并仅重建gowvp至userlabel1，不恢复数据库。
+
+## 录像弹窗播放器（2026-11-04 16:01:47）
+
+发布 `owl-v1-service:v1-20261104-recordmodal1`，录像回放改为宽版弹窗，保留播放与连续队列；关闭停止播放，列表与筛选保持原位。正式构建及519个静态文件、9个HTTP关键资源校验通过，容器健康，后端/PG/ZLM保持原样。包目录 `packages/recordmodal1-20261104/`，备份 `backups/before-recordmodal1-20261104/`；回滚恢复本轮备份.env后仅重建gowvp至recordings2，不恢复数据库。
+
+## 开放平台编码入口（2026-11-04 16:54:29）
+
+发布 `v1-20261104-resourcecodes1`，三方可直接使用设备编码和完整通道编码查询设备/通道、查询云台能力、控制云台、创建播放会话和抓拍任务。路径统一为 `/openapi/v1/devices/by-code/{device_code}`，通道入口追加 `/channels/{channel_code}`；列表支持 `device_code`、`channel_code` 精确筛选。`device_id` 查询参数仍指内部设备 ID，旧入口保持兼容。完整文档已同步到在线文档页，现为 62 个接口操作。
+
+编码解析始终限制在应用授权设备内，Scope 规则保持；不存在或无权访问统一 404，同设备重复通道编码返回 409，不任选控制目标。设备授权绑定内部 ID，同编码重建设备不会继承旧授权。
+
+仅覆盖后端和开放平台文档，其他页面资源摘要一致，无数据库迁移；ZLM、PostgreSQL 未重启。线上签名只读查询和能力接口通过，4 台设备在线、128 个通道保留；未执行真实云台、抓拍或播放。发布包 `packages/resourcecodes1-20261104/`，备份 `backups/before-resourcecodes1-20261104/`。回滚将 `.env` 的 `OWL_SERVICE_IMAGE_TAG` 恢复为 `v1-20261104-recordmodal1`，仅更新 gowvp，不恢复数据库或更换密钥。
+
+## 国标设备与通道工作区（2026-11-04）
+
+发布 `v1-20261104-deviceui1`：设备列表去重复状态、重要字段前移，名称和箭头进入详情；设备详情默认通道资源，统一表头、全设备通道检索/状态筛选/分页，横向导航及浅色紧凑布局。通道详情预览优先，低频配置、语音和播放地址按需展开，窄屏重排并保留触屏44px目标。
+
+34项相关检查和生产构建通过；519静态文件及10项HTTP资源匹配。线上只读核对4台设备/128路通道，目标设备32路、分页25+7、搜索及在线筛选正常。后端保持resourcecodes1，数据库和媒体容器未重启。包目录 `packages/deviceui1-20261104/`，备份 `backups/before-deviceui1-20261104/`；回滚恢复本轮备份.env后仅重建gowvp至resourcecodes1。未进行浏览器或真实设备操作验收。
+
+## 编码入口完整覆盖（2026-11-04 17:13:17）
+
+发布 `v1-20261104-resourcecodes2`，以现网 deviceui1 镜像仅更新后端与开放平台文档。设备编码路径和设备+完整通道编码路径均支持 GET `/recordings`、`/events`、`/live-sessions`、`/snapshot-tasks`、`/ptz-commands`，设备路径新增 GET `/channels`。原列表统一支持 `device_code`、`channel_code` 精确筛选；原播放/抓拍创建 JSON 可直接用这两个编码，订阅创建/修改支持 `channel_codes` 数组。文档优先展示编码入口，原设备/通道 ID 接口标记为兼容；共 76 个接口操作。
+
+具体录像、事件、会话、任务、命令和订阅仍用各自结果 ID 获取详情、票据、停止或修改；同通道多条记录不能用编码替代结果 ID。先按编码查列表，再选择结果即可，无需设备或通道内部 ID。编码路径严格解析、列表过滤取交集，禁止路径和查询/请求体的冲突定位；Scope、设备授权、幂等与安全停止规则保持。
+
+本地 API/目标 race 检查和构建通过，线上真实签名按编码检索到 3 条录像，其他记录列表及未知编码/冲突/401/404 检查通过，8 个文档文件摘要一致。非文档页面资源不变，4/4 设备在线、128 通道保留，ZLM/PG 未重启；未触发真实设备动作或修改线上订阅。包目录 `packages/resourcecodes2-20261104/`，备份 `backups/before-resourcecodes2-20261104/`。回滚将服务标签恢复 `v1-20261104-deviceui1`，仅更新 gowvp，无需恢复数据库或密钥。
+
+## 设备详情布局修正（2026-11-04）
+
+发布 `v1-20261104-deviceui2`：Tab与当前内容共享连续面板，桌面/窄屏内边距16/12px；通道名称和编码独立成列，查询框填满分配宽度。生产构建及519个静态文件、6项HTTP资源校验通过，后端保持resourcecodes2，数据库及媒体容器未重启。包目录 `packages/deviceui2-20261104/`，备份 `backups/before-deviceui2-20261104/`；回滚恢复本轮备份.env后仅重建gowvp至resourcecodes2。页面效果由人工验收。

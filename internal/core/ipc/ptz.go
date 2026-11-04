@@ -43,5 +43,5 @@ func (c Core) PTZControl(ctx context.Context, channelID string, in *PTZControlIn
 		in.Timeout = 6
 	}
 
-	return ptz.PTZControl(ctx, dev, ch, in)
+	return CoordinatePTZ(ctx, channelID, func(callCtx context.Context) error { return ptz.PTZControl(callCtx, dev, ch, in) })
 }

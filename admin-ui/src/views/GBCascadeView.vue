@@ -195,21 +195,21 @@ onMounted(load);
 <style scoped>
 .cascade-page { max-width: 1480px; }
 .cascade-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 14px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.cascade-summary > div { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; padding: 15px 18px; border-right: 1px solid var(--line); }
+.cascade-summary > div { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; padding: 12px 14px; border-right: 1px solid var(--line); }
 .cascade-summary > div:last-child { border-right: 0; }
 .cascade-summary span, .cascade-summary small { color: var(--muted); font-size: 12px; }
 .cascade-summary strong { color: var(--ink); font: 700 22px "Barlow Condensed", sans-serif; font-variant-numeric: tabular-nums; }
 .cascade-summary small { grid-column: 1 / -1; }
-.cascade-panel { padding: 18px; }
+.cascade-panel { padding: 14px; }
 .cascade-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 0; }
-.segmented { display: inline-flex; padding: 3px; background: #eef2f6; border-radius: 8px; }
-.segmented button { min-height: 34px; padding: 0 11px; color: var(--muted); background: transparent; border: 0; border-radius: 6px; font-weight: 600; cursor: pointer; }
+.segmented { display: inline-flex; max-width: 100%; overflow-x: auto; padding: 2px; background: var(--panel-3); border-radius: var(--radius-sm); }
+.segmented button { min-height: var(--control-height); padding: 0 10px; color: var(--muted); background: transparent; border: 0; border-radius: 3px; font-size: 12px; font-weight: 400; white-space: nowrap; cursor: pointer; }
 .segmented button.active { color: var(--blue); background: #fff; box-shadow: 0 3px 9px rgba(28, 51, 79, .09); }
 .segmented button span { margin-left: 4px; color: inherit; font: 700 11px "Barlow Condensed", sans-serif; }
 .cascade-empty { min-height: 220px; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); }
 .cascade-empty > svg { width: 20px; flex: 0 0 auto; }.cascade-empty span { display: block; }.cascade-empty strong, .cascade-empty small { display: block; }.cascade-empty small { margin-top: 3px; }
 .cascade-platform-list { display: grid; gap: 8px; }
-.cascade-platform-row { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(450px, 2fr) minmax(180px, .9fr); align-items: center; gap: 18px; padding: 14px; background: #f8fafc; border: 1px solid var(--line); border-radius: 9px; }
+.cascade-platform-row { display: grid; grid-template-columns: minmax(180px, 1.2fr) minmax(0, 2fr) minmax(150px, .9fr); align-items: center; gap: 18px; padding: 14px; background: #f8fafc; border: 1px solid var(--line); border-radius: 9px; }
 .cascade-platform-main { display: flex; align-items: center; gap: 10px; min-width: 0; }.cascade-platform-main strong, .cascade-platform-main small { display: block; }.cascade-platform-main strong { color: var(--ink-strong); }.cascade-platform-main small { margin-top: 3px; color: var(--muted); }
 .cascade-platform-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; background: var(--panel-3); }.cascade-platform-icon svg { width: 17px; }.cascade-platform-icon.online { color: var(--green); background: var(--green-soft); }.cascade-platform-icon.pending { color: var(--amber); background: var(--amber-soft); }.cascade-platform-icon.offline { color: var(--red); background: var(--red-soft); }
 .cascade-platform-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; }.cascade-platform-facts dt { color: var(--muted); font-size: 10px; }.cascade-platform-facts dd { margin: 4px 0 0; color: var(--ink); font-size: 12px; }.cascade-platform-facts dd small { display: block; margin-top: 3px; }.version-warning { color: #8b5100; }.cascade-platform-last { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: 11px; }.cascade-error { overflow-wrap: anywhere; color: #b4232b; white-space: normal; }
@@ -217,6 +217,6 @@ onMounted(load);
 .cascade-platform-icon.online { color: #126b49; }.cascade-platform-icon.pending { color: #8b5100; }.cascade-platform-icon.offline { color: #b4232b; }
 .cascade-panel-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 13px; color: var(--muted); font-size: 12px; }.cascade-panel-foot span { display: inline-flex; align-items: center; gap: 7px; }.cascade-panel-foot svg { width: 15px; }.cascade-panel-foot a { display: inline-flex; align-items: center; gap: 4px; color: var(--blue); font-weight: 700; }.cascade-panel-foot a svg { width: 14px; }
 .cascade-next-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }.cascade-next-steps article { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 15px 17px; }.cascade-next-steps article > svg { width: 20px; color: var(--blue); }.cascade-next-steps h2 { margin: 0; color: var(--ink-strong); font-size: 14px; }.cascade-next-steps p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
-@media (max-width: 1100px) { .cascade-platform-row { grid-template-columns: 1fr; gap: 12px; }.cascade-platform-last { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1280px) { .cascade-platform-row { grid-template-columns: 1fr; gap: 12px; }.cascade-platform-last { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .cascade-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }.cascade-summary > div:nth-child(2) { border-right: 0; }.cascade-summary > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }.cascade-panel { padding: 14px; }.cascade-toolbar, .cascade-panel-foot { align-items: stretch; flex-direction: column; }.segmented { width: 100%; overflow-x: auto; }.segmented button { flex: 1 0 auto; min-height: 44px; }.cascade-platform-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }.cascade-next-steps { grid-template-columns: 1fr; }.cascade-next-steps article { grid-template-columns: auto 1fr; }.cascade-next-steps article .btn { grid-column: 1 / -1; width: 100%; } }
 </style>

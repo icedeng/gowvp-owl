@@ -21,6 +21,7 @@ import (
 	"github.com/gowvp/owl/internal/core/event"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/metadata"
+	op "github.com/gowvp/owl/internal/core/openplatform"
 	"github.com/gowvp/owl/internal/core/recording"
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/ixugo/goddd/domain/uniqueid"
@@ -30,11 +31,11 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-var models = []any{
+var models = append([]any{
 	new(version.Version), new(sms.MediaServer), new(ipc.Device), new(ipc.Channel),
 	new(ipc.GBTaskStateRecord), new(ipc.GBCascadeTaskRouteRecord), new(ipc.DeviceHistoryRecord),
 	new(uniqueid.UniqueID), new(recording.Recording), new(event.Event), new(config.Config), new(metadata.Metadata),
-}
+}, op.Models()...)
 
 func main() {
 	source := flag.String("source", "", "停服后的 SQLite 一致性快照绝对路径")

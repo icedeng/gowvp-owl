@@ -24,6 +24,9 @@ case "${1:-monitor}" in
     if [[ -f data/configs/admin-credentials.toml ]]; then
       cp -a data/configs/admin-credentials.toml "$task_stage/configs/"
     fi
+    if [[ -f data/configs/open-platform-keyring.json ]]; then
+      cp -a data/configs/open-platform-keyring.json "$task_stage/configs/"
+    fi
     cp -a data/zlm-config/. "$task_stage/zlm-config/"
     # pg_dump 为在线一致性快照；使用容器内同版本工具，不复制运行中的数据目录。
     docker compose --project-name owl-v1 --env-file .env --file docker-compose.yml \

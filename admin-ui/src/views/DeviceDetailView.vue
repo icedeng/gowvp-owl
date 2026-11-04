@@ -60,15 +60,20 @@ interface SubscriptionReceipt {
   payload: Record<string, unknown>;
 }
 
-const tab = ref<DetailTab>("overview");
+const tab = ref<DetailTab>("channels");
 const loading = ref(false);
 const loadError = ref("");
 const actionLoading = ref("");
 const device = ref<ApiDevice | null>(null);
 const relatedChannels = ref<ApiChannel[]>([]);
 const channelTotal = ref(0);
-const onlineChannelTotal = ref(0);
+const onlineChannelTotal = ref<number | null>(null);
 const channelPage = ref(1);
+const channelResultTotal = ref(0);
+const channelQuery = ref("");
+const channelStatus = ref("all");
+const channelFilters = reactive({ key: "", status: "all" });
+let channelRequestSequence = 0;
 const channelLoading = ref(false);
 const channelError = ref("");
 const diagnostics = ref<Record<string, unknown> | null>(null);
@@ -170,8 +175,8 @@ const isGb = computed(
     ) === "GB28181"
 );
 const allTabs: Array<{ key: DetailTab; name: string; note: string; icon: typeof Activity }> = [
-  { key: "overview", name: "运行概览", note: "状态、档案与最近活动", icon: Activity },
   { key: "channels", name: "通道资源", note: "预览与通道能力", icon: ListVideo },
+  { key: "overview", name: "设备信息", note: "档案、能力与最近活动", icon: Activity },
   { key: "operations", name: "设备运维", note: "同步、订阅与参数下发", icon: Wrench },
   { key: "diagnostics", name: "协议诊断", note: "版本、探测与高级查询", icon: ShieldCheck },
 ];
@@ -363,7 +368,7 @@ const streamMode = computed(() => {
   return ({ 0: "UDP", 1: "TCP 被动", 2: "TCP 主动" } as Record<number, string>)[mode] || device.value?.transport?.toUpperCase() || "—";
 });
 const channelPageCount = computed(() =>
-  Math.max(1, Math.ceil(channelTotal.value / CHANNEL_PAGE_SIZE))
+  Math.max(1, Math.ceil(channelResultTotal.value / CHANNEL_PAGE_SIZE))
 );
 const recentActivity = computed(() => {
   const rows = [...heartbeatHistory.value, ...registerHistory.value];
@@ -418,7 +423,13 @@ async function load() {
     const { data } = await api.device(id);
     device.value = data;
     basicForm.name = data.name || "";
+    channelRequestSequence += 1;
     channelPage.value = 1;
+    channelLoading.value = false;
+    channelQuery.value = "";
+    channelStatus.value = "all";
+    channelFilters.key = "";
+    channelFilters.status = "all";
     channelError.value = "";
     const [channelResponse, onlineChannelResponse, heartbeatResponse, registerResponse] = await Promise.allSettled([
       api.channels({ did: data.id, page: 1, size: CHANNEL_PAGE_SIZE }),
@@ -439,10 +450,11 @@ async function load() {
         "设备通道加载失败"
       );
     }
+    channelResultTotal.value = channelTotal.value;
     onlineChannelTotal.value =
       onlineChannelResponse.status === "fulfilled"
         ? onlineChannelResponse.value
-        : relatedChannels.value.filter((item) => item.is_online === true).length;
+        : null;
     heartbeatHistory.value = heartbeatResponse.status === "fulfilled" ? heartbeatResponse.value.data?.items || [] : [];
     registerHistory.value = registerResponse.status === "fulfilled" ? registerResponse.value.data?.items || [] : [];
     if (isGb.value) {
@@ -456,7 +468,7 @@ async function load() {
       a4.value = null;
       subscriptionReceipts.value = [];
       subscriptionError.value = "";
-      if (tab.value === "operations" || tab.value === "diagnostics") tab.value = "overview";
+      if (tab.value === "operations" || tab.value === "diagnostics") tab.value = "channels";
     }
   } catch (cause) {
     loadError.value = errorMessage(cause, "设备详情加载失败");
@@ -546,10 +558,22 @@ async function loadSubscriptionStates(id = device.value?.id) {
   }
 }
 
-async function changeChannelPage(next: number) {
-  if (!device.value) return;
+function applyChannelFilters(reset = false) {
+  if (loading.value) return;
+  if (reset) {
+    channelQuery.value = "";
+    channelStatus.value = "all";
+  }
+  channelFilters.key = channelQuery.value.trim();
+  channelFilters.status = channelStatus.value;
+  void changeChannelPage(1, true);
+}
+
+async function changeChannelPage(next: number, force = false) {
+  if (!device.value || loading.value) return;
   const target = Math.min(channelPageCount.value, Math.max(1, next));
-  if (target === channelPage.value && !channelError.value) return;
+  if (!force && target === channelPage.value && !channelError.value) return;
+  const sequence = ++channelRequestSequence;
   channelLoading.value = true;
   channelError.value = "";
   try {
@@ -557,16 +581,22 @@ async function changeChannelPage(next: number) {
       did: device.value.id,
       page: target,
       size: CHANNEL_PAGE_SIZE,
+      key: channelFilters.key || undefined,
+      is_online: channelFilters.status === "all" ? undefined : channelFilters.status === "online",
     });
+    if (sequence !== channelRequestSequence) return;
     relatedChannels.value = response.data?.items || [];
-    channelTotal.value = Number(
+    channelResultTotal.value = Number(
       response.data?.total ?? relatedChannels.value.length
     );
     channelPage.value = target;
   } catch (cause) {
+    if (sequence !== channelRequestSequence) return;
+    relatedChannels.value = [];
+    channelResultTotal.value = 0;
     channelError.value = errorMessage(cause, "设备通道加载失败");
   } finally {
-    channelLoading.value = false;
+    if (sequence === channelRequestSequence) channelLoading.value = false;
   }
 }
 
@@ -833,11 +863,11 @@ onMounted(load);
             :aria-label="`返回${listLabel}列表`"
             :title="`返回${listLabel}`"
           ><ArrowLeft /></RouterLink>
-          <span class="device-command-icon"><Camera /></span>
+
           <div>
             <div class="device-command-title">
               <h1>{{ device.name || "未命名设备" }}</h1>
-              <span class="status" :class="registrationState.tone">{{ registrationState.badge }}</span>
+              <span class="status" :class="device.is_online ? 'online' : 'offline'">{{ device.is_online ? "在线" : "离线" }}</span>
               <span class="protocol-tag blue">{{ protocolDisplay }}</span>
             </div>
             <div class="device-command-meta">
@@ -849,39 +879,25 @@ onMounted(load);
         </div>
         <div class="head-actions">
           <button class="btn" @click="openEdit"><SlidersHorizontal />编辑档案</button>
-          <button class="btn btn-danger" type="button" @click="deleteOpen = true"><Trash2 />删除设备</button>
+          <button class="device-row-action device-delete-action" type="button" aria-label="删除设备" title="删除设备" @click="deleteOpen = true"><Trash2 /></button>
         </div>
       </section>
 
-      <section class="device-pulse" aria-label="设备运行摘要">
-        <div class="device-pulse-lead" :class="{ offline: registrationState.tone === 'offline', warning: registrationState.tone === 'warning' }">
-          <span class="pulse-led" />
-          <div><strong>{{ registrationState.label }}</strong><small>{{ registrationState.note }}</small></div>
-        </div>
-        <div><small>通道在线</small><strong>{{ onlineChannelTotal }} / {{ channelTotal }}</strong><span>当前目录资源</span></div>
-        <div><small>最近心跳</small><strong>{{ relativeTime(device.keepalive_at) }}</strong><span>{{ heartbeatHistory.length ? "历史已记录" : "等待新记录" }}</span></div>
-        <div><small>流传输</small><strong>{{ streamMode }}</strong><span>{{ device.transport?.toUpperCase() || "SIP" }} 信令</span></div>
-        <div><small>注册有效期</small><strong>{{ device.expires || "—" }}<em v-if="device.expires">s</em></strong><span>{{ formatDate(device.registered_at) }}</span></div>
-      </section>
+      <div v-if="!device.is_online" class="warning-box device-registration-alert" role="status">
+        <ShieldAlert /><span><strong>{{ registrationState.label }}</strong> · {{ registrationState.note }}</span>
+      </div>
 
       <section class="device-workbench">
-        <aside class="device-workbench-nav">
-          <nav class="card detail-task-nav" aria-label="设备详情工作区">
-            <button v-for="item in tabs" :key="item.key" :class="{ active: tab === item.key }" @click="tab = item.key">
-              <component :is="item.icon" /><span><strong>{{ item.name }}</strong><small>{{ item.note }}</small></span><ChevronRight />
-            </button>
-          </nav>
-          <article class="card detail-side-facts">
-            <div><span>厂商</span><strong>{{ device.ext?.manufacturer || "—" }}</strong></div>
-            <div><span>型号</span><strong>{{ device.ext?.model || "—" }}</strong></div>
-            <div><span>接入地址</span><strong class="mono">{{ deviceAddress }}</strong></div>
-          </article>
-        </aside>
+        <nav class="resource-detail-nav" aria-label="设备详情分区">
+          <button v-for="item in tabs" :key="item.key" type="button" :class="{ active: tab === item.key }" :aria-current="tab === item.key ? 'page' : undefined" @click="tab = item.key">
+            <component :is="item.icon" aria-hidden="true" />{{ item.name }}<span v-if="item.key === 'channels'" class="resource-count">{{ channelTotal }}</span>
+          </button>
+        </nav>
 
         <div class="device-workspace-content">
           <template v-if="tab === 'overview'">
             <section class="detail-section-head">
-              <div><h2>运行概览</h2><p>核对设备注册档案、协议能力与最近信令活动。</p></div>
+              <div><h2>设备信息</h2><p>设备档案、协议能力与最近信令活动。</p></div>
             </section>
             <section class="detail-overview-grid">
               <article class="card detail-profile-card">
@@ -891,7 +907,7 @@ onMounted(load);
                   <div><dt>厂商 / 型号</dt><dd>{{ [device.ext?.manufacturer, device.ext?.model].filter(Boolean).join(" / ") || "—" }}</dd></div>
                   <div><dt>注册地址</dt><dd class="mono">{{ deviceAddress }}</dd></div>
                   <div><dt>流传输模式</dt><dd>{{ streamMode }}</dd></div>
-                  <div><dt>注册时间</dt><dd>{{ formatDate(device.registered_at) }}</dd></div>
+                  <div><dt>注册时间 / 有效期</dt><dd>{{ formatDate(device.registered_at) }} · {{ device.expires || "—" }} 秒</dd></div>
                   <div><dt>{{ isGb ? "协议版本" : "接入协议" }}</dt><dd>{{ isGb ? protocolVersion : protocolLabel }} <small v-if="isGb">{{ device.ext?.gb_version_source || "自动识别" }}</small></dd></div>
                 </dl>
               </article>
@@ -926,33 +942,39 @@ onMounted(load);
           </template>
 
           <template v-else-if="tab === 'channels'">
-            <section class="detail-section-head">
-              <div><h2>通道资源</h2><p>查看通道目录、在线状态并进入通道详情。</p></div>
-              <button v-if="isGb" class="btn" :disabled="actionLoading === '同步通道'" @click="runAction('同步通道', () => api.catalog(device!.id), true)">
-                <LoaderCircle v-if="actionLoading === '同步通道'" class="animate-spin" /><RefreshCcw v-else />同步通道
-              </button>
-            </section>
-            <section class="card detail-channel-list">
-              <div v-if="channelError" class="inline-resource-error" role="alert">
-                <span>{{ channelError }}</span>
-                <button type="button" class="btn btn-sm" @click="changeChannelPage(channelPage)">重试</button>
+            <section class="detail-channel-list" :aria-busy="channelLoading || loading">
+              <form class="toolbar device-channel-toolbar" @submit.prevent="applyChannelFilters()">
+                <div class="resource-channel-summary"><strong>全部通道 {{ channelTotal }}</strong><span>在线 {{ onlineChannelTotal ?? "—" }}</span></div>
+                <label class="field"><Search aria-hidden="true" /><input v-model="channelQuery" class="input" aria-label="搜索设备下全部通道" placeholder="通道名称 / 国标编码" /></label>
+                <select v-model="channelStatus" class="select" aria-label="通道在线状态" @change="applyChannelFilters()"><option value="all">全部状态</option><option value="online">在线</option><option value="offline">离线</option></select>
+                <button class="btn" type="submit"><Search />查询</button>
+                <button v-if="channelFilters.key || channelFilters.status !== 'all'" class="btn" type="button" @click="applyChannelFilters(true)">重置</button>
+                <span class="toolbar-spacer" />
+                <button v-if="isGb" class="btn" type="button" :disabled="loading || Boolean(actionLoading)" @click="runAction('同步通道', () => api.catalog(device!.id), true)"><LoaderCircle v-if="actionLoading === '同步通道'" class="animate-spin" /><RefreshCcw v-else />同步通道</button>
+              </form>
+              <div v-if="channelError" class="inline-resource-error" role="alert"><span>{{ channelError }}</span><button type="button" class="btn btn-sm" @click="changeChannelPage(channelPage, true)">重试</button></div>
+              <div v-else-if="channelLoading || loading" class="compact-empty" role="status"><LoaderCircle class="animate-spin" /><span>正在加载通道…</span></div>
+              <div v-else class="table-wrap">
+                <table class="data-table device-channel-table">
+                  <caption class="sr-only">设备通道资源，支持在全部通道中按名称、编码和在线状态筛选</caption>
+                  <thead><tr><th scope="col">通道名称</th><th scope="col">通道编码</th><th scope="col">状态</th><th scope="col">云台能力</th><th scope="col">AI 分析</th><th scope="col" class="resource-actions-cell">操作</th></tr></thead>
+                  <tbody>
+                    <tr v-for="channel in relatedChannels" :key="channel.id">
+                      <td data-label="通道名称"><RouterLink class="resource-name-link" :to="`/channels/${encodeURIComponent(channel.id)}`">{{ channel.name || "未命名通道" }}</RouterLink></td>
+                      <td data-label="通道编码" class="mono">{{ channel.channel_id || channel.id }}</td>
+                      <td data-label="状态"><span class="status" :class="channel.is_online ? 'online' : 'offline'">{{ channel.is_online ? "在线" : "离线" }}</span></td>
+                      <td data-label="云台能力">{{ channel.ptz_verified ? "已验证" : channel.ptz_capable ? "声明支持" : "不支持" }}</td>
+                      <td data-label="AI 分析"><span :class="{ 'text-green-700': channel.ext?.enabled_ai }">{{ channel.ext?.enabled_ai ? "已启用" : "未启用" }}</span></td>
+                      <td data-label="操作" class="resource-actions-cell"><div class="resource-inline-actions">
+                        <RouterLink class="device-row-action" :to="`/channels/${encodeURIComponent(channel.id)}`" :aria-label="`查看${channel.name || channel.channel_id || '通道'}`" title="进入通道 · 预览与控制"><ChevronRight aria-hidden="true" /></RouterLink>
+                      </div></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div v-if="!relatedChannels.length" class="compact-empty"><ListVideo /><span><strong>{{ channelFilters.key || channelFilters.status !== 'all' ? "没有符合条件的通道" : "暂无通道资源" }}</strong><small>{{ channelFilters.key || channelFilters.status !== 'all' ? "调整条件或重置筛选，查看全部通道。" : isGb ? "同步通道可从设备获取最新目录。" : "等待设备上报通道资源。" }}</small></span></div>
               </div>
-              <div v-if="channelLoading" class="compact-empty" aria-live="polite">
-                <LoaderCircle class="animate-spin" /><span><strong>正在加载通道</strong><small>请稍候…</small></span>
-              </div>
-              <div v-for="channel in relatedChannels" :key="channel.id" class="detail-channel-row">
-                <span class="channel-status-icon" :class="{ offline: !channel.is_online }"><Camera /></span>
-                <span class="channel-main"><strong>{{ channel.name || "未命名通道" }}</strong><small class="mono">{{ channel.channel_id || channel.id }}</small></span>
-                <span><small>状态</small><b class="status" :class="channel.is_online ? 'online' : 'offline'">{{ channel.is_online ? "在线" : "离线" }}</b></span>
-                <span><small>PTZ</small><b>{{ channel.ptz_verified ? "已验证" : channel.ptz_capable ? "声明支持" : "不支持" }}</b></span>
-                <span><small>AI</small><b>{{ channel.ext?.enabled_ai ? "已启用" : "未启用" }}</b></span>
-                <div class="device-row-actions channel-row-actions">
-                  <RouterLink class="device-row-detail" :to="`/channels/${encodeURIComponent(channel.id)}`">详情<ChevronRight /></RouterLink>
-                </div>
-              </div>
-              <div v-if="!channelLoading && !channelError && !relatedChannels.length" class="compact-empty"><ListVideo /><span><strong>暂无通道资源</strong><small>{{ isGb ? "执行同步通道，从设备获取最新通道。" : "当前设备尚未上报可管理的视频通道。" }}</small></span></div>
-              <div v-if="channelTotal" class="pagination">
-                <span>共 {{ channelTotal }} 路通道</span>
+              <div class="pagination">
+                <span aria-live="polite">{{ channelFilters.key || channelFilters.status !== 'all' ? '匹配' : '共' }} {{ channelError ? '—' : channelResultTotal }} 路通道</span>
                 <div v-if="channelPageCount > 1" class="pagination-actions" aria-label="设备通道分页">
                   <button type="button" class="page-btn" :disabled="channelPage === 1 || channelLoading" aria-label="上一页通道" @click="changeChannelPage(channelPage - 1)"><ChevronLeft /></button>
                   <span>第 {{ channelPage }} / {{ channelPageCount }} 页</span>
@@ -1017,8 +1039,9 @@ onMounted(load);
                   </div>
                 </section>
               </article>
-              <article class="card detail-basic-config">
-                <div class="card-head"><div><h3 class="card-title">BasicParam 基础参数</h3><p class="card-sub">配置将通过 SIP 下发至在线设备</p></div><span class="protocol-tag blue">2014+</span></div>
+              <details class="card detail-basic-config resource-disclosure">
+                <summary><span>BasicParam 基础参数</span><small>名称、注册及心跳参数</small></summary>
+                <div class="resource-disclosure-body">
                 <div class="operation-notice"><Info />{{ basicConfigAvailability.available ? "当前档案支持配置写入；设备返回响应后才表示生效。" : basicConfigAvailability.reason }}</div>
                 <form @submit.prevent="saveBasic">
                   <div class="form-grid">
@@ -1029,12 +1052,11 @@ onMounted(load);
                   </div>
                   <div class="detail-form-actions"><span>{{ basicConfigAvailability.reason }}</span><button class="btn btn-primary" :disabled="!device.is_online || !basicConfigAvailability.available || actionLoading === '下发 BasicParam'" :title="!basicConfigAvailability.available ? basicConfigAvailability.reason : !device.is_online ? '设备离线' : undefined"><LoaderCircle v-if="actionLoading === '下发 BasicParam'" class="animate-spin" /><UploadCloud v-else />下发配置</button></div>
                 </form>
-              </article>
-              <article class="card detail-basic-config detail-advanced-config">
-                <div class="card-head">
-                  <div><h3 class="card-title">DeviceConfig 高级配置</h3><p class="card-sub">覆盖当前协议档案允许的设备配置节点</p></div>
-                  <span class="protocol-tag blue">{{ selectedAdvancedConfig.versions.join(" / ") }}</span>
                 </div>
+              </details>
+              <details class="card detail-basic-config resource-disclosure">
+                <summary><span>DeviceConfig 高级配置</span><small>按协议能力下发配置</small></summary>
+                <div class="resource-disclosure-body">
                 <div class="operation-notice" :class="{ warning: !advancedConfigAvailability.available }"><Info />{{ advancedConfigAvailability.reason }}</div>
                 <form @submit.prevent="saveAdvancedConfig">
                   <label class="form-group full">
@@ -1055,7 +1077,8 @@ onMounted(load);
                     </button>
                   </div>
                 </form>
-              </article>
+                </div>
+              </details>
             </section>
           </template>
 
@@ -1079,7 +1102,7 @@ onMounted(load);
                 <div class="operation-row"><span><strong>A.4 扩展快照</strong><small>{{ a4Availability.reason }}</small></span><button class="btn btn-sm" :disabled="!a4Availability.available || actionLoading === '查询 A.4 快照'" :title="!a4Availability.available ? a4Availability.reason : undefined" @click="queryA4">查询</button></div>
               </article>
               <article class="card detail-raw-card">
-                <details open><summary><span><Settings2 /><strong>诊断快照</strong></span><small>后端实时诊断结果</small></summary><pre>{{ diagnostics ? JSON.stringify(diagnostics, null, 2) : "当前后端未返回诊断快照。" }}</pre></details>
+                <details><summary><span><Settings2 /><strong>诊断快照</strong></span><small>后端实时诊断结果</small></summary><pre>{{ diagnostics ? JSON.stringify(diagnostics, null, 2) : "当前后端未返回诊断快照。" }}</pre></details>
                 <details v-if="a4" open><summary><span><Download /><strong>A.4 查询结果</strong></span><small>最近一次查询</small></summary><pre>{{ JSON.stringify(a4, null, 2) }}</pre></details>
               </article>
             </section>

@@ -1,0 +1,16 @@
+{
+  "audience": "owl-test",
+  "method": "POST",
+  "path": "/openapi/v1/snapshot-tasks",
+  "raw_query": "q=A+B%20C&empty=&label=%E5%91%8A%E8%AD%A6",
+  "canonical_query": "empty=&label=%E5%91%8A%E8%AD%A6&q=A%2BB%20C",
+  "content_type": "application/json",
+  "timestamp": "1700000000",
+  "nonce": "AAECAwQFBgcICQoLDA0ODw",
+  "idempotency_key": "capture-001",
+  "body": "{\"channel_id\":\"c1\"}",
+  "body_sha256": "3e05b7720c1b7aa8bb6c6fcc3c5722e9ccc83f1da8b4faab01dd133edec2d3fd",
+  "secret_key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "canonical_request": "OWL-HMAC-SHA256\nowl-test\nPOST\n/openapi/v1/snapshot-tasks\nempty=&label=%E5%91%8A%E8%AD%A6&q=A%2BB%20C\napplication/json\n1700000000\nAAECAwQFBgcICQoLDA0ODw\ncapture-001\n3e05b7720c1b7aa8bb6c6fcc3c5722e9ccc83f1da8b4faab01dd133edec2d3fd",
+  "signature": "84369f2c363948b081bee18d71e745e5b99ed3d0d675a9aff7209b5fa7bd54f6"
+}

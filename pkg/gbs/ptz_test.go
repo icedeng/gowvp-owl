@@ -173,3 +173,19 @@ func TestNormalizeZoomSpeed(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenPlatformSafetyStopPackets(t *testing.T) {
+	for _, tc := range []struct {
+		action PTZAction
+		code   byte
+	}{{"fi_stop", 0x40}, {"cruise_stop", 0x88}, {"scan_stop", 0x89}, {PTZActionStop, 0}} {
+		raw, e := encodePTZCommand(&PTZInput{Action: tc.action, Group: 17, Speed: 80})
+		if e != nil {
+			t.Fatal(e)
+		}
+		cmd, e := parsePTZCommand(raw)
+		if e != nil || cmd[3] != tc.code || cmd[4] != 0 || cmd[5] != 0 || cmd[6] != 0 {
+			t.Fatal("unsafe stop command", tc.action, raw, e)
+		}
+	}
+}

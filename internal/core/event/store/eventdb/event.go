@@ -33,7 +33,8 @@ func (d Event) Get(ctx context.Context, model *event.Event, opts ...orm.QueryOpt
 
 // Create implements event.EventStorer.
 func (d Event) Create(ctx context.Context, model *event.Event) error {
-	return d.db.WithContext(ctx).Create(model).Error
+	// 宿主默认关闭GORM隐式事务；事件及开放平台outbox必须显式原子提交。
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return tx.Create(model).Error })
 }
 
 // CreateIdempotent 通过 source_key 唯一索引原子去重，并在重复时返回已有事件。
@@ -41,12 +42,16 @@ func (d Event) CreateIdempotent(ctx context.Context, model *event.Event) (bool, 
 	if model == nil || model.SourceKey == nil || *model.SourceKey == "" {
 		return false, errors.New("event source key is required")
 	}
-	result := d.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "source_key"}},
-		DoNothing: true,
-	}).Create(model)
-	if result.Error != nil {
-		return false, result.Error
+	var result *gorm.DB
+	err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result = tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "source_key"}},
+			DoNothing: true,
+		}).Create(model)
+		return result.Error
+	})
+	if err != nil {
+		return false, err
 	}
 	if result.RowsAffected > 0 {
 		return true, nil

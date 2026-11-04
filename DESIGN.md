@@ -2,41 +2,41 @@
 name: "国标视频管理平台 Admin UI"
 description: "浅色信号矩阵控制台，让设备、通道与媒体链路在固定槽位中快速可核验"
 colors:
-  ink: "#172033"
-  ink-strong: "#0d1526"
-  muted: "#647188"
-  muted-2: "#647188"
-  bg: "#f4f6f9"
+  ink: "#303133"
+  ink-strong: "#1f2329"
+  muted: "#606266"
+  muted-2: "#606266"
+  bg: "#f5f7fa"
   panel: "#ffffff"
-  panel-2: "#f8fafc"
-  panel-3: "#eef2f7"
-  line: "#dfe5ed"
-  line-strong: "#c8d1de"
-  blue: "#1768d4"
-  blue-hover: "#1057b6"
-  blue-soft: "#eaf2ff"
-  green: "#17875d"
-  green-soft: "#e7f6ef"
-  amber: "#b66a08"
-  amber-soft: "#fff4df"
-  red: "#c43c43"
-  red-soft: "#fcebed"
+  panel-2: "#fafbfc"
+  panel-3: "#f0f2f5"
+  line: "#e4e7ed"
+  line-strong: "#b8bec8"
+  blue: "#1668dc"
+  blue-hover: "#0958d9"
+  blue-soft: "#eaf3ff"
+  green: "#167c4b"
+  green-soft: "#edf8f2"
+  amber: "#996000"
+  amber-soft: "#fff7e6"
+  red: "#c9363e"
+  red-soft: "#fff1f0"
   violet: "#6a56bd"
 typography:
   display:
     fontFamily: "Noto Sans SC, sans-serif"
-    fontSize: "28px"
+    fontSize: "20px"
     fontWeight: 700
     lineHeight: 1.25
     letterSpacing: "-0.02em"
   headline:
     fontFamily: "Noto Sans SC, sans-serif"
-    fontSize: "19px"
+    fontSize: "16px"
     fontWeight: 700
     lineHeight: 1.35
   title:
     fontFamily: "Noto Sans SC, sans-serif"
-    fontSize: "16px"
+    fontSize: "14px"
     fontWeight: 700
     lineHeight: 1.45
   body:
@@ -65,14 +65,14 @@ typography:
     fontWeight: 400
     lineHeight: 1.55
 rounded:
-  sm: "8px"
-  control: "8px"
-  surface: "12px"
+  sm: "4px"
+  control: "4px"
+  surface: "6px"
   avatar: "7px"
   status: "999px"
 spacing:
   xs: "4px"
-  sm: "8px"
+  sm: "4px"
   md: "12px"
   lg: "14px"
   xl: "16px"
@@ -86,28 +86,28 @@ components:
     typography: "{typography.control}"
     rounded: "{rounded.control}"
     padding: "0 14px"
-    height: "38px"
+    height: "32px"
   button-secondary:
     backgroundColor: "{colors.panel}"
     textColor: "{colors.ink}"
     typography: "{typography.control}"
     rounded: "{rounded.control}"
     padding: "0 14px"
-    height: "38px"
+    height: "32px"
   input:
     backgroundColor: "{colors.panel}"
     textColor: "{colors.ink}"
     typography: "{typography.body}"
     rounded: "{rounded.control}"
     padding: "0 11px"
-    height: "36px"
+    height: "32px"
   nav-item-active:
     backgroundColor: "{colors.blue-soft}"
     textColor: "{colors.blue}"
     typography: "{typography.control}"
     rounded: "{rounded.control}"
     padding: "0 10px"
-    height: "40px"
+    height: "36px"
   status-online:
     backgroundColor: "{colors.green-soft}"
     textColor: "{colors.green}"
@@ -118,16 +118,16 @@ components:
     backgroundColor: "{colors.panel}"
     textColor: "{colors.ink}"
     rounded: "{rounded.surface}"
-    padding: "17px"
+    padding: "14px"
   protocol-tag:
     backgroundColor: "{colors.panel-3}"
     textColor: "#3c526e"
     typography: "{typography.mono}"
     rounded: "5px"
     padding: "3px 7px"
-  signal-strip:
-    backgroundColor: "#172944"
-    textColor: "#ffffff"
+  overview-summary:
+    backgroundColor: "{colors.panel}"
+    textColor: "{colors.ink}"
     rounded: "{rounded.surface}"
     padding: "15px 17px"
   matrix-slot:
@@ -139,17 +139,30 @@ components:
 
 # Design System: 国标视频管理平台 Admin UI
 
+## 紧凑管理端规范（2026-11-04）
+
+在原有浅色工作台上统一为国内管理后台常见的紧凑操作方式，参考 Element Plus 与 Ant Design Vue 的布局和组件习惯，沿用自研 Vue 组件。以下规则优先于下文旧版尺寸描述，具体实现以 `admin-ui/src/styles/design.css` 为准。
+
+- **配色与字体**：灰白工作区、白色内容面、蓝色主操作；优先使用系统中文字体，数字等宽排列，技术标识使用等宽字体，状态保留文字或图标提示。
+- **组件密度**：桌面按钮、输入和选择器 32px，行内按钮 28px；按钮/输入圆角 4px，面板圆角 6px，表格垂直内边距 8px。正文 14px、表格 13px、常规辅助信息 12px，避免通过缩小文字制造密度。
+- **布局层级**：顶栏 48px、侧栏 208px、图标侧栏 56px；页面标题 20px、面板标题 14px，页面边距 16–20px、面板内边距 14px。普通面板使用细边框，浮层保留阴影。
+- **导航**：“平台运维”默认收起，可手动展开/收起；从链接或搜索进入运维路由时展开当前分组。图标模式点击运维入口时展开导航与分组。
+- **响应式**：1100px 以下复杂双栏重排；900px 以下导航改为抽屉、国标设备表改为字段卡片；普通笔记本继续显示表格，宽数据在表格容器内滚动。640px 以下工具栏和表单单列，兼容安全区域与低高度横屏；触屏操作目标至少 44px，手机输入字号 16px。
+- **浮层**：弹窗按动态视口限制高度；远程资源下拉按触发器固定定位，空间不足时向上展开，随滚动、缩放和软键盘视口变化更新，避免滚动区域裁剪；Escape 先关闭下拉框。
+- **运行总览**：采用浅色状态摘要、四列业务数据、白底快捷入口和协议列表；取消深蓝态势条、实蓝标题块及媒体区多层底色。系统字体和等宽数字承载层级，蓝色聚焦主操作，状态色仅表达异常/在线；640px 以下数据重排两列。
+- **检查边界**：本次通过源码、Vue 类型、样式语法及核心配色对比度检查交付；页面效果和真实设备操作由人工验收。
+
 ## Overview
 
 **Creative North Star: "白天值守的信号矩阵"**
 
-国标视频管理平台是一张白天值守的信号矩阵：冷白工作面承载持续操作，雾灰分区拉开层级，工程蓝把“可以继续”变成清楚、可执行的动作。布局和内容都服务于快速扫描，拒绝深色大屏与指标卡片堆叠；深色只被限制在实时视频画面、运行态势条和登录页信号场中，作为媒体与链路信息的对比框，而不是全局主题。本系统采用 Operate 模式，方向种子为 `20e0e63b`。
+国标视频管理平台是一张白天值守的信号矩阵：冷白工作面承载持续操作，雾灰分区拉开层级，工程蓝把“可以继续”变成清楚、可执行的动作。布局和内容都服务于快速扫描，拒绝深色大屏与指标卡片堆叠；深色只被限制在实时视频画面和登录页信号场中，作为媒体与链路信息的对比框，而不是全局主题。本系统采用 Operate 模式，方向种子为 `20e0e63b`。
 
 广播设备控制台的语法来自状态灯、协议铭牌、矩阵槽位和细密表格。值守人员先辨认平台风险，再沿设备 → 通道 → 直播 → 事件 → 录像链路核验，最后进入协议和系统运维定位故障。数字使用窄体节奏，设备 ID、流 ID、地址和时间使用等宽字，中文任务说明保持稳定的无衬线阅读感。
 
 **Key Characteristics:**
 
-- 冷白工作面（`#f4f6f9`）与白色面板（`#ffffff`）组成低反射、长时间可读的 admin 控制台。
+- 冷白工作面（`#f5f7fa`）与白色面板（`#ffffff`）组成低反射、长时间可读的 admin 控制台。
 - 工程蓝负责主动作、导航选中和信息态；绿、琥珀、红分别表达健康、注意/异常、危险/离线。
 - 运行态势条先于协议矩阵、待关注对象和趋势内容出现，主动作直达实时监控。
 - 四版本能力、当前运行态和级联注册使用固定槽位、矩阵列与状态文本并列呈现，可快速区分实现证据和真实验收边界。
@@ -178,7 +191,7 @@ components:
 
 - **工作面雾灰** (`colors.bg`)：页面底色；**面板白** (`colors.panel`)：卡片、表单和浮层。
 - **近白分区** (`colors.panel-2`) 与 **雾灰分区** (`colors.panel-3`)：矩阵槽位、输入辅助底和分段控件。
-- **正文墨** (`colors.ink`) 与 **强调墨** (`colors.ink-strong`)：正文和标题；`colors.muted`、`colors.muted-2` 统一使用可达 4.5:1 的 `#647188`，说明、元数据与分组标签通过字重和间距区分层级。
+- **正文墨** (`colors.ink`) 与 **强调墨** (`colors.ink-strong`)：正文和标题；`colors.muted`、`colors.muted-2` 统一使用可达 4.5:1 的 `#606266`，说明、元数据与分组标签通过字重和间距区分层级。
 - **结构线** (`colors.line`) 与 **强调结构线** (`colors.line-strong`)：卡片、表格、输入和顶栏边界。
 
 **The State Color Rule.** 蓝色不表示异常；绿色只表示健康/完成，琥珀只表示注意/等待/异常，红色只表示危险/离线。每个状态同时提供文字或图形提示。
@@ -220,7 +233,7 @@ components:
 
 ## Elevation & Depth
 
-这是浅色、低反射的分层系统：白色面板靠 `1px` 冷灰边与轻微环境阴影从雾灰工作面浮起，普通卡片使用 `0 5px 18px rgba(34, 50, 78, .04)`，Toast 使用 `var(--shadow)`（`0 10px 28px rgba(25, 42, 70, .08)`）。实时视频工作区及态势条保留深海军蓝内嵌对比，深色仅用于让视频内容和白色数字更易辨识。
+这是浅色、低反射的分层系统：白色面板靠 `1px` 冷灰边与轻微环境阴影从雾灰工作面浮起，普通卡片使用 `0 5px 18px rgba(34, 50, 78, .04)`，Toast 使用 `var(--shadow)`（`0 10px 28px rgba(25, 42, 70, .08)`）。实时视频工作区保留深海军蓝内嵌对比，深色仅用于让视频内容和白色数字更易辨识。
 
 **The Tonal Layer Rule.** 先用 `panel` / `panel-2` / `panel-3` 和结构线表达层级，再使用轻阴影；不要用大面积黑底或高扩散阴影制造“大屏”效果。
 
@@ -248,7 +261,7 @@ components:
 
 - **Corner Style:** 主卡片 `12px`；视频工作区、表格卡和详情容器沿用同一圆角。
 - **Background / Border:** `colors.panel` 白底、`colors.line` 细边；矩阵槽位使用 `colors.panel-2`，能力项和辅助区使用 `colors.panel-2` / `panel-3`。
-- **Shadow Strategy:** 卡片为低强度环境阴影；深色只限视频内容和态势条，不扩散到普通面板。
+- **Shadow Strategy:** 卡片为低强度环境阴影；深色只限视频内容和登录页，不扩散到普通面板。
 - **Internal Padding:** 常规 `17px`，工具栏/表头 `15–16px`，紧凑行 `8–13px`。
 
 ### Inputs / Fields
@@ -269,7 +282,7 @@ components:
 
 ### Signal Strip
 
-全宽态势条是首屏的运行结论：深海军蓝 `#172944` 只承载“核心链路运行正常”和四个数字槽位，左侧引导单元使用更深的 `#11233e`，槽位之间用半透明白线分隔；绿点表示健康，琥珀点表示最新事件等注意信号。
+全宽浅色摘要先展示核心链路结论、媒体节点和运行时长，再以四列呈现设备、通道、事件、活跃流。白底和细分隔线建立结构，不使用深蓝背景；绿点表示链路健康，琥珀色表示需要关注的状态。快捷入口与媒体区使用同样的白色面板。
 
 ### Protocol Matrix & Video Wall
 
@@ -298,10 +311,26 @@ components:
 
 ### Don't:
 
-- **Don't** 把整个 admin UI 做成深色大屏、黑色石墨主题或指标卡片堆叠；深色只可作为实时视频/态势条的局部对比。
+- **Don't** 把整个 admin UI 做成深色大屏、黑色石墨主题或指标卡片堆叠；深色只可作为实时视频/登录页的局部对比。
 - **Don't** 引入纸张、登机牌、票据缺口、纤维纹理或虚线作为当前视觉世界的签名。
 - **Don't** 让工程蓝承担警告/危险语义，或在同一动作组放置多个同权重蓝色主按钮。
 - **Don't** 用窄体或等宽字体排版长段中文，也不要把协议铭牌做成装饰性徽章墙。
 - **Don't** 在窄屏简单压缩桌面表格；应按断点转单列、折行、横向滚动或收起次级信息。
 - **Don't** 把“代码完成”或一次接口读取成功写成“真实互通已验收”；待设备、上级平台、网络抓包或三级链路验证时必须显式标注。
 - **Don't** 用厚重渐变、玻璃拟态和高扩散阴影替代清晰的槽位、边线与状态文本。
+
+## 录像中心检索与回放（2026-11-04）
+
+Operate 模式：先发现已有录像，再筛选和回放。默认查询全部日期，按开始时间倒序；左侧通道筛选与完整月历，蓝点及无障碍文字标识有录像日期，月历随最新录像定位。可查看整月或单日，明确显示结果范围与总数，搜索明确限定已加载结果。右侧优先展示列表，合并起止时间及大小/时长；仅在单日单通道时展示紧凑时间轴。点击片段在页内原生 MP4 播放器回放，支持拖动和全屏，不打开接口页面；连续播放按实际片段顺序跳过空档。文件读取失败、无录像、查询失败分别展示恢复入口。900px 以下上下重排，640px 以下列表改字段卡片、月历触控目标44px。
+
+### 录像弹窗回放（2026-11-04）
+
+录像片段及当天连续播放统一在宽版 ModalDialog 回放，列表与筛选保持原位。弹窗宽度最多1040px并受视口约束，播放器保留进度、全屏与错误恢复；复用焦点约束、背景滚动锁定和关闭后焦点恢复，关闭/遮罩/Escape 均停止播放并作废迟到请求。此规则替代上一节的页内播放器布局。
+
+### 国标设备与通道资源（2026-11-04）
+
+Operate 模式延续紧凑中文后台习惯：设备列表按名称、在线状态、通道数、接入地址、厂商与最近活动排序；正常在线仅显示状态，异常补充注册原因。名称链接与带名称提示的箭头进入详情，不再放置重复“详情”文字。设备详情默认通道资源，移除深色摘要及重复侧栏，使用横向分区导航；通道采用统一表头，搜索和在线状态筛选覆盖设备全部通道并保留分页。设备信息、运维、诊断各自承载对应低频内容，基础/高级配置与原始快照按需展开。通道详情预览优先，录像入口前移；不支持云台时隐藏禁用方向盘，语音参数、播放地址及升级任务收纳为可键盘展开的分组。900px以下重排、640px以下通道表转字段卡片，窄屏分区导航横向滚动，触屏操作目标44px。协议能力门禁与设备控制语义保持，真实设备操作由人工验收。
+
+### 设备详情分区与通道表格修正（2026-11-04）
+
+设备详情各分区共享连续白色面板和外框，Tab紧贴当前内容，不再以灰色间隔分开。内容桌面内边距16px、窄屏12px，工具栏与表格保持一致的左右留白；通道名称和通道编码独立成列，桌面单行扫描，窄屏保留编码独立字段，查询框填满分配宽度。

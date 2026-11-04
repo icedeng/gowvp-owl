@@ -82,8 +82,8 @@ let loadSequence = 0;
 
 const detailTabs = [
   { id: "live" as const, label: "实时值守", description: "预览与控制", icon: Video },
-  { id: "ai" as const, label: "智能分析", description: "AI 与检测区域", icon: Cpu },
   { id: "recordings" as const, label: "录像与回看", description: "策略与录像目录", icon: Film },
+  { id: "ai" as const, label: "智能分析", description: "AI 与检测区域", icon: Cpu },
   { id: "gb" as const, label: "国标扩展", description: "查询、控制与任务", icon: Radio },
   { id: "technical" as const, label: "通道档案", description: "协议与流信息", icon: Link2 },
 ];
@@ -1030,18 +1030,17 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
           <button class="device-command-back" type="button" :aria-label="backLabel" :title="backLabel" @click="goBack">
             <ArrowLeft />
           </button>
-          <span class="device-command-icon"><Radio /></span>
+
           <div class="min-w-0">
             <div class="device-command-title">
               <h1>{{ channel.name || "未命名通道" }}</h1>
               <span class="status" :class="channel.is_online ? 'online' : 'offline'">{{ channel.is_online ? "在线" : "离线" }}</span>
-              <span class="status" :class="channel.is_playing ? 'online' : ''">{{ channel.is_playing ? "LIVE" : "空闲" }}</span>
-              <span class="protocol-tag blue">{{ protocol }}</span>
-              <span v-if="isGb" class="protocol-tag blue" :title="`有效版本：${gbVersionLabel}`">{{ gbVersionLabel }}</span>
-              <span v-if="isGb" class="protocol-tag"><Server />{{ boundMediaServerId }}</span>
+              <span v-if="channel.is_playing" class="status online">直播中</span>
+              <span class="resource-secondary">{{ protocol }}<span v-if="isGb" :title="`有效版本：${gbVersionLabel}`"> · {{ gbVersionLabel }}</span></span>
             </div>
             <div class="device-command-meta">
               <span class="mono">{{ channel.channel_id || channel.id }}</span>
+              <span v-if="isGb"><Server />媒体节点 {{ boundMediaServerId }}</span>
               <RouterLink v-if="channel.did" :to="`/devices/${encodeURIComponent(channel.did)}`">
                 <Camera />{{ device?.name || channel.device_id || "所属设备" }}
               </RouterLink>
@@ -1068,14 +1067,11 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
           @keydown="onTabKeydown($event, index)"
         >
           <span class="channel-tab-icon"><component :is="item.icon" /></span>
-          <span><strong>{{ item.label }}</strong><small>{{ item.description }}</small></span>
+          <span><strong>{{ item.label }}</strong></span>
         </button>
       </div>
 
       <section v-if="activeTab === 'live'" id="channel-panel-live" class="channel-detail-section" role="tabpanel" aria-labelledby="channel-tab-live" tabindex="0">
-        <div class="detail-section-head">
-          <div><h2>实时值守</h2><p>在同一工作区完成预览、云台控制、快照和语音对讲。</p></div>
-        </div>
         <div class="channel-live-grid">
           <article class="card video-workspace">
             <div class="video-tile active !border-0 !aspect-video">
@@ -1085,7 +1081,7 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
             <div class="video-foot channel-video-foot">
               <div class="stream-context">
                 <strong>{{ playAddresses.length ? "实时流已建立" : channel.is_online ? "尚未开始预览" : "通道离线，暂时无法预览" }}</strong>
-                <span>{{ playAddresses.length ? `${playAddresses.length} 个播放地址可用于联调测试` : "开始预览后将显示可用协议地址" }}</span>
+                <span>{{ play ? "可在播放器中调节音量或切换全屏" : "点击开始预览，查看实时画面" }}</span>
               </div>
               <div class="stream-actions">
                 <button class="stream-link stream-primary" type="button" :disabled="!channel.is_online || Boolean(actionLoading)" @click="startPlay"><LoaderCircle v-if="actionLoading === '开始预览'" class="animate-spin" /><Video v-else />{{ play ? "重新预览" : "开始预览" }}</button>
@@ -1094,28 +1090,27 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
             </div>
           </article>
 
-          <section class="card channel-stream-addresses" aria-labelledby="channel-stream-address-title">
-            <div class="card-head">
-              <div><h3 id="channel-stream-address-title" class="card-title">播放地址</h3><p class="card-sub">完整地址可复制到 VLC、FFplay 或接口测试工具</p></div>
-              <span class="protocol-tag blue">{{ playAddresses.length }} 个</span>
-            </div>
-            <div v-if="playAddresses.length" class="channel-stream-address-list">
-              <div v-for="item in playAddresses" :key="item.url" class="channel-stream-address-row">
-                <span class="protocol-tag">{{ item.label }}</span>
-                <code>{{ item.url }}</code>
-                <div class="channel-stream-address-actions">
-                  <a class="device-row-action" :href="item.url" target="_blank" rel="noreferrer" :aria-label="`打开 ${item.label} 地址`" title="打开测试"><ExternalLink /></a>
-                  <button class="device-row-action" type="button" :aria-label="`复制 ${item.label} 地址`" title="复制地址" @click="copyPlayAddress(item.url)"><Copy /></button>
+          <details class="card channel-stream-addresses resource-disclosure">
+            <summary><span><Link2 aria-hidden="true" />播放地址</span><small>{{ playAddresses.length ? `${playAddresses.length} 个地址 · 复制与联调` : '预览后可查看' }}</small></summary>
+            <div class="resource-disclosure-body">
+              <div v-if="playAddresses.length" class="channel-stream-address-list">
+                <div v-for="item in playAddresses" :key="item.url" class="channel-stream-address-row">
+                  <span class="protocol-tag">{{ item.label }}</span>
+                  <code>{{ item.url }}</code>
+                  <div class="channel-stream-address-actions">
+                    <a class="device-row-action" :href="item.url" target="_blank" rel="noreferrer" :aria-label="`打开 ${item.label} 地址`" title="打开测试"><ExternalLink /></a>
+                    <button class="device-row-action" type="button" :aria-label="`复制 ${item.label} 地址`" title="复制地址" @click="copyPlayAddress(item.url)"><Copy /></button>
+                  </div>
                 </div>
               </div>
+              <div v-else class="empty-state compact">开始预览后显示后端返回的完整播放地址。</div>
             </div>
-            <div v-else class="empty-state compact">开始预览后显示后端返回的完整播放地址。</div>
-          </section>
+          </details>
 
           <aside class="control-stack channel-control-stack">
             <article class="card control-panel">
               <div class="card-head"><div><h3 class="card-title">云台控制</h3><p class="card-sub">方向控制与能力探测</p></div><span class="status" :class="supportsPtz ? 'online' : ''">{{ supportsPtz ? "可用" : "不可用" }}</span></div>
-              <div class="ptz" :aria-disabled="Boolean(ptzDisabledReason)">
+              <div v-if="supportsPtz" class="ptz" :aria-disabled="Boolean(ptzDisabledReason)">
                 <button class="up" type="button" aria-label="云台向上" :disabled="Boolean(ptzDisabledReason) || Boolean(actionLoading)" @click="runAction('云台向上', () => api.ptz(channel!.id, { action: 'up', speed: 30, timeout: 1 }))"><ChevronUp /></button>
                 <button class="right" type="button" aria-label="云台向右" :disabled="Boolean(ptzDisabledReason) || Boolean(actionLoading)" @click="runAction('云台向右', () => api.ptz(channel!.id, { action: 'right', speed: 30, timeout: 1 }))"><ChevronUp /></button>
                 <button class="down" type="button" aria-label="云台向下" :disabled="Boolean(ptzDisabledReason) || Boolean(actionLoading)" @click="runAction('云台向下', () => api.ptz(channel!.id, { action: 'down', speed: 30, timeout: 1 }))"><ChevronUp /></button>
@@ -1126,26 +1121,27 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
               <button class="btn w-full" type="button" :disabled="!channel.is_online || Boolean(actionLoading)" @click="runAction('PTZ 能力探测', () => api.ptzProbe(channel!.id, { action: 'stop', speed: 30, timeout: 5 }))"><RefreshCw />重新探测</button>
             </article>
 
-            <article class="card control-panel">
-              <div class="card-head"><div><h3 class="card-title">快捷操作</h3><p class="card-sub">保持当前画面持续可见</p></div><Mic /></div>
-              <div class="form-grid">
-                <label class="form-group"><span class="form-label">语音模式</span><select v-model="voiceForm.mode" class="input plain w-full"><option value="talk_standard" :disabled="!supportsStandardVoiceTalk">标准对讲（2016/2022）</option><option value="talk" :disabled="!supportsVoiceTalk">兼容对讲（2011+ 单 INVITE）</option><option value="broadcast" :disabled="!supportsVoiceBroadcast">语音广播（2014+）</option></select></label>
-                <label class="form-group"><span class="form-label">音频源节点</span><select v-model="voiceForm.mediaServerId" class="select w-full" :disabled="resourceLoading.media"><option v-if="!mediaServers.some((item) => item.id === voiceForm.mediaServerId)" :value="voiceForm.mediaServerId">{{ voiceForm.mediaServerId }} · 当前绑定</option><option v-for="item in mediaServers" :key="item.id" :value="item.id">{{ item.id }} · {{ mediaServerStatusLabel(item.status) }}</option></select></label>
-                <label class="form-group"><span class="form-label">G.711 音频源流</span><input v-model.trim="voiceForm.sourceStream" class="input plain w-full" placeholder="例如 voice-microphone-1" /></label>
+            <details class="card control-panel resource-disclosure">
+              <summary><span><Mic aria-hidden="true" />语音对讲与广播</span></summary>
+              <div class="resource-disclosure-body">
+                <div class="form-grid">
+                  <label class="form-group"><span class="form-label">语音模式</span><select v-model="voiceForm.mode" class="input plain w-full"><option value="talk_standard" :disabled="!supportsStandardVoiceTalk">标准对讲（2016/2022）</option><option value="talk" :disabled="!supportsVoiceTalk">兼容对讲（2011+ 单 INVITE）</option><option value="broadcast" :disabled="!supportsVoiceBroadcast">语音广播（2014+）</option></select></label>
+                  <label class="form-group"><span class="form-label">音频源节点</span><select v-model="voiceForm.mediaServerId" class="select w-full" :disabled="resourceLoading.media"><option v-if="!mediaServers.some((item) => item.id === voiceForm.mediaServerId)" :value="voiceForm.mediaServerId">{{ voiceForm.mediaServerId }} · 当前绑定</option><option v-for="item in mediaServers" :key="item.id" :value="item.id">{{ item.id }} · {{ mediaServerStatusLabel(item.status) }}</option></select></label>
+                  <label class="form-group"><span class="form-label">G.711 音频源流</span><input v-model.trim="voiceForm.sourceStream" class="input plain w-full" placeholder="例如 voice-microphone-1" /></label>
+                </div>
+                <div class="channel-quick-actions">
+                  <button class="btn" type="button" :disabled="!canUseRealtime" @click="refreshSnapshot"><Aperture />刷新快照</button>
+                  <button class="btn" type="button" :disabled="Boolean(voiceDisabledReason) || Boolean(actionLoading)" @click="runAction(voiceForm.mode === 'broadcast' ? '开始广播' : '开始对讲', () => api.voiceStart(channel!.id, { mode: voiceForm.mode, media_server_id: voiceForm.mediaServerId, source_vhost: voiceForm.sourceVhost, source_app: voiceForm.sourceApp, source_stream: voiceForm.sourceStream }))"><Volume2 />{{ voiceForm.mode === "broadcast" ? "开始广播" : "开始对讲" }}</button>
+                  <button class="btn" type="button" :disabled="Boolean(voiceStopDisabledReason) || Boolean(actionLoading)" @click="runAction(voiceForm.mode === 'broadcast' ? '停止广播' : '停止对讲', () => api.voiceStop(channel!.id, { mode: voiceForm.mode }))"><VolumeX />{{ voiceForm.mode === "broadcast" ? "停止广播" : "停止对讲" }}</button>
+                </div>
+                <p class="capability-reason">{{ voiceDisabledReason || (voiceForm.mode === "talk_standard" ? `标准对讲会组合实时点播上行与 ${voiceForm.mediaServerId} 节点的语音广播下行` : voiceForm.mode === "talk" ? `兼容模式从 ${voiceForm.mediaServerId} 节点发送厂商单个双向 INVITE` : `音频源将由 ${voiceForm.mediaServerId} 节点转为国标 RTP 发送`) }}</p>
               </div>
-              <div class="channel-quick-actions">
-                <button class="btn" type="button" :disabled="!canUseRealtime" @click="refreshSnapshot"><Aperture />刷新快照</button>
-                <button class="btn" type="button" :disabled="Boolean(voiceDisabledReason) || Boolean(actionLoading)" @click="runAction(voiceForm.mode === 'broadcast' ? '开始广播' : '开始对讲', () => api.voiceStart(channel!.id, { mode: voiceForm.mode, media_server_id: voiceForm.mediaServerId, source_vhost: voiceForm.sourceVhost, source_app: voiceForm.sourceApp, source_stream: voiceForm.sourceStream }))"><Volume2 />{{ voiceForm.mode === "broadcast" ? "开始广播" : "开始对讲" }}</button>
-                <button class="btn" type="button" :disabled="Boolean(voiceStopDisabledReason) || Boolean(actionLoading)" @click="runAction(voiceForm.mode === 'broadcast' ? '停止广播' : '停止对讲', () => api.voiceStop(channel!.id, { mode: voiceForm.mode }))"><VolumeX />{{ voiceForm.mode === "broadcast" ? "停止广播" : "停止对讲" }}</button>
-              </div>
-              <p class="capability-reason">{{ voiceDisabledReason || (voiceForm.mode === "talk_standard" ? `标准对讲会组合实时点播上行与 ${voiceForm.mediaServerId} 节点的语音广播下行` : voiceForm.mode === "talk" ? `兼容模式从 ${voiceForm.mediaServerId} 节点发送厂商单个双向 INVITE` : `音频源将由 ${voiceForm.mediaServerId} 节点转为国标 RTP 发送`) }}</p>
-            </article>
+            </details>
           </aside>
         </div>
       </section>
 
       <section v-else-if="activeTab === 'ai'" id="channel-panel-ai" class="channel-detail-section" role="tabpanel" aria-labelledby="channel-tab-ai" tabindex="0">
-        <div class="detail-section-head"><div><h2>智能分析</h2><p>管理通道 AI 状态与实际生效的检测区域。</p></div></div>
         <div class="channel-ai-grid">
           <article class="card form-section channel-ai-summary">
             <div class="card-head"><div><h3 class="card-title">AI 分析状态</h3><p class="card-sub">启用前请确认已配置检测区域</p></div><span class="status" :class="aiEnabled ? 'online' : ''">{{ aiEnabled ? "运行中" : "未启用" }}</span></div>
@@ -1299,27 +1295,31 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
             <details v-if="gbControlResult" class="detail-raw-card mt-4"><summary>查看控制响应</summary><pre>{{ JSON.stringify(gbControlResult, null, 2) }}</pre></details>
           </article>
 
-          <article class="card form-section">
-            <div class="card-head"><div><h3 class="card-title">2022 抓拍任务</h3><p class="card-sub">区分设备上传与实时流回退结果</p></div><Aperture /></div>
-            <p class="capability-reason">{{ supportsDeviceSnapshot ? "设备档案支持 9.14 图像抓拍" : "当前档案不支持设备上传；刷新快照可能使用实时流回退" }}</p>
-            <button class="btn" type="button" :disabled="!isGb || !channel.is_online || Boolean(actionLoading)" @click="refreshSnapshot"><Aperture />发起抓拍</button>
-            <div v-if="snapshotSessionId" class="read-only mt-4"><strong class="mono">{{ snapshotSessionId }}</strong><small>设备抓拍会话</small><button class="btn btn-sm" type="button" @click="loadSnapshotState">刷新状态</button></div>
-            <details v-if="snapshotState" class="detail-raw-card mt-4"><summary>查看抓拍状态</summary><pre>{{ JSON.stringify(snapshotState, null, 2) }}</pre></details>
-          </article>
+          <details class="card form-section resource-disclosure">
+            <summary><span>2022 抓拍任务</span><small>设备上传与实时流回退</small></summary>
+            <div class="resource-disclosure-body">
+              <p class="capability-reason">{{ supportsDeviceSnapshot ? "设备档案支持 9.14 图像抓拍" : "当前档案不支持设备上传；刷新快照可能使用实时流回退" }}</p>
+              <button class="btn" type="button" :disabled="!isGb || !channel.is_online || Boolean(actionLoading)" @click="refreshSnapshot"><Aperture />发起抓拍</button>
+              <div v-if="snapshotSessionId" class="read-only mt-4"><strong class="mono">{{ snapshotSessionId }}</strong><small>设备抓拍会话</small><button class="btn btn-sm" type="button" @click="loadSnapshotState">刷新状态</button></div>
+              <details v-if="snapshotState" class="detail-raw-card mt-4"><summary>查看抓拍状态</summary><pre>{{ JSON.stringify(snapshotState, null, 2) }}</pre></details>
+            </div>
+          </details>
 
-          <article class="card form-section">
-            <div class="card-head"><div><h3 class="card-title">2022 设备升级</h3><p class="card-sub">accepted 仅表示受理，需查询最终通知</p></div><FileUp /></div>
-            <div class="form-grid"><label class="form-group"><span class="form-label">固件版本</span><input v-model="upgradeForm.firmware" class="input plain w-full" :disabled="!supportsUpgrade" /></label><label class="form-group"><span class="form-label">厂商</span><input v-model="upgradeForm.manufacturer" class="input plain w-full" :disabled="!supportsUpgrade" /></label><label class="form-group full"><span class="form-label">固件下载地址</span><input v-model="upgradeForm.fileUrl" class="input plain w-full" :disabled="!supportsUpgrade" /></label><label class="form-group full"><span class="form-label">会话 ID（可选）</span><input v-model.trim="upgradeForm.sessionId" class="input plain w-full mono" :disabled="!supportsUpgrade" /></label></div>
-            <p class="capability-reason">{{ supportsUpgrade ? "当前设备档案支持升级流程" : "仅 GB/T 28181-2022 且声明 upgrade 能力的设备可用" }}</p>
-            <div class="channel-quick-actions"><button class="btn btn-primary" type="button" :disabled="!supportsUpgrade || !channel.is_online || Boolean(actionLoading)" @click="startUpgrade"><LoaderCircle v-if="actionLoading === '设备升级'" class="animate-spin" /><FileUp v-else />发起升级</button><button class="btn" type="button" :disabled="!upgradeSessionId || Boolean(actionLoading)" @click="loadUpgradeState"><RefreshCw />刷新状态</button></div>
-            <div v-if="upgradeSessionId" class="read-only mt-4"><strong class="mono">{{ upgradeSessionId }}</strong><small>升级会话</small></div>
-            <details v-if="upgradeState" class="detail-raw-card mt-4"><summary>查看升级状态</summary><pre>{{ JSON.stringify(upgradeState, null, 2) }}</pre></details>
-          </article>
+          <details class="card form-section resource-disclosure">
+            <summary><span>2022 设备升级</span><small>固件下发与任务状态</small></summary>
+            <div class="resource-disclosure-body">
+              <p class="card-sub mb-4">accepted 仅表示任务已受理，需刷新状态查询最终通知。</p>
+              <div class="form-grid"><label class="form-group"><span class="form-label">固件版本</span><input v-model="upgradeForm.firmware" class="input plain w-full" :disabled="!supportsUpgrade" /></label><label class="form-group"><span class="form-label">厂商</span><input v-model="upgradeForm.manufacturer" class="input plain w-full" :disabled="!supportsUpgrade" /></label><label class="form-group full"><span class="form-label">固件下载地址</span><input v-model="upgradeForm.fileUrl" class="input plain w-full" :disabled="!supportsUpgrade" /></label><label class="form-group full"><span class="form-label">会话 ID（可选）</span><input v-model.trim="upgradeForm.sessionId" class="input plain w-full mono" :disabled="!supportsUpgrade" /></label></div>
+              <p class="capability-reason">{{ supportsUpgrade ? "当前设备档案支持升级流程" : "仅 GB/T 28181-2022 且声明 upgrade 能力的设备可用" }}</p>
+              <div class="channel-quick-actions"><button class="btn btn-primary" type="button" :disabled="!supportsUpgrade || !channel.is_online || Boolean(actionLoading)" @click="startUpgrade"><LoaderCircle v-if="actionLoading === '设备升级'" class="animate-spin" /><FileUp v-else />发起升级</button><button class="btn" type="button" :disabled="!upgradeSessionId || Boolean(actionLoading)" @click="loadUpgradeState"><RefreshCw />刷新状态</button></div>
+              <div v-if="upgradeSessionId" class="read-only mt-4"><strong class="mono">{{ upgradeSessionId }}</strong><small>升级会话</small></div>
+              <details v-if="upgradeState" class="detail-raw-card mt-4"><summary>查看升级状态</summary><pre>{{ JSON.stringify(upgradeState, null, 2) }}</pre></details>
+            </div>
+          </details>
         </div>
       </section>
 
       <section v-else id="channel-panel-technical" class="channel-detail-section" role="tabpanel" aria-labelledby="channel-tab-technical" tabindex="0">
-        <div class="detail-section-head"><div><h2>通道档案</h2><p>用于运维核验的协议、归属和媒体流标识。</p></div></div>
         <div class="channel-technical-layout">
           <article class="card card-pad"><dl class="channel-technical-grid"><div><dt>协议</dt><dd>{{ protocol }}</dd></div><div v-if="isGb"><dt>有效版本</dt><dd><span class="protocol-tag blue">{{ gbVersionLabel }}</span></dd></div><div><dt>通道编号</dt><dd class="mono">{{ channel.channel_id || channel.id }}</dd></div><div><dt>所属设备</dt><dd>{{ device?.name || channel.device_id || "—" }}</dd></div><div><dt>设备 ID</dt><dd class="mono">{{ channel.did || channel.device_id || "—" }}</dd></div><div><dt>应用 / 流</dt><dd class="mono">{{ channel.app || "—" }} / {{ channel.stream || "—" }}</dd></div><div><dt>媒体节点</dt><dd><span class="status" :class="boundMediaServerState.tone">{{ boundMediaServerId }} · {{ boundMediaServerState.label }}</span></dd></div><div><dt>更新时间</dt><dd>{{ formatDate(channel.updated_at) }}</dd></div></dl><details v-if="playAddresses.length" class="detail-raw-card mt-4"><summary><Link2 />查看全部播放地址（{{ playAddresses.length }}）</summary><div class="technical-link-list"><a v-for="item in playAddresses" :key="item.url" :href="item.url" target="_blank" rel="noreferrer"><strong>{{ item.label }}</strong><span class="mono">{{ item.url }}</span></a></div></details></article>
 

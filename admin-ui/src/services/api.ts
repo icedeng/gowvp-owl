@@ -1,4 +1,5 @@
 import { http } from './http'
+import { recordingMediaPath } from '../utils/recordings'
 import type {
   ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord,
   ApiChannel as Channel, DeviceExt, GbMetrics, GBHistoryDownloadState, GBHistoryStartOutput, GBOperationOutput, GBSnapshotState, GBSubscriptionState, GBUpgradeOutput, GBUpgradeState, HealthInfo, MediaServer, MonthlyStats,
@@ -142,6 +143,8 @@ export const api = {
   timeline: (params?: ListParams) => http.get<{ items?: TimelineRange[] }>('/recordings/timeline', { params }),
   monthly: (params?: ListParams) => http.get<MonthlyStats>('/recordings/monthly', { params }),
   downloadRecording: (id: number | string) => http.get<Blob>(`/recordings/${id}/download`, { responseType: 'blob', timeout: 0 }),
+  recordingMediaUrl: (path: string) => withToken(apiUrl(recordingMediaPath(path))),
+  checkRecordingMedia: (path: string) => http.get<ArrayBuffer>(recordingMediaPath(path), { headers: { Range: 'bytes=0-0' }, responseType: 'arraybuffer' }),
   recordingDownloadUrl: (id: number | string) => withToken(apiUrl(`/recordings/${id}/download`)),
   hlsPlaylist: (cid: string, startMs: number, endMs: number) => apiUrl(`/recordings/channels/${encodeURIComponent(cid)}/index.m3u8?start_ms=${startMs}&end_ms=${endMs}`),
 

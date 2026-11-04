@@ -7,8 +7,9 @@
   "scripts": {
     "dev": "vite",
     "test": "node --test",
-    "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "build": "node scripts/check-open-platform-docs.mjs && vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "docs:generate": "cd .. && go run ./tools/openplatform-docs"
   },
   "dependencies": {
     "@fontsource/barlow-condensed": "^5.3.0",

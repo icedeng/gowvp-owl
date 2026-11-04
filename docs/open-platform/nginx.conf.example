@@ -1,0 +1,27 @@
+# 三方入口专用域名；仅示意，证书路径及上游按实际部署配置。
+server {
+    listen 443 ssl;
+    server_name open.example.com;
+    ssl_certificate /run/secrets/open.crt;
+    ssl_certificate_key /run/secrets/open.key;
+    client_max_body_size 1m;
+    # 避免ticket和签名进入日志，使用无query/无header的自定义日志格式或关闭该入口访问日志。
+    access_log off;
+    location ^~ /openapi/v1/ {
+        proxy_pass http://127.0.0.1:15123;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 65s;
+    }
+    location ^~ /openmedia/v1/ {
+        proxy_pass http://127.0.0.1:15123;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 65s;
+    }
+    location / { return 404; }
+}

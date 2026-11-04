@@ -143,6 +143,18 @@ func (g *GB28181API) validateCascadeDeviceControlOverrides(deviceID string, requ
 }
 
 func (g *GB28181API) sendCascadeDeviceControlDownstream(ctx context.Context, channel *ipc.Channel, request *deviceControlA23Request) (string, error) {
+	if channel != nil && request != nil && (request.PTZCmd != "" || request.PTZPreciseCtrl != nil || request.DragZoomIn != nil || request.DragZoomOut != nil || request.HomePosition != nil || request.TargetTrack != "") {
+		var out string
+		err := ipc.CoordinatePTZ(ctx, channel.ID, func(c context.Context) error {
+			var e error
+			out, e = g.sendCascadeDeviceControlRaw(c, channel, request)
+			return e
+		})
+		return out, err
+	}
+	return g.sendCascadeDeviceControlRaw(ctx, channel, request)
+}
+func (g *GB28181API) sendCascadeDeviceControlRaw(ctx context.Context, channel *ipc.Channel, request *deviceControlA23Request) (string, error) {
 	if g == nil || g.svr == nil || g.svr.memoryStorer == nil || channel == nil || request == nil {
 		return "ERROR", fmt.Errorf("cascade DeviceControl target is unavailable")
 	}

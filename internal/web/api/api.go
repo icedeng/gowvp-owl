@@ -56,6 +56,7 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 		web.Metrics(),
 		web.Logger(web.IgnorePrefix(staticPrefix),
 			web.IgnoreMethod(http.MethodOptions),
+			web.IgnorePrefix("/openapi/"), web.IgnorePrefix("/openmedia/"), web.IgnorePrefix("/admin/open-platform"),
 			web.IgnorePrefix("/events/image"),
 			web.IgnorePrefix("/recordings/channels"), // m3u8 播放列表
 			web.IgnorePrefix("/static/recordings"),   // 录像文件
@@ -63,6 +64,7 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 		web.LoggerWithBody(web.DefaultBodyLimit,
 			web.IgnoreBool(uc.Conf.Debug),
 			web.IgnoreMethod(http.MethodOptions),
+			web.IgnorePrefix("/openapi/"), web.IgnorePrefix("/openmedia/"), web.IgnorePrefix("/admin/open-platform"),
 			web.IgnorePrefix("/events/image"),
 			web.IgnorePrefix("/recordings/channels"),
 			web.IgnorePrefix("/static/recordings"),
@@ -70,7 +72,7 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 	)
 	go web.CountGoroutines(10*time.Minute, 20)
 
-	r.Use(cors.New(cors.Config{
+	corsHandler := cors.New(cors.Config{
 		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
 		AllowHeaders: []string{
 			"Accept", "Content-Length", "Content-Type", "Range", "Accept-Language",
@@ -87,7 +89,34 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 		AllowOriginFunc: func(_ string) bool {
 			return true
 		},
-	}))
+	})
+	r.Use(func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/openapi/") || strings.HasPrefix(path, "/admin/open-platform") {
+			if c.GetHeader("Origin") != "" {
+				origin, err := url.Parse(c.GetHeader("Origin"))
+				if err != nil || origin.Host != c.Request.Host {
+					c.AbortWithStatusJSON(403, gin.H{"code": "ORIGIN_DENIED", "message": "开放接口仅支持同源管理或服务端调用"})
+					return
+				}
+			}
+			c.Next()
+			return
+		}
+		if strings.HasPrefix(path, "/openmedia/") {
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Header("Access-Control-Allow-Methods", "GET, OPTIONS")
+			c.Header("Access-Control-Allow-Headers", "Range, Authorization")
+			c.Header("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges")
+			if c.Request.Method == "OPTIONS" {
+				c.AbortWithStatus(204)
+				return
+			}
+			c.Next()
+			return
+		}
+		corsHandler(c)
+	})
 
 	const staticDir = "www"
 	admin := r.Group(staticPrefix, gzip.Gzip(gzip.DefaultCompression))

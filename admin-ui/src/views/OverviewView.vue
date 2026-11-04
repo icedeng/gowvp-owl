@@ -386,65 +386,63 @@ onMounted(load);
       <ShieldAlert /><span>{{ loadError }}</span
       ><button class="btn btn-sm ml-auto" @click="load">重试</button>
     </div>
-    <section class="signal-strip" aria-label="平台核心运行态势">
-      <div class="signal-intro">
-        <div class="signal-kicker">
-          <i :class="{ warn: !coreConnected }" />平台态势
-        </div>
-        <h2>{{ coreHeadline }}</h2>
+    <section class="overview-summary" aria-label="平台核心运行态势">
+      <div class="overview-health">
+        <h2><i class="slot-led" :class="!coreConnected || (mediaServers.length && !activeMedia) ? 'warn' : ''" />{{ coreHeadline }}</h2>
         <p>
-          {{ activeMedia }} / {{ mediaServers.length }} 个媒体节点在线 ·
-          服务运行 {{ formatUptime(health.start_at) }}
+          <span>{{ activeMedia }} / {{ mediaServers.length }} 个媒体节点在线</span>
+          <span>服务运行 {{ formatUptime(health.start_at) }}</span>
         </p>
       </div>
-      <div
-        class="signal-cell"
-        :class="{ warn: totalDevices && onlineDevices < totalDevices }"
-      >
-        <small>在线设备</small
-        ><strong>{{ onlineDevices }} / {{ totalDevices }}</strong
-        ><span
-          ><i />{{
-            totalDevices
-              ? ((onlineDevices / totalDevices) * 100).toFixed(1)
-              : 0
-          }}% 在线</span
+      <div class="overview-stat-grid">
+        <div
+          class="overview-stat"
+          :class="{ warn: totalDevices && onlineDevices < totalDevices }"
         >
-      </div>
-      <div
-        class="signal-cell"
-        :class="{ warn: totalChannels && onlineChannels < totalChannels }"
-      >
-        <small>在线通道</small
-        ><strong>{{ onlineChannels }} / {{ totalChannels }}</strong
-        ><span
-          ><i />{{
-            totalChannels
-              ? ((onlineChannels / totalChannels) * 100).toFixed(1)
-              : 0
-          }}% 可用</span
+          <small>在线设备</small
+          ><strong>{{ onlineDevices }} / {{ totalDevices }}</strong
+          ><span
+            >{{
+              totalDevices
+                ? ((onlineDevices / totalDevices) * 100).toFixed(1)
+                : 0
+            }}% 在线</span
+          >
+        </div>
+        <div
+          class="overview-stat"
+          :class="{ warn: totalChannels && onlineChannels < totalChannels }"
         >
-      </div>
-      <div class="signal-cell" :class="{ warn: eventsTotal }">
-        <small>24 小时事件</small><strong>{{ eventsTotal }}</strong
-        ><span
-          ><i />最近一条
-          {{
-            events[0]
-              ? formatDate(events[0].started_at || events[0].created_at)
-              : "暂无"
-          }}</span
-        >
-      </div>
-      <div class="signal-cell">
-        <small>活跃媒体流</small><strong>{{ activeStreams }}</strong
-        ><span><i />当前播放中</span>
+          <small>在线通道</small
+          ><strong>{{ onlineChannels }} / {{ totalChannels }}</strong
+          ><span
+            >{{
+              totalChannels
+                ? ((onlineChannels / totalChannels) * 100).toFixed(1)
+                : 0
+            }}% 可用</span
+          >
+        </div>
+        <div class="overview-stat" :class="{ warn: eventsTotal }">
+          <small>24 小时事件</small><strong>{{ eventsTotal }}</strong
+          ><span
+            >最近一条
+            {{
+              events[0]
+                ? formatDate(events[0].started_at || events[0].created_at)
+                : "暂无"
+            }}</span
+          >
+        </div>
+        <div class="overview-stat">
+          <small>活跃媒体流</small><strong>{{ activeStreams }}</strong
+          ><span>当前播放中</span>
+        </div>
       </div>
     </section>
     <section class="overview-actions" aria-label="快捷入口">
       <div class="overview-actions-intro">
-        <strong>快捷入口</strong>
-        <span>沿信号链路进入高频任务</span>
+        <h2>快捷入口</h2>
       </div>
       <RouterLink class="overview-action" to="/devices">
         <span class="overview-action-icon"><Camera /></span>
@@ -494,7 +492,7 @@ onMounted(load);
             "
             ><span class="protocol-lane-name"
               ><i class="slot-led" :class="item.state" />
-              <span class="protocol-tag blue">{{ item.protocol }}</span></span
+              <span class="overview-protocol-name">{{ item.protocol }}</span></span
             ><strong>{{ item.value }}</strong
             ><small>{{ item.note }}</small><ArrowRight /></RouterLink
           >
@@ -523,7 +521,7 @@ onMounted(load);
         <dl class="service-stat-grid">
           <div>
             <dt>服务版本</dt>
-            <dd>{{ health.version || "—" }}</dd>
+            <dd :title="health.version">{{ health.version || "—" }}</dd>
           </div>
           <div>
             <dt>Git 提交</dt>

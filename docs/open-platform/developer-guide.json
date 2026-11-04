@@ -1,0 +1,758 @@
+{
+  "sections": [
+    {
+      "id": "start",
+      "title": "快速开始",
+      "intro": "从管理员分配凭据到读取设备、播放视频和接收告警。此页面可直接分享给接入开发者，无需访问源码仓库。",
+      "blocks": [
+        {
+          "title": "接入前准备",
+          "steps": [
+            "由平台管理员创建应用，授予所需 Scope、全部或指定设备、来源 IP 和额度；应用启用后方可调用。",
+            "接入方从管理员安全领取 AK/SK。SK 只在创建时展示一次，仅保存在接入系统的服务端，不放入浏览器、H5 或 App。",
+            "使用本页显示的开放地址和 Audience；下载 Go / Python / Java 示例，先运行 --vector 自检，再调用设备列表。",
+            "浏览器播放器通过自己的业务后端申请短期媒体票据；图片、视频 URL 不携带 SK，也不使用管理员 JWT。"
+          ]
+        },
+        {
+          "title": "三类身份",
+          "columns": [
+            "入口",
+            "认证",
+            "用途"
+          ],
+          "rows": [
+            [
+              "/openapi/v1/*",
+              "AK/SK 请求签名",
+              "三方服务端业务调用"
+            ],
+            [
+              "/openmedia/v1/*",
+              "短期票据（query ticket 或 Owl-Media 头）",
+              "播放器、图片或录像读取"
+            ],
+            [
+              "/admin/open-platform/*",
+              "现有管理员 Bearer JWT",
+              "由平台管理员管理应用、授权、密钥和审核"
+            ],
+            [
+              "本开发文档及 /open-platform/docs/config",
+              "公开只读，无需登录",
+              "文档、示例及公开接入元信息"
+            ]
+          ]
+        },
+        {
+          "title": "设备编码、通道编码与内部 ID",
+          "paragraphs": [
+            "所有需要定位设备或通道的业务均支持设备完整编码与完整通道编码。device_code 对应设备对象 device_id；channel_code 对应通道对象 channel_id，使用完整字符串保留前导零，不是录像机 1、2、3 数字序号。优先使用文档前部“按编码”接口；“内部 ID 兼容”接口继续服务旧客户端。",
+            "查询设备：GET /openapi/v1/devices/by-code/{device_code}。列出设备通道：GET 同一路径 /channels。查询指定通道：GET /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}。",
+            "同一设备编码路径或设备+通道编码路径后追加 /recordings、/events、/live-sessions、/snapshot-tasks、/ptz-commands，即可按编码查询录像、告警、播放会话、抓拍任务、云台命令列表；不需要先换取内部 ID。列表支持 size/cursor 和 start/end（记录默认最近24小时、最大7天），会话/任务/命令还支持 state。设备级告警包含设备自身与通道告警，通道级只含该通道告警。",
+            "原通道、录像、告警、会话、任务、命令列表也统一支持 ?device_code={device_code}&channel_code={channel_code}。仅传设备编码列出设备下结果；仅传通道编码匹配授权设备下的同码通道。所有筛选取交集，未知/未授权编码得到空列表；编码路径则严格返回404。编码路径不再传资源筛选参数，避免定位冲突。",
+            "控制云台：先 GET 编码通道路径 /ptz/capabilities，再 POST /ptz，body 如 {\"action\":\"left\",\"speed\":30,\"duration\":1}。播放：POST 编码通道路径 /live-sessions，body {\"protocol\":\"hls\"}。抓拍：POST 编码通道路径 /snapshot-tasks，body {}。所有动作仍须AK/SK签名与Idempotency-Key。",
+            "原 POST /openapi/v1/live-sessions 和 /snapshot-tasks 也接受 JSON 中的 device_code + channel_code，播放另传 protocol。不再需要内部 channel_id；两种定位字段不能混用，也不能只传一个编码。",
+            "告警订阅 POST/PATCH /subscriptions 使用 channel_codes:[{\"device_code\":\"设备完整编码\",\"channel_code\":\"完整通道编码\"}] 指定通道；与 channel_ids 互斥，空数组表示全部授权资源，不能传 null。创建/修改时转换为内部通道绑定，返回 channel_ids 为内部 ID；设备同码重建不会继承该绑定。",
+            "录像ID、事件ID、会话ID、任务ID、命令ID和订阅ID是具体业务结果的标识，不是设备或通道内部ID。同一通道可有多份录像、抓拍和命令，不能仅凭编码推断要下载哪份、停止哪条命令。先按编码查列表，再使用结果id获取详情、申请票据、停止命令或释放会话。",
+            "Scope、设备授权、来源和额度保持有效。能力/控制/记录入口只要求对应Scope，不另要求device:read/channel:read。编码路径的未知和未授权统一404；同设备重复通道编码返回409，不任选目标。all授权包含未来新增设备；selected_devices绑定原内部设备ID，同编码删除重建须重新授权。"
+          ]
+        },
+        {
+          "title": "按编码调用示例",
+          "language": "http",
+          "code": "GET /openapi/v1/devices/by-code/50010700001110000001/channels\nGET /openapi/v1/devices/by-code/50010700001110000001/channels/50010700001320000011/recordings?size=50\nGET /openapi/v1/events?device_code=50010700001110000001&channel_code=50010700001320000011\nGET /openapi/v1/devices/by-code/50010700001110000001/channels/50010700001320000011/snapshot-tasks?state=succeeded\n\nPOST /openapi/v1/live-sessions\n{\"device_code\":\"50010700001110000001\",\"channel_code\":\"50010700001320000011\",\"protocol\":\"hls\"}\n\nPOST /openapi/v1/subscriptions\n{\"callback_target_id\":\"target-001\",\"channel_codes\":[{\"device_code\":\"50010700001110000001\",\"channel_code\":\"50010700001320000011\"}],\"labels\":[\"person\"]}",
+          "paragraphs": [
+            "示例省略AK/SK签名头，实际请求仍须签名；创建/控制须携带幂等键。签名中的query需按规范排序。"
+          ]
+        },
+        {
+          "title": "实时播放与录像",
+          "steps": [
+            "POST /openapi/v1/live-sessions，body 为 {\"device_code\":\"<设备编码>\",\"channel_code\":\"<完整通道编码>\",\"protocol\":\"hls\"}，带 Idempotency-Key；也可使用编码通道路径 /live-sessions。",
+            "检查会话 state=ready，再 POST /openapi/v1/live-sessions/{session}/tickets，body 为 {}。播放器原样使用返回 URL。",
+            "HLS 所有子资源均由平台重写为受控路径；票据约 5 分钟，会话最长 30 分钟。换票不延长会话；快到期时由业务后端换票并让播放器重载清单。",
+            "停止观看时 DELETE /openapi/v1/live-sessions/{session}。仅释放自身会话，不会关闭其他应用、管理员、录像或级联使用的共享源。",
+            "录像先按设备/通道编码查 /recordings 列表，再 POST /recordings/{id}/tickets，purpose=play 或 download；下载需要 recording:download，支持单段Range。"
+          ]
+        },
+        {
+          "title": "抓拍与云台",
+          "steps": [
+            "POST 编码通道路径 /snapshot-tasks 请求新抓拍，body {}；通过同一路径GET任务列表或任务id轮询，succeeded 后用任务id申请 image-tickets。queued/running 不代表已有图片。",
+            "控制前 GET 编码通道路径 /ptz/capabilities；只从 actions 选择动作，再 POST 同一路径 /ptz，带幂等键。连续动作最长3秒，服务端自动停止。",
+            "如需提前停止，POST /ptz-commands/{command}/stop，再查询命令状态。confirmed 表示命令流程确认，不等于真实画面到位；stop_failed 不等于已停止。"
+          ]
+        },
+        {
+          "title": "状态说明",
+          "columns": [
+            "对象",
+            "状态",
+            "接入方处理"
+          ],
+          "rows": [
+            [
+              "实时会话",
+              "preparing / ready / failed / released / expired",
+              "ready 时申请票据；failed 检查依赖；released/expired 需重新创建会话。"
+            ],
+            [
+              "抓拍任务",
+              "queued / running / succeeded / failed / unknown / cancelled / expired",
+              "succeeded 才申请图片；unknown 为重启结果待核对，不自动重发设备动作。"
+            ],
+            [
+              "云台命令",
+              "pending / confirmed / failed / stopped / stop_failed / unknown",
+              "查询停止结果；stop_failed/unknown 保留通道租约等待核对，禁止绕过继续控制。"
+            ],
+            [
+              "订阅",
+              "paused / active / cancelled",
+              "创建为 paused，先配置密钥再 active；cancelled 不可恢复。"
+            ],
+            [
+              "告警投递",
+              "queued / sending / delivered / failed / dead / cancelled",
+              "至少一次投递，按 delivery_id 幂等；failed/dead 可受控重投。"
+            ]
+          ]
+        },
+        {
+          "title": "首期能力范围",
+          "paragraphs": [
+            "媒体与抓拍要求 ZLM；实时支持 HLS fMP4、HTTP-FLV，录像为平台本地落盘文件。设备侧录像检索、RTSP/RTMP 直连、WS-FLV 和 WebRTC 不属于本开放接口。",
+            "首期仅单实例。应用编辑保守作废旧媒体会话和票据并暂停订阅，接入方需重建会话并确认恢复订阅。应用停用、到期、凭据撤销和设备撤权会阻止新请求并收敛活动命令。"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "signing",
+      "title": "AK/SK 签名与幂等",
+      "intro": "每次请求自行签名，无需登录，也无需交换通用 Access Token。",
+      "blocks": [
+        {
+          "title": "签名计算",
+          "steps": [
+            "SK 是 Base64URL 无填充文本，先解码成 32 字节，再作为 HMAC key。",
+            "对实际发送的 body 原始字节计算 SHA256，小写 hex。GET/DELETE 的 body 为空。",
+            "按下面的十行拼接 UTF-8 字符串，使用 LF 分隔，末尾不加换行；空项仍保留空行。",
+            "HMAC-SHA256 解码后的 SK 与该签名串，得到小写 hex，填入 Authorization。"
+          ]
+        },
+        {
+          "title": "十行待签名串",
+          "language": "text",
+          "code": "OWL-HMAC-SHA256\n<audience>\n<HTTP_METHOD_UPPERCASE>\n<canonical_path>\n<canonical_query>\n<canonical_content_type>\n<timestamp>\n<nonce>\n<idempotency_key_or_empty>\n<body_sha256_hex>"
+        },
+        {
+          "title": "请求头",
+          "language": "http",
+          "code": "Authorization: OWL-HMAC-SHA256 Credential=<AK>,Signature=<HMAC-SHA256小写hex>\nX-Owl-Audience: <固定部署标识>\nX-Owl-Timestamp: <UTC Unix秒十进制>\nX-Owl-Nonce: <至少16随机字节的Base64URL无填充>\nX-Owl-Content-SHA256: <原始body SHA256小写hex>\nContent-Type: application/json\nIdempotency-Key: <写操作幂等键>"
+        },
+        {
+          "title": "规范化规则",
+          "columns": [
+            "项目",
+            "规则"
+          ],
+          "rows": [
+            [
+              "路径",
+              "包含 /openapi/v1；无尾斜线、双斜线、点路径、反斜线、百分号编码。代理不能重写前缀或重定向。"
+            ],
+            [
+              "query",
+              "严格百分号解码，+ 是字面加号。拒绝重复参数名、非法 UTF-8 和非法转义。名称和值用 RFC3986 编码，只保留字母数字与 -._~，空格为 %20，%HH 用大写；按编码后的名称/值排序，以 & 连接 name=value。空值保留。"
+            ],
+            [
+              "方法与 Content-Type",
+              "方法大写。GET/DELETE 不发送 body 和 Content-Type；其他写操作仅 application/json，不带 charset 或 Content-Encoding。即使 body 为 {}，也按这两个原始字节计算。"
+            ],
+            [
+              "body",
+              "最大 1MiB。拒绝未知或重复 JSON 属性。签名后不可再次格式化或重新序列化。"
+            ],
+            [
+              "时间与 nonce",
+              "UTC Unix 秒，允许 ±300 秒。nonce 为至少 16 个随机字节的 Base64URL 无填充文本；同 AK 不得复用，保留到签名时间+360秒。"
+            ],
+            [
+              "认证头",
+              "安全头不可重复。AK/SK 不放 query；Audience 必须是当前部署标识，不依赖 Host。"
+            ]
+          ]
+        },
+        {
+          "title": "空 body 的 SHA256",
+          "language": "text",
+          "code": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "title": "幂等与重试",
+          "paragraphs": [
+            "创建 live-sessions、snapshot-tasks、云台命令、订阅以及三方受控重投必须提供 Idempotency-Key，最多 128 字符。幂等记录保留 24 小时。",
+            "同一应用/操作/幂等键与同一参数返回同一资源；不同参数返回 IDEMPOTENCY_MISMATCH。重试必须使用新的时间、nonce 和签名，但沿用同一业务幂等键。",
+            "OPERATION_PENDING 表示执行中或崩溃结果待核对，应查询任务状态。失败且未生成资源时也可能保守保留 pending，不能把 409 当作可再次下发控制的信号。读取接口可在退避后重新签名重试；设备控制先核对原结果。"
+          ]
+        },
+        {
+          "title": "固定向量自检",
+          "paragraphs": [
+            "下载签名向量和任一语言示例，不联网即可自检。公开测试密钥仅用于此向量，不能当成应用密钥。"
+          ],
+          "language": "sh",
+          "code": "go run OwlClient.go --vector\npython3 owl_client.py --vector\njava OwlClient.java --vector\n\n# 三种语言预期均输出\n84369f2c363948b081bee18d71e745e5b99ed3d0d675a9aff7209b5fa7bd54f6"
+        }
+      ]
+    },
+    {
+      "id": "callbacks",
+      "title": "告警订阅与回调验签",
+      "intro": "至少一次投递；API SK 与 callback SK 独立，接收方按 delivery_id 幂等处理。",
+      "blocks": [
+        {
+          "title": "创建与启用顺序",
+          "steps": [
+            "管理员创建独立回调目标，填写 URL、必要的内网 CIDR，完成批准。应用只能使用 callback_target_id，不能自行传任意 URL。",
+            "指定通道优先传 channel_codes:[{device_code,channel_code}]；与旧 channel_ids 互斥，空数组订阅全部授权资源。编码在保存时解析为内部通道绑定；不会因为设备同码重建而自动扩大授权。",
+            "应用 POST /subscriptions，包含 callback_target_id、可选 channel_ids/labels；初始 paused。空筛选数组表示匹配应用当前全部可见资源，不扩大授权。",
+            "POST /subscriptions/{id}/signing-keys，保存仅一次返回的 key_id 和独立 callback SK。",
+            "PATCH /subscriptions/{id}，传最近 revision 与 status=active。对方配置好对应 key_id 的验签后再启用。",
+            "API AK 轮换时先用新 AK PATCH 订阅，绑定新凭据，再撤销旧 AK；否则仍绑定旧 AK 的订阅会暂停。"
+          ]
+        },
+        {
+          "title": "回调请求头",
+          "language": "http",
+          "code": "X-Owl-Callback-Key-ID: <独立签名密钥ID>\nX-Owl-Timestamp: <UTC Unix秒>\nX-Owl-Nonce: <随机Base64URL>\nX-Owl-Event-ID: <事件ID>\nX-Owl-Delivery-ID: <持久化投递ID>\nX-Owl-Content-SHA256: <实际body的SHA256小写hex>\nAuthorization: OWL-CALLBACK-HMAC-SHA256 Signature=<HMAC-SHA256小写hex>"
+        },
+        {
+          "title": "回调六行待签名串",
+          "language": "text",
+          "code": "OWL-CALLBACK-HMAC-SHA256\n<timestamp>\n<nonce>\n<event_id>\n<delivery_id>\n<body_sha256_hex>"
+        },
+        {
+          "title": "回调 body 示例",
+          "paragraphs": [
+            "这些字段不使用业务 API 的 code/data 包装。id 和 event_id 指向同一事件；image_url/image_expires_at 仅在有 event:image 且图片存在时追加，重试时可能生成新 URL。完整字段字典见 CallbackEvent。"
+          ],
+          "language": "json",
+          "code": "{\n  \"id\": 101,\n  \"event_id\": 101,\n  \"delivery_id\": \"delivery-001\",\n  \"did\": \"device-001\",\n  \"cid\": \"channel-001\",\n  \"started_at\": \"2026-11-04T08:00:00Z\",\n  \"ended_at\": \"2026-11-04T08:00:01Z\",\n  \"label\": \"person\",\n  \"score\": 0.96,\n  \"model\": \"model-001\"\n}"
+        },
+        {
+          "title": "接收方处理",
+          "steps": [
+            "限制 body 大小，拒绝重复安全头。按 X-Owl-Callback-Key-ID 选择独立 callback SK（Base64URL 解码32字节）。",
+            "核对时间窗 ±300秒、nonce 随机长度、原始 body SHA256 和签名；用常量时间比较签名。",
+            "验签后按当前订阅、key_id、nonce 持久化防重放至 timestamp+360秒，再解析 JSON 并核对 event_id/delivery_id 与头一致。订阅身份由本地目标/密钥映射确定。",
+            "按 delivery_id 幂等事务提交，再返回 2xx。已经处理的同 delivery_id 返回成功，但不重复执行业务。相同 delivery_id 的重试有新 timestamp/nonce/签名。",
+            "示例 verifyCallback 仅提供密码学核验；接收服务仍需完成重复头检查、持久化防重放与 delivery_id 去重。"
+          ]
+        },
+        {
+          "title": "响应与重试",
+          "columns": [
+            "接收端结果",
+            "平台行为"
+          ],
+          "rows": [
+            [
+              "2xx",
+              "delivered，投递成功。"
+            ],
+            [
+              "重定向或其他 4xx（不含408/429）",
+              "failed，不跟随重定向。修复后可受控重投。"
+            ],
+            [
+              "网络错误、超时、5xx、408、429",
+              "指数退避加抖动，最多 8 次后 dead；超时约10秒。"
+            ],
+            [
+              "failed / dead 受控重投",
+              "重新检查应用、签发凭据、订阅、目标及设备权限；保留 delivery_id。"
+            ]
+          ]
+        },
+        {
+          "title": "回调目标与密钥轮换",
+          "paragraphs": [
+            "默认只允许 HTTPS；本页接入配置显示允许 HTTP 时可使用 HTTP。内网需管理员显式批准 CIDR；始终拒绝回环、链路本地、云元数据和平台管理目标。DNS 保存及连接时均校验，不跟随重定向。",
+            "独立 callback SK 轮换后，新投递立即使用最新 key_id；旧 key_id 最多保留24小时用于在途校验。应用编辑、停用、到期、凭据撤销、订阅取消或目标禁用可能暂停或取消后续投递。",
+            "投递记录默认保留30天。已经发出的内容无法追回，接收方对数据保留与删除负责。"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "errors",
+      "title": "返回约定、分页与错误码",
+      "intro": "使用 HTTP 状态与 code 判断结果，通过 request_id 定位平台审计。",
+      "blocks": [
+        {
+          "title": "统一 JSON 响应",
+          "language": "json",
+          "code": "{\n  \"code\": \"OK\",\n  \"message\": \"success\",\n  \"request_id\": \"request-001\",\n  \"data\": {\n    \"items\": [],\n    \"next_cursor\": null\n  }\n}"
+        },
+        {
+          "title": "失败响应",
+          "language": "json",
+          "code": "{\n  \"code\": \"NOT_FOUND\",\n  \"message\": \"资源不存在或无权访问\",\n  \"request_id\": \"request-001\",\n  \"data\": null\n}"
+        },
+        {
+          "title": "成功状态与媒体返回",
+          "paragraphs": [
+            "当前业务接口成功通常返回 HTTP 200，包括异步抓拍和云台流程；应检查 data.state，不把 HTTP 成功等同于设备完成。",
+            "媒体成功为原始 HLS/FLV/MP4/图片字节，不使用 JSON 包装；单段 Range 可返回206，不可满足返回416。媒体失败仍可能返回 JSON 错误。",
+            "字段时间使用 RFC3339（包含时区）。列表结果只包含当前授权范围，不泄露设备密码、媒体节点内网地址或文件路径。"
+          ]
+        },
+        {
+          "title": "分页与时间",
+          "columns": [
+            "类别",
+            "参数和返回",
+            "注意事项"
+          ],
+          "rows": [
+            [
+              "业务列表",
+              "size=1—100，默认50；cursor 可选；返回 items/next_cursor",
+              "next_cursor=null 结束。续页必须保持同路径/筛选/size；游标约1小时失效，过期从首页重新查询。"
+            ],
+            [
+              "管理列表",
+              "page 从1开始；size=1—100，默认50；返回 items/total/page/size",
+              "管理员权限，不应由三方应用调用。"
+            ],
+            [
+              "录像/事件/投递查询",
+              "start/end 为 RFC3339，默认最近24小时，最大7天",
+              "查询开始时间位于范围内的记录，含边界；仅传end时start默认end前24小时。"
+            ],
+            [
+              "审计日志",
+              "start/end 可选，page/size 分页",
+              "均不传时不加时间筛选；传任意时间后按最长7天校验。"
+            ]
+          ]
+        },
+        {
+          "title": "错误码列表",
+          "columns": [
+            "HTTP",
+            "code",
+            "含义",
+            "建议处理"
+          ],
+          "rows": [
+            [
+              "400",
+              "APP_INCOMPLETE",
+              "请配置接口权限、来源策略及有效期；请先创建有效AK/SK",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "IDEMPOTENCY_REQUIRED",
+              "请提供不超过128字符的Idempotency-Key",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_ACTION",
+              "云台动作不合法",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_APP",
+              "应用名称或设备范围不合法；应用字段格式错误",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_CIDR",
+              "回调CIDR格式错误；来源CIDR格式错误；不限来源不能同时配置CIDR",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_CURSOR",
+              "游标无效或已过期",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_DEVICE_SCOPE",
+              "请选择全部设备或指定设备；设备范围与勾选设备不一致；设备ID为空或重复；部分设备不存在",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_EXPIRY",
+              "订阅到期时间必须在未来；到期时间必须在未来",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_FILTER",
+              "订阅筛选条件过多",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_JSON",
+              "JSON包含重复属性或格式错误；请求字段或JSON格式不正确；请求体必须为单个JSON对象",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_PAGE",
+              "size须为1至100；分页参数不合法",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_PATH",
+              "签名接口路径不规范",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_PTZ",
+              "持续时间须为1至3秒、速度1至100、预置位1至255",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_PURPOSE",
+              "purpose须为play或download",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_QUOTA",
+              "配额超出允许范围",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_RANGE",
+              "仅支持单段Range",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_SCOPE",
+              "接口权限不合法",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_STATUS",
+              "订阅状态不合法；HTTP状态不合法；回调目标状态不合法",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_SUBSCRIPTION",
+              "订阅字段不合法",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_TARGET",
+              "请提供独立的HTTPS回调目标；HTTP须由平台显式启用；回调目标无法解析或不在批准的地址范围",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_TIME",
+              "end必须为RFC3339时间；start必须为RFC3339时间；查询跨度须大于0且不超过7天",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "REVISION_REQUIRED",
+              "修改订阅需要revision；修改应用需要revision",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "SUBSCRIPTION_INCOMPLETE",
+              "请先审核回调目标并配置签名密钥",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "UNKNOWN_FIELD",
+              "不支持的订阅字段；不支持的应用字段",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "UNSUPPORTED_ACTION",
+              "设备不支持此动作",
+              "修正参数后重新签名。"
+            ],
+            [
+              "400",
+              "UNSUPPORTED_PROTOCOL",
+              "首期支持hls和flv",
+              "修正参数后重新签名。"
+            ],
+            [
+              "401",
+              "AUTHENTICATION_FAILED",
+              "认证失败",
+              "核对凭据、Audience、时间与签名；不要原样重放。"
+            ],
+            [
+              "403",
+              "ACTION_DENIED",
+              "未授权此云台动作",
+              "联系管理员核对权限/来源或协议配置。"
+            ],
+            [
+              "403",
+              "HTTPS_REQUIRED",
+              "创建或轮换密钥需要HTTPS入口",
+              "联系管理员核对权限/来源或协议配置。"
+            ],
+            [
+              "403",
+              "IP_DENIED",
+              "来源IP不允许",
+              "联系管理员核对权限/来源或协议配置。"
+            ],
+            [
+              "403",
+              "SCOPE_DENIED",
+              "未授予此接口权限",
+              "联系管理员核对权限/来源或协议配置。"
+            ],
+            [
+              "404",
+              "NOT_FOUND",
+              "资源不存在或无权访问",
+              "核对内部 ID 和设备授权；不区分越权与不存在。"
+            ],
+            [
+              "409",
+              "CONFLICT",
+              "状态已变化，请刷新后重试",
+              "先查询资源最新状态/revision；控制不得盲目重发。"
+            ],
+            [
+              "409",
+              "CREDENTIAL_LIMIT",
+              "最多同时存在两组有效凭据",
+              "先查询资源最新状态/revision；控制不得盲目重发。"
+            ],
+            [
+              "409",
+              "IDEMPOTENCY_MISMATCH",
+              "幂等键已用于其他请求",
+              "先查询资源最新状态/revision；控制不得盲目重发。"
+            ],
+            [
+              "409",
+              "OPERATION_PENDING",
+              "操作执行中或结果待核对，请查询任务状态",
+              "先查询资源最新状态/revision；控制不得盲目重发。"
+            ],
+            [
+              "409",
+              "PTZ_BUSY",
+              "通道正在控制或等待停止核对",
+              "先查询资源最新状态/revision；控制不得盲目重发。"
+            ],
+            [
+              "413",
+              "BODY_TOO_LARGE",
+              "请求体过大",
+              "缩小 body 至 1MiB 内。"
+            ],
+            [
+              "429",
+              "CONCURRENT_LIMIT",
+              "媒体连接超过配额；播放会话超过配额；全局播放会话已满；抓拍并发已满；全局抓拍并发已满",
+              "退避后按幂等规则重新签名，或调整额度。"
+            ],
+            [
+              "429",
+              "PTZ_CAPACITY",
+              "全局云台控制名额已满",
+              "退避后按幂等规则重新签名，或调整额度。"
+            ],
+            [
+              "429",
+              "RATE_LIMITED",
+              "云台指令过于频繁；媒体请求过于频繁；媒体请求超过配额；请求过于频繁；应用请求超过配额",
+              "退避后按幂等规则重新签名，或调整额度。"
+            ],
+            [
+              "429",
+              "SNAPSHOT_COOLDOWN",
+              "通道抓拍冷却中",
+              "退避后按幂等规则重新签名，或调整额度。"
+            ],
+            [
+              "429",
+              "SOURCE_LIMIT",
+              "拉流准备任务已满",
+              "退避后按幂等规则重新签名，或调整额度。"
+            ],
+            [
+              "429",
+              "SUBSCRIPTION_LIMIT",
+              "订阅数量超过配额",
+              "退避后按幂等规则重新签名，或调整额度。"
+            ],
+            [
+              "503",
+              "MEDIA_NOT_READY",
+              "媒体尚未就绪或已中断",
+              "检查依赖/配置；控制先核对原结果后再决定重试。"
+            ],
+            [
+              "503",
+              "SERVICE_UNAVAILABLE",
+              "开放平台暂不可用",
+              "检查依赖/配置；控制先核对原结果后再决定重试。"
+            ],
+            [
+              "503",
+              "SOURCE_FAILED",
+              "媒体源准备失败",
+              "检查依赖/配置；控制先核对原结果后再决定重试。"
+            ],
+            [
+              "400",
+              "INVALID_RESOURCE_CODE",
+              "设备或通道编码格式不正确",
+              "使用非空的完整编码，保留前导零，不带首尾空白。"
+            ],
+            [
+              "400",
+              "INVALID_RESOURCE_SELECTOR",
+              "编码路径与内部通道 ID 混用",
+              "编码路径已选定通道，移除请求体 channel_id。"
+            ],
+            [
+              "409",
+              "AMBIGUOUS_RESOURCE_CODE",
+              "同一设备下通道编码重复",
+              "联系管理员核对重复通道；平台拒绝猜测或控制。"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ptz",
+      "title": "云台动作参数",
+      "intro": "动作必须同时得到设备协议支持与管理员授权。先读取 capabilities.actions，不要根据名称假设设备一定支持。",
+      "blocks": [
+        {
+          "title": "动作与参数",
+          "columns": [
+            "动作",
+            "参数",
+            "行为"
+          ],
+          "rows": [
+            [
+              "left / right / up / down / left_up / left_down / right_up / right_down",
+              "speed=1—100（默认30），duration=1—3秒（默认1）",
+              "方向移动，到期自动停止。"
+            ],
+            [
+              "zoom_in / zoom_out",
+              "speed、duration",
+              "变倍，到期自动停止。"
+            ],
+            [
+              "focus_near / focus_far / iris_open / iris_close",
+              "speed、duration",
+              "仅支持这些动作的国标设备；使用专门停止报文。ONVIF 首期不声明。"
+            ],
+            [
+              "preset_call",
+              "preset=1—255；duration=1—3",
+              "调用预置位；定时停止，不代表已到位。"
+            ],
+            [
+              "preset_set / preset_delete",
+              "preset=1—255",
+              "写入或删除预置位，必须显式授权。"
+            ],
+            [
+              "cruise_add / cruise_del",
+              "group=0—255，preset=1—255",
+              "国标巡航点配置。"
+            ],
+            [
+              "cruise_speed / cruise_stay",
+              "group=0—255，value=0—4095",
+              "国标巡航速度/停留参数；设备可能有更窄范围。"
+            ],
+            [
+              "cruise_start",
+              "group、duration",
+              "启动巡航，到期用巡航停止码。"
+            ],
+            [
+              "scan_start",
+              "group、duration",
+              "启动扫描，到期用扫描停止码。"
+            ],
+            [
+              "scan_left / scan_right / scan_speed",
+              "group，scan_speed 使用 value",
+              "配置国标扫描边界或速度。"
+            ],
+            [
+              "aux_on / aux_off",
+              "aux=0—255",
+              "国标辅助开关。"
+            ]
+          ]
+        },
+        {
+          "title": "安全与状态",
+          "paragraphs": [
+            "接口提供的动作仅覆盖平台声明能力，协议应答不代表机械已执行。连续动作最长3秒，停止失败保留通道锁并退避重试；请查询命令并处理 stop_failed/unknown。",
+            "管理员或级联控制接管时先收敛应用动作。停止接口按命令代次校验，旧定时器不能停止后续命令。进程异常重启后，未知命令核对完成前拒绝通道上的新移动。"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads",
+      "title": "示例与下载",
+      "intro": "下载内容随当前版本一同部署，不需要源码仓库权限。示例只依赖各语言标准库。",
+      "blocks": [
+        {
+          "title": "运行环境",
+          "paragraphs": [
+            "Python 3、Go 或 Java 17+（HexFormat / Java HttpClient）。先用 --vector 校验签名，再设置下列环境变量调用只读设备列表。示例使用占位凭据，需替换为管理员分配值。"
+          ],
+          "language": "sh",
+          "code": "export OWL_API_BASE=\"<当前部署开放地址>\"\nexport OWL_AUDIENCE=\"<当前部署 Audience>\"\nexport OWL_AK=\"<管理员分配的AK>\"\nexport OWL_SK=\"<管理员分配的SK>\"\n# 当前HTTP部署显式设置；HTTPS部署无需此项\nexport OWL_ALLOW_HTTP=true\n\npython3 owl_client.py\n# 或\ngo run OwlClient.go\n# 或\njava OwlClient.java"
+        },
+        {
+          "title": "请求示例的使用",
+          "paragraphs": [
+            "每个接口页面提供完整请求头、body 示例、结果字段和响应示例。示例中的签名、nonce、ID、日期均为说明性数据；实际请求请用下载客户端生成，时间与资源ID需替换为当前值。",
+            "页面只展示与下载文档，不收集 AK/SK，也不在浏览器发送云台、抓拍、订阅或管理操作。"
+          ]
+        }
+      ]
+    }
+  ]
+}

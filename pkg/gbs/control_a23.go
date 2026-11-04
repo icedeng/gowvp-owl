@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	ipcmodel "github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
@@ -223,6 +224,28 @@ type deviceControlA23PTZPrecise struct {
 
 // DeviceControl 执行附录 A.2.3 设备控制命令；仅对标准规定的有应答命令等待设备 Response。
 func (g *GB28181API) DeviceControl(ctx context.Context, in *DeviceControlInput) (*DeviceControlOutput, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if in == nil {
+		return nil, ErrDeviceNotExist
+	}
+	action := normalizeDeviceControlAction(in.Action)
+	if action == deviceControlActionCameraControl || action == deviceControlActionPTZPrecise || action == deviceControlActionHomePosition || action == deviceControlActionDragZoomIn || action == deviceControlActionDragZoomOut || action == deviceControlActionTargetTrack {
+		var out *DeviceControlOutput
+		target := in.TargetID
+		if target == "" {
+			target = in.DeviceID
+		}
+		err := ipcmodel.CoordinateGBPTZ(ctx, in.DeviceID, target, func(c context.Context) error { var e error; out, e = g.deviceControlRaw(c, in); return e })
+		return out, err
+	}
+	return g.deviceControlRaw(ctx, in)
+}
+func (g *GB28181API) deviceControlRaw(ctx context.Context, in *DeviceControlInput) (*DeviceControlOutput, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
