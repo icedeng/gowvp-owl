@@ -3,6 +3,7 @@ package ipccache
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs"
@@ -20,7 +21,12 @@ func (d *Device) Create(ctx context.Context, dev *ipc.Device) error {
 	if err := d.Storer.Device().Create(ctx, dev); err != nil {
 		return err
 	}
-	d.devices.LoadOrStore(dev.GetGB28181DeviceID(), gbs.NewDevice(nil, dev))
+	// 首次 REGISTER 自动建档时尚未提交来源地址，由注册流程建立可用运行态。
+	if strings.TrimSpace(dev.Address) != "" {
+		if runtime := gbs.NewDevice(nil, dev); runtime != nil {
+			d.LoadOrStore(dev.GetGB28181DeviceID(), runtime)
+		}
+	}
 	return nil
 }
 
@@ -67,7 +73,7 @@ func (d *Device) Update(ctx context.Context, dev *ipc.Device, changeFn func(*ipc
 	if err := d.Storer.Device().Get(ctx, &before, opts...); err != nil {
 		return err
 	}
-	runtime, hasRuntime := d.devices.Load(before.GetGB28181DeviceID())
+	runtime, hasRuntime := d.Load(before.GetGB28181DeviceID())
 
 	update := func() error {
 		passwordChanged := false

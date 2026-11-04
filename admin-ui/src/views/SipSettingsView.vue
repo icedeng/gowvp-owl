@@ -65,6 +65,24 @@ const ui = useUiStore();
 const route = useRoute();
 const loading = ref(false);
 const saving = ref(false);
+const mediaSaving = ref(false);
+const mediaIdleSeconds = ref(180);
+
+async function saveMedia() {
+  if (!Number.isInteger(mediaIdleSeconds.value) || mediaIdleSeconds.value < 1 || mediaIdleSeconds.value > 86400) {
+    ui.toast("请输入 1–86400 之间的整数秒数");
+    return;
+  }
+  mediaSaving.value = true;
+  try {
+    await api.updateMedia(mediaIdleSeconds.value);
+    ui.toast("已保存，新的无人观看计时将使用此值");
+  } catch (cause) {
+    ui.toast(errorMessage(cause, "媒体设置保存失败"));
+  } finally {
+    mediaSaving.value = false;
+  }
+}
 const loadError = ref("");
 const statusLoading = ref(false);
 const statusError = ref("");
@@ -121,8 +139,8 @@ const directDownload = reactive({
   offer_port: 9,
   relay_listen_ip: "0.0.0.0",
   relay_advertise_ip: "",
-  relay_port_start: 30200,
-  relay_port_end: 30300,
+  relay_port_start: 50200,
+  relay_port_end: 50300,
   max_file_size_mb: 10240,
   global_concurrency: 4,
   device_concurrency: 1,
@@ -567,6 +585,7 @@ async function load() {
   loadError.value = "";
   try {
     const { data } = await api.configInfo();
+    mediaIdleSeconds.value = data.media?.stream_none_reader_delay_seconds ?? 180;
     const sip = data.sip || {};
     sipSecrets.value = data.sip_secrets || {};
     Object.assign(form, {
@@ -616,8 +635,8 @@ async function load() {
       offer_port: sip.direct_tcp_download?.offer_port ?? 9,
       relay_listen_ip: sip.direct_tcp_download?.relay_listen_ip || "0.0.0.0",
       relay_advertise_ip: sip.direct_tcp_download?.relay_advertise_ip || "",
-      relay_port_start: sip.direct_tcp_download?.relay_port_start ?? 30200,
-      relay_port_end: sip.direct_tcp_download?.relay_port_end ?? 30300,
+      relay_port_start: sip.direct_tcp_download?.relay_port_start ?? 50200,
+      relay_port_end: sip.direct_tcp_download?.relay_port_end ?? 50300,
       max_file_size_mb: Math.max(1, Math.round(Number(sip.direct_tcp_download?.max_file_size || 10 * 1024 ** 3) / 1024 ** 2)),
       global_concurrency: sip.direct_tcp_download?.global_concurrency ?? 4,
       device_concurrency: sip.direct_tcp_download?.device_concurrency ?? 1,
@@ -789,6 +808,7 @@ onUnmounted(() => {
         <a class="active" href="#base"><RadioTower />基础配置</a>
         <a href="#security"><ShieldCheck />信令安全</a>
         <a href="#history"><History />历史保留</a>
+        <a href="#media"><SquareStack />视频断流</a>
         <a href="#direct-download"><SquareStack />2014 下载</a>
         <a href="#annex-g"><KeyRound />附录 G</a>
         <a href="#alarm-receivers"><ShieldAlert />本域接警终端</a>
@@ -796,6 +816,12 @@ onUnmounted(() => {
       </nav>
 
       <form class="card form-section" @submit.prevent="save">
+        <section id="media" class="mb-6">
+          <div class="card-head"><div><h2 class="card-title">无人观看自动断流</h2><p class="card-sub">关闭视频后等待指定时间，自动停止设备推流并释放媒体端口。手动录像期间保持推流。</p></div></div>
+          <label class="form-group"><span class="form-label">等待时间（秒）</span><input v-model.number="mediaIdleSeconds" class="input plain w-full" type="number" min="1" max="86400" step="1" required /></label>
+          <p class="card-sub mt-2">默认 180 秒。保存后用于新一轮无人观看计时；已开始的计时仍使用原值。</p>
+          <button class="btn btn-primary mt-4" type="button" :disabled="loading || Boolean(loadError) || mediaSaving || saving" @click="saveMedia"><LoaderCircle v-if="mediaSaving" class="animate-spin" /><Save v-else />保存断流设置</button>
+        </section>
         <div class="card-head">
           <div><h2 class="card-title">SIP 服务</h2><p class="card-sub">修改服务 ID、域或密码前请同步设备侧配置</p></div>
           <RadioTower />

@@ -38,7 +38,7 @@ type ChannelInfo struct {
 	App        string // 应用名（如 rtp / live）
 	Stream     string // 流 ID
 	Type       string // 通道类型（gb28181 / onvif / rtmp / rtsp）
-	RecordMode string // 录像模式（always / ai / none / 空串=always）
+	RecordMode string // 录像模式（always / ai / none，未配置不录制）
 }
 
 // PlayProvider 主动拉流能力，解耦录制域与播放域

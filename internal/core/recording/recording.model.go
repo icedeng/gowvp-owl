@@ -10,16 +10,16 @@ import (
 // Recording domain model
 type Recording struct {
 	ID          int64    `gorm:"primaryKey" json:"id"`
-	CID         string   `gorm:"column:cid;notNull;index;default:'';comment:通道 ID (channel.ID)" json:"cid"`                  // 通道 ID (channel.ID)
-	App         string   `gorm:"column:app;notNull;default:'';comment:ZLM 应用名" json:"app"`                                   // ZLM 应用名
-	Stream      string   `gorm:"column:stream;notNull;default:'';comment:ZLM 流 ID" json:"stream"`                            // ZLM 流 ID
-	StartedAt   orm.Time `gorm:"column:started_at;notNull;index;default:CURRENT_TIMESTAMP;comment:录像开始时间" json:"started_at"` // 录像开始时间
-	EndedAt     orm.Time `gorm:"column:ended_at;notNull;default:CURRENT_TIMESTAMP;comment:录像结束时间" json:"ended_at"`           // 录像结束时间
-	Duration    float64  `gorm:"column:duration;notNull;default:0;comment:持续时长（秒）" json:"duration"`                          // 持续时长（秒）
-	Path        string   `gorm:"column:path;notNull;default:'';comment:文件相对路径" json:"path"`                                  // 文件相对路径
-	Size        int64    `gorm:"column:size;notNull;default:0;index;comment:文件大小（字节）" json:"size"`                           // 文件大小（字节）
-	ObjectCount int      `gorm:"column:object_count;notNull;default:0;comment:AI检测对象数量（从event表统计）" json:"object_count"`      // AI检测对象数量（从event表统计）
-	DeleteFlag  bool     `gorm:"column:delete_flag;notNull;default:false;comment:待删除标记" json:"delete_flag"`                  // 待删除标记（即将被清理）
+	CID         string   `gorm:"column:cid;notNull;index;index:idx_recordings_cid_started_at,priority:1;default:'';comment:通道 ID (channel.ID)" json:"cid"`                            // 通道 ID (channel.ID)
+	App         string   `gorm:"column:app;notNull;default:'';comment:ZLM 应用名" json:"app"`                                                                                            // ZLM 应用名
+	Stream      string   `gorm:"column:stream;notNull;default:'';comment:ZLM 流 ID" json:"stream"`                                                                                     // ZLM 流 ID
+	StartedAt   orm.Time `gorm:"column:started_at;notNull;index;index:idx_recordings_cid_started_at,priority:2,sort:desc;default:CURRENT_TIMESTAMP;comment:录像开始时间" json:"started_at"` // 录像开始时间
+	EndedAt     orm.Time `gorm:"column:ended_at;notNull;default:CURRENT_TIMESTAMP;comment:录像结束时间" json:"ended_at"`                                                                    // 录像结束时间
+	Duration    float64  `gorm:"column:duration;notNull;default:0;comment:持续时长（秒）" json:"duration"`                                                                                   // 持续时长（秒）
+	Path        string   `gorm:"column:path;notNull;default:'';comment:文件相对路径" json:"path"`                                                                                           // 文件相对路径
+	Size        int64    `gorm:"column:size;notNull;default:0;index;comment:文件大小（字节）" json:"size"`                                                                                    // 文件大小（字节）
+	ObjectCount int      `gorm:"column:object_count;notNull;default:0;comment:AI检测对象数量（从event表统计）" json:"object_count"`                                                               // AI检测对象数量（从event表统计）
+	DeleteFlag  bool     `gorm:"column:delete_flag;notNull;default:false;comment:待删除标记" json:"delete_flag"`                                                                           // 待删除标记（即将被清理）
 	CreatedAt   orm.Time `gorm:"column:created_at;notNull;default:CURRENT_TIMESTAMP" json:"created_at"`
 	UpdatedAt   orm.Time `gorm:"column:updated_at;notNull;default:CURRENT_TIMESTAMP" json:"updated_at"`
 }

@@ -23,6 +23,8 @@ go.work.sum
 
 # env file
 .env
+deploy/v1/data/postgres/
+admin-credentials.toml
 *.log
 *.db
 build/

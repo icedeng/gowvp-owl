@@ -166,8 +166,8 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 	}
 
 	// QueryCatalog 会检查在线状态，因此必须放在 Change(IsOnline=true) 之后。
-	if !alreadyLoaded {
-		slog.Info("keepalive 触发 Catalog 补载", "device_id", ctx.DeviceID)
+	if (!alreadyLoaded || !registrationState.IsOnline) && g.catalogResponses != nil {
+		slog.Info("keepalive 恢复触发 Catalog 补查", "device_id", ctx.DeviceID)
 		if err := g.QueryCatalogContext(g.serviceContext(), ctx.DeviceID); err != nil {
 			ctx.Log.Warn("keepalive 目录补载失败", "err", err)
 			if g.scheduleCatalogRefreshAfterFailure(ctx.DeviceID, err) {

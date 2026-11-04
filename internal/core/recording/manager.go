@@ -2,9 +2,30 @@ package recording
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 )
+
+// StartRequestedRecording 手动开启录像时立即拉流，不等待下一次五分钟策略同步。
+func (c Core) StartRequestedRecording(ctx context.Context, channel ChannelInfo) error {
+	if !c.IsEnabled() || c.smsProvider == nil {
+		return fmt.Errorf("平台录像已禁用")
+	}
+	streams, err := c.smsProvider.ListRecordingStreams()
+	if err != nil {
+		return err
+	}
+	if _, exists := streams[channel.App+"/"+channel.Stream]; !exists {
+		if c.playProvider == nil {
+			return fmt.Errorf("未配置录像拉流服务")
+		}
+		if err := c.playProvider.TriggerStream(ctx, channel); err != nil {
+			return err
+		}
+	}
+	return c.StartRecording(ctx, channel.Type, channel.App, channel.Stream)
+}
 
 // StartRecording 启动录制，在流注册时调用
 // 根据配置决定是否录制该流，并通知 ZLM 开始 MP4 录制

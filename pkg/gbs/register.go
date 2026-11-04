@@ -1420,6 +1420,11 @@ func (g *GB28181API) respondRegisterIntervalTooBrief(ctx *sip.Context) {
 }
 
 func (g *GB28181API) logout(deviceID string, changeFn func(*ipc.Device) error) error {
+	return g.setDeviceOffline(deviceID, true, changeFn)
+}
+
+// setDeviceOffline 区分注册失效和临时心跳离线，后者保留绑定供后续心跳恢复。
+func (g *GB28181API) setDeviceOffline(deviceID string, closeRegistration bool, changeFn func(*ipc.Device) error) error {
 	var committed ipc.Device
 	err := g.svr.changeMemory(g.serviceContext(), deviceID, func(device *ipc.Device) error {
 		if changeFn != nil {
@@ -1427,15 +1432,17 @@ func (g *GB28181API) logout(deviceID string, changeFn func(*ipc.Device) error) e
 				return err
 			}
 		}
-		setPersistedRegistrationClosed(device, true)
+		setPersistedRegistrationClosed(device, closeRegistration)
 		committed = *device
 		return nil
 	}, func(d *Device) {
 		SyncRegistrationBindingRuntime(d, &committed)
-		d.Expires = 0
+		if closeRegistration {
+			d.Expires = 0
+		}
 		d.IsOnline = false
 		d.offlinePersistencePending = false
-		d.registrationClosed = true
+		d.registrationClosed = closeRegistration
 		clearPendingDeviceStatusLocked(d)
 		clearPendingKeepaliveLocked(d)
 	})

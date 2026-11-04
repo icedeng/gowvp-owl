@@ -18,19 +18,26 @@ services:
       OWL_WEBHOOK_SECRET: ${OWL_WEBHOOK_SECRET:-}
       OWL_SIP_PASSWORD: ${OWL_SIP_PASSWORD:-}
       OWL_MEDIA_SECRET: ${OWL_MEDIA_SECRET:?set OWL_MEDIA_SECRET in deploy/v1/.env}
+      OWL_DATABASE_DSN: ${OWL_DATABASE_DSN:?set OWL_DATABASE_DSN in deploy/v1/.env}
       OWL_MEDIA_IP: zlm
-      OWL_MEDIA_HTTP_PORT: "80"
-      OWL_MEDIA_WEBHOOK_IP: gowvp
+      OWL_MEDIA_HTTP_PORT: ${OWL_ZLM_HTTP_PORT:-8080}
+      OWL_MEDIA_WEBHOOK_IP: ${OWL_MEDIA_SDP_IP:?set OWL_MEDIA_SDP_IP}
       OWL_MEDIA_SDP_IP: ${OWL_MEDIA_SDP_IP:?set OWL_MEDIA_SDP_IP to the LAN address in deploy/v1/.env}
     depends_on:
+      postgres:
+        condition: service_healthy
       zlm:
         condition: service_healthy
+    extra_hosts:
+      - "zlm:host-gateway"
     ports:
+      - "${OWL_HTTP_PORT:-15123}:15123"
       - "15060:15060"
       - "15060:15060/udp"
       - "15061:15061"
       - "3702:3702/udp"
-      - "30200-30300:30200-30300"
+      # 裸 TCP 下载中继移出媒体动态端口段，启用时同步修改 Sip.DirectTCPDownload。
+      - "50200-50300:50200-50300"
     volumes:
       - ./data/configs:/app/configs
       - ./data/logs:/app/logs
@@ -44,26 +51,30 @@ services:
     networks:
       - owl-v1
 
-  frontend:
-    image: owl-v1-frontend:${OWL_IMAGE_TAG:-local}
+  postgres:
+    image: owl-v1-postgres:${OWL_IMAGE_TAG:-local}
     pull_policy: never
     platform: linux/${TARGETARCH:-amd64}
     build:
       context: ../..
-      dockerfile: deploy/v1/Dockerfile.frontend
-      args:
-        TARGETARCH: ${TARGETARCH:-amd64}
+      dockerfile: deploy/v1/Dockerfile.postgres
     restart: unless-stopped
-    depends_on:
-      gowvp:
-        condition: service_healthy
-    ports:
-      - "${OWL_HTTP_PORT:-15123}:80"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: gowvp
+      POSTGRES_PASSWORD: ${OWL_POSTGRES_PASSWORD:?set OWL_POSTGRES_PASSWORD}
+      OWL_POSTGRES_APP_PASSWORD: ${OWL_POSTGRES_APP_PASSWORD:?set OWL_POSTGRES_APP_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-gowvp.sh:ro
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gowvp"]
+      interval: 5s
       timeout: 5s
-      retries: 6
+      retries: 12
+      start_period: 15s
+    shm_size: 256m
     networks:
       - owl-v1
 
@@ -82,29 +93,18 @@ services:
     environment:
       OWL_MEDIA_SECRET: ${OWL_MEDIA_SECRET:?set OWL_MEDIA_SECRET in deploy/v1/.env}
       ZLM_API_DEBUG: "0"
-    ports:
-      - "1935:1935"
-      - "554:554"
-      - "${OWL_ZLM_HTTP_PORT:-8080}:80"
-      - "8443:443"
-      - "10000:10000"
-      - "10000:10000/udp"
-      - "20000-20100:20000-20100"
-      - "20000-20100:20000-20100/udp"
-      - "8000:8000/udp"
-      - "9000:9000/udp"
+      ZLM_HTTP_PORT: ${OWL_ZLM_HTTP_PORT:-8080}
+    # Linux 宿主机网络，避免为 30000-50000 创建数万条端口映射。
+    network_mode: host
     volumes:
       - ./data/zlm-config:/opt/media/conf
-      - ./data/recordings:/opt/media/bin/configs/recordings
+      - ./data/recordings:/app/configs/recordings
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS 'http://127.0.0.1/index/api/getApiList?secret=$${OWL_MEDIA_SECRET}' >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS \"http://127.0.0.1:$${ZLM_HTTP_PORT}/index/api/getApiList?secret=$${OWL_MEDIA_SECRET}\" >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 18
       start_period: 10s
-    networks:
-      - owl-v1
-
 networks:
   owl-v1:
     driver: bridge

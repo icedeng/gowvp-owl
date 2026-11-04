@@ -295,11 +295,11 @@ async function toggleAI() {
 async function toggleRecording() {
   if (!selectedChannel.value) return;
   const next =
-    (selectedChannel.value.ext?.record_mode || "always") === "none"
+    (selectedChannel.value.ext?.record_mode || "none") === "none"
       ? "always"
       : "none";
   try {
-    await action(next === "always" ? "开启持续录像" : "停止录像", () =>
+    await action(next === "always" ? "开启手动录像" : "停止录像", () =>
       api.recordMode(selectedChannel.value!.id, next)
     );
     selectedChannel.value.ext = {
@@ -521,7 +521,7 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
                 :class="channel.is_online ? 'online' : 'offline'"
                 >{{ channel.is_online ? "在线" : "离线" }}</span
               ><span
-                v-if="(channel.ext?.record_mode || 'always') !== 'none'"
+                v-if="(channel.ext?.record_mode || 'none') !== 'none'"
                 class="rec"
                 >REC</span
               ></span
@@ -754,14 +754,14 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
                 @change="toggleAI" /><span class="slider" /></span></label
           ><label class="toggle-row"
             ><span
-              ><strong>持续录像</strong
+              ><strong>手动录像</strong
               ><small class="text-slate-500"
-                >AI 录制暂不开放</small
+                >开启后录制，手动停止后结束</small
               ></span
             ><span class="switch"
               ><input
                 :checked="
-                  (selectedChannel?.ext?.record_mode || 'always') !== 'none'
+                  (selectedChannel?.ext?.record_mode || 'none') !== 'none'
                 "
                 type="checkbox"
                 @change="toggleRecording" /><span class="slider" /></span

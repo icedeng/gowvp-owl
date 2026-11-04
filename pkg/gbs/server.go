@@ -576,7 +576,7 @@ func (s *Server) checkOfflineDevices(now time.Time) {
 		registrationExpired := registrationBindingExpired(state.LastRegisterAt, state.Expires, now)
 		if !state.IsOnline {
 			if state.OfflinePersistencePending {
-				if _, err := s.logoutDeviceIfCurrent(key, state); err != nil {
+				if _, err := s.setDeviceOfflineIfCurrent(key, state, state.RegistrationClosed || registrationExpired); err != nil {
 					slog.Error("retry persisting device offline state failed", "device_id", key, "err", err)
 				}
 			} else if !state.RegistrationClosed && registrationExpired {
@@ -621,8 +621,8 @@ func (s *Server) checkOfflineDevices(now time.Time) {
 		if state.LastKeepaliveAt.IsZero() {
 			// 如果注册时间也超过了超时时间，则判定离线
 			if !state.LastRegisterAt.IsZero() && now.Sub(state.LastRegisterAt) >= timeout {
-				if _, err := s.logoutDeviceIfCurrent(key, state); err != nil {
-					slog.Error("logout device failed", "device_id", key, "err", err)
+				if _, err := s.setDeviceOfflineIfCurrent(key, state, false); err != nil {
+					slog.Error("persist heartbeat offline state failed", "device_id", key, "err", err)
 				}
 			}
 			return true
@@ -639,9 +639,9 @@ func (s *Server) checkOfflineDevices(now time.Time) {
 					return true
 				}
 			}
-			changed, err := s.logoutDeviceIfCurrent(key, state)
+			changed, err := s.setDeviceOfflineIfCurrent(key, state, false)
 			if err != nil {
-				slog.Error("logout device failed", "device_id", key, "err", err)
+				slog.Error("persist heartbeat offline state failed", "device_id", key, "err", err)
 			} else if changed {
 				slog.Info("device offline detected",
 					"device_id", key,
@@ -657,12 +657,20 @@ func (s *Server) checkOfflineDevices(now time.Time) {
 }
 
 func (s *Server) logoutDeviceIfCurrent(deviceID string, expected deviceRuntimeState) (bool, error) {
+	return s.setDeviceOfflineIfCurrent(deviceID, expected, true)
+}
+
+func (s *Server) setDeviceOfflineIfCurrent(deviceID string, expected deviceRuntimeState, closeRegistration bool) (bool, error) {
 	unlock := s.gb.lockRegisterOperation(deviceID)
 	defer unlock()
-	err := s.gb.logout(deviceID, func(d *ipc.Device) error {
+	err := s.gb.setDeviceOffline(deviceID, closeRegistration, func(d *ipc.Device) error {
 		if d.Expires != expected.Expires ||
 			!d.RegisteredAt.Time.Equal(expected.LastRegisterAt) ||
 			!d.KeepaliveAt.Time.Equal(expected.LastKeepaliveAt) {
+			return errOfflineSnapshotStale
+		}
+		// 迟到的心跳扫描不得重新打开已注销或已撤销凭据的绑定。
+		if !closeRegistration && persistedRegistrationClosed(d) {
 			return errOfflineSnapshotStale
 		}
 		d.IsOnline = false
@@ -683,7 +691,7 @@ func (s *Server) logoutDeviceIfCurrent(deviceID string, expected deviceRuntimeSt
 		if sameOfflineSnapshotLocked(current, expected) {
 			current.IsOnline = false
 			current.offlinePersistencePending = true
-			current.registrationClosed = true
+			current.registrationClosed = closeRegistration
 			clearPendingDeviceStatusLocked(current)
 			clearPendingKeepaliveLocked(current)
 			marked = true

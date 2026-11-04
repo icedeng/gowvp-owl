@@ -19,8 +19,9 @@ import (
 )
 
 type UserAPI struct {
-	conf   *conf.Bootstrap
-	secret *Secret
+	conf          *conf.Bootstrap
+	secret        *Secret
+	credentialsMu *sync.RWMutex
 }
 
 type Secret struct {
@@ -80,8 +81,9 @@ func (s *Secret) Decrypt(ciphertext string) ([]byte, error) {
 
 func NewUserAPI(conf *conf.Bootstrap) UserAPI {
 	return UserAPI{
-		conf:   conf,
-		secret: &Secret{},
+		conf:          conf,
+		secret:        &Secret{},
+		credentialsMu: new(sync.RWMutex),
 	}
 }
 
@@ -121,6 +123,8 @@ func (api UserAPI) login(_ *gin.Context, in *loginInput) (*loginOutput, error) {
 	}
 
 	// 凭据必须由安全配置初始化，不再回退到固定默认密码。
+	api.credentialsMu.RLock()
+	defer api.credentialsMu.RUnlock()
 	if api.conf.Server.Username == "" || api.conf.Server.Password == "" {
 		return nil, reason.ErrServer.WithMsg("管理员凭据未配置")
 	}
@@ -166,17 +170,18 @@ func (api UserAPI) updateCredentials(_ *gin.Context, in *updateCredentialsInput)
 	}
 
 	// 校验旧密码
+	api.credentialsMu.Lock()
+	defer api.credentialsMu.Unlock()
 	currentPassword := api.conf.Server.Password
 	if credentials.OldPassword != currentPassword {
 		return nil, reason.ErrServer.WithMsg("旧密码错误")
 	}
 
-	api.conf.Server.Username = credentials.Username
-	api.conf.Server.Password = credentials.Password
-
-	if err := conf.WriteConfig(api.conf, api.conf.ConfigPath); err != nil {
+	if err := conf.SaveAdminCredentials(api.conf, credentials.Username, credentials.Password); err != nil {
 		return nil, reason.ErrServer.WithMsg("保存配置失败: " + err.Error())
 	}
+	api.conf.Server.Username = credentials.Username
+	api.conf.Server.Password = credentials.Password
 
 	return gin.H{"msg": "凭据更新成功"}, nil
 }

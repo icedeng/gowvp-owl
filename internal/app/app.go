@@ -43,11 +43,11 @@ func Run(bc *conf.Bootstrap) {
 	switch bc.Server.Recording.DefaultMode {
 	case "", "always", "ai", "none":
 		if bc.Server.Recording.DefaultMode == "" {
-			bc.Server.Recording.DefaultMode = "always"
+			bc.Server.Recording.DefaultMode = "none"
 		}
 	default:
-		slog.Warn("invalid recording default mode, fallback to always", "mode", bc.Server.Recording.DefaultMode)
-		bc.Server.Recording.DefaultMode = "always"
+		slog.Warn("invalid recording default mode, fallback to none", "mode", bc.Server.Recording.DefaultMode)
+		bc.Server.Recording.DefaultMode = "none"
 	}
 	ipc.SetDefaultRecordMode(bc.Server.Recording.DefaultMode)
 

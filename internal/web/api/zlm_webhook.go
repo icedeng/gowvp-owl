@@ -231,11 +231,7 @@ func (w WebHookAPI) onStreamChanged(c *gin.Context, in *onStreamChangedInput) (D
 		// 流注册时根据录像模式决定是否启动录制
 		ch, err := w.ipcCore.GetChannelByAppStreamOrID(ctx, app, stream)
 		if err != nil {
-			w.log.WarnContext(ctx, "获取通道信息失败，尝试启动录制", "stream", stream, "err", err)
-			// 找不到通道时仍尝试按旧逻辑启动录制
-			if err := w.recordingCore.StartRecording(ctx, channelType, app, stream); err != nil {
-				w.log.WarnContext(ctx, "启动录制失败", "stream", stream, "err", err)
-			}
+			w.log.WarnContext(ctx, "获取通道信息失败，不自动启动录制", "stream", stream, "err", err)
 			return newDefaultOutputOK(), nil
 		}
 

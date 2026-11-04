@@ -66,6 +66,8 @@ init_env() {
 
   local media_ip="${2:-CHANGE_ME}"
   local image_tag="v1-$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || printf 'local')"
+  local database_password
+  database_password="$(generate_secret 32)"
   umask 077
   printf '%s\n' \
     "OWL_IMAGE_TAG=${image_tag}" \
@@ -76,6 +78,9 @@ init_env() {
     "OWL_JWT_SECRET=$(generate_secret 32)" \
     "OWL_RTMP_SECRET=$(generate_secret 32)" \
     "OWL_WEBHOOK_SECRET=$(generate_secret 32)" \
+    "OWL_POSTGRES_PASSWORD=$(generate_secret 32)" \
+    "OWL_POSTGRES_APP_PASSWORD=${database_password}" \
+    "OWL_DATABASE_DSN=postgres://gowvp:${database_password}@postgres:5432/gowvp?sslmode=disable&TimeZone=Asia/Shanghai" \
     "OWL_SIP_PASSWORD=" \
     "OWL_HTTP_PORT=15123" \
     "OWL_ZLM_HTTP_PORT=8080" >"$ENV_FILE"
@@ -103,18 +108,20 @@ validate_runtime_env() {
   case "$media_ip" in
     127.*|localhost|zlm|gowvp) fail "OWL_MEDIA_SDP_IP 必须是真机可访问的宿主机地址: $media_ip" ;;
   esac
-  for key in OWL_ADMIN_PASSWORD OWL_JWT_SECRET OWL_RTMP_SECRET OWL_WEBHOOK_SECRET; do
+  for key in OWL_ADMIN_PASSWORD OWL_JWT_SECRET OWL_RTMP_SECRET OWL_WEBHOOK_SECRET OWL_POSTGRES_PASSWORD OWL_POSTGRES_APP_PASSWORD; do
     value="$(env_value "$key")"
     min_length=32
     [[ -n "$value" && "$value" != "CHANGE_ME" ]] || fail "请在 $ENV_FILE 设置 $key"
     [[ ${#value} -ge $min_length ]] || fail "$key 长度至少为 $min_length 个字符"
   done
+  [[ "$(env_value OWL_DATABASE_DSN)" == postgres* ]] || fail "请设置 PostgreSQL OWL_DATABASE_DSN，旧 SQLite 数据需先迁移"
 }
 
 prepare_data_dirs() {
   mkdir -p \
     "${SCRIPT_DIR}/data/configs" \
     "${SCRIPT_DIR}/data/logs" \
+    "${SCRIPT_DIR}/data/postgres" \
     "${SCRIPT_DIR}/data/recordings" \
     "${SCRIPT_DIR}/data/zlm-config"
 
@@ -154,7 +161,8 @@ build_artifacts() {
 
   log "编译管理前端"
   pnpm --dir "${ROOT_DIR}/admin-ui" install --frozen-lockfile
-  pnpm --dir "${ROOT_DIR}/admin-ui" build
+  # Owl 直接提供 API，固定同源根路径，避免开发用 .env.local 的 /api 代理前缀进入发布包。
+  VITE_API_BASE_URL=/ pnpm --dir "${ROOT_DIR}/admin-ui" build
   cp -R "${ROOT_DIR}/admin-ui/dist/." "${artifact_dir}/frontend/"
 }
 

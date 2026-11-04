@@ -60,6 +60,32 @@ func newTestCore(sms *mockSMS, ipc *mockIPC, play *mockPlay) Core {
 	)
 }
 
+func TestSync_UnconfiguredChannelsDoNotPullOrRecord(t *testing.T) {
+	sms := &mockSMS{streams: map[string]bool{"rtp/existing": true}}
+	channels := &mockIPC{channels: []ChannelInfo{
+		{ID: "new", App: "rtp", Stream: "new"},
+		{ID: "existing", App: "rtp", Stream: "existing"},
+	}}
+	play := &mockPlay{}
+	c := newTestCore(sms, channels, play)
+	c.syncRecordingTasks(context.Background())
+	if sms.startedCount.Load() != 0 || play.triggeredCount.Load() != 0 || sms.stoppedCount.Load() != 1 {
+		t.Fatalf("未配置通道被自动拉流/录像，或旧录制未停止: start=%d trigger=%d stop=%d", sms.startedCount.Load(), play.triggeredCount.Load(), sms.stoppedCount.Load())
+	}
+}
+
+func TestStartRequestedRecordingPullsMissingStreamImmediately(t *testing.T) {
+	sms := &mockSMS{streams: map[string]bool{}}
+	play := &mockPlay{}
+	c := newTestCore(sms, &mockIPC{}, play)
+	if err := c.StartRequestedRecording(context.Background(), ChannelInfo{ID: "ch1", App: "rtp", Stream: "ch1"}); err != nil {
+		t.Fatal(err)
+	}
+	if play.triggeredCount.Load() != 1 || sms.startedCount.Load() != 1 {
+		t.Fatal("手动开启录像未立即拉流并开始录制")
+	}
+}
+
 // TestSync_StartRecording 应录制+流在但未录制 → startRecord
 func TestSync_StartRecording(t *testing.T) {
 	sms := &mockSMS{streams: map[string]bool{"rtp/ch1": false}}
@@ -171,7 +197,7 @@ func TestSync_Mixed(t *testing.T) {
 	}
 }
 
-// TestSync_EmptyRecordMode 空串 RecordMode 视为 always
+// TestSync_EmptyRecordMode 空串 RecordMode 不自动录像。
 func TestSync_EmptyRecordMode(t *testing.T) {
 	sms := &mockSMS{streams: map[string]bool{"rtp/ch1": false}}
 	ipc := &mockIPC{channels: []ChannelInfo{
@@ -182,7 +208,7 @@ func TestSync_EmptyRecordMode(t *testing.T) {
 
 	c.syncRecordingTasks(context.Background())
 
-	if got := sms.startedCount.Load(); got != 1 {
-		t.Fatalf("空串应视为 always, startRecord 调用次数: got %d, want 1", got)
+	if got := sms.startedCount.Load(); got != 0 {
+		t.Fatalf("空串不应开启录像, startRecord 调用次数: got %d, want 0", got)
 	}
 }

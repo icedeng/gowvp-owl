@@ -1,0 +1,176 @@
+services:
+  gowvp:
+    image: owl-v1-service:${OWL_SERVICE_IMAGE_TAG:-${OWL_IMAGE_TAG:?set OWL_IMAGE_TAG}}
+    platform: linux/amd64
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    cpus: "2.0"
+    mem_limit: 2g
+    environment:
+      OWL_ADMIN_USERNAME: ${OWL_ADMIN_USERNAME:-admin}
+      OWL_ADMIN_PASSWORD: ${OWL_ADMIN_PASSWORD:?set OWL_ADMIN_PASSWORD}
+      OWL_JWT_SECRET: ${OWL_JWT_SECRET:?set OWL_JWT_SECRET}
+      OWL_RTMP_SECRET: ${OWL_RTMP_SECRET:?set OWL_RTMP_SECRET}
+      OWL_WEBHOOK_SECRET: ${OWL_WEBHOOK_SECRET:?set OWL_WEBHOOK_SECRET}
+      OWL_SIP_PASSWORD: ${OWL_SIP_PASSWORD:?set OWL_SIP_PASSWORD}
+      OWL_MEDIA_SECRET: ${OWL_MEDIA_SECRET:?set OWL_MEDIA_SECRET}
+      OWL_DATABASE_DSN: ${OWL_DATABASE_DSN:?set OWL_DATABASE_DSN}
+      OWL_MEDIA_IP: zlm
+      OWL_MEDIA_HTTP_PORT: "8080"
+      OWL_MEDIA_WEBHOOK_IP: "192.168.6.20"
+      OWL_MEDIA_SDP_IP: "192.168.6.20"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zlm:
+        condition: service_healthy
+    extra_hosts:
+      - "zlm:host-gateway"
+    ports:
+      - "0.0.0.0:15123:15123"
+      - "0.0.0.0:15060:15060"
+      - "0.0.0.0:15060:15060/udp"
+    volumes:
+      - type: bind
+        source: /www2/gowvp-v1/data/configs
+        target: /app/configs
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /www2/gowvp-v1/data/logs
+        target: /app/logs
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /www/gowvp-data/recordings
+        target: /app/configs/recordings
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /www/gowvp-data/downloads
+        target: /app/configs/downloads
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /www/gowvp-data/events
+        target: /app/configs/events
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /www/gowvp-data/cover
+        target: /app/configs/cover
+        bind:
+          create_host_path: false
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:15123/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      owl-v1:
+        # 保持现网原地址，避免旧 UDP DNAT 会话把录像机心跳送往已释放的地址。
+        ipv4_address: 172.19.0.3
+
+  postgres:
+    image: ${OWL_POSTGRES_IMAGE:-owl-v1-postgres:17-20261104}
+    platform: linux/amd64
+    pull_policy: never
+    restart: unless-stopped
+    cpus: "2.0"
+    mem_limit: 2g
+    shm_size: 256m
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: gowvp
+      POSTGRES_PASSWORD: ${OWL_POSTGRES_PASSWORD:?set OWL_POSTGRES_PASSWORD}
+      OWL_POSTGRES_APP_PASSWORD: ${OWL_POSTGRES_APP_PASSWORD:?set OWL_POSTGRES_APP_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - type: bind
+        source: /www2/gowvp-v1/data/postgres
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /www2/gowvp-v1/postgres-init.sh
+        target: /docker-entrypoint-initdb.d/10-gowvp.sh
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gowvp"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      owl-v1:
+        ipv4_address: 172.19.0.4
+
+  zlm:
+    image: owl-v1-zlm:${OWL_ZLM_IMAGE_TAG:-${OWL_IMAGE_TAG:?set OWL_IMAGE_TAG}}
+    platform: linux/amd64
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    cpus: "4.0"
+    mem_limit: 4g
+    environment:
+      OWL_MEDIA_SECRET: ${OWL_MEDIA_SECRET:?set OWL_MEDIA_SECRET}
+      ZLM_API_DEBUG: "0"
+      ZLM_HTTP_PORT: "8080"
+    # 大端口范围直接在宿主机监听，避免 40002 条 Docker TCP/UDP 映射。
+    network_mode: host
+    volumes:
+      - type: bind
+        source: /www2/gowvp-v1/data/zlm-config
+        target: /opt/media/conf
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /www/gowvp-data/recordings
+        target: /app/configs/recordings
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /www/gowvp-data/zlm-cache
+        target: /opt/media/cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /www2/gowvp-v1/data/zlm-fflogs
+        target: /opt/media/bin/fflogs
+        bind:
+          create_host_path: false
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://127.0.0.1:8080/index/api/getApiList?secret=$${OWL_MEDIA_SECRET}' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 10s
+networks:
+  owl-v1:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+          gateway: 172.19.0.1
+    driver_opts:
+      com.docker.network.bridge.name: br-owl-v1

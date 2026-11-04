@@ -4138,13 +4138,15 @@ func (a IPCAPI) setRecordMode(c *gin.Context, in *setRecordModeInput) (gin.H, er
 	if channel.Ext.IsNoneRecord() {
 		// none 模式：停止录制
 		if err := a.recordingCore.StopRecording(ctx, channel.GetApp(), channel.GetStream()); err != nil {
-			slog.WarnContext(ctx, "停止录制失败", "channel", channelID, "err", err)
+			return nil, reason.ErrServer.WithMsg("录像策略已保存，停止录制失败: " + err.Error())
 		}
 	} else {
 		// always/ai 模式：如果流在线则启动录制
 		if channel.IsOnline {
-			if err := a.recordingCore.StartRecording(ctx, channel.GetType(), channel.GetApp(), channel.GetStream()); err != nil {
-				slog.WarnContext(ctx, "启动录制失败", "channel", channelID, "err", err)
+			if err := a.recordingCore.StartRequestedRecording(ctx, recording.ChannelInfo{
+				ID: channel.ID, App: channel.GetApp(), Stream: channel.GetStream(), Type: channel.GetType(),
+			}); err != nil {
+				return nil, reason.ErrServer.WithMsg("录像策略已保存，启动录制失败: " + err.Error())
 			}
 		}
 	}

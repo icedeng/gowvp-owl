@@ -214,6 +214,9 @@ func (n *NodeManager) Run(bc *conf.Bootstrap, serverPort int) error {
 		return fmt.Errorf("media secret is required; set OWL_MEDIA_SECRET or provide zlm.ini/config.ini")
 	}
 	cfg := bc.Media
+	if driver, ok := n.drivers[ProtocolZLMediaKit].(*ZLMDriver); ok {
+		driver.noneReaderDelaySeconds.Store(int64(cfg.StreamNoneReaderDelaySeconds))
+	}
 	setValueFn := func(ms *MediaServer) {
 		ms.ID = DefaultMediaServerID
 		ms.IP = cfg.IP

@@ -104,8 +104,8 @@ func (c Core) syncRecordingTasks(ctx context.Context) {
 
 		key := ch.App + "/" + ch.Stream
 		isRecording, streamExists := recordingMap[key]
-		// 保持现有兼容语义：always 和 ai 都维持录制，none 才停止。
-		shouldRecord := ch.RecordMode != "none"
+		// 仅显式开启的通道维持录制，未配置的通道不自动拉流。
+		shouldRecord := ch.RecordMode == "always" || ch.RecordMode == "ai"
 
 		switch {
 		case !shouldRecord && isRecording:

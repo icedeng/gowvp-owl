@@ -57,12 +57,20 @@ async function encryptCredentials(publicKeyPem: string, plaintext: string, oaepS
   return forge.util.encode64(ciphertext)
 }
 
-export async function login(username: string, password: string): Promise<LoginResponse> {
+async function encryptedPayload(credentials: object): Promise<{ data: string }> {
   const { data: keyResponse } = await http.get<LoginKeyResponse>('/login/key')
   const publicKeyPem = new TextDecoder().decode(base64ToBytes(keyResponse.key))
-  const ciphertext = await encryptCredentials(publicKeyPem, JSON.stringify({ username, password }), keyResponse.oaep_seed)
-  const { data } = await http.post<LoginResponse>('/login', { data: ciphertext })
+  const ciphertext = await encryptCredentials(publicKeyPem, JSON.stringify(credentials), keyResponse.oaep_seed)
+  return { data: ciphertext }
+}
+
+export async function login(username: string, password: string): Promise<LoginResponse> {
+  const { data } = await http.post<LoginResponse>('/login', await encryptedPayload({ username, password }))
   return data
+}
+
+export async function updateCredentials(username: string, password: string, oldPassword: string): Promise<void> {
+  await http.put('/users', await encryptedPayload({ username, password, old_password: oldPassword }))
 }
 
 export function clearSession() {

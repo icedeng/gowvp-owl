@@ -11,7 +11,7 @@ import (
 // Channel domain model
 type Channel struct {
 	ID        string    `gorm:"primaryKey" json:"id"`
-	DID       string    `gorm:"column:did;index;notNull;default:'';comment:父级 ID" json:"did"`
+	DID       string    `gorm:"column:did;index;index:idx_channels_did_created_at,priority:1;notNull;default:'';comment:父级 ID" json:"did"`
 	DeviceID  string    `gorm:"column:device_id;index;notNull;default:'';comment:国标编码" json:"device_id"`   // 国标编码
 	ChannelID string    `gorm:"column:channel_id;index;notNull;default:'';comment:国标编码" json:"channel_id"` // 国标编码
 	Name      string    `gorm:"column:name;notNull;default:'';comment:通道名称" json:"name"`                   // 通道名称
@@ -19,9 +19,9 @@ type Channel struct {
 	IsOnline  bool      `gorm:"column:is_online;notNull;default:FALSE;comment:是否在线" json:"is_online"`      // 是否在线
 	IsPlaying bool      `gorm:"column:is_playing;notNull;default:FALSE;comment:是否播放中" json:"is_playing"`   // 是否播放中
 	Ext       DeviceExt `gorm:"column:ext;notNull;default:'{}';type:jsonb" json:"ext"`
-	CreatedAt orm.Time  `gorm:"column:created_at;notNull;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"` // 创建时间
-	UpdatedAt orm.Time  `gorm:"column:updated_at;notNull;default:CURRENT_TIMESTAMP;comment:更新时间" json:"updated_at"` // 更新时间
-	Type      string    `gorm:"column:type;notNull;default:'';comment:通道类型" json:"type"`                            // 通道类型，继承父级设备类型
+	CreatedAt orm.Time  `gorm:"column:created_at;notNull;index:idx_channels_did_created_at,priority:2,sort:desc;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"` // 创建时间
+	UpdatedAt orm.Time  `gorm:"column:updated_at;notNull;default:CURRENT_TIMESTAMP;comment:更新时间" json:"updated_at"`                                                        // 更新时间
+	Type      string    `gorm:"column:type;notNull;default:'';comment:通道类型" json:"type"`                                                                                   // 通道类型，继承父级设备类型
 
 	// RTMP/RTSP 流配置字段
 	App    string       `gorm:"column:app;index;notNull;default:'';comment:应用名" json:"app"`        // 应用名 (RTMP/RTSP)

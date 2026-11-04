@@ -16,14 +16,14 @@ const (
 	TypeRTMP    = "RTMP"
 )
 
-var defaultRecordMode = "always"
+var defaultRecordMode = "none"
 
 func normalizeRecordMode(mode string) string {
 	switch mode {
 	case "always", "ai", "none":
 		return mode
 	default:
-		return "always"
+		return "none"
 	}
 }
 
@@ -89,7 +89,7 @@ type DeviceExt struct {
 	// GBCatalog 保存 GB/T 28181 目录项扩展和原始 XML，兼容 2014 及厂商私有字段。
 	GBCatalog *GBCatalogExt `json:"gb_catalog,omitempty"`
 
-	// 空串表示 always
+	// 空串使用全局默认模式（默认 none）。
 	RecordMode string `json:"record_mode"` // 录像模式, 一直录制:always, 按AI触发:ai, 不录制:none
 }
 

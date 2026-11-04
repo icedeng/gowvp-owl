@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	sdp "github.com/panjjo/gosdp"
 )
 
 // parseRTPDownloadFileSize 读取 2014 附录 F 定义的 a=filesize。
 func parseRTPDownloadFileSize(body []byte) (int64, bool, error) {
-	message, err := sdp.Decode(body)
+	message, err := decodeRTPAnswerSDP(body)
 	if err != nil {
 		return 0, false, fmt.Errorf("decode RTP download SDP: %w", err)
 	}

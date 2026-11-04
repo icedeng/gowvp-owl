@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -37,8 +38,22 @@ func parseActiveRTPAnswer(body []byte, mediaType string) (*activeRTPEndpoint, er
 	return validateRTPAnswer(body, mediaType, 2, "")
 }
 
+// decodeRTPAnswerSDP 兼容设备应答中空的可选 f= 行，按未提供媒体描述处理。
+// 仅移除这一种空扩展行，其余字段继续由原解析器及后续校验处理。
+func decodeRTPAnswerSDP(body []byte) (*sdp.Message, error) {
+	lines := bytes.SplitAfter(body, []byte("\n"))
+	kept := lines[:0]
+	for _, line := range lines {
+		if bytes.Equal(bytes.TrimSpace(line), []byte("f=")) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return sdp.Decode(bytes.Join(kept, nil))
+}
+
 func validateRTPAnswer(body []byte, mediaType string, streamMode int8, expectedSSRC string, offeredFormats ...string) (*activeRTPEndpoint, error) {
-	message, err := sdp.Decode(body)
+	message, err := decodeRTPAnswerSDP(body)
 	if err != nil {
 		return nil, fmt.Errorf("decode RTP SDP answer: %w", err)
 	}

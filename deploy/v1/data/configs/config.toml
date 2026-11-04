@@ -18,7 +18,8 @@
   Debug = false
   # 由 deploy/v1/.env 的 OWL_RTMP_SECRET 覆盖。
   RTMPSecret = ''
-  # 由 deploy/v1/.env 的 OWL_ADMIN_USERNAME/OWL_ADMIN_PASSWORD 覆盖。
+  # 首次登录由 deploy/v1/.env 的 OWL_ADMIN_USERNAME/OWL_ADMIN_PASSWORD 覆盖。
+  # 网页修改后，使用同目录的 admin-credentials.toml，重启仍生效；备份时需包含它。
   Username = 'admin'
   Password = ''
 
@@ -47,12 +48,12 @@
       AccessIps = ['::1', '127.0.0.1']
 
   [Server.Recording]
-    # true=全局关闭录像；真机测试默认开启。
+    # false=允许手动录像；true 会连手动录像一起禁用。
     Disabled = false
-    # 通道未单独设置时的录像模式：always、ai、none。
-    DefaultMode = 'always'
+    # 默认不录像，仅管理端手动开启的通道录制：always、ai、none。
+    DefaultMode = 'none'
     # Owl 与 ZLM 共享的容器内录像路径，不建议修改。
-    StorageDir = './configs/recordings'
+    StorageDir = '/app/configs/recordings'
     # 录像保留天数。
     RetainDays = 3
     # 磁盘使用率超过该百分比后执行循环覆盖。
@@ -71,8 +72,9 @@
 
 [Data]
   [Data.Database]
-    # 默认使用 SQLite，文件持久化在 deploy/v1/data/configs/data.db。
-    Dsn = './configs/data.db'
+    # v1 使用独立 PostgreSQL；完整连接串及密码由 .env 的 OWL_DATABASE_DSN 注入。
+    # 从 SQLite 升级必须先迁移并核对数据，不能只改这里后直接启动。
+    Dsn = 'postgres://gowvp@postgres:5432/gowvp?sslmode=disable&TimeZone=Asia/Shanghai'
     MaxIdleConns = 10
     MaxOpenConns = 50
     ConnMaxLifetime = '6h0m0s'
@@ -164,8 +166,8 @@
     # 级联中继对上级宣告的地址；为空时使用 Media.SDPIP。
     RelayAdvertiseIP = ''
     # compose 已映射该 TCP 端口段。
-    RelayPortStart = 30200
-    RelayPortEnd = 30300
+    RelayPortStart = 50200
+    RelayPortEnd = 50300
     # 单文件最大 10 GiB。
     MaxFileSize = 10737418240
     GlobalConcurrency = 4
@@ -227,13 +229,18 @@
 [Media]
   # 以下连接参数均由 deploy/v1/.env/Compose 覆盖；保留值便于脱离 Compose 排查。
   IP = 'zlm'
-  HTTPPort = 80
+  HTTPPort = 8080
   Secret = ''
   Type = 'zlm'
   # 设备直接上传抓拍图片的公网/局域网回调基础地址，按需填写。
   GBSnapshotBaseURL = ''
   GBSnapshotFFmpegConcurrency = 2
-  WebHookIP = 'gowvp'
-  RTPPortRange = '20000-20100'
+  # ZLM 使用宿主机网络，回调宿主机上发布的管理端口。
+  WebHookIP = '192.168.1.100'
+  # 30000 用于 WebRTC，30001-50000 用于国标 RTP/RTCP；TCP/UDP 均允许所有来源。
+  RTPPortRange = '30000-50000'
+  # 无人观看超过此秒数自动停止推流，管理端“SIP 设置 → 视频断流”可修改。
+  # 手动录像期间不自动断流；停止录像后重新计时。
+  StreamNoneReaderDelaySeconds = 180
   # 【必改】应与 Sip.Host、deploy/v1/.env 的 OWL_MEDIA_SDP_IP 一致。
   SDPIP = '192.168.1.100'

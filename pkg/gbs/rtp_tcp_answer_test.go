@@ -71,6 +71,52 @@ func TestValidateRTPAnswerRejectsUnofferedPayload(t *testing.T) {
 	}
 }
 
+func TestValidateRTPAnswerEmptyMediaDescription(t *testing.T) {
+	// 使用真机应答结构，保留厂商属性，不包含真实设备凭据。
+	udp := "v=0\r\no=34020000001110000201 0 0 IN IP4 192.0.2.20\r\n" +
+		"s=Network Video Recorder\r\nc=IN IP4 192.0.2.20\r\nt=0 0\r\n" +
+		"m=video 62032 RTP/AVP 96\r\na=sendonly\r\na=rtpmap:96 PS/90000\r\n" +
+		"a=username:device\r\na=password:example\r\na=filesize:0\r\ny=0100000001\r\nf=\r\n"
+	tests := []struct {
+		name string
+		body string
+		mode int8
+		want string
+	}{
+		{name: "UDP device answer", body: udp},
+		{name: "LF answer", body: strings.ReplaceAll(udp, "\r\n", "\n")},
+		{name: "empty format at EOF", body: strings.TrimSuffix(udp, "\r\n")},
+		{name: "populated format", body: strings.Replace(udp, "f=\r\n", "f=v/////a///\r\n", 1)},
+		{name: "TCP answer", body: string(activeTCPAnswer("video", "192.0.2.20", "passive", "sendonly")) + "f=\r\n", mode: 2},
+		{name: "empty required connection", body: strings.Replace(udp, "c=IN IP4 192.0.2.20", "c=", 1), want: "decode RTP SDP answer"},
+		{name: "empty SSRC", body: strings.Replace(udp, "y=0100000001", "y=", 1), want: "decode RTP SDP answer"},
+		{name: "mismatched SSRC", body: strings.Replace(udp, "y=0100000001", "y=0100000002", 1), want: "does not match offer"},
+		{name: "unoffered payload", body: strings.Replace(udp, "RTP/AVP 96", "RTP/AVP 97", 1), want: "not offered"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			endpoint, err := validateRTPAnswer([]byte(tt.body), "video", tt.mode, "0100000001", "96")
+			if tt.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("error = %v, want %q", err, tt.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if endpoint.IP.String() != "192.0.2.20" || endpoint.Port <= 0 {
+				t.Fatalf("endpoint = %+v", endpoint)
+			}
+			if tt.mode == 0 {
+				if _, _, err := parseRTPDownloadFileSize([]byte(tt.body)); err != nil {
+					t.Fatalf("download answer rejected: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildVoiceSDPRejectsInvalidStreamMode(t *testing.T) {
 	if _, err := buildVoiceSDP(gb10ChannelID, "192.0.2.10", 9000, 3, "0100000001"); err == nil || !strings.Contains(err.Error(), "invalid RTP stream mode") {
 		t.Fatalf("error = %v", err)

@@ -67,9 +67,10 @@ type SwaggerPlayResponse struct {
 
 // SwaggerConfigInfoOutput 是系统配置摘要响应。
 type SwaggerConfigInfoOutput struct {
-	SIP        SwaggerSIPConfig `json:"sip"`         // 当前系统使用的 SIP 配置；对端密码和摘要 seed 已脱敏
-	SIPSecrets SIPSecretStatus  `json:"sip_secrets"` // 已脱敏密钥的“是否配置”状态
-	AccessInfo SIPAccessInfo    `json:"access_info"` // 设备接入所需的精简地址信息
+	Media      mediaPlaybackConfig `json:"media"`       // 播放和无人观看断流配置，不含媒体密钥
+	SIP        SwaggerSIPConfig    `json:"sip"`         // 当前系统使用的 SIP 配置；对端密码和摘要 seed 已脱敏
+	SIPSecrets SIPSecretStatus     `json:"sip_secrets"` // 已脱敏密钥的“是否配置”状态
+	AccessInfo SIPAccessInfo       `json:"access_info"` // 设备接入所需的精简地址信息
 }
 
 // SwaggerSIPConfig 是 Swagger 友好的 SIP 配置模型。

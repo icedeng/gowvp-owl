@@ -147,7 +147,8 @@ export const api = {
 
   mediaServers: (params?: ListParams) => http.get<ApiPage<MediaServer>>('/media_servers', { params }),
   editMediaServer: (id: string, body: Record<string, unknown>) => http.put<MediaServer>(`/media_servers/${encodeURIComponent(id)}`, body),
-  configInfo: () => http.get<{ sip?: SipConfig; sip_secrets?: SipSecretStatus; access_info?: SipAccessInfo }>('/configs/info'),
+  configInfo: () => http.get<{ sip?: SipConfig; sip_secrets?: SipSecretStatus; access_info?: SipAccessInfo; media?: { stream_none_reader_delay_seconds: number } }>('/configs/info'),
+  updateMedia: (seconds: number) => http.put('/configs/info/media', { stream_none_reader_delay_seconds: seconds }),
   updateSip: (body: SipConfig) => http.put('/configs/info/sip', body),
   cascadeStatuses: () => http.get<{ items?: CascadePlatformStatus[] }>('/gb28181/cascade/status'),
   annexGAlarms: (params?: ListParams) => http.get<AnnexGAuditPage<AnnexGAlarmAudit>>('/gb28181/annex-g/alarms', { params }),

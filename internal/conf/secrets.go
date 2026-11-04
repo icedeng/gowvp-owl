@@ -94,6 +94,10 @@ func SecureRuntimeSecrets(cfg *Bootstrap) error {
 	applyEnv(envSIPPassword, &cfg.Sip.Password)
 	applyEnv(envMediaSecret, &cfg.Media.Secret)
 	applyEnv(envWebhookSecret, &cfg.Server.Webhook.RecvSecret)
+	// 环境变量用于初始化；网页显式保存的管理员凭据在重启后仍然生效。
+	if err := loadAdminCredentials(cfg); err != nil {
+		return fmt.Errorf("load admin credentials: %w", err)
+	}
 	applyEnv(envMediaIP, &cfg.Media.IP)
 	applyEnv(envMediaWebhook, &cfg.Media.WebHookIP)
 	applyEnv(envMediaSDPIP, &cfg.Media.SDPIP)

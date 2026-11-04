@@ -1,0 +1,11 @@
+/www2/gowvp-v1/data/zlm-fflogs/*.log {
+    daily
+    maxsize 100M
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su root root
+}

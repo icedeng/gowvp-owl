@@ -50,7 +50,6 @@ func (c Core) StartCleanupWorker(ctx context.Context, days int) {
 func (c Core) cleanupExpiredEvents(days int) {
 	ctx := context.Background()
 	cutoffTime := time.Now().AddDate(0, 0, -days)
-	cutoffMs := cutoffTime.UnixMilli()
 
 	slog.Info("starting event cleanup", "cutoff_time", cutoffTime.Format(time.DateTime), "retain_days", days)
 
@@ -64,7 +63,7 @@ func (c Core) cleanupExpiredEvents(days int) {
 		var events []*Event
 		pager := web.PagerFilter{Page: 1, Size: batchSize}
 		_, err := c.store.Event().List(ctx, &events, &pager,
-			orm.Where("started_at < ?", cutoffMs),
+			orm.Where("started_at < ?", orm.Time{Time: cutoffTime}),
 		)
 		if err != nil {
 			slog.Error("failed to query expired events", "err", err)

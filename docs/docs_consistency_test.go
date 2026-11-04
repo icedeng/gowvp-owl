@@ -78,6 +78,7 @@ func TestZLMediaKitEntrypointSynchronizesSecret(t *testing.T) {
 			"ZLM_CONFIG_TEMPLATE="+templatePath,
 			"OWL_MEDIA_SECRET="+secret,
 			"ZLM_API_DEBUG=0",
+			"ZLM_HTTP_PORT=8080",
 		)
 		return cmd.Run()
 	}
@@ -97,6 +98,9 @@ func TestZLMediaKitEntrypointSynchronizesSecret(t *testing.T) {
 		}
 		if strings.Count(string(body), "apiDebug=0") != 1 {
 			t.Fatalf("runtime ZLMediaKit config must disable secret-bearing API debug logs by default: %s", body)
+		}
+		if !strings.Contains(string(body), "[http]\nport=8080\n") {
+			t.Fatalf("ZLM host-network HTTP port was not applied: %s", body)
 		}
 	}
 	if err := os.WriteFile(configPath, []byte("api.secret=old\n[api]\nsecret=duplicate\nsecret=duplicate-again\napiDebug=1\napiDebug=1\n"), 0o600); err != nil {

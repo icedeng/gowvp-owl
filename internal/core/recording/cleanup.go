@@ -134,7 +134,10 @@ func (c Core) cleanupByDiskUsage() bool {
 		storageDir = "./recordings"
 	}
 
-	absStorageDir := filepath.Join(system.Getwd(), storageDir)
+	absStorageDir := storageDir
+	if !filepath.IsAbs(absStorageDir) {
+		absStorageDir = filepath.Join(system.Getwd(), absStorageDir)
+	}
 	if _, err := os.Stat(absStorageDir); os.IsNotExist(err) {
 		return false
 	}
@@ -395,7 +398,10 @@ func (c Core) batchDeleteRecordings(ctx context.Context, reason string, conditio
 
 	// 清理空目录
 	if c.conf != nil && c.conf.StorageDir != "" {
-		absStorageDir := filepath.Join(system.Getwd(), c.conf.StorageDir)
+		absStorageDir := c.conf.StorageDir
+		if !filepath.IsAbs(absStorageDir) {
+			absStorageDir = filepath.Join(system.Getwd(), absStorageDir)
+		}
 		cleanupEmptyDirs(absStorageDir)
 	}
 

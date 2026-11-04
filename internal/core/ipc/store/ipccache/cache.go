@@ -33,7 +33,19 @@ func (c *Cache) DeviceHistory() *ipc.DeviceHistoryStore {
 
 // LoadOrStore implements gbs.MemoryStorer.
 func (c *Cache) LoadOrStore(deviceID string, value *gbs.Device) {
-	c.devices.LoadOrStore(deviceID, value)
+	if value == nil {
+		return
+	}
+	for {
+		current, loaded := c.devices.LoadOrStore(deviceID, value)
+		if !loaded || current != nil {
+			return
+		}
+		// 兼容旧流程遗留的空对象，原子替换以免覆盖并发注册已建立的运行态。
+		if c.devices.CompareAndSwap(deviceID, current, value) {
+			return
+		}
+	}
 }
 
 func (c *Cache) Device() ipc.DeviceStorer {
@@ -131,7 +143,12 @@ func (c *Cache) LoadDeviceChannelsContext(ctx context.Context, deviceID string, 
 
 // RangeDevices implements gbs.MemoryStorer.
 func (c *Cache) RangeDevices(fn func(key string, value *gbs.Device) bool) {
-	c.devices.Range(fn)
+	c.devices.Range(func(key string, value *gbs.Device) bool {
+		if value == nil {
+			return true
+		}
+		return fn(key, value)
+	})
 }
 
 // Change implements gbs.MemoryStorer.
@@ -144,7 +161,7 @@ func (c *Cache) ChangeContext(ctx context.Context, deviceID string, changeFn fun
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	runtime, hasRuntime := c.devices.Load(deviceID)
+	runtime, hasRuntime := c.Load(deviceID)
 	change := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -207,7 +224,7 @@ func (c *Cache) ChangeContext(ctx context.Context, deviceID string, changeFn fun
 
 // GetChannel implements gbs.MemoryStorer.
 func (c *Cache) GetChannel(deviceID string, channelID string) (*gbs.Channel, bool) {
-	dev, ok := c.devices.Load(deviceID)
+	dev, ok := c.Load(deviceID)
 	if !ok {
 		return nil, false
 	}
@@ -216,10 +233,13 @@ func (c *Cache) GetChannel(deviceID string, channelID string) (*gbs.Channel, boo
 
 // Load implements gbs.MemoryStorer.
 func (c *Cache) Load(deviceID string) (*gbs.Device, bool) {
-	return c.devices.Load(deviceID)
+	device, loaded := c.devices.Load(deviceID)
+	return device, loaded && device != nil
 }
 
 // Store implements gbs.MemoryStorer.
 func (c *Cache) Store(deviceID string, value *gbs.Device) {
-	c.devices.Store(deviceID, value)
+	if value != nil {
+		c.devices.Store(deviceID, value)
+	}
 }

@@ -12,9 +12,11 @@ RUN apk add --no-cache \
 WORKDIR /app
 
 COPY build/deploy-v1/${TARGETARCH}/service/owl ./owl
+COPY build/deploy-v1/${TARGETARCH}/frontend/ ./www/
 
 RUN chmod +x ./owl && \
-    mkdir -p configs logs
+    mkdir -p configs logs && \
+    test -f ./www/index.html
 
 EXPOSE 15123 15060 15060/udp 15061 3702/udp 30200-30300
 

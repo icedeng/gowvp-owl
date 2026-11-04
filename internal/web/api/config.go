@@ -57,6 +57,7 @@ func registerConfig(g gin.IRouter, api ConfigAPI, handler ...gin.HandlerFunc) {
 
 		group.GET("/info", web.WrapH(api.getConfigInfo))
 		group.PUT("/info/sip", web.WrapH(api.updateSIP))
+		group.PUT("/info/media", web.WrapH(api.updateMedia))
 	}
 }
 
@@ -84,9 +85,10 @@ func (a ConfigAPI) deleteConfig(c *gin.Context, in *configIDInput) (any, error) 
 }
 
 type getConfigInfoOutput struct {
-	SIP        conf.SIP        `json:"sip"`
-	SIPSecrets SIPSecretStatus `json:"sip_secrets"`
-	AccessInfo SIPAccessInfo   `json:"access_info"`
+	Media      mediaPlaybackConfig `json:"media"`
+	SIP        conf.SIP            `json:"sip"`
+	SIPSecrets SIPSecretStatus     `json:"sip_secrets"`
+	AccessInfo SIPAccessInfo       `json:"access_info"`
 }
 
 // SIPPeerSecretStatus 只暴露密钥是否已配置，不返回任何密钥内容。
@@ -171,6 +173,7 @@ func (a ConfigAPI) getConfigInfo(c *gin.Context, _ *struct{}) (*getConfigInfoOut
 	}
 	redacted, secretStatus := redactSIPPeerSecrets(cfg)
 	return &getConfigInfoOutput{
+		Media:      mediaPlaybackConfig{StreamNoneReaderDelaySeconds: mediaNoneReaderDelay(a.conf.Media)},
 		SIP:        redacted,
 		SIPSecrets: secretStatus,
 		AccessInfo: sipAccessInfo(cfg, a.conf.Media.SDPIP),

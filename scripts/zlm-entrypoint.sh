@@ -15,7 +15,7 @@ case "$api_debug" in
   *) echo "ZLM_API_DEBUG must be 0 or 1" >&2; exit 1 ;;
 esac
 
-python3 - "$config_path" "${OWL_MEDIA_SECRET:-}" "$api_debug" <<'PY'
+python3 - "$config_path" "${OWL_MEDIA_SECRET:-}" "$api_debug" "${ZLM_HTTP_PORT:-}" <<'PY'
 import pathlib
 import re
 import sys
@@ -23,6 +23,9 @@ import sys
 path = pathlib.Path(sys.argv[1])
 secret = sys.argv[2]
 api_debug = sys.argv[3]
+http_port = sys.argv[4]
+if http_port and (not http_port.isdigit() or not 1 <= int(http_port) <= 65535):
+    raise SystemExit("ZLM_HTTP_PORT must be between 1 and 65535")
 if "\n" in secret or "\r" in secret:
     raise SystemExit("OWL_MEDIA_SECRET must not contain newlines")
 
@@ -111,6 +114,29 @@ if not api_debug_updated:
         if insert_at < len(rewritten) and secret_pattern.match(rewritten[insert_at]):
             insert_at += 1
         rewritten.insert(insert_at, f"apiDebug={api_debug}")
+
+if http_port:
+    # 同时兼容 ZLM 保存的扁平配置与镜像模板的分段配置。
+    http_section = None
+    in_http = False
+    port_updated = False
+    for index, line in enumerate(rewritten):
+        section = section_pattern.match(line)
+        if section:
+            in_http = section.group(1).strip().lower() == "http"
+            if in_http:
+                http_section = index
+        flat_port = re.match(r"^\s*http\.port\s*=", line, re.IGNORECASE)
+        if flat_port or (in_http and re.match(r"^\s*port\s*=", line, re.IGNORECASE)):
+            rewritten[index] = ("http.port=" if flat_port else "port=") + http_port
+            port_updated = True
+    if not port_updated:
+        if http_section is not None:
+            rewritten.insert(http_section + 1, "port=" + http_port)
+        elif prefixed_style:
+            rewritten.append("http.port=" + http_port)
+        else:
+            rewritten.extend(("[http]", "port=" + http_port))
 
 path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
 PY

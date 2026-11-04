@@ -1,6 +1,7 @@
 package data
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -20,6 +21,10 @@ var ProviderSet = wire.NewSet(SetupDB)
 // SetupDB 初始化数据存储
 func SetupDB(c *conf.Bootstrap) (*gorm.DB, error) {
 	cfg := c.Data.Database
+	// 部署凭据仅由环境注入，不写回可通过管理端修改的主配置。
+	if dsn := strings.TrimSpace(os.Getenv("OWL_DATABASE_DSN")); dsn != "" {
+		cfg.Dsn = dsn
+	}
 	dial, isSQLite := getDialector(cfg.Dsn)
 	if isSQLite {
 		cfg.MaxIdleConns = 1

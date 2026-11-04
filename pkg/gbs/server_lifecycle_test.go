@@ -365,6 +365,72 @@ func TestOfflineCheckMarksUnchangedTimedOutDeviceOffline(t *testing.T) {
 	}
 }
 
+func TestHeartbeatTimeoutAllowsKeepaliveRecovery(t *testing.T) {
+	now := time.Now()
+	registeredAt := now.Add(-5 * time.Minute)
+	memory := newFlowMemory(gb10DeviceID)
+	memory.persistent.IsOnline = true
+	memory.persistent.RegisteredAt = orm.Time{Time: registeredAt}
+	memory.persistent.KeepaliveAt = orm.Time{Time: registeredAt}
+	memory.persistent.Expires = 3600
+	setPersistedRegistrationClosed(memory.persistent, false)
+	memory.runtime.UpdateRuntime(func(device *Device) {
+		SyncRegistrationBindingRuntime(device, memory.persistent)
+	})
+	api := &GB28181API{}
+	server := &Server{gb: api, memoryStorer: memory}
+	api.svr = server
+
+	server.checkOfflineDevices(now)
+	if memory.persistent.IsOnline || memory.runtime.IsOnlineNow() {
+		t.Fatal("heartbeat timeout did not mark device offline")
+	}
+	if !runtimeRegistrationBindingActive(memory.runtime.runtimeSnapshot(), now) ||
+		!persistedRegistrationBindingActive(memory.persistent, now) {
+		t.Fatal("heartbeat timeout closed a valid registration")
+	}
+	body := []byte(`<Notify><CmdType>Keepalive</CmdType><SN>1</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Status>OK</Status></Notify>`)
+	response := runKeepaliveHandlerForDevice(t, newFlowConnection(), api, gb10DeviceID, "timeout-recovery", body)
+	assertFlowOK(t, response)
+	if !memory.persistent.IsOnline || !memory.runtime.IsOnlineNow() {
+		t.Fatal("returning heartbeat did not restore device online")
+	}
+	if !memory.persistent.RegisteredAt.Time.Equal(registeredAt) {
+		t.Fatal("heartbeat fabricated a new registration")
+	}
+	if _, exists := api.deviceOfflineTombstones.Load(gb10DeviceID); exists {
+		t.Fatal("recovered device retained offline operation tombstone")
+	}
+}
+
+func TestHeartbeatTimeoutPersistenceRetryPreservesBinding(t *testing.T) {
+	now := time.Now()
+	registeredAt := now.Add(-5 * time.Minute)
+	base := newFlowMemory(gb10DeviceID)
+	base.persistent.IsOnline = true
+	base.persistent.RegisteredAt = orm.Time{Time: registeredAt}
+	base.persistent.KeepaliveAt = orm.Time{Time: registeredAt}
+	base.persistent.Expires = 3600
+	setPersistedRegistrationClosed(base.persistent, false)
+	base.runtime.UpdateRuntime(func(device *Device) { SyncRegistrationBindingRuntime(device, base.persistent) })
+	memory := &probePersistenceFailureMemory{flowMemory: base, err: errors.New("database unavailable")}
+	api := &GB28181API{}
+	server := &Server{gb: api, memoryStorer: memory}
+	api.svr = server
+	server.checkOfflineDevices(now)
+	state := memory.runtime.runtimeSnapshot()
+	if state.IsOnline || !state.OfflinePersistencePending || state.RegistrationClosed {
+		t.Fatalf("failed heartbeat timeout persistence: %+v", state)
+	}
+	memory.err = nil
+	server.checkOfflineDevices(now.Add(time.Second))
+	state = memory.runtime.runtimeSnapshot()
+	if memory.persistent.IsOnline || state.IsOnline || state.OfflinePersistencePending ||
+		!runtimeRegistrationBindingActive(state, now) || !persistedRegistrationBindingActive(memory.persistent, now) {
+		t.Fatal("retry closed the registration or failed to persist offline state")
+	}
+}
+
 func TestOfflineCheckRegistrationExpiry(t *testing.T) {
 	now := time.Now()
 	tests := []struct {

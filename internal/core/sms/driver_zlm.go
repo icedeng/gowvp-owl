@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gowvp/owl/internal/notify"
@@ -38,7 +39,23 @@ func splitFirstPort(rng string) (string, string, bool) {
 var _ Driver = (*ZLMDriver)(nil)
 
 type ZLMDriver struct {
-	engine zlm.Engine
+	engine                 zlm.Engine
+	noneReaderDelaySeconds atomic.Int64
+}
+
+func (d *ZLMDriver) noneReaderDelay() int {
+	if seconds := d.noneReaderDelaySeconds.Load(); seconds > 0 {
+		return int(seconds)
+	}
+	return 180
+}
+
+func (d *ZLMDriver) setNoneReaderDelay(ms *MediaServer, seconds int) error {
+	engine := d.withConfig(ms)
+	_, err := engine.SetServerConfig(&zlm.SetServerConfigRequest{
+		GeneralStreamNoneReaderDelayMS: new(strconv.Itoa(seconds * 1000)),
+	})
+	return err
 }
 
 // GetStreamLiveAddr implements Driver.
@@ -150,12 +167,13 @@ func (d *ZLMDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL strin
 		ProtocolEnableFmp4:    new("0"),
 		ProtocolEnableHls:     new("0"),
 		ProtocolEnableHlsFmp4: new("1"),
+		ProtocolEnableMp4:     new("0"), // 仅通道显式开启时调用 startRecord。
 		RtmpEnhanced:          new("1"),
 
 		HookOnPlay:                     new(hookURL("/on_play")),
 		HookOnPublish:                  new(hookURL("/on_publish")),
 		HookOnStreamNoneReader:         new(hookURL("/on_stream_none_reader")),
-		GeneralStreamNoneReaderDelayMS: new("30000"),
+		GeneralStreamNoneReaderDelayMS: new(strconv.Itoa(d.noneReaderDelay() * 1000)),
 		HookOnStreamNotFound:           new(hookURL("/on_stream_not_found")),
 		HookOnRecordTs:                 new(""),
 		HookOnRecordMp4:                new(hookURL("/on_record_mp4")),
@@ -168,8 +186,10 @@ func (d *ZLMDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL strin
 		HookTimeoutSec:                 new("10"),
 		HookAliveInterval:              new(fmt.Sprint(ms.HookAliveInterval)),
 		ProtocolContinuePushMs:         new("3000"),
-		RtpProxyPortRange:              &portRange,
-		FfmpegLog:                      new("./fflogs/ffmpeg.log"),
+		// 手动录像作为消费者，停止录像后重新触发无人观看计时。
+		ProtocolMp4AsPlayer: new("1"),
+		RtpProxyPortRange:   &portRange,
+		FfmpegLog:           new("./fflogs/ffmpeg.log"),
 
 		// 为什么: 低延迟直播优化, 但保留 GOP 缓存保证首画面快速呈现。
 		// rtp_proxy.gop_cache 保持默认开启: 新连接进来立刻下发最近一个 I 帧缓冲, 首帧延迟 <1s; 由前端追帧消化多余缓冲。

@@ -60,7 +60,7 @@ const zones = ref<Zone[]>([]);
 const play = ref<PlayResult | null>(null);
 const snapshotUrl = ref("");
 const aiEnabled = ref(false);
-const recordMode = ref("always");
+const recordMode = ref("none");
 const remoteRecords = ref<Record<string, unknown> | null>(null);
 const gbQueryResult = ref<GBOperationOutput | null>(null);
 const gbControlResult = ref<GBOperationOutput | null>(null);
@@ -583,7 +583,7 @@ async function load() {
     selectedMediaServerId.value = data.config?.media_server_id?.trim() || "local";
     voiceForm.mediaServerId = selectedMediaServerId.value;
     aiEnabled.value = Boolean(data.ext?.enabled_ai);
-    recordMode.value = data.ext?.record_mode || "always";
+    recordMode.value = data.ext?.record_mode || "none";
 
     void loadRecordings(data.id, sequence);
     void loadZones(data.id, sequence);
@@ -1177,16 +1177,16 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
       <section v-else-if="activeTab === 'recordings'" id="channel-panel-recordings" class="channel-detail-section" role="tabpanel" aria-labelledby="channel-tab-recordings" tabindex="0">
         <div class="detail-section-head"><div><h2>录像与回看</h2><p>集中管理平台录像策略、录像片段和 GB28181 设备端录像。</p></div><RouterLink class="btn btn-primary" :to="`/recordings?channel=${encodeURIComponent(channel.id)}`"><Film />进入录像中心</RouterLink></div>
         <div class="channel-recording-summary">
-          <div><small>当前策略</small><strong>{{ recordMode === "always" ? "持续录像" : "不录制" }}</strong></div>
+          <div><small>当前策略</small><strong>{{ recordMode === "always" ? "手动录像已开启" : "不录制" }}</strong></div>
           <div><small>平台片段</small><strong>{{ resourceErrors.recordings ? "—" : recordingTotal }}</strong></div>
           <div><small>最近录像</small><strong>{{ resourceErrors.recordings ? "读取失败" : formatDate(recordings[0]?.started_at, "暂无") }}</strong></div>
         </div>
         <div class="channel-recording-grid">
           <article class="card form-section">
-            <div class="card-head"><div><h3 class="card-title">平台录像策略</h3><p class="card-sub">控制当前通道的媒体录制行为</p></div><Film /></div>
-            <label class="form-group"><span class="form-label">录像模式</span><select v-model="recordMode" class="select w-full"><option value="always">持续录像（always）</option><option value="none">不录制（none）</option><option value="ai" disabled>AI 触发（暂不可用）</option></select></label>
-            <div class="warning-box mt-4"><ShieldAlert /><span>AI 模式当前与持续录像行为相同，因此暂不允许切换。</span></div>
-            <button class="btn btn-primary mt-4" type="button" :disabled="Boolean(actionLoading)" @click="saveRecordMode"><Save />保存策略</button>
+            <div class="card-head"><div><h3 class="card-title">手动录像</h3><p class="card-sub">默认不录像。手动开启后持续录制，直至手动停止；关闭页面不会停止录像。</p></div><Film /></div>
+            <label class="form-group"><span class="form-label">录像开关</span><select v-model="recordMode" class="select w-full"><option value="always">开启手动录像</option><option value="none">停止录像</option><option value="ai" disabled>AI 触发（暂不可用）</option></select></label>
+            <p class="card-sub mt-4">手动录像期间不因无人观看而断流；停止录像后恢复无人观看自动断流。</p>
+            <button class="btn btn-primary mt-4" type="button" :disabled="Boolean(actionLoading)" @click="saveRecordMode"><Save />应用录像开关</button>
           </article>
 
           <article class="card card-pad">

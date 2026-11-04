@@ -14,6 +14,44 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestCreateWithoutAddressAllowsRegistrationRuntime(t *testing.T) {
+	store := ipcdb.NewDB(openCacheTestDatabase(t)).AutoMigrate(true)
+	cache := ipccache.NewCache(store)
+	device := &ipc.Device{
+		ID: "GB_first_register", DeviceID: "34020000001110000202", Type: ipc.TypeGB28181,
+	}
+	if err := cache.Device().Create(t.Context(), device); err != nil {
+		t.Fatal(err)
+	}
+	if runtime, exists := cache.Load(device.DeviceID); exists || runtime != nil {
+		t.Fatal("device without a signaling address published an unusable runtime")
+	}
+
+	device.Address = "192.0.2.51:5060"
+	runtime := gbs.NewDevice(nil, device)
+	if runtime == nil {
+		t.Fatal("registration runtime initialization failed")
+	}
+	cache.LoadOrStore(device.DeviceID, runtime)
+	if err := cache.ChangeContext(t.Context(), device.DeviceID, func(current *ipc.Device) error {
+		current.Address = device.Address
+		current.IsOnline = true
+		current.RegisteredAt = orm.Now()
+		current.KeepaliveAt = orm.Now()
+		current.Expires = 3600
+		return nil
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	current, exists := cache.Load(device.DeviceID)
+	if !exists || current != runtime || !current.IsOnlineNow() {
+		t.Fatal("successful registration did not publish an online runtime")
+	}
+	if to := current.To(); to == nil || to.URI == nil || to.URI.Host() != "192.0.2.51" {
+		t.Fatalf("registration target is unavailable: %v", to)
+	}
+}
+
 func TestChangeWaitsForDeviceRegistrationStateLock(t *testing.T) {
 	db := openCacheTestDatabase(t)
 	store := ipcdb.NewDB(db).AutoMigrate(true)

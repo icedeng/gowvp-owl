@@ -1,0 +1,11 @@
+[Unit]
+Description=GoWVP consistent local backup
+RequiresMountsFor=/www /www2
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/www2/gowvp-v1/maintenance.sh backup
+UMask=0077
+Nice=19
+IOSchedulingClass=idle

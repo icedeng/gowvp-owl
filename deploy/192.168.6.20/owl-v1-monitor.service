@@ -1,0 +1,10 @@
+[Unit]
+Description=GoWVP storage monitoring and playback cache cleanup
+RequiresMountsFor=/www /www2
+
+[Service]
+Type=oneshot
+ExecStart=/www2/gowvp-v1/maintenance.sh monitor
+UMask=0077
+Nice=19
+IOSchedulingClass=idle
