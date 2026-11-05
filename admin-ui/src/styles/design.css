@@ -668,9 +668,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .device-detail-page { --detail-gap: 14px; }
 .device-command-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; background: white; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: none; flex-wrap: wrap; }
 .device-command-identity { min-width: 0; display: flex; align-items: center; gap: 14px; }
-.device-command-back { width: 36px; height: 36px; display: grid; flex: 0 0 auto; place-items: center; color: #526078; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; transition: color .16s ease, background .16s ease, border-color .16s ease; }
-.device-command-back:hover { color: var(--blue); background: var(--blue-soft); border-color: #b8d1f3; }
-.device-command-back svg { width: 17px; height: 17px; }
+.page-back-btn { width: 36px; height: 36px; display: grid; flex: 0 0 auto; place-items: center; padding: 0; color: var(--muted); background: transparent; border: 0; border-radius: var(--radius-sm); text-decoration: none; cursor: pointer; transition: color .16s ease, background .16s ease; }
+.page-back-btn:hover, .page-back-btn:focus-visible { color: var(--blue); background: var(--blue-soft); }
+.page-back-btn:active { background: var(--panel-3); }
+.page-back-btn svg { width: 20px; height: 20px; }
 .device-command-icon { width: 52px; height: 52px; display: grid; flex: 0 0 auto; place-items: center; color: var(--blue); background: var(--blue-soft); border-radius: 11px; }
 .device-command-icon svg { width: 25px; height: 25px; }
 .device-command-title { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
@@ -1117,7 +1118,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .pagination { align-items: flex-start; flex-direction: column; gap: 4px; }
   .device-command-header { padding: 15px; }
   .device-command-identity { align-items: flex-start; }
-  .device-command-back { width: 44px; height: 44px; }
   .device-command-icon { display: none; }
   .device-command-title h1 { width: 100%; font-size: 19px; }
   .device-command-meta { gap: 6px 10px; }
@@ -1270,7 +1270,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   :root { --control-height: 44px; --control-small: 44px; --topbar-height: 56px; }
   .nav-link, .nav-group-toggle, .user-menu-item, .settings-nav a, .settings-nav button,
   .segmented button, .remote-select-more { min-height: var(--touch-target); }
-  .icon-btn, .more-btn, .device-row-action, .page-btn, .password-toggle { width: var(--touch-target); height: var(--touch-target); }
+  .icon-btn, .page-back-btn, .more-btn, .device-row-action, .page-btn, .password-toggle { width: var(--touch-target); height: var(--touch-target); }
   .user-chip, .remote-select-option, .device-row-detail, .tree-item, .tree-group { min-height: var(--touch-target); }
   .btn, .input, .select { min-height: var(--touch-target); }
   .remote-select-search, .remote-select-more { flex-shrink: 0; }
@@ -1333,9 +1333,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .gb-device-page .device-row-actions { gap: 6px; padding: 0; background: transparent; border: 0; }
 .gb-device-page .device-row-action, .device-channel-table .device-row-action { color: var(--blue); background: transparent; border: 0; border-radius: var(--radius-sm); }
 .gb-device-page .device-row-action:hover, .device-channel-table .device-row-action:hover { background: var(--blue-soft); }
-.gb-device-page a.device-row-action svg, .device-channel-table a.device-row-action svg, .device-detail-page .device-command-back svg { width: 20px; height: 20px; }
-.device-detail-page .device-command-back, .gb-device-page .page-btn, .device-detail-page .page-btn { background: transparent; border: 0; }
-.device-detail-page .device-command-back:hover, .gb-device-page .page-btn:hover:not(:disabled), .device-detail-page .page-btn:hover:not(:disabled) { color: var(--blue); background: var(--blue-soft); }
+.gb-device-page a.device-row-action svg, .device-channel-table a.device-row-action svg { width: 20px; height: 20px; }
+.gb-device-page .page-btn, .device-detail-page .page-btn { background: transparent; border: 0; }
+.gb-device-page .page-btn:hover:not(:disabled), .device-detail-page .page-btn:hover:not(:disabled) { color: var(--blue); background: var(--blue-soft); }
 .gb-device-page .page-btn svg, .device-detail-page .page-btn svg { width: 20px; height: 20px; }
 .resource-state-note { max-width: 180px; }
 .device-registration-alert { margin-top: 12px; }

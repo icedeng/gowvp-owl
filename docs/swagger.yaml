@@ -1586,6 +1586,50 @@ definitions:
         example: 1920
         type: integer
     type: object
+  api.captureScheduleItem:
+    properties:
+      channel_code:
+        type: string
+      channel_id:
+        type: string
+      channel_name:
+        type: string
+      channel_type:
+        type: string
+      device_code:
+        type: string
+      device_id:
+        type: string
+      device_name:
+        type: string
+      enabled:
+        type: boolean
+      interval_seconds:
+        type: integer
+      is_online:
+        type: boolean
+      last_error:
+        type: string
+      last_run_at:
+        type: string
+      next_run_at:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  api.captureSchedulePage:
+    properties:
+      device_count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/api.captureScheduleItem'
+        type: array
+      standalone_count:
+        type: integer
+      total:
+        type: integer
+    type: object
   api.capturePage:
     properties:
       items:
@@ -3255,6 +3299,33 @@ paths:
       - System
   /app/upgrade: {"post": {"summary": "旧升级入口已停用", "description": "旧 SSE 下载入口已停用，请改用签名发布包上传与安装接口。", "tags": ["System"], "produces": ["application/json"], "security": [{"BearerAuth": []}], "responses": {"410": {"description": "OK", "schema": {"$ref": "#/definitions/api.SwaggerErrorResponse"}}, "401": {"description": "需要登录", "schema": {"$ref": "#/definitions/api.SwaggerErrorResponse"}}, "403": {"description": "仅本平台管理员", "schema": {"$ref": "#/definitions/api.SwaggerErrorResponse"}}, "503": {"description": "升级服务未配置或不可用", "schema": {"$ref": "#/definitions/api.SwaggerErrorResponse"}}}}}
   /app/version/check: {"get": {"summary": "兼容入口：读取本平台发布库状态", "description": "仅本平台管理员。与 /app/upgrade/status 返回相同结构，不再查询上游 GitHub。", "tags": ["System"], "produces": ["application/json"], "security": [{"BearerAuth": []}], "responses": {"200": {"description": "OK", "schema": {"$ref": "#/definitions/api.UpgradeStatus"}}, "401": {"description": "需要登录", "schema": {"$ref": "#/definitions/api.SwaggerErrorResponse"}}, "403": {"description": "仅本平台管理员", "schema": {"$ref": "#/definitions/api.SwaggerErrorResponse"}}, "503": {"description": "升级服务未配置或不可用", "schema": {"$ref": "#/definitions/api.SwaggerErrorResponse"}}}}}
+  /capture_schedules:
+    get:
+      parameters:
+      - description: 页码，默认1
+        in: query
+        name: page
+        type: integer
+      - description: 每页数量，默认20，最大100
+        in: query
+        name: size
+        type: integer
+      - description: 设备或通道名称、编码
+        in: query
+        name: key
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.captureSchedulePage'
+      security:
+      - BearerAuth: []
+      summary: 分页查询已开启定时抓拍的设备与通道
+      tags:
+      - Capture
   /captures:
     get:
       parameters:

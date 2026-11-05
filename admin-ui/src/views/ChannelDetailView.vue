@@ -82,7 +82,7 @@ const resourceErrors = reactive({ device: "", zones: "", history: "", media: "" 
 const resourceLoading = reactive({ zones: false, media: false });
 const zoneError = ref("");
 type ChannelTab = "snapshots" | "live" | "ai" | "recordings" | "gb" | "technical";
-const activeTab = ref<ChannelTab>("live");
+const activeTab = ref<ChannelTab>(route.query.tab === "snapshots" ? "snapshots" : "live");
 const liveProtocolPriority: StreamProtocol[] = ["ws-flv", "http-flv", "webrtc", "hls"];
 let loadSequence = 0;
 
@@ -493,7 +493,7 @@ function clearContext() {
   selectedMediaServerId.value = "local";
   voiceForm.mediaServerId = "local";
   Object.assign(resourceErrors, { device: "", zones: "", history: "", media: "" });
-  activeTab.value = "live";
+  activeTab.value = route.query.tab === "snapshots" ? "snapshots" : "live";
 }
 
 function mediaServerStatusLabel(status?: boolean) {
@@ -1077,6 +1077,9 @@ watch(() => historyForm.mode, (mode) => {
 });
 
 watch(() => route.params.id, load, { immediate: true });
+watch(() => route.query.tab, tab => {
+  if (tab === "snapshots") activeTab.value = "snapshots";
+});
 watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([talk, standard, broadcast]) => {
   if (voiceForm.mode === "talk_standard" && !standard) voiceForm.mode = talk ? "talk" : "broadcast";
   else if (voiceForm.mode === "talk" && !talk && broadcast) voiceForm.mode = "broadcast";
@@ -1093,7 +1096,7 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
         <p>{{ loadError }}</p>
       </div>
       <div class="head-actions">
-        <button class="btn" type="button" @click="goBack"><ArrowLeft />{{ backLabel }}</button>
+        <button class="page-back-btn" type="button" :aria-label="backLabel" :title="backLabel" @click="goBack"><ArrowLeft aria-hidden="true" /></button>
         <button class="btn btn-primary" type="button" @click="load"><RefreshCw />重试</button>
       </div>
     </section>
@@ -1105,8 +1108,8 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
     <template v-if="channel">
       <section class="device-command-header channel-command-header">
         <div class="device-command-identity">
-          <button class="device-command-back" type="button" :aria-label="backLabel" :title="backLabel" @click="goBack">
-            <ArrowLeft />
+          <button class="page-back-btn" type="button" :aria-label="backLabel" :title="backLabel" @click="goBack">
+            <ArrowLeft aria-hidden="true" />
           </button>
 
           <div class="min-w-0">

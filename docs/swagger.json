@@ -119,6 +119,50 @@
                 }
             }
         },
+        "/capture_schedules": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Capture"
+                ],
+                "summary": "分页查询已开启定时抓拍的设备与通道",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "页码，默认1",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量，默认20，最大100",
+                        "name": "size",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "设备或通道名称、编码",
+                        "name": "key",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.captureSchedulePage"
+                        }
+                    }
+                }
+            }
+        },
         "/captures": {
             "get": {
                 "security": [
@@ -6886,6 +6930,73 @@
                     "description": "视频宽度",
                     "type": "integer",
                     "example": 1920
+                }
+            }
+        },
+        "api.captureScheduleItem": {
+            "type": "object",
+            "properties": {
+                "channel_code": {
+                    "type": "string"
+                },
+                "channel_id": {
+                    "type": "string"
+                },
+                "channel_name": {
+                    "type": "string"
+                },
+                "channel_type": {
+                    "type": "string"
+                },
+                "device_code": {
+                    "type": "string"
+                },
+                "device_id": {
+                    "type": "string"
+                },
+                "device_name": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "interval_seconds": {
+                    "type": "integer"
+                },
+                "is_online": {
+                    "type": "boolean"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "last_run_at": {
+                    "type": "string"
+                },
+                "next_run_at": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.captureSchedulePage": {
+            "type": "object",
+            "properties": {
+                "device_count": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.captureScheduleItem"
+                    }
+                },
+                "standalone_count": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },

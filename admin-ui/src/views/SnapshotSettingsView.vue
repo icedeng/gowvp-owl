@@ -7,6 +7,7 @@ import type { SnapshotConfig } from '../types/api'
 import { useUiStore } from '../stores/ui'
 import { defaultSnapshotConfig, useSnapshotStore } from '../stores/snapshot'
 import SnapshotWorkspace from '../components/SnapshotWorkspace.vue'
+import CaptureScheduleDevices from '../components/CaptureScheduleDevices.vue'
 const ui = useUiStore()
 const store = useSnapshotStore()
 const form = reactive<SnapshotConfig>({ ...defaultSnapshotConfig })
@@ -16,9 +17,9 @@ const ready = ref(false)
 const error = ref('')
 const route = useRoute()
 const router = useRouter()
-const tabs = [{ id: 'history', label: '抓拍历史' }, { id: 'settings', label: '设置配置' }] as const
+const tabs = [{ id: 'history', label: '抓拍历史' }, { id: 'schedules', label: '定时抓拍设备' }, { id: 'settings', label: '设置配置' }] as const
 type SnapshotTab = typeof tabs[number]['id']
-const activeTab = computed<SnapshotTab>(() => route.query.tab === 'settings' ? 'settings' : 'history')
+const activeTab = computed<SnapshotTab>(() => route.query.tab === 'settings' ? 'settings' : route.query.tab === 'schedules' ? 'schedules' : 'history')
 const historyVisited = ref(false)
 watch(activeTab, tab => { if (tab === 'history') historyVisited.value = true }, { immediate: true })
 async function selectTab(tab: SnapshotTab) {
@@ -127,6 +128,7 @@ onMounted(load)
       </form>
     </section>
     <section v-show="activeTab === 'history'" id="snapshot-panel-history" class="snapshot-panel snapshot-history" role="tabpanel" aria-labelledby="snapshot-tab-history" tabindex="0"><SnapshotWorkspace v-if="historyVisited" /></section>
+    <section v-if="activeTab === 'schedules'" id="snapshot-panel-schedules" class="snapshot-panel" role="tabpanel" aria-labelledby="snapshot-tab-schedules" tabindex="0"><CaptureScheduleDevices /></section>
     </div>
   </main>
 </template>

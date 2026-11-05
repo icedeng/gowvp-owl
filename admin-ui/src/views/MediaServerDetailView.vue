@@ -206,7 +206,7 @@ onBeforeUnmount(() => { generation++; selectionGeneration++; clearInterval(refre
 <template>
   <main class="page-content media-node-detail">
     <header class="page-head">
-      <div class="node-page-title"><RouterLink class="icon-btn" to="/media-servers" aria-label="返回媒体节点列表"><ArrowLeft aria-hidden="true" /></RouterLink><div><h1 class="page-title">{{ node?.id || route.params.id }}</h1><p class="page-desc">媒体节点运行详情</p></div></div>
+      <div class="node-page-title"><RouterLink class="page-back-btn" to="/media-servers" aria-label="返回媒体节点列表" title="返回媒体节点列表"><ArrowLeft aria-hidden="true" /></RouterLink><div><h1 class="page-title">{{ node?.id || route.params.id }}</h1><p class="page-desc">媒体节点运行详情</p></div></div>
       <div class="head-actions"><label class="node-auto"><input v-model="autoRefresh" type="checkbox" />每 15 秒刷新当前分区</label><button class="btn btn-primary" type="button" :disabled="refreshing" @click="refresh"><RefreshCw :class="{ 'animate-spin': refreshing }" aria-hidden="true" />{{ refreshing ? '正在刷新…' : '刷新当前分区' }}</button></div>
     </header>
     <div v-if="nodeError" class="warning-box mb-4" role="alert"><ShieldAlert aria-hidden="true" /><span>{{ nodeError }}</span><button class="btn btn-sm" @click="loadNode">重试</button></div>

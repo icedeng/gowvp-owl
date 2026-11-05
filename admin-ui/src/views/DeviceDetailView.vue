@@ -875,11 +875,11 @@ onMounted(load);
       <section class="device-command-header">
         <div class="device-command-identity">
           <RouterLink
-            class="device-command-back"
+            class="page-back-btn"
             :to="listRoute"
             :aria-label="`返回${listLabel}列表`"
             :title="`返回${listLabel}`"
-          ><ArrowLeft /></RouterLink>
+          ><ArrowLeft aria-hidden="true" /></RouterLink>
 
           <div>
             <div class="device-command-title">

@@ -2,7 +2,7 @@ import { http } from './http'
 import { recordingMediaPath } from '../utils/recordings'
 import type { PTZProbeOutput, PTZBatchProbeOutput } from '../types/api'
 import type {
-  CaptureRecord, CaptureSchedule, SnapshotConfig, ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord, MediaInspectionResource, MediaInspectionResult,
+  CaptureRecord, CaptureSchedule, CaptureSchedulePage, SnapshotConfig, ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord, MediaInspectionResource, MediaInspectionResult,
   ApiChannel as Channel, DeviceExt, GbMetrics, GBHistoryDownloadState, GBHistoryStartOutput, GBOperationOutput, GBSnapshotState, GBSubscriptionState, GBUpgradeOutput, GBUpgradeState, HealthInfo, MediaServer, MonthlyStats,
   CascadePlatformStatus, PlayResult, SipAccessInfo, SipConfig, SipSecretStatus, TimelineRange, Zone,
   ResourceStats, SnapshotRefreshOutput, AnnexGAlarmAudit, AnnexGDefenceAudit, AnnexGDefenceState, AnnexGAuditPage,
@@ -114,6 +114,7 @@ export const api = {
   renameCapture: (id: string, name: string) => http.put<CaptureRecord>(`/captures/${encodeURIComponent(id)}`, { name }),
   deleteCapture: (id: string) => http.delete(`/captures/${encodeURIComponent(id)}`),
   captureSchedule: (id: string) => http.get<CaptureSchedule>(`/channels/${encodeURIComponent(id)}/capture_schedule`),
+  captureSchedules: (params?: ListParams) => http.get<CaptureSchedulePage>('/capture_schedules', { params }),
   saveCaptureSchedule: (id: string, body: CaptureSchedule) => http.put<CaptureSchedule>(`/channels/${encodeURIComponent(id)}/capture_schedule`, body),
   updateSnapshotConfig: (body: SnapshotConfig) => http.put<SnapshotConfig>('/configs/info/snapshot', body),
   snapshotConfig: () => http.get<SnapshotConfig>('/configs/info/snapshot'),

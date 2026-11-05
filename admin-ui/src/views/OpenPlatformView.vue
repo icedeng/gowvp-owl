@@ -943,19 +943,19 @@ onBeforeUnmount(() => {
       <div v-else-if="!selected" class="card empty-state empty-action">
         <ShieldAlert aria-hidden="true" /><strong>暂时无法打开应用详情</strong
         ><span>请重新加载，或返回列表选择应用。</span
-        ><RouterLink class="btn" :to="listLink"
-          ><ArrowLeft aria-hidden="true" />返回应用列表</RouterLink
+        ><RouterLink class="page-back-btn" :to="listLink" aria-label="返回应用列表" title="返回应用列表"
+          ><ArrowLeft aria-hidden="true" /></RouterLink
         >
       </div>
       <template v-if="selected">
         <header class="device-command-header">
           <div class="device-command-identity">
             <RouterLink
-              class="device-command-back"
+              class="page-back-btn"
               :to="listLink"
               aria-label="返回应用列表"
               title="返回应用列表"
-              ><ArrowLeft
+              ><ArrowLeft aria-hidden="true"
             /></RouterLink>
             <span class="device-command-icon"
               ><AppWindow aria-hidden="true"
@@ -2294,10 +2294,6 @@ onBeforeUnmount(() => {
   }
   .open-row-actions .btn {
     min-height: 44px;
-  }
-  .open-platform-page .device-command-back {
-    width: 44px;
-    height: 44px;
   }
   .open-form-footer {
     position: static;

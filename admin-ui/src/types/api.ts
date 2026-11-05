@@ -682,3 +682,20 @@ export interface CaptureSchedule {
   last_run_at?: string
   last_error?: string
 }
+
+export interface CaptureScheduleItem extends CaptureSchedule {
+  device_id: string
+  device_name: string
+  device_code: string
+  channel_name: string
+  channel_code: string
+  channel_type: string
+  is_online: boolean
+}
+
+export interface CaptureSchedulePage {
+  items: CaptureScheduleItem[]
+  total: number
+  device_count: number
+  standalone_count: number
+}

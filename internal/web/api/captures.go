@@ -24,6 +24,7 @@ import (
 )
 
 func registerCaptures(r gin.IRouter, a IPCAPI, auth gin.HandlerFunc) {
+	r.GET("/capture_schedules", auth, web.WrapH(a.listCaptureSchedules))
 	g := r.Group("/captures", auth)
 	g.GET("", web.WrapH(a.listCaptures))
 	g.GET("/:capture_id", web.WrapH(a.getCapture))

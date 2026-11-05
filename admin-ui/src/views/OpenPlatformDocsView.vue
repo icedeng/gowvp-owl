@@ -62,7 +62,7 @@ onMounted(load)
 
 <template>
  <div class="developer-docs">
-  <header class="docs-header"><RouterLink :to="{name:'open-platform-docs'}" class="docs-brand"><span class="brand-icon"><BookOpen :size="22"/></span><span>三方应用开放平台<small>开发者文档 · API {{ spec?.info.version || 'v1' }}</small></span></RouterLink><div class="header-actions"><button class="doc-btn" @click="copyLink"><Copy :size="15"/>{{ copyMessage || '复制分享链接' }}</button><RouterLink class="doc-btn" :to="{name:'open-platform'}"><ArrowLeft :size="15"/>管理平台</RouterLink></div></header>
+  <header class="docs-header"><RouterLink :to="{name:'open-platform-docs'}" class="docs-brand"><span class="brand-icon"><BookOpen :size="22"/></span><span>三方应用开放平台<small>开发者文档 · API {{ spec?.info.version || 'v1' }}</small></span></RouterLink><div class="header-actions"><button class="doc-btn" @click="copyLink"><Copy :size="15"/>{{ copyMessage || '复制分享链接' }}</button><RouterLink class="page-back-btn" :to="{name:'open-platform'}" aria-label="返回管理平台" title="返回管理平台"><ArrowLeft aria-hidden="true"/></RouterLink></div></header>
   <div v-if="loading" class="docs-loading" role="status">正在加载完整接口文档…</div>
   <div v-else-if="error" class="docs-loading" role="alert">{{ error }} <button class="doc-btn" @click="load">重新加载</button></div>
   <div v-else-if="spec" class="docs-layout">
