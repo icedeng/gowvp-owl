@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { LoaderCircle, Save } from '@lucide/vue'
 import { api, errorMessage } from '../services/api'
 import type { SnapshotConfig } from '../types/api'
@@ -13,6 +14,28 @@ const loading = ref(true)
 const saving = ref(false)
 const ready = ref(false)
 const error = ref('')
+const route = useRoute()
+const router = useRouter()
+const tabs = [{ id: 'history', label: '抓拍历史' }, { id: 'settings', label: '设置配置' }] as const
+type SnapshotTab = typeof tabs[number]['id']
+const activeTab = computed<SnapshotTab>(() => route.query.tab === 'settings' ? 'settings' : 'history')
+const historyVisited = ref(false)
+watch(activeTab, tab => { if (tab === 'history') historyVisited.value = true }, { immediate: true })
+async function selectTab(tab: SnapshotTab) {
+  await router.replace({ query: { ...route.query, tab } })
+}
+async function onTabKeydown(event: KeyboardEvent, index: number) {
+  let next = index
+  if (event.key === 'ArrowRight') next = (index + 1) % tabs.length
+  else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length
+  else if (event.key === 'Home') next = 0
+  else if (event.key === 'End') next = tabs.length - 1
+  else return
+  event.preventDefault()
+  await selectTab(tabs[next]!.id)
+  await nextTick()
+  document.getElementById(`snapshot-tab-${activeTab.value}`)?.focus()
+}
 type NumericKey = { [K in keyof SnapshotConfig]: SnapshotConfig[K] extends number ? K : never }[keyof SnapshotConfig]
 type Field = { key: NumericKey; label: string; min: number; max: number; hint: string }
 const executionFields: Field[] = [
@@ -59,16 +82,24 @@ onMounted(load)
 </script>
 
 <template>
-  <div>
+  <main class="page-content snapshot-settings-page">
     <div class="page-head"><div><h1 class="page-title">抓拍设置</h1><p class="page-desc">配置任务调度、取帧策略和结果查询，查看所有通道保存的抓拍图片。</p></div></div>
-    <section class="card form-section capture-settings">
+    <div class="card snapshot-workbench">
+      <div class="resource-detail-nav snapshot-tabs" role="tablist" aria-label="抓拍管理">
+        <button v-for="(tab, index) in tabs" :id="`snapshot-tab-${tab.id}`" :key="tab.id" type="button" role="tab" :class="{ active: activeTab === tab.id }" :aria-selected="activeTab === tab.id" :aria-controls="`snapshot-panel-${tab.id}`" :tabindex="activeTab === tab.id ? 0 : -1" @click="selectTab(tab.id)" @keydown="onTabKeydown($event, index)">{{ tab.label }}</button>
+      </div>
+    <section v-show="activeTab === 'settings'" id="snapshot-panel-settings" class="snapshot-panel capture-settings" role="tabpanel" aria-labelledby="snapshot-tab-settings" tabindex="0">
       <p v-if="error" class="warning-box" role="alert">{{ error }} <button v-if="!ready" class="btn btn-sm" type="button" :disabled="loading" @click="load">重试</button></p>
-      <form class="snapshot-settings-form" @submit.prevent="save">
+      <p v-if="loading" class="snapshot-loading" role="status"><LoaderCircle class="animate-spin" aria-hidden="true" />正在读取抓拍配置…</p>
+      <form class="snapshot-settings-form" :aria-busy="loading || saving" @submit.prevent="save">
+        <div class="snapshot-settings-body">
         <fieldset :disabled="!ready || loading || saving">
           <legend>任务调度与结果查询</legend>
           <p class="section-description">默认每秒扫描队列；浏览器只查询后台任务状态，离开页面不会取消抓拍。</p>
-          <label class="capture-setting-toggle"><span>入队立即执行</span><span class="switch"><input v-model="form.immediate_dispatch" type="checkbox" role="switch" /><span class="slider" /></span></label>
-          <p class="field-note">默认关闭，等待下一轮扫描。开启后立即通知执行，扫描周期仍用于兜底；并发已满时继续排队。</p>
+          <div class="capture-dispatch-setting">
+            <label class="capture-setting-toggle"><span>入队立即执行</span><span class="switch"><input v-model="form.immediate_dispatch" type="checkbox" role="switch" aria-describedby="capture-dispatch-help" /><span class="slider" /></span></label>
+            <p id="capture-dispatch-help" class="field-note">默认关闭，等待下一轮扫描。开启后立即通知执行，扫描周期仍用于兜底；并发已满时继续排队。</p>
+          </div>
           <div class="snapshot-field-grid">
             <label v-for="field in executionFields" :key="field.key" class="form-group"><span class="form-label">{{ field.label }}</span><input v-model.number="form[field.key]" class="input plain" type="number" :min="field.min" :max="field.max" step="1" required :aria-describedby="`capture-${field.key}-help`" /><small :id="`capture-${field.key}-help`">{{ field.hint }}</small></label>
           </div>
@@ -81,6 +112,7 @@ onMounted(load)
             <label v-for="field in multiFrameFields" :key="field.key" class="form-group"><span class="form-label">{{ field.label }}</span><input v-model.number="form[field.key]" class="input plain" type="number" :min="field.min" :max="field.max" step="1" required :aria-describedby="`capture-${field.key}-help`" /><small :id="`capture-${field.key}-help`">{{ field.hint }}</small></label>
           </div>
         </fieldset>
+        </div>
         <details class="capture-advanced">
           <summary>高级参数 · 超时、探测与图片质量</summary>
           <fieldset :disabled="!ready || loading || saving">
@@ -91,31 +123,50 @@ onMounted(load)
             </div>
           </fieldset>
         </details>
-        <div class="capture-settings-footer"><p>保存到当前节点配置文件，无需重启。执行参数用于后续任务；扫描和本管理端轮询立即更新。定时计划在各通道中配置。</p><button class="btn btn-primary" type="submit" :disabled="!ready || loading || saving"><LoaderCircle v-if="loading || saving" class="animate-spin" /><Save v-else />{{ saving ? '保存中' : '保存配置' }}</button></div>
+        <div class="capture-settings-footer"><p>保存到当前节点配置文件，无需重启。执行参数用于后续任务；扫描和本管理端轮询立即更新。定时计划在各通道中配置。</p><button class="btn btn-primary" type="submit" :disabled="!ready || loading || saving"><LoaderCircle v-if="loading || saving" class="animate-spin" aria-hidden="true" /><Save v-else aria-hidden="true" />{{ saving ? '保存中' : '保存配置' }}</button></div>
       </form>
     </section>
-    <section class="card form-section"><SnapshotWorkspace /></section>
-  </div>
+    <section v-show="activeTab === 'history'" id="snapshot-panel-history" class="snapshot-panel snapshot-history" role="tabpanel" aria-labelledby="snapshot-tab-history" tabindex="0"><SnapshotWorkspace v-if="historyVisited" /></section>
+    </div>
+  </main>
 </template>
 
 <style scoped>
-.capture-settings { margin-bottom: 24px; }
-.snapshot-settings-form { display: grid; gap: 24px; }
+.snapshot-workbench { min-width: 0; }
+.snapshot-tabs button { font-weight: 600; }
+.snapshot-panel { min-width: 0; padding: 16px; }
+.snapshot-panel:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.snapshot-settings-form { display: grid; gap: 20px; }
+.snapshot-settings-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; }
+.snapshot-loading { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+.snapshot-loading svg { width: 16px; height: 16px; }
 .snapshot-settings-form fieldset { min-width: 0; padding: 0; margin: 0; border: 0; }
-.snapshot-settings-form > fieldset + fieldset { padding-top: 24px; border-top: 1px solid var(--line); }
-.snapshot-settings-form legend { margin-bottom: 8px; padding: 0; color: var(--ink-strong); font-size: 16px; font-weight: 700; }
+.snapshot-settings-body > fieldset + fieldset { padding-top: 20px; border-top: 1px solid var(--line); }
+.snapshot-settings-form legend { margin-bottom: 6px; padding: 0; color: var(--ink-strong); font-size: 14px; font-weight: 600; }
 .section-description, .field-note, .snapshot-settings-form small { color: var(--muted); font-size: 12px; line-height: 1.6; }
-.section-description { margin: 0 0 20px; }
-.capture-setting-toggle { display: inline-flex; align-items: center; gap: 16px; min-height: var(--control-height); font-size: 13px; cursor: pointer; }
-.field-note { margin: 6px 0 20px; }
-.snapshot-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 24px; }
+.section-description { margin: 0 0 16px; }
+.capture-dispatch-setting { margin-bottom: 16px; padding: 12px; background: var(--panel-2); border-radius: var(--radius-sm); }
+.capture-setting-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: var(--control-height); font-size: 13px; cursor: pointer; }
+.capture-setting-toggle input:disabled + .slider { opacity: .6; cursor: not-allowed; }
+.field-note { margin: 4px 0 0; }
+.snapshot-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .snapshot-field-grid .form-group, .mode-field { margin: 0; }
-.mode-field { max-width: 600px; margin-bottom: 20px; }
-.capture-advanced { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 16px; }
-.capture-advanced summary { color: var(--ink-strong); font-weight: 600; cursor: pointer; }
-.capture-advanced[open] summary { margin-bottom: 20px; }
+.mode-field { margin-bottom: 16px; }
+.capture-advanced { border-top: 1px solid var(--line); padding-top: 4px; }
+.capture-advanced summary { padding-block: 12px; color: var(--ink-strong); font-size: 13px; font-weight: 600; cursor: pointer; }
+.capture-advanced[open] summary { margin-bottom: 4px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.capture-settings-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding-top: 20px; border-top: 1px solid var(--line); }
+.capture-settings-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
 .capture-settings-footer p { flex: 1 1 360px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-@media (max-width: 720px) { .snapshot-field-grid { grid-template-columns: minmax(0, 1fr); } }
+.capture-settings-footer > .btn { flex: 0 0 auto; margin-left: auto; }
+@media (min-width: 1280px) {
+  .snapshot-settings-body { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; }
+  .snapshot-settings-body > fieldset + fieldset { padding: 0 0 0 32px; border-top: 0; border-left: 1px solid var(--line); }
+}
+@media (max-width: 640px) {
+  .snapshot-panel { padding: 12px; }
+  .snapshot-field-grid { grid-template-columns: minmax(0, 1fr); }
+  .capture-settings-footer { align-items: stretch; }
+  .capture-settings-footer > .btn { width: 100%; margin-left: 0; }
+}
 </style>
