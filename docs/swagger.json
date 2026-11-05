@@ -1,7 +1,7 @@
 {
     "swagger": "2.0",
     "info": {
-        "description": "GoWVP Owl 的 HTTP API 文档，包含设备、通道、GB28181、PTZ、录像与系统接口。\n\n鉴权方式：\n大多数管理接口需要在请求头中携带 `Authorization: Bearer \u003ctoken\u003e`。\n可先调用 `/login/key` 获取 RSA 公钥，再调用 `/login` 完成登录。\n\n返回约定：\n1. 成功时通常返回业务对象，或 `{ \"msg\": \"ok\" }`\n2. 失败时通常返回 `{ \"msg\": \"错误原因\" }`\n3. GB28181 查询类接口通常会同时返回结构化结果与原始 XML",
+        "description": "GoWVP Owl 的 HTTP API 文档，包含设备、通道、GB28181、PTZ、录像与系统接口。\n\n鉴权方式：\n大多数管理接口需要在请求头中携带 `Authorization: Bearer <token>`。\n可先调用 `/login/key` 获取 RSA 公钥，再调用 `/login` 完成登录。\n\n返回约定：\n1. 成功时通常返回业务对象，或 `{ \"msg\": \"ok\" }`\n2. 失败时通常返回 `{ \"msg\": \"错误原因\" }`\n3. GB28181 查询类接口通常会同时返回结构化结果与原始 XML",
         "title": "GoWVP Owl API",
         "contact": {},
         "version": "0.0.1"
@@ -35,28 +35,40 @@
         },
         "/app/upgrade": {
             "post": {
+                "summary": "旧升级入口已停用",
+                "description": "旧 SSE 下载入口已停用，请改用签名发布包上传与安装接口。",
+                "tags": [
+                    "System"
+                ],
+                "produces": [
+                    "application/json"
+                ],
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "以 SSE 方式输出下载进度事件，事件类型包含 start、progress、error、complete",
-                "produces": [
-                    "text/event-stream"
-                ],
-                "tags": [
-                    "System"
-                ],
-                "summary": "执行应用升级",
                 "responses": {
-                    "200": {
-                        "description": "SSE 事件流",
+                    "410": {
+                        "description": "OK",
                         "schema": {
-                            "type": "string"
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
+                    "401": {
+                        "description": "需要登录",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "仅本平台管理员",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "升级服务未配置或不可用",
                         "schema": {
                             "$ref": "#/definitions/api.SwaggerErrorResponse"
                         }
@@ -66,22 +78,40 @@
         },
         "/app/version/check": {
             "get": {
-                "produces": [
-                    "application/json"
-                ],
+                "summary": "兼容入口：读取本平台发布库状态",
+                "description": "仅本平台管理员。与 /app/upgrade/status 返回相同结构，不再查询上游 GitHub。",
                 "tags": [
                     "System"
                 ],
-                "summary": "检查新版本",
+                "produces": [
+                    "application/json"
+                ],
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/api.checkVersionOutput"
+                            "$ref": "#/definitions/api.UpgradeStatus"
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
+                    "401": {
+                        "description": "需要登录",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "仅本平台管理员",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "升级服务未配置或不可用",
                         "schema": {
                             "$ref": "#/definitions/api.SwaggerErrorResponse"
                         }
@@ -2824,6 +2854,28 @@
             }
         },
         "/configs/info/snapshot": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Config"
+                ],
+                "summary": "获取抓拍设置（不含其他系统配置）",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.snapshotConfig"
+                        }
+                    }
+                }
+            },
             "put": {
                 "security": [
                     {
@@ -2839,10 +2891,10 @@
                 "tags": [
                     "Config"
                 ],
-                "summary": "设置抓拍上传等待时间与 FFmpeg 并发",
+                "summary": "设置抓拍调度、取帧与管理端轮询参数",
                 "parameters": [
                     {
-                        "description": "上传等待秒数 1–3600，并发 1–32",
+                        "description": "省略的字段沿用当前配置",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -4403,6 +4455,218 @@
                     }
                 }
             }
+        },
+        "/app/upgrade/status": {
+            "get": {
+                "summary": "读取签名发布库和最近升级任务",
+                "description": "仅接受本平台管理员 Authorization: Bearer JWT。",
+                "tags": [
+                    "System"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.UpgradeStatus"
+                        }
+                    },
+                    "401": {
+                        "description": "需要登录",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "仅本平台管理员",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "升级服务未配置或不可用",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/app/upgrade/packages": {
+            "post": {
+                "summary": "上传并校验签名发布包",
+                "description": "仅本平台管理员。上传原始 .owl-release.tar.gz，Content-Length 必填，最大2GiB。校验签名、摘要和架构；上传不会触发安装。",
+                "tags": [
+                    "System"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.UpgradeRelease"
+                        }
+                    },
+                    "401": {
+                        "description": "需要登录",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "仅本平台管理员",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "升级服务未配置或不可用",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "上传校验、任务冲突或空间不足",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "上传校验、任务冲突或空间不足",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "上传校验、任务冲突或空间不足",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "507": {
+                        "description": "上传校验、任务冲突或空间不足",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "package",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "binary"
+                        }
+                    }
+                ],
+                "consumes": [
+                    "application/octet-stream"
+                ]
+            }
+        },
+        "/app/upgrade/install": {
+            "post": {
+                "summary": "创建异步安装任务",
+                "description": "仅本平台管理员。备份配置与数据库后安装兼容镜像，健康检查失败自动回滚。用状态接口轮询，任务在重启后保留。",
+                "tags": [
+                    "System"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/upgrader.Task"
+                        }
+                    },
+                    "401": {
+                        "description": "需要登录",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "仅本平台管理员",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "升级服务未配置或不可用",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "发布包无效、不兼容或任务冲突",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "发布包无效、不兼容或任务冲突",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "发布包无效、不兼容或任务冲突",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "发布包无效、不兼容或任务冲突",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "required": [
+                                "package_id"
+                            ],
+                            "properties": {
+                                "package_id": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ]
+            }
         }
     },
     "definitions": {
@@ -5656,7 +5920,7 @@
             "properties": {
                 "inner_xml": {
                     "type": "string",
-                    "example": "\u003cSVCParam\u003e\u003cSVCFlag\u003e1\u003c/SVCFlag\u003e\u003c/SVCParam\u003e"
+                    "example": "<SVCParam><SVCFlag>1</SVCFlag></SVCParam>"
                 }
             }
         },
@@ -6728,23 +6992,6 @@
                 }
             }
         },
-        "api.checkVersionOutput": {
-            "type": "object",
-            "properties": {
-                "current_version": {
-                    "type": "string"
-                },
-                "description": {
-                    "type": "string"
-                },
-                "has_new_version": {
-                    "type": "boolean"
-                },
-                "new_version": {
-                    "type": "string"
-                }
-            }
-        },
         "api.editChannelMediaServerInput": {
             "type": "object",
             "properties": {
@@ -7452,7 +7699,49 @@
         "api.snapshotConfig": {
             "type": "object",
             "properties": {
+                "analyze_duration_ms": {
+                    "type": "integer"
+                },
                 "ffmpeg_concurrency": {
+                    "type": "integer"
+                },
+                "ffmpeg_mode": {
+                    "type": "string"
+                },
+                "ffmpeg_timeout_seconds": {
+                    "type": "integer"
+                },
+                "frame_count": {
+                    "type": "integer"
+                },
+                "frame_interval_ms": {
+                    "type": "integer"
+                },
+                "immediate_dispatch": {
+                    "type": "boolean"
+                },
+                "jpeg_quality": {
+                    "type": "integer"
+                },
+                "poll_interval_ms": {
+                    "type": "integer"
+                },
+                "probe_size_bytes": {
+                    "type": "integer"
+                },
+                "probe_timeout_seconds": {
+                    "type": "integer"
+                },
+                "rtsp_timeout_seconds": {
+                    "type": "integer"
+                },
+                "scan_interval_ms": {
+                    "type": "integer"
+                },
+                "skip_frames": {
+                    "type": "integer"
+                },
+                "stream_timeout_seconds": {
                     "type": "integer"
                 },
                 "upload_timeout_seconds": {
@@ -8893,6 +9182,140 @@
                 },
                 "webrtc": {
                     "type": "string"
+                }
+            }
+        },
+        "api.UpgradeRelease": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "product": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                },
+                "architecture": {
+                    "type": "string"
+                },
+                "os": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
+                "image_id": {
+                    "type": "string"
+                },
+                "image_sha256": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "format": {
+                    "type": "integer"
+                },
+                "image_size": {
+                    "type": "integer",
+                    "format": "int64"
+                },
+                "from_versions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "migration": {
+                    "type": "boolean"
+                },
+                "replaces_version": {
+                    "type": "string",
+                    "description": "版本编号调整时唯一指定的来源版本，普通升级为空"
+                }
+            }
+        },
+        "upgrader.TaskEvent": {
+            "type": "object",
+            "properties": {
+                "time": {
+                    "type": "string"
+                },
+                "phase": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "upgrader.Task": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "package_id": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                },
+                "previous_version": {
+                    "type": "string"
+                },
+                "previous_image": {
+                    "type": "string"
+                },
+                "target_image": {
+                    "type": "string"
+                },
+                "phase": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "backup": {
+                    "type": "string"
+                },
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/upgrader.TaskEvent"
+                    }
+                }
+            }
+        },
+        "api.UpgradeStatus": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "max_upload_bytes": {
+                    "type": "integer",
+                    "format": "int64"
+                },
+                "releases": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.UpgradeRelease"
+                    }
+                },
+                "task": {
+                    "$ref": "#/definitions/upgrader.Task"
                 }
             }
         }

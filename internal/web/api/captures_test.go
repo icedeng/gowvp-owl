@@ -31,37 +31,62 @@ func TestSnapshotConfigDefaultsPersistsAndRejectsInvalidValues(t *testing.T) {
 	cfg := conf.DefaultConfig()
 	cfg.ConfigPath = filepath.Join(t.TempDir(), "config.toml")
 	defaults := snapshotSettings(conf.Media{})
-	if defaults.UploadTimeoutSeconds != 120 || defaults.FFmpegConcurrency != 2 {
+	if defaults != snapshotSettings(cfg.Media) || defaults.UploadTimeoutSeconds != 120 || defaults.FFmpegConcurrency != 2 || defaults.ImmediateDispatch || defaults.ScanIntervalMS != 1000 || defaults.PollIntervalMS != 2000 || defaults.FFmpegMode != "multi_frame" || defaults.FrameCount != 5 || defaults.SkipFrames != 75 {
 		t.Fatal(defaults)
 	}
 	a := ConfigAPI{conf: &cfg, sipMu: new(sync.RWMutex)}
-	if _, err := a.updateSnapshotConfig(nil, &snapshotConfig{240, 4}); err != nil {
+	update := func(body string) (*snapshotConfig, error) {
+		var patch map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(body), &patch); err != nil {
+			t.Fatal(err)
+		}
+		return a.updateSnapshotConfig(nil, &patch)
+	}
+	if _, err := update(`{"upload_timeout_seconds":240,"ffmpeg_concurrency":4,"immediate_dispatch":true,"scan_interval_ms":1500,"poll_interval_ms":500,"ffmpeg_mode":"single_frame","stream_timeout_seconds":180,"ffmpeg_timeout_seconds":90,"rtsp_timeout_seconds":20,"probe_timeout_seconds":15,"analyze_duration_ms":8000,"probe_size_bytes":8000000,"frame_count":8,"skip_frames":100,"frame_interval_ms":500,"jpeg_quality":3}`); err != nil {
 		t.Fatal(err)
 	}
+	want := snapshotSettings(cfg.Media)
 	var restored conf.Bootstrap
 	if err := conf.SetupConfig(&restored, cfg.ConfigPath); err != nil {
 		t.Fatal(err)
 	}
-	if restored.Media.GBSnapshotUploadTimeoutSeconds != 240 || restored.Media.GBSnapshotFFmpegConcurrency != 4 || restored.Sip.ID != cfg.Sip.ID || restored.Media.RTPPortRange != cfg.Media.RTPPortRange {
+	if snapshotSettings(restored.Media) != want || restored.Sip.ID != cfg.Sip.ID || restored.Media.RTPPortRange != cfg.Media.RTPPortRange {
 		t.Fatal("未持久化或覆盖其他配置")
 	}
-	for _, bad := range []snapshotConfig{{0, 2}, {3601, 2}, {120, 0}, {120, 33}} {
-		if _, err := a.updateSnapshotConfig(nil, &bad); err == nil {
+	for _, bad := range []string{
+		`{"upload_timeout_seconds":0}`, `{"upload_timeout_seconds":3601}`, `{"ffmpeg_concurrency":0}`, `{"ffmpeg_concurrency":33}`,
+		`{"scan_interval_ms":99}`, `{"poll_interval_ms":0}`, `{"ffmpeg_mode":"custom"}`, `{"frame_count":1}`, `{"skip_frames":-1}`,
+		`{"frame_interval_ms":0}`, `{"ffmpeg_timeout_seconds":200}`, `{"rtsp_timeout_seconds":100}`, `{"ffmpeg_mode":"multi_frame","probe_timeout_seconds":200}`,
+		`{"analyze_duration_ms":99}`, `{"probe_size_bytes":0}`, `{"jpeg_quality":32}`, `{"poll_interval_ms":null}`, `{"unknown":1}`, `{"poll_interval_ms":0.5}`,
+	} {
+		if _, err := update(bad); err == nil {
 			t.Fatal("接受非法配置", bad)
 		}
 	}
-	if cfg.Media.GBSnapshotUploadTimeoutSeconds != 240 || cfg.Media.GBSnapshotFFmpegConcurrency != 4 {
+	if snapshotSettings(cfg.Media) != want {
 		t.Fatal("非法配置污染当前值")
 	}
-	cfg.ConfigPath = filepath.Join(t.TempDir(), "missing", "config.toml")
-	// 使用普通文件作为父目录保证写盘失败。
+	// 旧客户端省略新增字段时沿用当前值；显式false可关闭即时执行。
+	if _, err := update(`{"upload_timeout_seconds":240,"ffmpeg_concurrency":4}`); err != nil {
+		t.Fatal(err)
+	}
+	if snapshotSettings(cfg.Media) != want {
+		t.Fatal("旧客户端覆盖了新增配置")
+	}
+	if _, err := update(`{"immediate_dispatch":false}`); err != nil {
+		t.Fatal(err)
+	}
+	want.ImmediateDispatch = false
+	if snapshotSettings(cfg.Media) != want {
+		t.Fatal("显式false未生效")
+	}
 	blocked := filepath.Join(t.TempDir(), "file")
 	_ = os.WriteFile(blocked, []byte("x"), 0600)
 	cfg.ConfigPath = filepath.Join(blocked, "config.toml")
-	if _, err := a.updateSnapshotConfig(nil, &snapshotConfig{300, 8}); err == nil {
+	if _, err := update(`{"upload_timeout_seconds":300,"ffmpeg_concurrency":8}`); err == nil {
 		t.Fatal("写盘错误未返回")
 	}
-	if cfg.Media.GBSnapshotUploadTimeoutSeconds != 240 {
+	if snapshotSettings(cfg.Media) != want {
 		t.Fatal("写盘失败更新了内存")
 	}
 }
@@ -254,6 +279,15 @@ func TestFastFFmpegPathDoesNotProbeWait75FramesOrWriteSharedCover(t *testing.T) 
 	if strings.Contains(string(args), "select=") || !strings.Contains(string(args), "-frames:v\n1\n") {
 		t.Fatal(string(args))
 	}
+	inputOptions := strings.SplitN(string(args), "-i\n", 2)[0]
+	if !strings.Contains(inputOptions, "-threads\n1\n") || !strings.Contains(inputOptions, "-allowed_media_types\nvideo\n") || !strings.Contains(inputOptions, "-probesize\n5000000\n") {
+		t.Fatal("单帧解码未限制输入线程/视频，或意外缩短了兼容探测预算", string(args))
+	}
+	for _, option := range []string{"-rtsp_transport\ntcp\n", "-timeout\n10000000\n", "-analyzeduration\n5000000\n"} {
+		if !strings.Contains(inputOptions, option) {
+			t.Fatal("取帧优化改变了传输或网络等待参数", string(args))
+		}
+	}
 	if _, err := os.Stat(readCoverPath(cfg.ConfigDir, "ch")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("快路径仍写入共享封面")
 	}
@@ -304,5 +338,149 @@ func TestTransientChannelReadErrorDoesNotDisableSchedule(t *testing.T) {
 	plan, err := a.captures.GetSchedule(t.Context(), "rtsp_capture")
 	if err != nil || !plan.Enabled {
 		t.Fatal("读库故障被误判为通道删除，关闭了计划", plan, err)
+	}
+}
+
+func TestCaptureConfiguredModesSaveValidCandidate(t *testing.T) {
+	if os.PathSeparator != '/' {
+		t.Skip("shell fake only")
+	}
+	for _, mode := range []string{"multi_frame", "single_frame"} {
+		t.Run(mode, func(t *testing.T) {
+			a, db := captureTestAPI(t)
+			cfg := conf.DefaultConfig()
+			cfg.ConfigDir = t.TempDir()
+			if mode == "single_frame" {
+				cfg.Media.GBSnapshotFFmpegMode = mode
+				cfg.Media.GBSnapshotRTSPTimeoutSeconds = 15
+				cfg.Media.GBSnapshotAnalyzeDurationMS = 7000
+				cfg.Media.GBSnapshotProbeSizeBytes = 8000000
+				cfg.Media.GBSnapshotJPEGQuality = 3
+			}
+			a.uc = &Usecase{Conf: &cfg}
+			a.snapshot = newSnapshotCoordinator(2)
+			img := image.NewRGBA(image.Rect(0, 0, 256, 256))
+			for y := 0; y < 256; y++ {
+				for x := 0; x < 256; x++ {
+					i := img.PixOffset(x, y)
+					img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = byte(x*y), byte(x*3+y*7), byte(x*11+y*17), 255
+				}
+			}
+			var body bytes.Buffer
+			if err := jpeg.Encode(&body, img, nil); err != nil {
+				t.Fatal(err)
+			}
+			fixture := filepath.Join(t.TempDir(), "input.jpg")
+			if err := os.WriteFile(fixture, body.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			argsFile, probeFile := filepath.Join(bin, "args"), filepath.Join(bin, "probe")
+			t.Setenv("CAPTURE_FIXTURE", fixture)
+			t.Setenv("CAPTURE_ARGS", argsFile)
+			t.Setenv("CAPTURE_PROBE", probeFile)
+			t.Setenv("CAPTURE_MODE", mode)
+			script := `#!/bin/sh
+for arg do printf '%s\n' "$arg" >> "$CAPTURE_ARGS"; output=$arg; done
+if [ "$CAPTURE_MODE" = "multi_frame" ]; then
+  printf 'broken image' > "${output%frame-%03d.jpg}frame-001.jpg"
+  cp "$CAPTURE_FIXTURE" "${output%frame-%03d.jpg}frame-002.jpg"
+else
+  cp "$CAPTURE_FIXTURE" "${output%frame-%03d.jpg}frame-001.jpg"
+fi
+`
+			if err := os.WriteFile(filepath.Join(bin, "ffmpeg"), []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			probe := "#!/bin/sh\nprintf 'probe' > \"$CAPTURE_PROBE\"\nprintf 'h264,256,256\\n'\n"
+			if err := os.WriteFile(filepath.Join(bin, "ffprobe"), []byte(probe), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			row, err := a.captures.EnqueueURL(t.Context(), "rtsp_capture", "manual", "rtsp://127.0.0.1/live/test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Model(row).Update("state", "running").Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := a.runCapture(t.Context(), row); err != nil {
+				t.Fatal(err)
+			}
+			saved, err := a.captures.Get(t.Context(), row.ID)
+			if err != nil || saved.State != "succeeded" {
+				t.Fatal("未永久保存", saved, err)
+			}
+			path, err := a.captures.Path(saved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(actual, body.Bytes()) {
+				t.Fatal("未选择有效候选图片", err)
+			}
+			args, err := os.ReadFile(argsFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, probeErr := os.Stat(probeFile)
+			if mode == "multi_frame" {
+				if probeErr != nil || !strings.Contains(string(args), "-frames:v\n5\n") || !strings.Contains(string(args), "select=gte(n\\,75),fps=1000/1000") {
+					t.Fatal("默认未走原多帧模式", string(args), probeErr)
+				}
+				inputOptions := strings.SplitN(string(args), "-i\n", 2)[0]
+				if strings.Contains(inputOptions, "-threads\n1\n") || strings.Contains(inputOptions, "-allowed_media_types") {
+					t.Fatal("多帧模式意外启用单帧参数", string(args))
+				}
+			} else {
+				if !errors.Is(probeErr, os.ErrNotExist) || strings.Contains(string(args), "-vf") || !strings.Contains(string(args), "-frames:v\n1\n") {
+					t.Fatal("单帧模式仍探测或多帧采样", string(args), probeErr)
+				}
+				for _, option := range []string{"-timeout\n15000000\n", "-analyzeduration\n7000000\n", "-probesize\n8000000\n", "-q:v\n3\n"} {
+					if !strings.Contains(string(args), option) {
+						t.Fatal("未采用配置的FFmpeg参数", string(args))
+					}
+				}
+			}
+			if _, err := os.Stat(readCoverPath(cfg.ConfigDir, "rtsp_capture")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("持久抓拍提前写共享封面", err)
+			}
+		})
+	}
+}
+
+func TestSnapshotSettingsHTTPPatchAndRead(t *testing.T) {
+	cfg := conf.DefaultConfig()
+	cfg.ConfigPath = filepath.Join(t.TempDir(), "config.toml")
+	a := ConfigAPI{conf: &cfg, sipMu: new(sync.RWMutex)}
+	r := gin.New()
+	registerConfig(r, a)
+	request := func(method, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(method, "/configs/info/snapshot", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		return w
+	}
+	w := request("PUT", `{"poll_interval_ms":500,"immediate_dispatch":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	w = request("GET", "")
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var response snapshotConfig
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	want := snapshotSettings(conf.DefaultConfig().Media)
+	want.PollIntervalMS, want.ImmediateDispatch = 500, true
+	if response != want {
+		t.Fatal("HTTP绑定或返回配置不一致", w.Body.String())
+	}
+	w = request("PUT", `{"ffmpeg_mode":"unsupported"}`)
+	if w.Code == http.StatusOK {
+		t.Fatal("HTTP接口接受不支持的模式", w.Body.String())
 	}
 }

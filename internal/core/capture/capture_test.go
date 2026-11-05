@@ -273,3 +273,116 @@ func TestWorkerRestartRecoversQueueAndShutdownCancelsWork(t *testing.T) {
 		t.Fatal("重启恢复/退出状态错误", old, stopped, calls.Load())
 	}
 }
+
+func TestWorkerDispatchesNewTasksWithoutPeriodicScan(t *testing.T) {
+	s := testService(t)
+	s.SetScheduling(time.Hour, true)
+	first, err := s.Enqueue(t.Context(), "first", "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 首个任务由启动扫描拾取，避免其残留通知掩盖第二次入队未唤醒的问题。
+	select {
+	case <-s.wake:
+	default:
+		t.Fatal("首个任务缺少入队通知")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan string, 2)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// 禁用短周期扫描，确认新任务通过入队通知调度。
+		s.Run(ctx, func(ctx context.Context, row *Record) error {
+			started <- row.ID
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("worker未退出")
+		}
+	})
+	select {
+	case id := <-started:
+		if id != first.ID {
+			t.Fatal(id)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("初始任务未执行")
+	}
+	second, err := s.Enqueue(t.Context(), "second", "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case id := <-started:
+		if id != second.ID {
+			t.Fatal(id)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("新任务仍在等待定时扫描")
+	}
+}
+
+func TestWorkerScanModeAndSchedulingHotUpdate(t *testing.T) {
+	s := testService(t)
+	if interval, immediate := s.scheduling(); interval != time.Second || immediate {
+		t.Fatal("默认不是每秒扫描模式", interval, immediate)
+	}
+	s.SetScheduling(time.Hour, false)
+	<-s.wake
+	if _, err := s.Enqueue(t.Context(), "first", "manual"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-s.wake:
+		t.Fatal("扫描模式入队仍立即唤醒")
+	default:
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	started := make(chan string, 2)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.Run(ctx, func(ctx context.Context, row *Record) error {
+			started <- row.ChannelID
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("worker未退出")
+		}
+	})
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("首轮扫描未执行")
+	}
+	if _, err := s.Enqueue(t.Context(), "second", "manual"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+		t.Fatal("入队绕过了扫描等待")
+	case <-time.After(80 * time.Millisecond):
+	}
+	s.SetScheduling(10*time.Millisecond, false)
+	select {
+	case id := <-started:
+		if id != "second" {
+			t.Fatal(id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("扫描间隔热更新未唤醒旧周期")
+	}
+}

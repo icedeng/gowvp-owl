@@ -238,6 +238,34 @@
   GBSnapshotFFmpegConcurrency = 2
   # 2022 设备接受抓拍指令后等待图片上传的时间；管理端“抓拍设置”可在线修改。
   GBSnapshotUploadTimeoutSeconds = 120
+  # 是否入队立即执行，默认false按扫描周期执行
+  GBSnapshotImmediateDispatch = false
+  # 抓拍队列扫描间隔毫秒，默认1000
+  GBSnapshotScanIntervalMS = 1000
+  # 管理端抓拍结果轮询间隔毫秒，默认2000
+  GBSnapshotPollIntervalMS = 2000
+  # FFmpeg模式：multi_frame多帧兼容（默认）/single_frame单帧快速
+  GBSnapshotFFmpegMode = "multi_frame"
+  # 多帧模式候选图片数量，默认5，范围2–30
+  GBSnapshotFrameCount = 5
+  # 多帧模式跳过起始帧数，默认75，范围1–1000
+  GBSnapshotSkipFrames = 75
+  # 多帧模式采样间隔毫秒，默认1000
+  GBSnapshotFrameIntervalMS = 1000
+  # 取流任务总超时秒数（不含排队），默认60
+  GBSnapshotStreamTimeoutSeconds = 60
+  # FFmpeg取帧超时秒数，默认35
+  GBSnapshotFFmpegTimeoutSeconds = 35
+  # RTSP套接字超时秒数，默认10
+  GBSnapshotRTSPTimeoutSeconds = 10
+  # 多帧模式ffprobe超时秒数，默认10
+  GBSnapshotProbeTimeoutSeconds = 10
+  # FFmpeg分析预算毫秒，默认5000，不是固定等待时间
+  GBSnapshotAnalyzeDurationMS = 5000
+  # FFmpeg探测字节预算，默认5000000
+  GBSnapshotProbeSizeBytes = 5000000
+  # FFmpeg JPEG质量参数，默认2，范围2–31，越小质量越高
+  GBSnapshotJPEGQuality = 2
   # ZLM 使用宿主机网络，回调宿主机上发布的管理端口。
   WebHookIP = '192.168.1.100'
   # 30000 用于 WebRTC，30001-50000 用于国标 RTP/RTCP；TCP/UDP 均允许所有来源。

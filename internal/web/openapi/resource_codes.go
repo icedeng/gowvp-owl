@@ -180,7 +180,7 @@ func (a *API) listChannelResources(c *gin.Context, resource string) {
 	case "live-sessions":
 		resourcePage[op.Session](a, c, q, table, func(v op.Session) string { return v.ID })
 	case "snapshot-tasks":
-		resourcePage[op.Snapshot](a, c, q, table, func(v op.Snapshot) string { return v.ID })
+		resourcePage[op.Snapshot](a, c, q, table, func(v op.Snapshot) string { return v.ID }, func(v *op.Snapshot) error { return a.snapshotAddress(c, v) })
 	case "ptz-commands":
 		resourcePage[op.Command](a, c, q, table, func(v op.Command) string { return v.ID })
 	}

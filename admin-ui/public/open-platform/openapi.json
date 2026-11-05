@@ -1321,6 +1321,87 @@
         },
         "type": "object"
       },
+      "CaptureRecord": {
+        "additionalProperties": false,
+        "description": "与管理端通道抓图图片记录相同的持久化记录，仅返回当前应用授权通道下成功保存的图片。不返回请求URL、媒体认证或磁盘路径；图片独立保留直至管理端删除，不受三方临时任务24小时到期影响。",
+        "properties": {
+          "captured_at": {
+            "description": "抓拍成功时间；未成功时为 null。",
+            "example": null,
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "channel_id": {
+            "description": "通道内部 ID，使用通道列表返回的 id，不是国标 channel_id 编码。",
+            "example": "channel-001",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "记录创建时间，RFC3339。",
+            "example": "2026-11-04T08:00:00Z",
+            "format": "date-time",
+            "type": "string"
+          },
+          "error": {
+            "description": "可选的脱敏失败说明；空字符串或未出现表示无附加错误。",
+            "example": "",
+            "type": "string"
+          },
+          "id": {
+            "description": "通道持久化图片记录ID，与三方 snapshot-tasks 的任务ID不同。",
+            "example": "task-001",
+            "type": "string"
+          },
+          "image_expires_at": {
+            "description": "image_url 的票据到期时间，不是图片记录删除时间。",
+            "example": "2026-11-05T04:05:00Z",
+            "format": "date-time",
+            "type": "string"
+          },
+          "image_url": {
+            "description": "直接GET的短期受控图片地址，默认约5分钟，可查询图片详情重新获取。文件重命名后仍按记录ID定位；图片删除或设备撤权后立即拒绝访问。",
+            "example": "http://10.144.0.20:15123/openmedia/v1/capture/capture-001/content?ticket=\u003c短期票据\u003e",
+            "format": "uri",
+            "type": "string"
+          },
+          "method": {
+            "description": "实际抓拍方式，例如ffmpeg或设备上传。",
+            "example": "ffmpeg",
+            "type": "string"
+          },
+          "name": {
+            "description": "当前JPG文件名；管理员重命名后更新。",
+            "example": "20261105120000.jpg",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "可选的设备抓拍会话标识。",
+            "example": "session-001",
+            "type": "string"
+          },
+          "source": {
+            "description": "生成来源 manual（管理端手动）、schedule（定时）、openapi（三方）；复用在途任务时保留原来源。",
+            "example": "schedule",
+            "type": "string"
+          },
+          "state": {
+            "description": "此只读接口仅返回已成功生成图片的记录。",
+            "enum": [
+              "succeeded"
+            ],
+            "example": "succeeded",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "记录更新时间。",
+            "example": "2026-11-05T04:00:00Z",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "Channel": {
         "additionalProperties": false,
         "properties": {
@@ -2193,6 +2274,18 @@
             "example": "task-001",
             "type": "string"
           },
+          "image_expires_at": {
+            "description": "image_url 的票据到期时间，不是图片记录删除时间。",
+            "example": "2026-11-05T04:05:00Z",
+            "format": "date-time",
+            "type": "string"
+          },
+          "image_url": {
+            "description": "可直接GET的短期受控图片地址，默认约5分钟。异步任务未完成时仍返回此地址，访问409 SNAPSHOT_PENDING并带Retry-After:1；完成后同一地址可取图。地址过期可查询任务详情重新获取；失败、取消、未知或过期任务不返回地址。",
+            "example": "http://10.144.0.20:15123/openmedia/v1/snapshot/task-001/content?ticket=\u003c短期票据\u003e",
+            "format": "uri",
+            "type": "string"
+          },
           "state": {
             "description": "queued / running / succeeded / failed / unknown / cancelled / expired。具体状态含义见快速开始的状态说明。",
             "enum": [
@@ -2206,6 +2299,31 @@
             ],
             "example": "queued",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SnapshotByCodeInput": {
+        "additionalProperties": false,
+        "description": "编码路径已指定通道，请勿传 channel_id、device_code 或 channel_code；{} 保持异步兼容。",
+        "properties": {
+          "mode": {
+            "default": "async",
+            "description": "sync 等待本次任务成功再返回图片地址；async 立即返回任务和图片地址。省略保持异步兼容。",
+            "enum": [
+              "sync",
+              "async"
+            ],
+            "example": "sync",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "default": 60,
+            "description": "仅同步等待使用，默认60秒、最多120秒；不延长底层抓拍执行期限。超时504，任务继续，可用相同幂等键重试或查任务列表。",
+            "example": 60,
+            "maximum": 120,
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "type": "object"
@@ -2264,6 +2382,24 @@
             "maxLength": 256,
             "minLength": 1,
             "type": "string"
+          },
+          "mode": {
+            "default": "async",
+            "description": "sync 等待本次任务成功再返回图片地址；async 立即返回任务和图片地址。省略保持异步兼容。",
+            "enum": [
+              "sync",
+              "async"
+            ],
+            "example": "sync",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "default": 60,
+            "description": "仅同步等待使用，默认60秒、最多120秒；不延长底层抓拍执行期限。超时504，任务继续，可用相同幂等键重试或查任务列表。",
+            "example": 60,
+            "maximum": 120,
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "required": [],
@@ -5307,7 +5443,7 @@
     },
     "/admin/open-platform/apps/{app}/snapshot-tasks": {
       "get": {
-        "description": "仅返回指定应用记录，采用 page/size 分页。凭据、订阅不返回任何明文或加密密钥。",
+        "description": "仅返回指定应用记录，采用 page/size 分页。凭据、订阅不返回任何明文或加密密钥。 queued/running/succeeded 且未过期的任务自动附带短期 image_url 和 image_expires_at；其他状态无图片地址。查询会刷新票据，不再需要额外申请图片地址。",
         "operationId": "get_admin_open_platform_apps_app_snapshot_tasks",
         "parameters": [
           {
@@ -5359,6 +5495,8 @@
                         "error": "",
                         "expires_at": "2026-11-05T08:00:00Z",
                         "id": "task-001",
+                        "image_expires_at": "2026-11-05T04:05:00Z",
+                        "image_url": "http://10.144.0.20:15123/openmedia/v1/snapshot/task-001/content?ticket=\u003c短期票据\u003e",
                         "state": "queued"
                       }
                     ],
@@ -6100,6 +6238,468 @@
         "x-scope": "公开文档，无需认证"
       }
     },
+    "/openapi/v1/captures": {
+      "get": {
+        "description": "查询管理端通道抓图页相同的持久化图片记录，包括手动、定时、三方抓拍；仅返回当前应用授权通道下 state=succeeded 的图片，自动附带 image_url 和 image_expires_at。使用现有 snapshot:capture 权限，无须额外开启新Scope。size/cursor分页；默认全部历史，显式传start或end时按创建时间筛选（RFC3339，跨度最多7天）。原请求URL/媒体认证和磁盘路径不公开。图片文件按原管理端规则持久保存；只有管理员可重命名和删除，三方本期只读。顶层列表支持device_code/channel_code或兼容内部device_id/channel_id，过滤条件取交集；编码路径严格定位，未知/未授权404且禁止额外资源定位参数。",
+        "operationId": "get_openapi_v1_captures",
+        "parameters": [
+          {
+            "description": "每页 1—100 条，默认 50。",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 next_cursor；首次不传。翻页时保留相同筛选条件。",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "设备完整编码精确筛选，未知或未授权编码返回空列表；可与 channel_code 组合，无须先查内部 ID。",
+            "in": "query",
+            "name": "device_code",
+            "required": false,
+            "schema": {
+              "example": "50010700001110000001",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "完整通道编码精确筛选；与 device_code 组合可限定设备，单独使用时匹配授权设备下的同码通道。",
+            "in": "query",
+            "name": "channel_code",
+            "required": false,
+            "schema": {
+              "example": "50010700001320000011",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "内部设备 ID 兼容参数，与所有其他筛选条件取交集。",
+            "in": "query",
+            "name": "device_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "内部通道 ID 兼容参数，与所有其他筛选条件取交集。",
+            "in": "query",
+            "name": "channel_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "可选RFC3339开始时间，只有传start/end时才按创建时间限制范围，最大7天；省略两者列出全部历史。",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "包含边界的 RFC3339 结束时间。默认当前时间；仅传 end 时 start 默认其前 24 小时。",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "items": [
+                      {
+                        "captured_at": "2026-11-05T04:00:01Z",
+                        "channel_id": "channel-001",
+                        "created_at": "2026-11-05T04:00:00Z",
+                        "id": "capture-001",
+                        "image_expires_at": "2026-11-05T04:05:00Z",
+                        "image_url": "http://10.144.0.20:15123/openmedia/v1/capture/capture-001/content?ticket=\u003c短期票据\u003e",
+                        "method": "ffmpeg",
+                        "name": "20261105120000.jpg",
+                        "source": "schedule",
+                        "state": "succeeded",
+                        "updated_at": "2026-11-05T04:00:01Z"
+                      }
+                    ],
+                    "next_cursor": null
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "additionalProperties": false,
+                          "description": "业务结果。失败时为 null；媒体成功响应为原始字节，不使用此 envelope。",
+                          "properties": {
+                            "items": {
+                              "description": "当前页结果数组。",
+                              "items": {
+                                "$ref": "#/components/schemas/CaptureRecord"
+                              },
+                              "type": "array"
+                            },
+                            "next_cursor": {
+                              "description": "下一页游标；null 表示没有下一页。只可用于同一应用、同一路径及筛选参数，有效约 1 小时。",
+                              "example": null,
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；检查 data 中的实际状态。secret_key 仅生成/轮换响应返回一次。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "查询通道图片记录",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "snapshot:capture"
+      }
+    },
+    "/openapi/v1/captures/{capture}": {
+      "get": {
+        "description": "按图片记录ID查询当前授权通道的成功图片，自动签发短期图片地址；可用于刷新到期image_url，允许访问授权通道内管理端和定时抓拍记录。图片不存在、未成功、已删除或未授权统一404。图片记录ID可从编码图片列表取得，与三方抓拍任务ID不同。",
+        "operationId": "get_openapi_v1_captures_capture",
+        "parameters": [
+          {
+            "description": "通道图片记录的id。",
+            "in": "path",
+            "name": "capture",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "captured_at": "2026-11-05T04:00:01Z",
+                    "channel_id": "channel-001",
+                    "created_at": "2026-11-05T04:00:00Z",
+                    "id": "capture-001",
+                    "image_expires_at": "2026-11-05T04:05:00Z",
+                    "image_url": "http://10.144.0.20:15123/openmedia/v1/capture/capture-001/content?ticket=\u003c短期票据\u003e",
+                    "method": "ffmpeg",
+                    "name": "20261105120000.jpg",
+                    "source": "schedule",
+                    "state": "succeeded",
+                    "updated_at": "2026-11-05T04:00:01Z"
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CaptureRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；检查 data 中的实际状态。secret_key 仅生成/轮换响应返回一次。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "查询通道图片详情与地址",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "snapshot:capture"
+      }
+    },
+    "/openapi/v1/captures/{capture}/image-tickets": {
+      "post": {
+        "description": "为当前授权通道的成功图片签发约5分钟票据，返回url与expires_at。图片列表/详情已自动提供image_url，此接口供独立换票。删除或撤权后地址立即不可用。",
+        "operationId": "post_openapi_v1_captures_capture_image_tickets",
+        "parameters": [
+          {
+            "description": "通道图片记录的id。",
+            "in": "path",
+            "name": "capture",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "POST/PATCH/PUT 为 application/json，不带 charset；GET/DELETE 不传此头。",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {},
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          },
+          "description": "JSON 请求体，未知或重复属性拒绝。签名必须使用实际发送字节。",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "expires_at": "2026-11-05T04:05:00Z",
+                    "url": "http://10.144.0.20:15123/openmedia/v1/capture/capture-001/content?ticket=\u003c短期票据\u003e"
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Ticket"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；检查 data 中的实际状态。secret_key 仅生成/轮换响应返回一次。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "刷新通道图片地址",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "snapshot:capture"
+      }
+    },
     "/openapi/v1/channels": {
       "get": {
         "description": "返回当前应用设备授权范围内的通道。结果采用游标分页，next_cursor=null 表示结束。支持 device_code 精确筛选，通道还支持 channel_code；多个筛选条件按 AND 合并。未授权或不存在的资源在列表中均为空。 支持 device_code、channel_code 编码精确筛选，也保留内部 device_id、channel_id；所有条件取交集，不会因未知编码退化为全量结果。仅传 channel_code 时匹配所有授权设备的同码通道。",
@@ -6400,6 +7000,186 @@
           "业务"
         ],
         "x-scope": "channel:read"
+      }
+    },
+    "/openapi/v1/channels/{id}/captures": {
+      "get": {
+        "description": "查询管理端通道抓图页相同的持久化图片记录，包括手动、定时、三方抓拍；仅返回当前应用授权通道下 state=succeeded 的图片，自动附带 image_url 和 image_expires_at。使用现有 snapshot:capture 权限，无须额外开启新Scope。size/cursor分页；默认全部历史，显式传start或end时按创建时间筛选（RFC3339，跨度最多7天）。原请求URL/媒体认证和磁盘路径不公开。图片文件按原管理端规则持久保存；只有管理员可重命名和删除，三方本期只读。顶层列表支持device_code/channel_code或兼容内部device_id/channel_id，过滤条件取交集；编码路径严格定位，未知/未授权404且禁止额外资源定位参数。",
+        "operationId": "get_openapi_v1_channels_id_captures",
+        "parameters": [
+          {
+            "description": "兼容内部通道ID；推荐使用设备编码+完整通道编码路径。",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "每页 1—100 条，默认 50。",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 next_cursor；首次不传。翻页时保留相同筛选条件。",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "可选RFC3339开始时间，只有传start/end时才按创建时间限制范围，最大7天；省略两者列出全部历史。",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "包含边界的 RFC3339 结束时间。默认当前时间；仅传 end 时 start 默认其前 24 小时。",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "items": [
+                      {
+                        "captured_at": "2026-11-05T04:00:01Z",
+                        "channel_id": "channel-001",
+                        "created_at": "2026-11-05T04:00:00Z",
+                        "id": "capture-001",
+                        "image_expires_at": "2026-11-05T04:05:00Z",
+                        "image_url": "http://10.144.0.20:15123/openmedia/v1/capture/capture-001/content?ticket=\u003c短期票据\u003e",
+                        "method": "ffmpeg",
+                        "name": "20261105120000.jpg",
+                        "source": "schedule",
+                        "state": "succeeded",
+                        "updated_at": "2026-11-05T04:00:01Z"
+                      }
+                    ],
+                    "next_cursor": null
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "additionalProperties": false,
+                          "description": "业务结果。失败时为 null；媒体成功响应为原始字节，不使用此 envelope。",
+                          "properties": {
+                            "items": {
+                              "description": "当前页结果数组。",
+                              "items": {
+                                "$ref": "#/components/schemas/CaptureRecord"
+                              },
+                              "type": "array"
+                            },
+                            "next_cursor": {
+                              "description": "下一页游标；null 表示没有下一页。只可用于同一应用、同一路径及筛选参数，有效约 1 小时。",
+                              "example": null,
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；检查 data 中的实际状态。secret_key 仅生成/轮换响应返回一次。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "查询通道图片记录（内部 ID 兼容）",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "snapshot:capture"
       }
     },
     "/openapi/v1/channels/{id}/ptz": {
@@ -6954,6 +7734,189 @@
         "x-scope": "device:read"
       }
     },
+    "/openapi/v1/devices/by-code/{device_code}/captures": {
+      "get": {
+        "description": "查询管理端通道抓图页相同的持久化图片记录，包括手动、定时、三方抓拍；仅返回当前应用授权通道下 state=succeeded 的图片，自动附带 image_url 和 image_expires_at。使用现有 snapshot:capture 权限，无须额外开启新Scope。size/cursor分页；默认全部历史，显式传start或end时按创建时间筛选（RFC3339，跨度最多7天）。原请求URL/媒体认证和磁盘路径不公开。图片文件按原管理端规则持久保存；只有管理员可重命名和删除，三方本期只读。顶层列表支持device_code/channel_code或兼容内部device_id/channel_id，过滤条件取交集；编码路径严格定位，未知/未授权404且禁止额外资源定位参数。",
+        "operationId": "get_openapi_v1_devices_by_code_device_code_captures",
+        "parameters": [
+          {
+            "description": "设备完整编码，对应设备对象 device_id，按原字符串精确匹配；不是内部 id。",
+            "in": "path",
+            "name": "device_code",
+            "required": true,
+            "schema": {
+              "example": "50010700001110000001",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "每页 1—100 条，默认 50。",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 next_cursor；首次不传。翻页时保留相同筛选条件。",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "可选RFC3339开始时间，只有传start/end时才按创建时间限制范围，最大7天；省略两者列出全部历史。",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "包含边界的 RFC3339 结束时间。默认当前时间；仅传 end 时 start 默认其前 24 小时。",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "items": [
+                      {
+                        "captured_at": "2026-11-05T04:00:01Z",
+                        "channel_id": "channel-001",
+                        "created_at": "2026-11-05T04:00:00Z",
+                        "id": "capture-001",
+                        "image_expires_at": "2026-11-05T04:05:00Z",
+                        "image_url": "http://10.144.0.20:15123/openmedia/v1/capture/capture-001/content?ticket=\u003c短期票据\u003e",
+                        "method": "ffmpeg",
+                        "name": "20261105120000.jpg",
+                        "source": "schedule",
+                        "state": "succeeded",
+                        "updated_at": "2026-11-05T04:00:01Z"
+                      }
+                    ],
+                    "next_cursor": null
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "additionalProperties": false,
+                          "description": "业务结果。失败时为 null；媒体成功响应为原始字节，不使用此 envelope。",
+                          "properties": {
+                            "items": {
+                              "description": "当前页结果数组。",
+                              "items": {
+                                "$ref": "#/components/schemas/CaptureRecord"
+                              },
+                              "type": "array"
+                            },
+                            "next_cursor": {
+                              "description": "下一页游标；null 表示没有下一页。只可用于同一应用、同一路径及筛选参数，有效约 1 小时。",
+                              "example": null,
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；检查 data 中的实际状态。secret_key 仅生成/轮换响应返回一次。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "按编码查询通道图片记录",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "snapshot:capture"
+      }
+    },
     "/openapi/v1/devices/by-code/{device_code}/channels": {
       "get": {
         "description": "通过设备完整编码列出该设备的全部授权通道，无须内部设备 ID。使用 size/cursor 分页。设备未知或未授权统一 404；不额外要求 device:read。路径已确定设备，不接受其他资源定位筛选参数。",
@@ -7239,6 +8202,201 @@
           "业务"
         ],
         "x-scope": "channel:read"
+      }
+    },
+    "/openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/captures": {
+      "get": {
+        "description": "查询管理端通道抓图页相同的持久化图片记录，包括手动、定时、三方抓拍；仅返回当前应用授权通道下 state=succeeded 的图片，自动附带 image_url 和 image_expires_at。使用现有 snapshot:capture 权限，无须额外开启新Scope。size/cursor分页；默认全部历史，显式传start或end时按创建时间筛选（RFC3339，跨度最多7天）。原请求URL/媒体认证和磁盘路径不公开。图片文件按原管理端规则持久保存；只有管理员可重命名和删除，三方本期只读。顶层列表支持device_code/channel_code或兼容内部device_id/channel_id，过滤条件取交集；编码路径严格定位，未知/未授权404且禁止额外资源定位参数。",
+        "operationId": "get_openapi_v1_devices_by_code_device_code_channels_channel_code_captures",
+        "parameters": [
+          {
+            "description": "设备完整编码，对应设备对象 device_id，按原字符串精确匹配；不是内部 id。",
+            "in": "path",
+            "name": "device_code",
+            "required": true,
+            "schema": {
+              "example": "50010700001110000001",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "设备上报的完整通道编码，对应通道对象 channel_id；不是内部 id，也不是录像机数字序号。必须属于路径中的设备。",
+            "in": "path",
+            "name": "channel_code",
+            "required": true,
+            "schema": {
+              "example": "50010700001320000011",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "每页 1—100 条，默认 50。",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 next_cursor；首次不传。翻页时保留相同筛选条件。",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "可选RFC3339开始时间，只有传start/end时才按创建时间限制范围，最大7天；省略两者列出全部历史。",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "包含边界的 RFC3339 结束时间。默认当前时间；仅传 end 时 start 默认其前 24 小时。",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "items": [
+                      {
+                        "captured_at": "2026-11-05T04:00:01Z",
+                        "channel_id": "channel-001",
+                        "created_at": "2026-11-05T04:00:00Z",
+                        "id": "capture-001",
+                        "image_expires_at": "2026-11-05T04:05:00Z",
+                        "image_url": "http://10.144.0.20:15123/openmedia/v1/capture/capture-001/content?ticket=\u003c短期票据\u003e",
+                        "method": "ffmpeg",
+                        "name": "20261105120000.jpg",
+                        "source": "schedule",
+                        "state": "succeeded",
+                        "updated_at": "2026-11-05T04:00:01Z"
+                      }
+                    ],
+                    "next_cursor": null
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "additionalProperties": false,
+                          "description": "业务结果。失败时为 null；媒体成功响应为原始字节，不使用此 envelope。",
+                          "properties": {
+                            "items": {
+                              "description": "当前页结果数组。",
+                              "items": {
+                                "$ref": "#/components/schemas/CaptureRecord"
+                              },
+                              "type": "array"
+                            },
+                            "next_cursor": {
+                              "description": "下一页游标；null 表示没有下一页。只可用于同一应用、同一路径及筛选参数，有效约 1 小时。",
+                              "example": null,
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；检查 data 中的实际状态。secret_key 仅生成/轮换响应返回一次。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "按编码查询通道图片记录",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "snapshot:capture"
       }
     },
     "/openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/events": {
@@ -8498,7 +9656,7 @@
     },
     "/openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/snapshot-tasks": {
       "get": {
-        "description": "直接按设备完整编码与完整通道编码查询抓拍任务。无需内部设备/通道 ID，不额外要求 device:read 或 channel:read。路径资源不存在或未授权统一 404；通道编码不唯一返回 409。路径已限定资源，不接受 device_id/channel_id/device_code/channel_code 查询参数。只返回本应用记录，不触发设备动作。 使用 size/cursor 分页，保留 start/end、state（若有）等筛选，时间默认最近 24 小时、最大 7 天。",
+        "description": "直接按设备完整编码与完整通道编码查询抓拍任务。无需内部设备/通道 ID，不额外要求 device:read 或 channel:read。路径资源不存在或未授权统一 404；通道编码不唯一返回 409。路径已限定资源，不接受 device_id/channel_id/device_code/channel_code 查询参数。只返回本应用记录，不触发设备动作。 使用 size/cursor 分页，保留 start/end、state（若有）等筛选，时间默认最近 24 小时、最大 7 天。 queued/running/succeeded 且未过期的任务自动附带短期 image_url 和 image_expires_at；其他状态无图片地址。查询会刷新票据，不再需要额外申请图片地址。",
         "operationId": "get_openapi_v1_devices_by_code_device_code_channels_channel_code_snapshot_tasks",
         "parameters": [
           {
@@ -8613,6 +9771,8 @@
                         "error": "",
                         "expires_at": "2026-11-05T08:00:00Z",
                         "id": "task-001",
+                        "image_expires_at": "2026-11-05T04:05:00Z",
+                        "image_url": "http://10.144.0.20:15123/openmedia/v1/snapshot/task-001/content?ticket=\u003c短期票据\u003e",
                         "state": "queued"
                       }
                     ],
@@ -8697,7 +9857,7 @@
         "x-scope": "snapshot:capture"
       },
       "post": {
-        "description": "直接使用设备完整编码与完整通道编码定位授权资源，无需先换取内部 ID。设备不存在或未授权均返回 404；同一设备下重复通道编码返回 409 AMBIGUOUS_RESOURCE_CODE。异步请求 ZLM 采集新图片；返回 queued 后轮询状态。不会使用旧封面充当本次结果。任务最长约 60 秒，图片保留约 24 小时。发送 {}；路径已选定通道，请勿在 body 传入 channel_id。后续查询任务和申请图片票据仍使用任务 id。",
+        "description": "支持同步与异步，两种方式均自动返回 image_url 和 image_expires_at，无需额外申请图片票据。mode=sync 等待成功后返回可用图片地址；mode=async 或省略立即返回排队任务和地址，完成前访问图片地址返回409 SNAPSHOT_PENDING，完成后同一地址可取图。查询任务详情或任务列表会刷新地址；失败/取消/未知/过期任务不返回地址。同步等待超时返回504 SNAPSHOT_TIMEOUT，任务继续，可携带完全相同body和幂等键重试，或按编码查询任务列表取得任务id。不同body复用同一幂等键返回409。底层复用通道持久化抓拍（设备上传/FFmpeg按现有能力选取），成功图片同时出现在通道图片记录中；既有临时三方任务仍约24小时到期，通道图片记录独立保留。",
         "operationId": "post_openapi_v1_devices_by_code_device_code_channels_channel_code_snapshot_tasks",
         "parameters": [
           {
@@ -8762,9 +9922,12 @@
         "requestBody": {
           "content": {
             "application/json": {
-              "example": {},
+              "example": {
+                "mode": "sync",
+                "timeout_seconds": 60
+              },
               "schema": {
-                "$ref": "#/components/schemas/Empty"
+                "$ref": "#/components/schemas/SnapshotByCodeInput"
               }
             }
           },
@@ -8785,6 +9948,8 @@
                     "error": "",
                     "expires_at": "2026-11-05T08:00:00Z",
                     "id": "task-001",
+                    "image_expires_at": "2026-11-05T04:05:00Z",
+                    "image_url": "http://10.144.0.20:15123/openmedia/v1/snapshot/task-001/content?ticket=\u003c短期票据\u003e",
                     "state": "queued"
                   },
                   "message": "success",
@@ -8835,6 +10000,36 @@
           },
           "503": {
             "$ref": "#/components/responses/HTTP503"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "SNAPSHOT_TIMEOUT",
+                  "data": null,
+                  "message": "等待抓拍超时，任务仍在处理；请使用相同幂等键重试或查询任务列表",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "nullable": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "同步等待超时，任务仍在运行。使用相同幂等键和body重试，或通过任务列表查询。"
           }
         },
         "security": [
@@ -8842,7 +10037,7 @@
             "ApplicationSignature": []
           }
         ],
-        "summary": "按编码创建抓拍任务",
+        "summary": "按编码同步或异步抓拍",
         "tags": [
           "业务"
         ],
@@ -9605,7 +10800,7 @@
     },
     "/openapi/v1/devices/by-code/{device_code}/snapshot-tasks": {
       "get": {
-        "description": "直接按设备完整编码查询抓拍任务。无需内部设备/通道 ID，不额外要求 device:read 或 channel:read。路径资源不存在或未授权统一 404；通道编码不唯一返回 409。路径已限定资源，不接受 device_id/channel_id/device_code/channel_code 查询参数。只返回本应用记录，不触发设备动作。 使用 size/cursor 分页，保留 start/end、state（若有）等筛选，时间默认最近 24 小时、最大 7 天。",
+        "description": "直接按设备完整编码查询抓拍任务。无需内部设备/通道 ID，不额外要求 device:read 或 channel:read。路径资源不存在或未授权统一 404；通道编码不唯一返回 409。路径已限定资源，不接受 device_id/channel_id/device_code/channel_code 查询参数。只返回本应用记录，不触发设备动作。 使用 size/cursor 分页，保留 start/end、state（若有）等筛选，时间默认最近 24 小时、最大 7 天。 queued/running/succeeded 且未过期的任务自动附带短期 image_url 和 image_expires_at；其他状态无图片地址。查询会刷新票据，不再需要额外申请图片地址。",
         "operationId": "get_openapi_v1_devices_by_code_device_code_snapshot_tasks",
         "parameters": [
           {
@@ -9708,6 +10903,8 @@
                         "error": "",
                         "expires_at": "2026-11-05T08:00:00Z",
                         "id": "task-001",
+                        "image_expires_at": "2026-11-05T04:05:00Z",
+                        "image_url": "http://10.144.0.20:15123/openmedia/v1/snapshot/task-001/content?ticket=\u003c短期票据\u003e",
                         "state": "queued"
                       }
                     ],
@@ -12009,7 +13206,7 @@
     },
     "/openapi/v1/snapshot-tasks": {
       "get": {
-        "description": "按编码查询本应用在当前授权通道上的抓拍任务记录。支持 device_code、channel_code 编码精确筛选，也保留内部 device_id、channel_id；所有条件取交集，不会因未知编码退化为全量结果。仅传 channel_code 时匹配所有授权设备的同码通道。 默认按创建时间筛选最近 24 小时，可传 start/end，最大 7 天；size/cursor 分页。只返回记录，不触发设备动作。其他应用记录始终不可见；过期记录可在时间范围内返回，后续操作仍检查生命周期与当前权限。",
+        "description": "按编码查询本应用在当前授权通道上的抓拍任务记录。支持 device_code、channel_code 编码精确筛选，也保留内部 device_id、channel_id；所有条件取交集，不会因未知编码退化为全量结果。仅传 channel_code 时匹配所有授权设备的同码通道。 默认按创建时间筛选最近 24 小时，可传 start/end，最大 7 天；size/cursor 分页。只返回记录，不触发设备动作。其他应用记录始终不可见；过期记录可在时间范围内返回，后续操作仍检查生命周期与当前权限。 queued/running/succeeded 且未过期的任务自动附带短期 image_url 和 image_expires_at；其他状态无图片地址。查询会刷新票据，不再需要额外申请图片地址。",
         "operationId": "get_openapi_v1_snapshot_tasks",
         "parameters": [
           {
@@ -12142,6 +13339,8 @@
                         "error": "",
                         "expires_at": "2026-11-05T08:00:00Z",
                         "id": "task-001",
+                        "image_expires_at": "2026-11-05T04:05:00Z",
+                        "image_url": "http://10.144.0.20:15123/openmedia/v1/snapshot/task-001/content?ticket=\u003c短期票据\u003e",
                         "state": "queued"
                       }
                     ],
@@ -12226,7 +13425,7 @@
         "x-scope": "snapshot:capture"
       },
       "post": {
-        "description": "异步请求 ZLM 采集新图片；返回 queued 后轮询状态。不会使用旧封面充当本次结果。任务最长约 60 秒，图片保留约 24 小时。 可直接在 JSON 中传 device_code 和 channel_code，无须内部 ID；与内部 channel_id 互斥。",
+        "description": "支持同步与异步，两种方式均自动返回 image_url 和 image_expires_at，无需额外申请图片票据。mode=sync 等待成功后返回可用图片地址；mode=async 或省略立即返回排队任务和地址，完成前访问图片地址返回409 SNAPSHOT_PENDING，完成后同一地址可取图。查询任务详情或任务列表会刷新地址；失败/取消/未知/过期任务不返回地址。同步等待超时返回504 SNAPSHOT_TIMEOUT，任务继续，可携带完全相同body和幂等键重试，或按编码查询任务列表取得任务id。不同body复用同一幂等键返回409。底层复用通道持久化抓拍（设备上传/FFmpeg按现有能力选取），成功图片同时出现在通道图片记录中；既有临时三方任务仍约24小时到期，通道图片记录独立保留。",
         "operationId": "post_openapi_v1_snapshot_tasks",
         "parameters": [
           {
@@ -12271,7 +13470,9 @@
             "application/json": {
               "example": {
                 "channel_code": "50010700001320000011",
-                "device_code": "50010700001110000001"
+                "device_code": "50010700001110000001",
+                "mode": "sync",
+                "timeout_seconds": 60
               },
               "schema": {
                 "$ref": "#/components/schemas/SnapshotInput"
@@ -12295,6 +13496,8 @@
                     "error": "",
                     "expires_at": "2026-11-05T08:00:00Z",
                     "id": "task-001",
+                    "image_expires_at": "2026-11-05T04:05:00Z",
+                    "image_url": "http://10.144.0.20:15123/openmedia/v1/snapshot/task-001/content?ticket=\u003c短期票据\u003e",
                     "state": "queued"
                   },
                   "message": "success",
@@ -12345,6 +13548,36 @@
           },
           "503": {
             "$ref": "#/components/responses/HTTP503"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "SNAPSHOT_TIMEOUT",
+                  "data": null,
+                  "message": "等待抓拍超时，任务仍在处理；请使用相同幂等键重试或查询任务列表",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "nullable": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "同步等待超时，任务仍在运行。使用相同幂等键和body重试，或通过任务列表查询。"
           }
         },
         "security": [
@@ -12352,7 +13585,7 @@
             "ApplicationSignature": []
           }
         ],
-        "summary": "创建抓拍任务（支持编码）",
+        "summary": "同步或异步视频抓拍",
         "tags": [
           "业务"
         ],
@@ -12361,7 +13594,7 @@
     },
     "/openapi/v1/snapshot-tasks/{task}": {
       "get": {
-        "description": "仅本应用任务。succeeded 后再申请 image-tickets；failed 检查 error；unknown 表示重启后结果待核对，不自动重发设备动作。 这里的路径 ID 是具体录像/事件/会话/任务/命令的结果标识；同一通道可有多条结果，先 GET /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/snapshot-tasks 按设备和通道编码查询列表，再使用目标记录的 id。",
+        "description": "仅本应用任务。succeeded 后再申请 image-tickets；failed 检查 error；unknown 表示重启后结果待核对，不自动重发设备动作。 这里的路径 ID 是具体录像/事件/会话/任务/命令的结果标识；同一通道可有多条结果，先 GET /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/snapshot-tasks 按设备和通道编码查询列表，再使用目标记录的 id。 queued/running/succeeded 且未过期的任务自动附带短期 image_url 和 image_expires_at；其他状态无图片地址。查询会刷新票据，不再需要额外申请图片地址。",
         "operationId": "get_openapi_v1_snapshot_tasks_task",
         "parameters": [
           {
@@ -12409,6 +13642,8 @@
                     "error": "",
                     "expires_at": "2026-11-05T08:00:00Z",
                     "id": "task-001",
+                    "image_expires_at": "2026-11-05T04:05:00Z",
+                    "image_url": "http://10.144.0.20:15123/openmedia/v1/snapshot/task-001/content?ticket=\u003c短期票据\u003e",
                     "state": "queued"
                   },
                   "message": "success",
@@ -12475,7 +13710,7 @@
     },
     "/openapi/v1/snapshot-tasks/{task}/image-tickets": {
       "post": {
-        "description": "任务须 succeeded 且未到期。图片下载经过独立短期票据入口，不能读取其他应用任务。 这里的路径 ID 是具体录像/事件/会话/任务/命令的结果标识；同一通道可有多条结果，先 GET /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/snapshot-tasks 按设备和通道编码查询列表，再使用目标记录的 id。",
+        "description": "兼容的独立图片票据入口。新客户端直接使用创建/详情/列表响应的 image_url；排队、执行中或成功且未过期任务均可取票据，访问图片前仍检查任务状态与当前权限。",
         "operationId": "post_openapi_v1_snapshot_tasks_task_image_tickets",
         "parameters": [
           {
@@ -13755,14 +14990,14 @@
     },
     "/openmedia/v1/{kind}/{id}/{path}": {
       "get": {
-        "description": "使用票据接口返回 URL 原样访问。GET 成功返回 HLS 清单、FLV、MP4 或图片字节；不使用 JSON 成功包装。HLS 全部子资源经授权重写，不能拼接任意回源。新连接检查票据到期，活动连接约每秒检查撤权。",
+        "description": "使用票据接口返回 URL 原样访问。GET 成功返回 HLS 清单、FLV、MP4 或图片字节；不使用 JSON 成功包装。HLS 全部子资源经授权重写，不能拼接任意回源。新连接检查票据到期，活动连接约每秒检查撤权。 capture为通道永久图片、snapshot为三方抓拍任务结果，均支持直接使用API返回地址。异步snapshot未完成时409 SNAPSHOT_PENDING并带Retry-After:1，成功后同一地址取图；失败/删除/撤权后拒绝访问。",
         "operationId": "get_openmedia_v1_kind_id_path",
         "parameters": [
           {
             "$ref": "#/components/parameters/Range"
           },
           {
-            "description": "媒体种类：live / recording / download / event / snapshot。",
+            "description": "媒体种类：live / recording / download / event / snapshot / capture。",
             "in": "path",
             "name": "kind",
             "required": true,
@@ -13840,7 +15075,7 @@
             "$ref": "#/components/responses/HTTP404"
           },
           "409": {
-            "$ref": "#/components/responses/HTTP409"
+            "description": "异步抓拍处理中，code=SNAPSHOT_PENDING，Retry-After:1；不要展示旧图片。"
           },
           "413": {
             "$ref": "#/components/responses/HTTP413"

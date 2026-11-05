@@ -101,6 +101,8 @@ func NewHTTPHandler(uc *Usecase) http.Handler {
 	}
 
 	uc.GB28181API.captures = capture.New(uc.DB, filepath.Join(uc.Conf.ConfigDir, "cover", "captures"))
+	snapshot := uc.GB28181API.captureSettings()
+	uc.GB28181API.captures.SetScheduling(time.Duration(snapshot.ScanIntervalMS)*time.Millisecond, snapshot.ImmediateDispatch)
 	setupRouter(g, uc) // 设置路由处理函数
 	// 将 SIP 层 GB 报警上报桥接到事件中心，统一落库到 events 表。
 	setupGBAlarmBridge(uc)

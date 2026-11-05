@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gowvp/owl/internal/core/capture"
 	"github.com/gowvp/owl/internal/core/event"
 	"github.com/gowvp/owl/internal/core/recording"
 	"gorm.io/gorm"
@@ -115,7 +116,7 @@ func (s *Service) ReleaseSession(app, id string) error {
 func (s *Service) IssueTicket(p Principal, kind, id string) (string, Ticket, error) {
 	s.execution.Lock()
 	defer s.execution.Unlock()
-	scope := map[string]string{"live": "live:play", "recording": "recording:play", "download": "recording:download", "event": "event:image", "snapshot": "snapshot:capture"}[kind]
+	scope := mediaScope(kind)
 	var t Ticket
 	if scope == "" {
 		return "", t, ErrNotFound
@@ -141,7 +142,7 @@ func (s *Service) IssueTicket(p Principal, kind, id string) (string, Ticket, err
 		}
 	case "snapshot":
 		var row Snapshot
-		if e = s.DB.First(&row, "id = ? AND app_id = ? AND state = ? AND expires_at > ?", id, p.App.ID, "succeeded", time.Now()).Error; e != nil {
+		if e = s.DB.First(&row, "id = ? AND app_id = ? AND state IN ? AND expires_at > ?", id, p.App.ID, []string{"queued", "running", "succeeded"}, time.Now()).Error; e != nil {
 			return "", t, ErrNotFound
 		}
 		if _, e = s.Current(row.AppID, row.CredentialID); e != nil {
@@ -151,6 +152,12 @@ func (s *Service) IssueTicket(p Principal, kind, id string) (string, Ticket, err
 		if row.ExpiresAt.Before(t.ExpiresAt) {
 			t.ExpiresAt = row.ExpiresAt
 		}
+	case "capture":
+		var row capture.Record
+		if e = s.DB.First(&row, "id = ? AND state = ?", id, "succeeded").Error; e != nil {
+			return "", t, ErrNotFound
+		}
+		t.ChannelID = row.ChannelID
 	case "recording", "download":
 		var row recording.Recording
 		if e = s.DB.First(&row, "id = ? AND delete_flag = ?", id, false).Error; e != nil {
@@ -191,7 +198,7 @@ func (s *Service) CheckTicket(raw, kind, id string) (Ticket, Principal, error) {
 	if e := s.DB.First(&t, "hash = ? AND kind = ? AND resource_id = ? AND revoked = ? AND expires_at > ?", Hash([]byte(raw)), kind, id, false, time.Now()).Error; e != nil {
 		return t, p, ErrAuth
 	}
-	scope := map[string]string{"live": "live:play", "recording": "recording:play", "download": "recording:download", "event": "event:image", "snapshot": "snapshot:capture"}[kind]
+	scope := mediaScope(kind)
 	p, e := s.Current(t.AppID, t.CredentialID)
 	if e != nil {
 		return t, p, e
@@ -205,11 +212,17 @@ func (s *Service) CheckTicket(raw, kind, id string) (Ticket, Principal, error) {
 	}
 	if kind == "snapshot" {
 		var row Snapshot
-		if e := s.DB.First(&row, "id = ? AND app_id = ? AND state = ? AND expires_at > ?", id, p.App.ID, "succeeded", time.Now()).Error; e != nil {
+		if e := s.DB.First(&row, "id = ? AND app_id = ? AND state IN ? AND expires_at > ?", id, p.App.ID, []string{"queued", "running", "succeeded"}, time.Now()).Error; e != nil {
 			return t, p, ErrAuth
 		}
 		if _, e := s.Current(row.AppID, row.CredentialID); e != nil {
 			return t, p, e
+		}
+	}
+	if kind == "capture" {
+		var row capture.Record
+		if s.DB.First(&row, "id = ? AND channel_id = ? AND state = ?", id, t.ChannelID, "succeeded").Error != nil {
+			return t, p, ErrNotFound
 		}
 	}
 	if kind == "live" {
@@ -279,7 +292,13 @@ func (s *Service) Capture(id string) {
 		return
 	}
 	path := filepath.Join(s.Config.DataDir, "open-snapshots", row.ID+".jpg")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	timeout := 60 * time.Second
+	if host, ok := s.Host.(interface{ SnapshotTimeout() time.Duration }); ok {
+		if value := host.SnapshotTimeout(); value > 0 && value <= 2*time.Hour {
+			timeout = value
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	e = s.Host.Snapshot(ctx, row.ChannelID, path)
 	state := "succeeded"
@@ -497,10 +516,28 @@ func (s *Service) File(t Ticket) (string, error) {
 		return s.Host.EventImagePath(context.Background(), id)
 	case "snapshot":
 		var row Snapshot
-		if err := s.DB.First(&row, "id = ? AND app_id = ? AND state = ? AND expires_at > ?", t.ResourceID, t.AppID, "succeeded", time.Now()).Error; err != nil {
+		if err := s.DB.First(&row, "id = ? AND app_id = ? AND expires_at > ?", t.ResourceID, t.AppID, time.Now()).Error; err != nil {
+			return "", ErrNotFound
+		}
+		if row.State == "queued" || row.State == "running" {
+			return "", Fail(409, "SNAPSHOT_PENDING", "抓拍处理中，请稍后重试图片地址或查询任务")
+		}
+		if row.State != "succeeded" {
 			return "", ErrNotFound
 		}
 		return row.Path, nil
+	case "capture":
+		var row capture.Record
+		if s.DB.First(&row, "id = ? AND channel_id = ? AND state = ?", t.ResourceID, t.ChannelID, "succeeded").Error != nil {
+			return "", ErrNotFound
+		}
+		host, ok := s.Host.(interface {
+			CapturePath(context.Context, string) (string, error)
+		})
+		if !ok {
+			return "", ErrUnavailable
+		}
+		return host.CapturePath(context.Background(), row.ID)
 	}
 	return "", fmt.Errorf("unsupported media")
 }

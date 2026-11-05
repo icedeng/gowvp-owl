@@ -9,6 +9,7 @@ services:
     mem_limit: 2g
     environment:
       OWL_ADMIN_USERNAME: ${OWL_ADMIN_USERNAME:-admin}
+      OWL_UPGRADER_SOCKET: /app/upgrader/agent.sock
       OWL_ADMIN_PASSWORD: ${OWL_ADMIN_PASSWORD:?set OWL_ADMIN_PASSWORD}
       OWL_JWT_SECRET: ${OWL_JWT_SECRET:?set OWL_JWT_SECRET}
       OWL_RTMP_SECRET: ${OWL_RTMP_SECRET:?set OWL_RTMP_SECRET}
@@ -40,6 +41,12 @@ services:
       - "0.0.0.0:15060:15060"
       - "0.0.0.0:15060:15060/udp"
     volumes:
+      - type: bind
+        source: /www2/gowvp-v1/upgrader/socket
+        target: /app/upgrader
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind
         source: /www2/gowvp-v1/data/configs
         target: /app/configs

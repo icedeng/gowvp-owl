@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -63,6 +64,8 @@ func (a *API) page(c *gin.Context, q *gorm.DB, table string) {
 }
 func (a *API) business(g *gin.RouterGroup) {
 	a.codeRoutes(g)
+	a.captureRoutes(g)
+	a.deviceRecordRoutes(g)
 	for _, resource := range []string{"live-sessions", "snapshot-tasks", "ptz-commands"} {
 		name := resource
 		g.GET("/"+name, func(c *gin.Context) { a.listChannelResources(c, name) })
@@ -122,6 +125,9 @@ func (a *API) business(g *gin.RouterGroup) {
 		}
 		if e == nil {
 			_, e = a.S.Channel(principal(c).App, row.ChannelID)
+		}
+		if e == nil {
+			e = a.snapshotAddress(c, &row)
 		}
 		respond(c, row, e)
 	})
@@ -269,12 +275,30 @@ func (a *API) createSnapshot(c *gin.Context) {
 	if !require(c, a.S, "snapshot:capture") {
 		return
 	}
-	var in channelSelector
+	var in struct {
+		channelSelector
+		Mode           string `json:"mode"`
+		TimeoutSeconds int    `json:"timeout_seconds"`
+	}
 	if e := Body(c, &in); e != nil {
 		respond(c, nil, e)
 		return
 	}
-	channel, e := a.inputChannel(c, in)
+	if in.Mode == "" {
+		in.Mode = "async"
+	}
+	if in.Mode != "sync" && in.Mode != "async" {
+		respond(c, nil, op.Fail(400, "INVALID_SNAPSHOT_MODE", "mode 须为 sync 或 async"))
+		return
+	}
+	if in.TimeoutSeconds == 0 {
+		in.TimeoutSeconds = 60
+	}
+	if in.TimeoutSeconds < 1 || in.TimeoutSeconds > 120 {
+		respond(c, nil, op.Fail(400, "INVALID_SNAPSHOT_TIMEOUT", "timeout_seconds 须为 1—120"))
+		return
+	}
+	channel, e := a.inputChannel(c, in.channelSelector)
 	if e != nil {
 		respond(c, nil, e)
 		return
@@ -283,21 +307,55 @@ func (a *API) createSnapshot(c *gin.Context) {
 	if !ok {
 		return
 	}
+	var row op.Snapshot
 	if id != "" {
-		row, e := owned[op.Snapshot](a, c, id)
-		respond(c, row, e)
-		return
+		row, e = owned[op.Snapshot](a, c, id)
+	} else {
+		row, e = a.S.CreateSnapshot(principal(c), channel)
+		if e == nil {
+			// 先启动持久化任务；即使幂等结果写入失败，也不留下永不执行的排队任务。
+			taskID := row.ID
+			a.S.Spawn(func() { a.S.Capture(taskID) })
+			if !a.done(c, "snapshot.create", row.ID) {
+				return
+			}
+		}
 	}
-	row, e := a.S.CreateSnapshot(principal(c), channel)
 	if e != nil {
 		respond(c, nil, e)
 		return
 	}
-	if !a.done(c, "snapshot.create", row.ID) {
-		return
+	if in.Mode == "sync" {
+		// 同步等待最长 120 秒，单独延长此入口写超时，不影响其他 API。
+		_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(time.Duration(in.TimeoutSeconds+5) * time.Second))
+		// 客户端断开只停止等待，已接受的任务继续；同幂等键重试不会再次抓拍。
+		deadline := time.NewTimer(time.Duration(in.TimeoutSeconds) * time.Second)
+		defer deadline.Stop()
+		tick := time.NewTicker(100 * time.Millisecond)
+		defer tick.Stop()
+	wait:
+		for row.State == "queued" || row.State == "running" {
+			select {
+			case <-c.Request.Context().Done():
+				return
+			case <-deadline.C:
+				respond(c, nil, op.Fail(504, "SNAPSHOT_TIMEOUT", "等待抓拍超时，任务仍在处理；请使用相同幂等键重试或查询任务列表"))
+				return
+			case <-tick.C:
+				row, e = owned[op.Snapshot](a, c, row.ID)
+				if e != nil {
+					break wait
+				}
+			}
+		}
+		if e == nil && row.State != "succeeded" {
+			e = op.Fail(503, "SNAPSHOT_FAILED", "抓拍失败或任务已失效，请查询任务状态")
+		}
 	}
-	a.S.Spawn(func() { a.S.Capture(row.ID) })
-	respond(c, row, nil)
+	if e == nil {
+		e = a.snapshotAddress(c, &row)
+	}
+	respond(c, row, e)
 }
 func (a *API) ptz(c *gin.Context) {
 	if !require(c, a.S, "ptz:control") {

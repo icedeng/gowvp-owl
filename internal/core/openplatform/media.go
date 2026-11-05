@@ -2,6 +2,7 @@ package openplatform
 
 import (
 	"context"
+	"github.com/gowvp/owl/internal/core/capture"
 	"golang.org/x/time/rate"
 	"time"
 )
@@ -14,10 +15,13 @@ func (s *Service) AcquireConnection(p Principal, kind string) (func(), error) {
 	}
 	key := p.App.ID + ":" + kind
 	limit := p.App.LiveLimit * 4
+	if kind == "device-record-query" {
+		limit = 2
+	}
 	if kind == "download" || kind == "recording" {
 		limit = p.App.DownloadLimit
 	}
-	if kind == "event" || kind == "snapshot" {
+	if kind == "event" || kind == "snapshot" || kind == "capture" {
 		limit = 10
 	}
 	if s.connections[key] >= limit {
@@ -68,11 +72,17 @@ func (s *Service) CheckActive(t Ticket) error {
 	}
 	if t.Kind == "snapshot" {
 		var row Snapshot
-		if s.DB.First(&row, "id = ? AND state = ? AND expires_at > ?", t.ResourceID, "succeeded", time.Now()).Error != nil {
+		if s.DB.First(&row, "id = ? AND state IN ? AND expires_at > ?", t.ResourceID, []string{"queued", "running", "succeeded"}, time.Now()).Error != nil {
 			return ErrAuth
 		}
 		if _, e = s.Current(row.AppID, row.CredentialID); e != nil {
 			return e
+		}
+	}
+	if t.Kind == "capture" {
+		var row capture.Record
+		if s.DB.First(&row, "id = ? AND channel_id = ? AND state = ?", t.ResourceID, t.ChannelID, "succeeded").Error != nil {
+			return ErrNotFound
 		}
 	}
 	if t.Kind == "live" {
@@ -85,4 +95,8 @@ func (s *Service) CheckActive(t Ticket) error {
 		}
 	}
 	return nil
+}
+
+func mediaScope(kind string) string {
+	return map[string]string{"live": "live:play", "recording": "recording:play", "download": "recording:download", "event": "event:image", "snapshot": "snapshot:capture", "capture": "snapshot:capture"}[kind]
 }

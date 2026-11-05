@@ -1,14 +1,8 @@
 package api
 
 import (
-	"bytes"
 	"context"
-	"crypto/md5"
 	"encoding/json"
-	"fmt"
-	"image"
-	"image/jpeg"
-	_ "image/png"
 	"io"
 	"log/slog"
 	"net"
@@ -34,6 +28,12 @@ import (
 )
 
 type openHost struct{ uc *Usecase }
+
+func (h openHost) SnapshotTimeout() time.Duration {
+	// 后台任务覆盖宿主设备上传等待与取流/队列余量，同步 HTTP 等待单独限时。
+	settings := h.uc.GB28181API.captureSettings()
+	return time.Duration(max(settings.UploadTimeoutSeconds, settings.StreamTimeoutSeconds)+120) * time.Second
+}
 
 func (h openHost) Start(ctx context.Context, id string) (op.Source, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -87,59 +87,42 @@ func (h openHost) Start(ctx context.Context, id string) (op.Source, error) {
 	}
 }
 func (h openHost) Snapshot(ctx context.Context, id, dest string) error {
-	source, e := h.Start(ctx, id)
-	if e != nil {
-		return e
+	a := h.uc.GB28181API
+	row, err := a.captures.Enqueue(ctx, id, "openapi")
+	if err != nil {
+		return err
 	}
-	ms, e := h.uc.SMSAPI.smsCore.GetMediaServer(ctx, source.MediaServerID)
-	if e != nil {
-		return e
+	row, err = a.waitCapture(ctx, row.ID)
+	if err != nil {
+		return err
 	}
-	// 唯一URL隔离ZLM的截图缓存，返回字节直接认领到本次任务，禁止读取历史封面。
-	streamURL := "rtsp://" + net.JoinHostPort(ms.IP, strconv.Itoa(ms.Ports.RTSP)) + "/" + url.PathEscape(source.App) + "/" + url.PathEscape(source.Stream) + "?owl_capture=" + uuid.NewString()
-	if source.Query != "" {
-		streamURL += "&" + source.Query
+	path, err := a.captures.Path(row)
+	if err != nil {
+		return err
 	}
-	body := url.Values{"url": {streamURL}, "timeout_sec": {"15"}, "expire_sec": {"0"}, "secret": {ms.Secret}}.Encode()
-	req, e := http.NewRequestWithContext(ctx, "POST", source.BaseURL+"/index/api/getSnap", strings.NewReader(body))
-	if e != nil {
-		return e
+	source, err := os.Open(path)
+	if err != nil {
+		return err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	client := &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	res, e := client.Do(req)
-	if e != nil {
-		return e
+	defer source.Close()
+	target, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
 	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		return fmt.Errorf("snapshot unavailable")
+	defer target.Close()
+	if _, err = io.Copy(target, source); err != nil {
+		return err
 	}
-	b, e := io.ReadAll(io.LimitReader(res.Body, (20<<20)+1))
-	if e != nil || len(b) > 20<<20 {
-		return fmt.Errorf("invalid snapshot")
+	return target.Sync()
+}
+
+// CapturePath 只向开放平台内部返回文件路径，HTTP 响应使用受控票据地址。
+func (h openHost) CapturePath(ctx context.Context, id string) (string, error) {
+	row, err := h.uc.GB28181API.captures.Get(ctx, id)
+	if err != nil || row.State != "succeeded" {
+		return "", op.ErrNotFound
 	}
-	// 与现有ZLM驱动一致，拒绝其失败时返回的固定占位图。MD5仅识别该公开占位文件。
-	if len(b) == 47255 && fmt.Sprintf("%x", md5.Sum(b)) == "32ddfa5715059731ae893ec92fca0311" {
-		return fmt.Errorf("snapshot not refreshed")
-	}
-	cfg, _, e := image.DecodeConfig(bytes.NewReader(b))
-	if e != nil || cfg.Width < 1 || cfg.Height < 1 || int64(cfg.Width)*int64(cfg.Height) > 32000000 {
-		return fmt.Errorf("invalid snapshot image")
-	}
-	img, _, e := image.Decode(bytes.NewReader(b))
-	if e != nil {
-		return e
-	}
-	f, e := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if e != nil {
-		return e
-	}
-	defer f.Close()
-	if e = jpeg.Encode(f, img, &jpeg.Options{Quality: 90}); e != nil {
-		return e
-	}
-	return f.Sync()
+	return h.uc.GB28181API.captures.Path(row)
 }
 func (h openHost) Capabilities(ctx context.Context, id string) ([]string, error) {
 	ch, e := h.uc.GB28181API.ipc.GetChannel(ctx, id)

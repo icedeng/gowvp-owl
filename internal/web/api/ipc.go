@@ -3529,10 +3529,25 @@ func (a IPCAPI) refreshGBSnapshotByFFmpeg(ctx context.Context, channelID, rtspUR
 		return snapshotResult{}, err
 	}
 	defer release()
-	return a.extractSnapshotByFFmpeg(ctx, channelID, rtspURL, requestAt, frameCount)
+	result, err := a.extractSnapshotByFFmpeg(ctx, channelID, rtspURL, requestAt, frameCount)
+	if err != nil || frameCount <= 1 {
+		return result, err
+	}
+	// 旧接口仍发布共享封面；永久抓拍在 Complete 成功后才更新封面。
+	if err := writeCover(a.uc.Conf.ConfigDir, channelID, result.Image); err != nil {
+		return result, err
+	}
+	if !waitForFreshCover(ctx, readCoverPath(a.uc.Conf.ConfigDir, channelID), requestAt, time.Second) {
+		return result, fmt.Errorf("snapshot file not refreshed")
+	}
+	return result, nil
 }
 
 func (a IPCAPI) extractSnapshotByFFmpeg(ctx context.Context, channelID, rtspURL string, requestAt time.Time, frameCount int) (snapshotResult, error) {
+	return a.extractSnapshotWithSettings(ctx, channelID, rtspURL, requestAt, frameCount, a.captureSettings())
+}
+
+func (a IPCAPI) extractSnapshotWithSettings(ctx context.Context, channelID, rtspURL string, requestAt time.Time, frameCount int, settings snapshotConfig) (snapshotResult, error) {
 	startedAt := time.Now()
 	result := snapshotResult{Method: "ffmpeg", Attempts: make([]string, 0, 8)}
 	if frameCount <= 0 {
@@ -3543,7 +3558,7 @@ func (a IPCAPI) extractSnapshotByFFmpeg(ctx context.Context, channelID, rtspURL 
 	}
 
 	if _, err := exec.LookPath("ffprobe"); frameCount > 1 && err == nil {
-		probeInfo, err := probeRTSPVideoStream(ctx, rtspURL)
+		probeInfo, err := probeRTSPVideoStream(ctx, rtspURL, settings)
 		if err != nil {
 			return result, err
 		}
@@ -3559,27 +3574,35 @@ func (a IPCAPI) extractSnapshotByFFmpeg(ctx context.Context, channelID, rtspURL 
 	defer os.RemoveAll(dir)
 
 	outputPattern := filepath.Join(dir, "frame-%03d.jpg")
-	ffmpegCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	ffmpegCtx, cancel := context.WithTimeout(ctx, time.Duration(settings.FFmpegTimeoutSeconds)*time.Second)
 	defer cancel()
 	args := []string{
 		"-nostdin",
 		"-hide_banner",
 		"-loglevel", "warning",
 		"-rtsp_transport", "tcp",
-		"-timeout", "10000000",
-		"-analyzeduration", "5000000",
-		"-probesize", "5000000",
+		"-timeout", strconv.FormatInt(int64(settings.RTSPTimeoutSeconds)*1000000, 10),
+		"-analyzeduration", strconv.FormatInt(int64(settings.AnalyzeDurationMS)*1000, 10),
+		"-probesize", strconv.Itoa(settings.ProbeSizeBytes),
 		"-fflags", "+genpts+discardcorrupt",
 		"-err_detect", "ignore_err",
+	}
+	if frameCount == 1 {
+		// 单帧不需要音频；输入侧单线程解码避免帧线程缓存首张图片。
+		// 探测预算沿用节点配置，默认兼容 SDP 参数不完整、低帧率及 H.265 设备。
+		args = append(args, "-allowed_media_types", "video", "-threads", "1")
+	}
+	args = append(args,
 		"-i", rtspURL,
 		"-an",
 		"-threads", "1",
 		"-frames:v", strconv.Itoa(frameCount),
-		"-q:v", "2",
+		"-q:v", strconv.Itoa(settings.JPEGQuality),
 		outputPattern,
-	}
+	)
 	if frameCount > 1 {
-		args = append(args[:len(args)-1], "-vf", "select=gte(n\\,75),fps=1", outputPattern)
+		filter := fmt.Sprintf("select=gte(n\\,%d),fps=1000/%d", settings.SkipFrames, settings.FrameIntervalMS)
+		args = append(args[:len(args)-1], "-vf", filter, outputPattern)
 	}
 	output, cmdErr := runCommandCombinedOutput(ffmpegCtx, "ffmpeg", args...)
 
@@ -3602,18 +3625,9 @@ func (a IPCAPI) extractSnapshotByFFmpeg(ctx context.Context, channelID, rtspURL 
 			result.Attempts = append(result.Attempts, fmt.Sprintf("ffmpeg_frame_%d: invalid err=%s,size=%d", i+1, err.Error(), len(img)))
 			continue
 		}
-		if frameCount == 1 {
-			result.Image = img
-			return result, nil
-		}
-		if err := writeCover(a.uc.Conf.ConfigDir, channelID, img); err != nil {
-			return result, err
-		}
-		if waitForFreshCover(ctx, readCoverPath(a.uc.Conf.ConfigDir, channelID), requestAt, time.Second) {
-			result.Attempts = append(result.Attempts, fmt.Sprintf("ffmpeg: ok valid_frame=%d,size=%d,total_ms=%d", i+1, len(img), time.Since(startedAt).Milliseconds()))
-			return result, nil
-		}
-		lastErr = fmt.Errorf("snapshot file not refreshed")
+		result.Image = img
+		result.Attempts = append(result.Attempts, fmt.Sprintf("ffmpeg: ok valid_frame=%d,size=%d,total_ms=%d", i+1, len(img), time.Since(startedAt).Milliseconds()))
+		return result, nil
 	}
 	if lastErr != nil {
 		return result, lastErr
@@ -3627,13 +3641,13 @@ func (a IPCAPI) extractSnapshotByFFmpeg(ctx context.Context, channelID, rtspURL 
 	return result, fmt.Errorf("ffmpeg snapshot produced no frames, output: %s", trimCommandOutput(output))
 }
 
-func probeRTSPVideoStream(ctx context.Context, rtspURL string) (string, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+func probeRTSPVideoStream(ctx context.Context, rtspURL string, settings snapshotConfig) (string, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, time.Duration(settings.ProbeTimeoutSeconds)*time.Second)
 	defer cancel()
 	args := []string{
 		"-v", "error",
 		"-rtsp_transport", "tcp",
-		"-timeout", "10000000",
+		"-timeout", strconv.FormatInt(int64(settings.RTSPTimeoutSeconds)*1000000, 10),
 		"-select_streams", "v:0",
 		"-show_entries", "stream=codec_name,width,height",
 		"-of", "csv=p=0",

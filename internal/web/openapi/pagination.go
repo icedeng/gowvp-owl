@@ -12,7 +12,7 @@ import (
 )
 
 // resourcePage 使用实体序列化，保证订阅密文等隐藏字段不会被map查询意外输出。
-func resourcePage[T any](a *API, c *gin.Context, q *gorm.DB, table string, id func(T) string) {
+func resourcePage[T any](a *API, c *gin.Context, q *gorm.DB, table string, id func(T) string, decorate ...func(*T) error) {
 	size, e := strconv.Atoi(c.DefaultQuery("size", "50"))
 	if e != nil || size < 1 || size > 100 {
 		respond(c, nil, op.Fail(400, "INVALID_PAGE", "size须为1至100"))
@@ -43,6 +43,14 @@ func resourcePage[T any](a *API, c *gin.Context, q *gorm.DB, table string, id fu
 		b, _ := json.Marshal(cursor{p.App.ID, identity, id(items[size-1]), time.Now().Add(time.Hour).Unix()})
 		raw := base64.RawURLEncoding.EncodeToString(b)
 		next = raw + "." + op.Sign(a.S.Config.Keys[a.S.Config.KeyID], raw)
+	}
+	for i := range items {
+		for _, fn := range decorate {
+			if err := fn(&items[i]); err != nil {
+				respond(c, nil, err)
+				return
+			}
+		}
 	}
 	respond(c, gin.H{"items": items, "next_cursor": next}, nil)
 }

@@ -159,17 +159,19 @@ type Ticket struct {
 func (Ticket) TableName() string { return "open_media_tickets" }
 
 type Snapshot struct {
-	ID           string     `gorm:"primaryKey;size:64" json:"id"`
-	AppID        string     `gorm:"index;size:64" json:"app_id"`
-	CredentialID string     `json:"-"`
-	ChannelID    string     `gorm:"index;size:128" json:"channel_id"`
-	State        string     `gorm:"index;size:24" json:"state"`
-	Revision     int64      `json:"-"`
-	Path         string     `json:"-"`
-	Error        string     `json:"error,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	CapturedAt   *time.Time `json:"captured_at"`
-	ExpiresAt    time.Time  `gorm:"index" json:"expires_at"`
+	ImageURL       string     `gorm:"-" json:"image_url,omitempty"`
+	ImageExpiresAt *time.Time `gorm:"-" json:"image_expires_at,omitempty"`
+	ID             string     `gorm:"primaryKey;size:64" json:"id"`
+	AppID          string     `gorm:"index;size:64" json:"app_id"`
+	CredentialID   string     `json:"-"`
+	ChannelID      string     `gorm:"index;size:128" json:"channel_id"`
+	State          string     `gorm:"index;size:24" json:"state"`
+	Revision       int64      `json:"-"`
+	Path           string     `json:"-"`
+	Error          string     `json:"error,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	CapturedAt     *time.Time `json:"captured_at"`
+	ExpiresAt      time.Time  `gorm:"index" json:"expires_at"`
 }
 
 func (Snapshot) TableName() string { return "open_snapshot_tasks" }

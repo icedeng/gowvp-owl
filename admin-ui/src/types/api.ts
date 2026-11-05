@@ -611,13 +611,6 @@ export interface AnnexGAuditPage<T> extends ApiPage<T> {
   page_size?: number
 }
 
-export interface VersionCheck {
-  has_new_version?: boolean
-  current_version?: string
-  new_version?: string
-  description?: string
-}
-
 export interface PlayAddress {
   label?: string
   schema?: string
@@ -651,6 +644,20 @@ export interface ApiErrorBody {
 export interface SnapshotConfig {
   upload_timeout_seconds: number
   ffmpeg_concurrency: number
+  immediate_dispatch: boolean
+  scan_interval_ms: number
+  poll_interval_ms: number
+  ffmpeg_mode: 'multi_frame' | 'single_frame'
+  frame_count: number
+  skip_frames: number
+  frame_interval_ms: number
+  stream_timeout_seconds: number
+  ffmpeg_timeout_seconds: number
+  rtsp_timeout_seconds: number
+  probe_timeout_seconds: number
+  analyze_duration_ms: number
+  probe_size_bytes: number
+  jpeg_quality: number
 }
 
 export interface CaptureRecord {

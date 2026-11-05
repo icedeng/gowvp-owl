@@ -59,6 +59,7 @@ func registerConfig(g gin.IRouter, api ConfigAPI, handler ...gin.HandlerFunc) {
 		group.PUT("/info/sip", web.WrapH(api.updateSIP))
 		group.PUT("/info/media", web.WrapH(api.updateMedia))
 		group.PUT("/info/snapshot", web.WrapH(api.updateSnapshotConfig))
+		group.GET("/info/snapshot", web.WrapH(api.getSnapshotConfig))
 	}
 }
 

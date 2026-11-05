@@ -24,7 +24,6 @@ import (
 	"github.com/gowvp/owl/internal/core/metadata/metadataapi"
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/internal/web/onvifserver"
-	"github.com/gowvp/owl/pkg/ota"
 	"github.com/gowvp/owl/plugin/stat"
 	"github.com/gowvp/owl/plugin/stat/statapi"
 	"github.com/ixugo/goddd/domain/version/versionapi"
@@ -62,6 +61,7 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 			web.IgnorePrefix("/static/recordings"),   // 录像文件
 		),
 		web.LoggerWithBody(web.DefaultBodyLimit,
+			web.IgnorePrefix("/app/upgrade"),
 			web.IgnoreBool(uc.Conf.Debug),
 			web.IgnoreMethod(http.MethodOptions),
 			web.IgnorePrefix("/openapi/"), web.IgnorePrefix("/openmedia/"), web.IgnorePrefix("/admin/open-platform"),
@@ -143,8 +143,7 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 	onvifserver.Register(r, uc.GB28181API.ipc, uc.SMSAPI.smsCore, uc.Conf)
 	r.Any("/health", web.WrapH(uc.getHealth))
 	r.GET("/app/metrics/api", web.WrapH(uc.getMetricsAPI))
-	r.GET("/app/version/check", web.WrapH(uc.checkVersion))
-	r.POST("/app/upgrade", auth, uc.upgradeApp)
+	uc.registerAppUpgrade(r)
 
 	versionapi.Register(r, uc.Version, auth)
 	statapi.Register(r)
@@ -269,125 +268,6 @@ func sortExpvarMap(data *expvar.Map, top int) []KV {
 		idx = len(kvs)
 	}
 	return kvs[:idx]
-}
-
-const repoName = "gowvp/owl"
-
-type checkVersionOutput struct {
-	HasNewVersion  bool   `json:"has_new_version"`
-	CurrentVersion string `json:"current_version"`
-	NewVersion     string `json:"new_version"`
-	Description    string `json:"description"`
-}
-
-// checkVersion 检查是否有新版本
-// 通过 GitHub API 获取最新 release 信息，与当前版本比较
-// checkVersion godoc
-// @Summary 检查新版本
-// @Tags System
-// @Produce json
-// @Success 200 {object} checkVersionOutput
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /app/version/check [get]
-func (uc *Usecase) checkVersion(_ *gin.Context, _ *struct{}) (checkVersionOutput, error) {
-	currentVersion := uc.Conf.BuildVersion
-	newVersion, body, err := ota.GetLastVersion(repoName)
-	if err != nil {
-		return checkVersionOutput{}, err
-	}
-
-	hasNew := compareVersion(currentVersion, newVersion) < 0
-
-	return checkVersionOutput{
-		HasNewVersion:  hasNew,
-		CurrentVersion: currentVersion,
-		NewVersion:     newVersion,
-		Description:    body,
-	}, nil
-}
-
-// compareVersion 比较两个版本号
-// 返回值: -1 表示 v1 < v2, 0 表示相等, 1 表示 v1 > v2
-func compareVersion(v1, v2 string) int {
-	v1 = strings.TrimPrefix(v1, "v")
-	v2 = strings.TrimPrefix(v2, "v")
-
-	parts1 := strings.Split(v1, ".")
-	parts2 := strings.Split(v2, ".")
-
-	maxLen := len(parts1)
-	if len(parts2) > maxLen {
-		maxLen = len(parts2)
-	}
-
-	for i := 0; i < maxLen; i++ {
-		var n1, n2 int
-		if i < len(parts1) {
-			fmt.Sscanf(parts1[i], "%d", &n1)
-		}
-		if i < len(parts2) {
-			fmt.Sscanf(parts2[i], "%d", &n2)
-		}
-		if n1 < n2 {
-			return -1
-		}
-		if n1 > n2 {
-			return 1
-		}
-	}
-	return 0
-}
-
-// upgradeApp 执行应用升级
-// 通过 SSE 返回下载进度，下载完成后由回调决定如何升级
-// upgradeApp godoc
-// @Summary 执行应用升级
-// @Description 以 SSE 方式输出下载进度事件，事件类型包含 start、progress、error、complete
-// @Tags System
-// @Security BearerAuth
-// @Produce text/event-stream
-// @Success 200 {string} string "SSE 事件流"
-// @Failure 400 {object} SwaggerErrorResponse
-// @Router /app/upgrade [post]
-func (uc *Usecase) upgradeApp(c *gin.Context) {
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Header("Access-Control-Allow-Origin", "*")
-
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "不支持 SSE"})
-		return
-	}
-
-	sendEvent := func(event, data string) {
-		fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, data)
-		flusher.Flush()
-	}
-
-	sendEvent("start", `{"msg":"开始下载升级包"}`)
-
-	filename := "linux_amd64"
-	if runtime.GOARCH == "arm64" {
-		filename = "linux_arm64"
-	}
-
-	o := ota.NewOTA(repoName, filename)
-	o.SetProgressCallback(func(current, total int64) {
-		percent := 0
-		if total > 0 {
-			percent = int(current * 100 / total)
-		}
-		sendEvent("progress", fmt.Sprintf(`{"current":%d,"total":%d,"percent":%d}`, current, total, percent))
-	})
-
-	if err := o.Download().Error(); err != nil {
-		sendEvent("error", fmt.Sprintf(`{"msg":"%s"}`, err.Error()))
-		return
-	}
-
-	sendEvent("complete", `{"msg":"下载完成，请手动重启服务"}`)
 }
 
 // proxySMS godoc

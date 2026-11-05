@@ -22,19 +22,49 @@
 
 设备上传失败时不再按顺序尝试多种模式。若设备宣告 2022 但没有实现抓拍上传，可以在设备档案中禁用 `snapshot`，后续任务会直接取流。
 
-实时流抓拍只启动一次 FFmpeg，取首个可解码视频帧；不再先运行 ffprobe、不固定等待 75 帧，也不关闭或重启正在观看的流。取帧本身最多执行 35 秒，取流任务（取得并发名额后，含启动）最多 60 秒，排队不消耗取帧超时。因抓拍建立的流沿用平台现有无人观看自动断流规则，手动录像不会被强制停止。
+实时流抓拍提供两种明确的取帧模式，不在失败后逐级试探：
 
-配置文件仍使用 `[Media]`：
+| 模式 | 行为 |
+| --- | --- |
+| `multi_frame` 多帧兼容（默认） | 沿用原处理：先运行 ffprobe（未安装时跳过），FFmpeg 跳过前 75 帧，按每秒 1 帧生成最多 5 张候选图片，校验后选择首张有效图，最终只永久保存一张 |
+| `single_frame` 单帧快速 | 不预先运行 ffprobe，只协商视频并以单线程解码，取首个可解码帧；仍做落盘前的完整图片解码校验 |
 
-```toml
-[Media]
-# 设备接受指令之后等待图片上传的秒数，默认 120；界面范围 1–3600。
-GBSnapshotUploadTimeoutSeconds = 120
-# 平台 FFmpeg 抓拍并发上限，默认 2；界面范围 1–32。
-GBSnapshotFFmpegConcurrency = 2
-```
+不关闭或重启正在观看的流。已有直播流通常更快，无直播流时仍需等待设备起流和关键帧。因抓拍建立的流沿用平台现有无人观看自动断流规则，手动录像不会被强制停止。
 
-在“抓拍设置”保存即写入当前 `config.toml`，新任务采用新值，无需重启。调低并发不会终止已执行任务；后续任务等待运行数降到新上限以下。设备上传等待不含下发信令的业务响应等待。
+默认按 1000ms（1 秒）周期扫描队列，入队立即执行默认关闭。开启后入队和执行名额释放会通知后台执行，仍保留周期扫描及重启恢复。调整扫描周期也会影响定时计划的触发精度；执行参数按任务开始时的配置取值，排队不消耗取流超时。
+
+取帧默认保持 RTSP/TCP、10 秒套接字超时、5 秒分析预算及 5MB 探测预算。分析预算不是固定等待时间，也不保证弱网必定成功。设备到 ZLM 的传输协议沿用通道配置，FFmpeg 的 TCP 连接不能修复设备侧 UDP 丢包。持续断流、超过超时或迟迟没有可解码帧时仍会失败，不用旧图冒充本次结果。
+
+管理端结果轮询默认 2000ms，可在设置中改为 500ms 等值。执行期间只查询单个任务，完成后再刷新图库和计划，查询不并发堆叠。失败后以至少 2 秒开始逐步退避至 30 秒（配置间隔大于 30 秒时以配置值为上限）；已提交且尚未取得最终状态的任务继续查询。浏览器断网不会取消后台抓拍；设备与服务器之间的断网仍可能导致取图失败。
+
+后台 `capture timing` 日志按抓拍 ID 记录 `dispatch_ms`、`ffmpeg_queue_ms`、`stream_ms`、`ffmpeg_ms`、`save_ms`、`total_ms` 和结果，供定位队列、设备起流、取帧与落盘耗时，不记录播放地址或凭据。
+
+## 节点抓拍配置
+
+在 **平台运维 → 抓拍设置** 修改，保存到当前节点 `config.toml` 的 `[Media]`，无需重启。已有配置文件缺少新增字段时采用下表默认值，旧客户端只提交原有字段时沿用其他当前设置。
+
+| 配置文件字段 | 管理接口字段 | 默认值 | 范围 / 用途 |
+| --- | --- | --- | --- |
+| `GBSnapshotImmediateDispatch` | `immediate_dispatch` | `false` | 是否入队立即通知执行；并发满时仍排队 |
+| `GBSnapshotScanIntervalMS` | `scan_interval_ms` | `1000` | 100–60000ms，队列和计划扫描周期 |
+| `GBSnapshotPollIntervalMS` | `poll_interval_ms` | `2000` | 200–60000ms，管理端结果查询间隔 |
+| `GBSnapshotFFmpegMode` | `ffmpeg_mode` | `multi_frame` | `multi_frame` / `single_frame` |
+| `GBSnapshotUploadTimeoutSeconds` | `upload_timeout_seconds` | `120` | 1–3600 秒，设备图片上传等待，不含信令业务响应 |
+| `GBSnapshotFFmpegConcurrency` | `ffmpeg_concurrency` | `2` | 1–32，取帧并发上限 |
+| `GBSnapshotFrameCount` | `frame_count` | `5` | 2–30，仅多帧模式 |
+| `GBSnapshotSkipFrames` | `skip_frames` | `75` | 1–1000，仅多帧模式 |
+| `GBSnapshotFrameIntervalMS` | `frame_interval_ms` | `1000` | 40–10000ms，仅多帧模式 |
+| `GBSnapshotStreamTimeoutSeconds` | `stream_timeout_seconds` | `60` | 1–3600 秒，含起流、探测、取帧、保存，不含排队 |
+| `GBSnapshotFFmpegTimeoutSeconds` | `ffmpeg_timeout_seconds` | `35` | 1–3600 秒，FFmpeg 进程执行上限 |
+| `GBSnapshotRTSPTimeoutSeconds` | `rtsp_timeout_seconds` | `10` | 1–3600 秒，RTSP 读写超时 |
+| `GBSnapshotProbeTimeoutSeconds` | `probe_timeout_seconds` | `10` | 1–3600 秒，多帧 ffprobe 执行上限 |
+| `GBSnapshotAnalyzeDurationMS` | `analyze_duration_ms` | `5000` | 100–60000ms，FFmpeg 分析预算 |
+| `GBSnapshotProbeSizeBytes` | `probe_size_bytes` | `5000000` | 32768–100000000 字节，FFmpeg 探测预算 |
+| `GBSnapshotJPEGQuality` | `jpeg_quality` | `2` | 2–31，越小质量越高，仅影响 FFmpeg 输出 |
+
+取流任务总超时不能小于取帧或探测超时，RTSP 超时不能大于取帧超时；各步骤共享任务总预算。降低超时或探测预算可能影响弱网、低帧率和参数不完整设备；增加候选数量、跳过帧数或采样间隔可能需要更长超时。平台校验数值范围，不保证所有参数组合都能在预算内完成。
+
+保存后扫描参数立即更新，本管理端下一次轮询使用新间隔；其他已打开的管理端可刷新页面读取。执行参数用于后续开始的任务，调低并发不会终止已执行任务。定时计划仍在各通道的“抓拍与计划”中配置；图片大小、分辨率安全上限和永久保存规则不开放关闭。
 
 ## 保存与删除
 
@@ -70,6 +100,6 @@ Compose 现有 `cover` 挂载已覆盖子目录 `captures`，无需新增挂载�
 - `PUT /captures/:capture_id`，`{"name":"新名称.jpg"}`：重命名。
 - `DELETE /captures/:capture_id`：删除记录与文件。
 - `GET /channels/:id/capture_schedule`、`PUT /channels/:id/capture_schedule`：读写计划。
-- `PUT /configs/info/snapshot`：保存上传等待秒数和 FFmpeg 并发。
+- `GET /configs/info/snapshot`、`PUT /configs/info/snapshot`：读取及保存节点抓拍设置；PUT 省略字段沿用当前值。
 
 原 `POST /channels/:id/snapshot` 保留同步兼容，也会永久保存图片，但可能超过调用方的 HTTP 超时；新调用方应使用异步任务接口。`GET /channels/:id/snapshot` 优先返回最新成功抓拍，没有时兼容旧封面。

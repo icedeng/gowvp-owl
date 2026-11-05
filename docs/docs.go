@@ -42,28 +42,40 @@ const docTemplate = `{
         },
         "/app/upgrade": {
             "post": {
+                "summary": "旧升级入口已停用",
+                "description": "旧 SSE 下载入口已停用，请改用签名发布包上传与安装接口。",
+                "tags": [
+                    "System"
+                ],
+                "produces": [
+                    "application/json"
+                ],
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "以 SSE 方式输出下载进度事件，事件类型包含 start、progress、error、complete",
-                "produces": [
-                    "text/event-stream"
-                ],
-                "tags": [
-                    "System"
-                ],
-                "summary": "执行应用升级",
                 "responses": {
-                    "200": {
-                        "description": "SSE 事件流",
+                    "410": {
+                        "description": "OK",
                         "schema": {
-                            "type": "string"
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
+                    "401": {
+                        "description": "需要登录",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "仅本平台管理员",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "升级服务未配置或不可用",
                         "schema": {
                             "$ref": "#/definitions/api.SwaggerErrorResponse"
                         }
@@ -73,22 +85,40 @@ const docTemplate = `{
         },
         "/app/version/check": {
             "get": {
-                "produces": [
-                    "application/json"
-                ],
+                "summary": "兼容入口：读取本平台发布库状态",
+                "description": "仅本平台管理员。与 /app/upgrade/status 返回相同结构，不再查询上游 GitHub。",
                 "tags": [
                     "System"
                 ],
-                "summary": "检查新版本",
+                "produces": [
+                    "application/json"
+                ],
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/api.checkVersionOutput"
+                            "$ref": "#/definitions/api.UpgradeStatus"
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
+                    "401": {
+                        "description": "需要登录",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "仅本平台管理员",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "升级服务未配置或不可用",
                         "schema": {
                             "$ref": "#/definitions/api.SwaggerErrorResponse"
                         }
@@ -1810,7 +1840,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "对历史回放/下载会话执行暂停、恢复、倍速、跳转等控制。\n` + "`" + `action` + "`" + ` 枚举：` + "`" + `play` + "`" + ` 恢复播放、` + "`" + `pause` + "`" + ` 暂停、` + "`" + `speed` + "`" + ` 调整倍速（负值倒放）、` + "`" + `seek` + "`" + ` 跳转到指定时间。\n调用前置条件：历史会话已经启动。\n失败场景：1. 会话不存在；2. action 不受支持；3. 跳转时间越界；4. 设备未返回控制应答。\n暂停示例：` + "`" + `{ \"mode\":\"playback\", \"action\":\"pause\" }` + "`" + `\n倍速示例：` + "`" + `{ \"mode\":\"playback\", \"action\":\"speed\", \"scale\":2 }` + "`" + `\n2022 指定位置倒放示例：` + "`" + `{ \"mode\":\"playback\", \"action\":\"speed\", \"scale\":-2, \"seek_at\":1710867600 }` + "`" + `\n跳转示例：` + "`" + `{ \"mode\":\"playback\", \"action\":\"seek\", \"seek_at\":1710867600 }` + "`" + `\n成功响应示例：` + "`" + `{ \"msg\": \"ok\" }` + "`" + `",
+                "description": "对历史回放/下载会话执行暂停、恢复、倍速、跳转等控制。\n\u0060action\u0060 枚举：\u0060play\u0060 恢复播放、\u0060pause\u0060 暂停、\u0060speed\u0060 调整倍速（负值倒放）、\u0060seek\u0060 跳转到指定时间。\n调用前置条件：历史会话已经启动。\n失败场景：1. 会话不存在；2. action 不受支持；3. 跳转时间越界；4. 设备未返回控制应答。\n暂停示例：\u0060{ \"mode\":\"playback\", \"action\":\"pause\" }\u0060\n倍速示例：\u0060{ \"mode\":\"playback\", \"action\":\"speed\", \"scale\":2 }\u0060\n2022 指定位置倒放示例：\u0060{ \"mode\":\"playback\", \"action\":\"speed\", \"scale\":-2, \"seek_at\":1710867600 }\u0060\n跳转示例：\u0060{ \"mode\":\"playback\", \"action\":\"seek\", \"seek_at\":1710867600 }\u0060\n成功响应示例：\u0060{ \"msg\": \"ok\" }\u0060",
                 "consumes": [
                     "application/json"
                 ],
@@ -1862,7 +1892,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "启动历史回放或历史下载会话。\n` + "`" + `mode` + "`" + ` 可选：` + "`" + `playback` + "`" + ` 表示回放，` + "`" + `download` + "`" + ` 表示下载。\n` + "`" + `transport=direct_tcp` + "`" + ` 仅用于有效版本 1.1 且已加入白名单的附录 O 下载；空值或 ` + "`" + `rtp` + "`" + ` 保持原链路。\n调用前置条件：1. 通道必须存在；2. 设备在线；3. 目标时间段内存在可用录像；4. 设备支持历史回放或下载。\n失败场景：1. 通道不存在；2. 设备离线；3. 无录像可回放；4. 设备返回协议不支持；5. 会话建立超时。\n请求示例：` + "`" + `{ \"mode\": \"playback\", \"start_at\": 1710864000, \"end_at\": 1710950400 }` + "`" + `\n成功响应示例：` + "`" + `{ \"msg\": \"ok\" }` + "`" + `",
+                "description": "启动历史回放或历史下载会话。\n\u0060mode\u0060 可选：\u0060playback\u0060 表示回放，\u0060download\u0060 表示下载。\n\u0060transport=direct_tcp\u0060 仅用于有效版本 1.1 且已加入白名单的附录 O 下载；空值或 \u0060rtp\u0060 保持原链路。\n调用前置条件：1. 通道必须存在；2. 设备在线；3. 目标时间段内存在可用录像；4. 设备支持历史回放或下载。\n失败场景：1. 通道不存在；2. 设备离线；3. 无录像可回放；4. 设备返回协议不支持；5. 会话建立超时。\n请求示例：\u0060{ \"mode\": \"playback\", \"start_at\": 1710864000, \"end_at\": 1710950400 }\u0060\n成功响应示例：\u0060{ \"msg\": \"ok\" }\u0060",
                 "consumes": [
                     "application/json"
                 ],
@@ -1954,7 +1984,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "停止已创建的历史回放或历史下载会话。\n调用前置条件：历史会话已经启动。\n失败场景：1. 会话不存在；2. 设备已离线；3. 设备拒绝停止命令。\n请求示例：` + "`" + `{ \"mode\": \"playback\" }` + "`" + `",
+                "description": "停止已创建的历史回放或历史下载会话。\n调用前置条件：历史会话已经启动。\n失败场景：1. 会话不存在；2. 设备已离线；3. 设备拒绝停止命令。\n请求示例：\u0060{ \"mode\": \"playback\" }\u0060",
                 "consumes": [
                     "application/json"
                 ],
@@ -2097,7 +2127,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "通道级统一 PTZ 接口，同时兼容 GB28181 与 ONVIF。\n常见动作包括方向移动、停止、变倍、光圈、聚焦、预置位设置/调用/删除。\n` + "`" + `action` + "`" + ` 支持值：\n1. 基础方向：` + "`" + `stop` + "`" + `、` + "`" + `left` + "`" + `、` + "`" + `right` + "`" + `、` + "`" + `up` + "`" + `、` + "`" + `down` + "`" + `、` + "`" + `left_up` + "`" + `、` + "`" + `left_down` + "`" + `、` + "`" + `right_up` + "`" + `、` + "`" + `right_down` + "`" + `\n2. 变倍：` + "`" + `zoom_in` + "`" + `、` + "`" + `zoom_out` + "`" + `\n3. 光圈：` + "`" + `iris_open` + "`" + `、` + "`" + `iris_close` + "`" + `、` + "`" + `iris_add` + "`" + `、` + "`" + `iris_sub` + "`" + `\n4. 聚焦：` + "`" + `focus_near` + "`" + `、` + "`" + `focus_far` + "`" + `、` + "`" + `focus_add` + "`" + `、` + "`" + `focus_sub` + "`" + `\n5. 预置位：` + "`" + `preset_set` + "`" + `、` + "`" + `preset_call` + "`" + `、` + "`" + `preset_delete` + "`" + `\n6. 巡航：` + "`" + `cruise_add` + "`" + `、` + "`" + `cruise_del` + "`" + `、` + "`" + `cruise_speed` + "`" + `、` + "`" + `cruise_stay` + "`" + `、` + "`" + `cruise_start` + "`" + `\n7. 扫描：` + "`" + `scan_start` + "`" + `、` + "`" + `scan_left` + "`" + `、` + "`" + `scan_right` + "`" + `、` + "`" + `scan_speed` + "`" + `\n8. 辅助开关：` + "`" + `aux_on` + "`" + `、` + "`" + `aux_off` + "`" + `\n调用前置条件：1. 通道存在；2. 通道在线；3. 对应协议适配器支持该动作。\n失败场景：1. 动作不存在；2. ONVIF/GB28181 子能力不一致导致不支持；3. 设备离线；4. 命令下发失败或等待应答超时。\n请求示例：` + "`" + `{ \"action\": \"left\", \"speed\": 30, \"timeout\": 5 }` + "`" + `\n预置位示例：` + "`" + `{ \"action\": \"preset_call\", \"preset\": 1, \"speed\": 30 }` + "`" + `\n成功响应示例：` + "`" + `{ \"msg\": \"ok\" }` + "`" + `",
+                "description": "通道级统一 PTZ 接口，同时兼容 GB28181 与 ONVIF。\n常见动作包括方向移动、停止、变倍、光圈、聚焦、预置位设置/调用/删除。\n\u0060action\u0060 支持值：\n1. 基础方向：\u0060stop\u0060、\u0060left\u0060、\u0060right\u0060、\u0060up\u0060、\u0060down\u0060、\u0060left_up\u0060、\u0060left_down\u0060、\u0060right_up\u0060、\u0060right_down\u0060\n2. 变倍：\u0060zoom_in\u0060、\u0060zoom_out\u0060\n3. 光圈：\u0060iris_open\u0060、\u0060iris_close\u0060、\u0060iris_add\u0060、\u0060iris_sub\u0060\n4. 聚焦：\u0060focus_near\u0060、\u0060focus_far\u0060、\u0060focus_add\u0060、\u0060focus_sub\u0060\n5. 预置位：\u0060preset_set\u0060、\u0060preset_call\u0060、\u0060preset_delete\u0060\n6. 巡航：\u0060cruise_add\u0060、\u0060cruise_del\u0060、\u0060cruise_speed\u0060、\u0060cruise_stay\u0060、\u0060cruise_start\u0060\n7. 扫描：\u0060scan_start\u0060、\u0060scan_left\u0060、\u0060scan_right\u0060、\u0060scan_speed\u0060\n8. 辅助开关：\u0060aux_on\u0060、\u0060aux_off\u0060\n调用前置条件：1. 通道存在；2. 通道在线；3. 对应协议适配器支持该动作。\n失败场景：1. 动作不存在；2. ONVIF/GB28181 子能力不一致导致不支持；3. 设备离线；4. 命令下发失败或等待应答超时。\n请求示例：\u0060{ \"action\": \"left\", \"speed\": 30, \"timeout\": 5 }\u0060\n预置位示例：\u0060{ \"action\": \"preset_call\", \"preset\": 1, \"speed\": 30 }\u0060\n成功响应示例：\u0060{ \"msg\": \"ok\" }\u0060",
                 "consumes": [
                     "application/json"
                 ],
@@ -2149,7 +2179,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "对指定通道发送一次停止命令检查控制信令连通性，不能验证实际转动能力。\n调用前置条件：1. 通道存在；2. 设备已在线；3. 对应协议适配器实现了 PTZ 控制。\n失败场景：1. 通道不存在；2. 设备离线；3. 协议不支持 PTZ；4. 设备未返回应答。\n` + "`" + `signaling_ok` + "`" + ` 表示设备接受信令；兼容字段 ` + "`" + `ptz_verified/verified_now` + "`" + ` 始终为 false，不再持久化能力验证标记。\n请求示例：` + "`" + `{ \"action\": \"stop\", \"timeout\": 5 }` + "`" + `\n响应示例：` + "`" + `{ \"channel_id\": \"GB_34020000001320000001\", \"ptz_capable\": false, \"ptz_verified\": false, \"verified_now\": false, \"signaling_ok\": true, \"message\": \"设备已接受停止信令，实际云台能力仍需观察画面确认\" }` + "`" + `",
+                "description": "对指定通道发送一次停止命令检查控制信令连通性，不能验证实际转动能力。\n调用前置条件：1. 通道存在；2. 设备已在线；3. 对应协议适配器实现了 PTZ 控制。\n失败场景：1. 通道不存在；2. 设备离线；3. 协议不支持 PTZ；4. 设备未返回应答。\n\u0060signaling_ok\u0060 表示设备接受信令；兼容字段 \u0060ptz_verified/verified_now\u0060 始终为 false，不再持久化能力验证标记。\n请求示例：\u0060{ \"action\": \"stop\", \"timeout\": 5 }\u0060\n响应示例：\u0060{ \"channel_id\": \"GB_34020000001320000001\", \"ptz_capable\": false, \"ptz_verified\": false, \"verified_now\": false, \"signaling_ok\": true, \"message\": \"设备已接受停止信令，实际云台能力仍需观察画面确认\" }\u0060",
                 "consumes": [
                     "application/json"
                 ],
@@ -2251,7 +2281,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "查询指定 GB28181 通道在一段时间内的录像目录。\n调用前置条件：1. 通道必须属于 GB28181 设备；2. 设备在线；3. 设备支持录像目录查询。\n失败场景：1. 通道不存在；2. 设备离线；3. 设备协议版本或厂商实现不支持；4. 查询超时未应答。\n请求示例：` + "`" + `{ \"start_at\": 1710864000, \"end_at\": 1710950400, \"timeout\": 10 }` + "`" + `\n响应中 ` + "`" + `daynum` + "`" + ` 表示有录像的日期数，` + "`" + `timenum` + "`" + ` 表示录像片段总数，` + "`" + `list` + "`" + ` 按日期归类。\n设备在超时前只返回部分分包时仍返回已收到的录像，` + "`" + `incomplete` + "`" + ` 给出已收/应收数量；零分包仍返回错误。\n响应示例：` + "`" + `{ \"daynum\": 2, \"timenum\": 3, \"list\": [ { \"date\": \"2024-03-20\", \"items\": [ { \"start\": 1710864000, \"end\": 1710867600 } ] } ] }` + "`" + `",
+                "description": "查询指定 GB28181 通道在一段时间内的录像目录。\n调用前置条件：1. 通道必须属于 GB28181 设备；2. 设备在线；3. 设备支持录像目录查询。\n失败场景：1. 通道不存在；2. 设备离线；3. 设备协议版本或厂商实现不支持；4. 查询超时未应答。\n请求示例：\u0060{ \"start_at\": 1710864000, \"end_at\": 1710950400, \"timeout\": 10 }\u0060\n响应中 \u0060daynum\u0060 表示有录像的日期数，\u0060timenum\u0060 表示录像片段总数，\u0060list\u0060 按日期归类。\n设备在超时前只返回部分分包时仍返回已收到的录像，\u0060incomplete\u0060 给出已收/应收数量；零分包仍返回错误。\n响应示例：\u0060{ \"daynum\": 2, \"timenum\": 3, \"list\": [ { \"date\": \"2024-03-20\", \"items\": [ { \"start\": 1710864000, \"end\": 1710867600 } ] } ] }\u0060",
                 "consumes": [
                     "application/json"
                 ],
@@ -2831,6 +2861,28 @@ const docTemplate = `{
             }
         },
         "/configs/info/snapshot": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Config"
+                ],
+                "summary": "获取抓拍设置（不含其他系统配置）",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.snapshotConfig"
+                        }
+                    }
+                }
+            },
             "put": {
                 "security": [
                     {
@@ -2846,10 +2898,10 @@ const docTemplate = `{
                 "tags": [
                     "Config"
                 ],
-                "summary": "设置抓拍上传等待时间与 FFmpeg 并发",
+                "summary": "设置抓拍调度、取帧与管理端轮询参数",
                 "parameters": [
                     {
-                        "description": "上传等待秒数 1–3600，并发 1–32",
+                        "description": "省略的字段沿用当前配置",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -3233,7 +3285,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "下发 DeviceConfig；支持 2014 的 BasicParam、VideoParamConfig、AudioParamConfig、SVAC，以及 2022 的视频属性、录像计划、报警录像、遮挡、翻转、报警上报、OSD、抓拍配置和 ExtraInfo。\nXML 配置的 ` + "`" + `inner_xml` + "`" + ` 只填写配置节点内部的标准 XML；服务端会校验 XML 完整性并拒绝指令/DOCTYPE。2022 扩展仅允许有效版本 3.0。",
+                "description": "下发 DeviceConfig；支持 2014 的 BasicParam、VideoParamConfig、AudioParamConfig、SVAC，以及 2022 的视频属性、录像计划、报警录像、遮挡、翻转、报警上报、OSD、抓拍配置和 ExtraInfo。\nXML 配置的 \u0060inner_xml\u0060 只填写配置节点内部的标准 XML；服务端会校验 XML 完整性并拒绝指令/DOCTYPE。2022 扩展仅允许有效版本 3.0。",
                 "consumes": [
                     "application/json"
                 ],
@@ -3285,7 +3337,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "执行 GB/T 28181 附录 A.2.3 统一设备控制命令。\n` + "`" + `action` + "`" + ` 支持：` + "`" + `ptz_cmd` + "`" + `、` + "`" + `teleboot` + "`" + `、` + "`" + `record_start` + "`" + `、` + "`" + `record_stop` + "`" + `、` + "`" + `guard_set` + "`" + `、` + "`" + `guard_reset` + "`" + `、` + "`" + `alarm_reset` + "`" + `、` + "`" + `iframe_send` + "`" + `、` + "`" + `drag_zoom_in` + "`" + `、` + "`" + `drag_zoom_out` + "`" + `、` + "`" + `home_position` + "`" + `、` + "`" + `ptz_precise` + "`" + `、` + "`" + `format_sdcard` + "`" + `、` + "`" + `target_track` + "`" + `。历史拼写 ` + "`" + `ifame_cmd` + "`" + ` 继续兼容为 ` + "`" + `iframe_send` + "`" + `。\n` + "`" + `ptz_cmd` + "`" + ` 常见值：` + "`" + `stop` + "`" + `、` + "`" + `left` + "`" + `、` + "`" + `right` + "`" + `、` + "`" + `up` + "`" + `、` + "`" + `down` + "`" + `、` + "`" + `left_up` + "`" + `、` + "`" + `left_down` + "`" + `、` + "`" + `right_up` + "`" + `、` + "`" + `right_down` + "`" + `、` + "`" + `zoom_in` + "`" + `、` + "`" + `zoom_out` + "`" + `、` + "`" + `focus_near` + "`" + `、` + "`" + `focus_far` + "`" + `、` + "`" + `iris_open` + "`" + `、` + "`" + `iris_close` + "`" + `、` + "`" + `preset_set` + "`" + `、` + "`" + `preset_call` + "`" + `、` + "`" + `preset_delete` + "`" + `、` + "`" + `cruise_add` + "`" + `、` + "`" + `cruise_del` + "`" + `、` + "`" + `cruise_speed` + "`" + `、` + "`" + `cruise_stay` + "`" + `、` + "`" + `cruise_start` + "`" + `、` + "`" + `scan_start` + "`" + `、` + "`" + `scan_left` + "`" + `、` + "`" + `scan_right` + "`" + `、` + "`" + `scan_speed` + "`" + `、` + "`" + `aux_on` + "`" + `、` + "`" + `aux_off` + "`" + `。\n` + "`" + `ptz_cmd` + "`" + ` 也兼容 16 位十六进制原始 PTZCmd；原始命令必须符合 A.3 的 ` + "`" + `A5 0F` + "`" + ` 头和校验和。动作名通过 ` + "`" + `ptz_speed` + "`" + `、` + "`" + `ptz_preset` + "`" + `、` + "`" + `ptz_group` + "`" + `、` + "`" + `ptz_aux` + "`" + `、` + "`" + `ptz_value` + "`" + ` 提供编码参数。2022 ` + "`" + `ptz_cmd_param.preset_name` + "`" + ` 仅用于设置预置位，` + "`" + `cruise_track_name` + "`" + ` 仅用于巡航命令且最长 32 字节。\n调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 所选动作受设备能力和协议版本支持。\n失败场景：1. ` + "`" + `action` + "`" + `、` + "`" + `ptz_cmd` + "`" + ` 或命令参数非法；2. 协议版本不支持所选能力；3. 设备离线；4. SIP 下发失败或有应答控制等待业务 Response 超时。\nPTZCmd 示例：` + "`" + `{ \"target_id\": \"34020000001320000001\", \"action\": \"ptz_cmd\", \"ptz_cmd\": \"preset_call\", \"ptz_preset\": 1, \"timeout\": 5 }` + "`" + `\n精确 PTZ 示例：` + "`" + `{ \"action\": \"ptz_precise\", \"ptz_precise\": { \"pan\": 10.5, \"tilt\": 5.2, \"zoom\": 2.0 }, \"timeout\": 5 }` + "`" + `\n手动目标跟踪示例：` + "`" + `{ \"action\": \"target_track\", \"target_track\": { \"mode\": \"Manual\", \"target_area\": { \"length\": 1920, \"width\": 1080, \"mid_point_x\": 960, \"mid_point_y\": 540, \"length_x\": 300, \"length_y\": 200 } } }` + "`" + `\n成功响应示例：` + "`" + `{ \"sn\": 12, \"device_id\": \"34020000002000000001\", \"target_id\": \"34020000001320000001\", \"result\": \"OK\" }` + "`" + `",
+                "description": "执行 GB/T 28181 附录 A.2.3 统一设备控制命令。\n\u0060action\u0060 支持：\u0060ptz_cmd\u0060、\u0060teleboot\u0060、\u0060record_start\u0060、\u0060record_stop\u0060、\u0060guard_set\u0060、\u0060guard_reset\u0060、\u0060alarm_reset\u0060、\u0060iframe_send\u0060、\u0060drag_zoom_in\u0060、\u0060drag_zoom_out\u0060、\u0060home_position\u0060、\u0060ptz_precise\u0060、\u0060format_sdcard\u0060、\u0060target_track\u0060。历史拼写 \u0060ifame_cmd\u0060 继续兼容为 \u0060iframe_send\u0060。\n\u0060ptz_cmd\u0060 常见值：\u0060stop\u0060、\u0060left\u0060、\u0060right\u0060、\u0060up\u0060、\u0060down\u0060、\u0060left_up\u0060、\u0060left_down\u0060、\u0060right_up\u0060、\u0060right_down\u0060、\u0060zoom_in\u0060、\u0060zoom_out\u0060、\u0060focus_near\u0060、\u0060focus_far\u0060、\u0060iris_open\u0060、\u0060iris_close\u0060、\u0060preset_set\u0060、\u0060preset_call\u0060、\u0060preset_delete\u0060、\u0060cruise_add\u0060、\u0060cruise_del\u0060、\u0060cruise_speed\u0060、\u0060cruise_stay\u0060、\u0060cruise_start\u0060、\u0060scan_start\u0060、\u0060scan_left\u0060、\u0060scan_right\u0060、\u0060scan_speed\u0060、\u0060aux_on\u0060、\u0060aux_off\u0060。\n\u0060ptz_cmd\u0060 也兼容 16 位十六进制原始 PTZCmd；原始命令必须符合 A.3 的 \u0060A5 0F\u0060 头和校验和。动作名通过 \u0060ptz_speed\u0060、\u0060ptz_preset\u0060、\u0060ptz_group\u0060、\u0060ptz_aux\u0060、\u0060ptz_value\u0060 提供编码参数。2022 \u0060ptz_cmd_param.preset_name\u0060 仅用于设置预置位，\u0060cruise_track_name\u0060 仅用于巡航命令且最长 32 字节。\n调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 所选动作受设备能力和协议版本支持。\n失败场景：1. \u0060action\u0060、\u0060ptz_cmd\u0060 或命令参数非法；2. 协议版本不支持所选能力；3. 设备离线；4. SIP 下发失败或有应答控制等待业务 Response 超时。\nPTZCmd 示例：\u0060{ \"target_id\": \"34020000001320000001\", \"action\": \"ptz_cmd\", \"ptz_cmd\": \"preset_call\", \"ptz_preset\": 1, \"timeout\": 5 }\u0060\n精确 PTZ 示例：\u0060{ \"action\": \"ptz_precise\", \"ptz_precise\": { \"pan\": 10.5, \"tilt\": 5.2, \"zoom\": 2.0 }, \"timeout\": 5 }\u0060\n手动目标跟踪示例：\u0060{ \"action\": \"target_track\", \"target_track\": { \"mode\": \"Manual\", \"target_area\": { \"length\": 1920, \"width\": 1080, \"mid_point_x\": 960, \"mid_point_y\": 540, \"length_x\": 300, \"length_y\": 200 } } }\u0060\n成功响应示例：\u0060{ \"sn\": 12, \"device_id\": \"34020000002000000001\", \"target_id\": \"34020000001320000001\", \"result\": \"OK\" }\u0060",
                 "consumes": [
                     "application/json"
                 ],
@@ -3337,7 +3389,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "执行 GB/T 28181 附录 A.2.4 统一设备查询命令。\n常见 ` + "`" + `action` + "`" + `：` + "`" + `device_status` + "`" + `、` + "`" + `alarm` + "`" + `、` + "`" + `catalog` + "`" + `、` + "`" + `config_download` + "`" + `、` + "`" + `preset_query` + "`" + `、` + "`" + `record_info` + "`" + `、` + "`" + `mobile_position` + "`" + `、` + "`" + `home_position_query` + "`" + `、` + "`" + `cruise_track_list` + "`" + `、` + "`" + `cruise_track` + "`" + `、` + "`" + `ptz_position` + "`" + `、` + "`" + `sdcard_status` + "`" + `。\n` + "`" + `alarm` + "`" + ` 保留部分厂商接受 ` + "`" + `MESSAGE/Query/Alarm` + "`" + ` 并返回 ` + "`" + `Response/Alarm/Result` + "`" + ` 的兼容流程；四版标准中的 A.2.4 Alarm 查询体用于 9.11 SUBSCRIBE 报警订阅，不保证独立主动查询。\n调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 查询动作被设备支持。\n失败场景：1. ` + "`" + `action` + "`" + ` 不支持；2. 设备离线；3. 查询超时；4. 2016 协议设备不支持 2022 扩展查询。\n请求示例：` + "`" + `{ \"action\": \"device_status\", \"target_id\": \"34020000001320000001\", \"timeout\": 5 }` + "`" + `\n录像查询示例：` + "`" + `{ \"action\": \"record_info\", \"target_id\": \"34020000001320000001\", \"start\": 1710864000, \"end\": 1710950400, \"timeout\": 10 }` + "`" + `\n响应中 ` + "`" + `xml` + "`" + ` 为原始 XML，` + "`" + `data` + "`" + ` 为解析后的主体数据，` + "`" + `appendix_a4` + "`" + ` 为 2022 版附录 A.4 扩展对象。\nCatalog、RecordInfo 或 ConfigDownload 在超时前只收到部分分包时仍返回已收到的数据，` + "`" + `incomplete` + "`" + ` 给出完成度；零分包仍返回错误。",
+                "description": "执行 GB/T 28181 附录 A.2.4 统一设备查询命令。\n常见 \u0060action\u0060：\u0060device_status\u0060、\u0060alarm\u0060、\u0060catalog\u0060、\u0060config_download\u0060、\u0060preset_query\u0060、\u0060record_info\u0060、\u0060mobile_position\u0060、\u0060home_position_query\u0060、\u0060cruise_track_list\u0060、\u0060cruise_track\u0060、\u0060ptz_position\u0060、\u0060sdcard_status\u0060。\n\u0060alarm\u0060 保留部分厂商接受 \u0060MESSAGE/Query/Alarm\u0060 并返回 \u0060Response/Alarm/Result\u0060 的兼容流程；四版标准中的 A.2.4 Alarm 查询体用于 9.11 SUBSCRIBE 报警订阅，不保证独立主动查询。\n调用前置条件：1. 设备在线；2. 目标设备或通道存在；3. 查询动作被设备支持。\n失败场景：1. \u0060action\u0060 不支持；2. 设备离线；3. 查询超时；4. 2016 协议设备不支持 2022 扩展查询。\n请求示例：\u0060{ \"action\": \"device_status\", \"target_id\": \"34020000001320000001\", \"timeout\": 5 }\u0060\n录像查询示例：\u0060{ \"action\": \"record_info\", \"target_id\": \"34020000001320000001\", \"start\": 1710864000, \"end\": 1710950400, \"timeout\": 10 }\u0060\n响应中 \u0060xml\u0060 为原始 XML，\u0060data\u0060 为解析后的主体数据，\u0060appendix_a4\u0060 为 2022 版附录 A.4 扩展对象。\nCatalog、RecordInfo 或 ConfigDownload 在超时前只收到部分分包时仍返回已收到的数据，\u0060incomplete\u0060 给出完成度；零分包仍返回错误。",
                 "consumes": [
                     "application/json"
                 ],
@@ -3441,7 +3493,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "对指定设备下的所有通道逐个执行 PTZ 探测，并汇总返回结果。\n调用前置条件：设备存在，且设备下已存在可探测通道。\n失败场景：1. 设备不存在；2. 设备下没有通道；3. 单个通道离线或协议不支持时会体现在对应 item.message 中。\n请求示例：` + "`" + `{ \"action\": \"stop\", \"timeout\": 5 }` + "`" + `",
+                "description": "对指定设备下的所有通道逐个执行 PTZ 探测，并汇总返回结果。\n调用前置条件：设备存在，且设备下已存在可探测通道。\n失败场景：1. 设备不存在；2. 设备下没有通道；3. 单个通道离线或协议不支持时会体现在对应 item.message 中。\n请求示例：\u0060{ \"action\": \"stop\", \"timeout\": 5 }\u0060",
                 "consumes": [
                     "application/json"
                 ],
@@ -3492,7 +3544,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "对指定设备发起事件订阅。\n` + "`" + `event` + "`" + ` 常见值：` + "`" + `alarm` + "`" + `、` + "`" + `mobile_position` + "`" + `、` + "`" + `catalog` + "`" + `、` + "`" + `device_position` + "`" + `、` + "`" + `ptz_position` + "`" + `。\n创建或续订要求设备在线，且协议/厂商实现支持订阅；取消已持久化的订阅意图允许设备离线执行。\n失败场景：1. 创建或续订时设备离线；2. 订阅事件类型不支持；3. 设备未返回 200/OK。",
+                "description": "对指定设备发起事件订阅。\n\u0060event\u0060 常见值：\u0060alarm\u0060、\u0060mobile_position\u0060、\u0060catalog\u0060、\u0060device_position\u0060、\u0060ptz_position\u0060。\n创建或续订要求设备在线，且协议/厂商实现支持订阅；取消已持久化的订阅意图允许设备离线执行。\n失败场景：1. 创建或续订时设备离线；2. 订阅事件类型不支持；3. 设备未返回 200/OK。",
                 "consumes": [
                     "application/json"
                 ],
@@ -4409,6 +4461,218 @@ const docTemplate = `{
                         }
                     }
                 }
+            }
+        },
+        "/app/upgrade/status": {
+            "get": {
+                "summary": "读取签名发布库和最近升级任务",
+                "description": "仅接受本平台管理员 Authorization: Bearer JWT。",
+                "tags": [
+                    "System"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.UpgradeStatus"
+                        }
+                    },
+                    "401": {
+                        "description": "需要登录",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "仅本平台管理员",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "升级服务未配置或不可用",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/app/upgrade/packages": {
+            "post": {
+                "summary": "上传并校验签名发布包",
+                "description": "仅本平台管理员。上传原始 .owl-release.tar.gz，Content-Length 必填，最大2GiB。校验签名、摘要和架构；上传不会触发安装。",
+                "tags": [
+                    "System"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.UpgradeRelease"
+                        }
+                    },
+                    "401": {
+                        "description": "需要登录",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "仅本平台管理员",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "升级服务未配置或不可用",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "上传校验、任务冲突或空间不足",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "上传校验、任务冲突或空间不足",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "上传校验、任务冲突或空间不足",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "507": {
+                        "description": "上传校验、任务冲突或空间不足",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "package",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "binary"
+                        }
+                    }
+                ],
+                "consumes": [
+                    "application/octet-stream"
+                ]
+            }
+        },
+        "/app/upgrade/install": {
+            "post": {
+                "summary": "创建异步安装任务",
+                "description": "仅本平台管理员。备份配置与数据库后安装兼容镜像，健康检查失败自动回滚。用状态接口轮询，任务在重启后保留。",
+                "tags": [
+                    "System"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/upgrader.Task"
+                        }
+                    },
+                    "401": {
+                        "description": "需要登录",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "仅本平台管理员",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "升级服务未配置或不可用",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "发布包无效、不兼容或任务冲突",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "发布包无效、不兼容或任务冲突",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "发布包无效、不兼容或任务冲突",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "发布包无效、不兼容或任务冲突",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                },
+                "parameters": [
+                    {
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "required": [
+                                "package_id"
+                            ],
+                            "properties": {
+                                "package_id": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ]
             }
         }
     },
@@ -5663,7 +5927,7 @@ const docTemplate = `{
             "properties": {
                 "inner_xml": {
                     "type": "string",
-                    "example": "\u003cSVCParam\u003e\u003cSVCFlag\u003e1\u003c/SVCFlag\u003e\u003c/SVCParam\u003e"
+                    "example": "<SVCParam><SVCFlag>1</SVCFlag></SVCParam>"
                 }
             }
         },
@@ -6735,23 +6999,6 @@ const docTemplate = `{
                 }
             }
         },
-        "api.checkVersionOutput": {
-            "type": "object",
-            "properties": {
-                "current_version": {
-                    "type": "string"
-                },
-                "description": {
-                    "type": "string"
-                },
-                "has_new_version": {
-                    "type": "boolean"
-                },
-                "new_version": {
-                    "type": "string"
-                }
-            }
-        },
         "api.editChannelMediaServerInput": {
             "type": "object",
             "properties": {
@@ -7459,7 +7706,49 @@ const docTemplate = `{
         "api.snapshotConfig": {
             "type": "object",
             "properties": {
+                "analyze_duration_ms": {
+                    "type": "integer"
+                },
                 "ffmpeg_concurrency": {
+                    "type": "integer"
+                },
+                "ffmpeg_mode": {
+                    "type": "string"
+                },
+                "ffmpeg_timeout_seconds": {
+                    "type": "integer"
+                },
+                "frame_count": {
+                    "type": "integer"
+                },
+                "frame_interval_ms": {
+                    "type": "integer"
+                },
+                "immediate_dispatch": {
+                    "type": "boolean"
+                },
+                "jpeg_quality": {
+                    "type": "integer"
+                },
+                "poll_interval_ms": {
+                    "type": "integer"
+                },
+                "probe_size_bytes": {
+                    "type": "integer"
+                },
+                "probe_timeout_seconds": {
+                    "type": "integer"
+                },
+                "rtsp_timeout_seconds": {
+                    "type": "integer"
+                },
+                "scan_interval_ms": {
+                    "type": "integer"
+                },
+                "skip_frames": {
+                    "type": "integer"
+                },
+                "stream_timeout_seconds": {
                     "type": "integer"
                 },
                 "upload_timeout_seconds": {
@@ -8902,6 +9191,140 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "api.UpgradeRelease": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "product": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                },
+                "architecture": {
+                    "type": "string"
+                },
+                "os": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
+                "image_id": {
+                    "type": "string"
+                },
+                "image_sha256": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "format": {
+                    "type": "integer"
+                },
+                "image_size": {
+                    "type": "integer",
+                    "format": "int64"
+                },
+                "from_versions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "migration": {
+                    "type": "boolean"
+                },
+                "replaces_version": {
+                    "type": "string",
+                    "description": "版本编号调整时唯一指定的来源版本，普通升级为空"
+                }
+            }
+        },
+        "upgrader.TaskEvent": {
+            "type": "object",
+            "properties": {
+                "time": {
+                    "type": "string"
+                },
+                "phase": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "upgrader.Task": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "package_id": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                },
+                "previous_version": {
+                    "type": "string"
+                },
+                "previous_image": {
+                    "type": "string"
+                },
+                "target_image": {
+                    "type": "string"
+                },
+                "phase": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "backup": {
+                    "type": "string"
+                },
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/upgrader.TaskEvent"
+                    }
+                }
+            }
+        },
+        "api.UpgradeStatus": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "max_upload_bytes": {
+                    "type": "integer",
+                    "format": "int64"
+                },
+                "releases": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.UpgradeRelease"
+                    }
+                },
+                "task": {
+                    "$ref": "#/definitions/upgrader.Task"
+                }
+            }
         }
     },
     "securityDefinitions": {
@@ -8911,6 +9334,7 @@ const docTemplate = `{
             "in": "header"
         }
     }
+
 }`
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it

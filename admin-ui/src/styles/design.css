@@ -561,7 +561,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .channel-core-error p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 .channel-detail-section { min-width: 0; margin-bottom: 0; padding: 16px; background: var(--panel); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); }
 .channel-detail-section[tabindex="0"]:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
-.channel-live-grid { display: grid; grid-template-columns: minmax(0, 1fr) 292px; align-items: start; gap: 14px; }
+/* 普通预览保持 16:9，宽屏下最多约 1280×720；控制区紧邻画面。 */
+.channel-live-grid { display: grid; grid-template-columns: minmax(0, 1280px) 292px; justify-content: start; align-items: start; gap: 14px; }
 .channel-live-grid > .video-workspace { grid-column: 1; grid-row: 1; }
 .channel-live-grid > .channel-stream-addresses { grid-column: 1; grid-row: 2; }
 .channel-live-grid > .channel-control-stack { grid-column: 2; grid-row: 1 / span 2; }
@@ -945,7 +946,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .overview-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .detail-overview-grid { grid-template-columns: 1fr; }
   .detail-activity-card { grid-column: auto; }
-  .channel-live-grid { grid-template-columns: minmax(0, 1fr) 270px; }
+  .channel-live-grid { grid-template-columns: minmax(0, 1280px) 270px; }
   .channel-live-grid > .channel-control-stack { grid-column: 2; grid-template-columns: 1fr; }
   .channel-recording-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .history-session-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }

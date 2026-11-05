@@ -50,12 +50,24 @@ func (a *API) media(c *gin.Context) {
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
 	stop := make(chan struct{})
-	defer close(stop)
+	watcherDone := make(chan struct{})
+	// 返回前等待撤权监视退出，避免异步访问已被 Gin 回收的 Context/Writer。
+	defer func() { close(stop); <-watcherDone }()
+	var writer http.ResponseWriter = c.Writer
+	for {
+		unwrapper, ok := writer.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		writer = unwrapper.Unwrap()
+	}
+	controller := http.NewResponseController(writer)
 	// 短期票据控制新连接入场；已建立连接按应用/会话当前状态撤销。
 	go func() {
+		defer close(watcherDone)
 		defer func() {
 			if ctx.Err() != nil {
-				_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now())
+				_ = controller.SetWriteDeadline(time.Now())
 			}
 		}()
 		ticker := time.NewTicker(time.Second)
@@ -90,7 +102,12 @@ func (a *API) media(c *gin.Context) {
 		}
 		file, e := a.S.File(t)
 		if e != nil {
-			respond(c, nil, op.ErrNotFound)
+			if op.AsError(e).Code == "SNAPSHOT_PENDING" {
+				c.Header("Retry-After", "1")
+				respond(c, nil, e)
+			} else {
+				respond(c, nil, op.ErrNotFound)
+			}
 			return
 		}
 		f, e := os.Open(file)

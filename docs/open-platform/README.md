@@ -51,7 +51,7 @@
 | 录像、告警查询 | `/recordings`、`/events` | GET，设备级或通道级均支持 |
 | 播放会话、抓拍任务、云台命令记录 | `/live-sessions`、`/snapshot-tasks`、`/ptz-commands` | GET，仅本应用记录；设备级或通道级均支持 |
 | 云台能力和控制 | 通道路径 `/ptz/capabilities`、`/ptz` | GET 能力、POST 控制 |
-| 创建播放和抓拍 | 通道路径 `/live-sessions`、`/snapshot-tasks` | POST，播放 body 为 `{"protocol":"hls"}`，抓拍为 `{}` |
+| 创建播放和抓拍 | 通道路径 `/live-sessions`、`/snapshot-tasks` | POST，播放 body 为 `{"protocol":"hls"}`，抓拍为 `{"mode":"sync"}` 或 `{"mode":"async"}`（省略兼容异步） |
 
 原通道、录像、告警、会话、任务、命令列表也统一支持 `device_code`、`channel_code` 精确筛选；所有条件取交集，仅传 `channel_code` 匹配授权设备下的同码通道。列表未知编码返回空列表，严格编码路径返回 404；编码路径不接受额外资源筛选参数。会话/任务/命令列表支持 `state`，记录按 `start/end` 默认最近24小时、最大7天，使用 `size/cursor` 分页。
 
@@ -68,10 +68,11 @@
 3. `DELETE /live-sessions/{id}` 只释放自身会话，不关闭共享源，不影响管理员观看、录像、级联或其他应用。最后引用释放后仍由原宿主无人观看策略回收源。
 4. HLS 清单、init、切片、密钥全部经 `/openmedia/v1/*`；客户端在票据到期前经业务后端换票并重载清单。FLV/下载连接每秒检查当前授权，撤权时取消上游并中断写入；已缓冲或已下载的数据无法追回。
 5. 录像 `/recordings/{id}/tickets` 的 purpose 为 play/download，下载需独立 `recording:download`；媒体读取仅允许单段 Range。告警图片使用 `/events/{id}/image-tickets`。
-6. `POST /snapshot-tasks` body `{device_code,channel_code}`（也兼容内部 channel_id），带幂等键；查询任务，succeeded 后申请 image-tickets。任务用唯一 URL 向 ZLM 请求新图片，单独存储，最多 60 秒，保留 24 小时；采集失败不拿旧封面冒充。`unknown` 表示进程重启时结果待核对，不自动重发。
-7. 云台先读编码通道路径 `/ptz/capabilities`；`POST` 同一路径 `/ptz` body `{action:"left",speed:30,duration:1}`，带幂等键。连续动作 1—3 秒；后端独立下发停止，查 command 状态；协议确认不代表实际到位。停止自身命令走 `/ptz-commands/{id}/stop`，管理员可从记录执行安全停止。停止失败保留通道租约，阻止后续控制；旧定时器只停止自己的代次。GB 聚焦/光圈、巡航/扫描采用对应停止码；预置位写入等须显式授权。ONVIF 首期仅声明方向、变倍、预置位，聚焦缺少成像停止链路，光圈未声明；不支持的动作拒绝。RTSP/RTMP 无云台能力。
+6. `POST /snapshot-tasks` body `{device_code,channel_code,mode:"sync",timeout_seconds:60}`（兼容内部 channel_id），带幂等键。同步等成功返回图片地址；异步 `mode:"async"` 或省略立即返回任务和地址。两种均自动返回 `image_url`、`image_expires_at`；异步未完成访问图片地址返回 409 `SNAPSHOT_PENDING` 和 `Retry-After:1`，成功后同一地址可取图。同步等待 1—120 秒，超时 504 `SNAPSHOT_TIMEOUT`，任务继续；同幂等键及原 body 重试不会重复抓拍。任务详情/列表自动刷新约 5 分钟有效的地址；失败、未知、取消或到期任务无图片地址。底层复用通道持久化抓拍，按原协议选择设备上传或 FFmpeg，保留宿主上传超时及并发控制。临时三方任务与结果约24小时到期，通道持久化图片独立保留。
+7. 图片记录：`GET /captures` 或编码设备/通道路径 `/captures`，返回与管理端通道抓图页相同的成功图片记录，含手动、定时和三方抓拍。顶层列表支持 `device_code/channel_code` 或兼容内部ID，`size/cursor`分页；默认全部历史，显式 `start/end` 时最大7天。`GET /captures/{capture}` 查询详情/刷新图片地址，`POST /captures/{capture}/image-tickets` 独立换票。权限沿用 `snapshot:capture` 与应用设备授权，本期只读；管理员重命名后按ID解析最新路径，图片删除或设备撤权后拒绝地址访问。图片记录ID与三方任务ID不同；永久图片不因三方任务到期删除。
+8. 云台先读编码通道路径 `/ptz/capabilities`；`POST` 同一路径 `/ptz` body `{action:"left",speed:30,duration:1}`，带幂等键。连续动作 1—3 秒；后端独立下发停止，查 command 状态；协议确认不代表实际到位。停止自身命令走 `/ptz-commands/{id}/stop`，管理员可从记录执行安全停止。停止失败保留通道租约，阻止后续控制；旧定时器只停止自己的代次。GB 聚焦/光圈、巡航/扫描采用对应停止码；预置位写入等须显式授权。ONVIF 首期仅声明方向、变倍、预置位，聚焦缺少成像停止链路，光圈未声明；不支持的动作拒绝。RTSP/RTMP 无云台能力。
 
-媒体入口首期支持 **ZLM 的 HLS fMP4 / HTTP-FLV** 和平台本地落盘录像/图片；不开放设备侧录像搜索、RTSP/RTMP 直连、WS-FLV、WebRTC。抓拍也要求 ZLM 的 getSnap/FFmpeg 实际可用。
+媒体入口首期支持 **ZLM 的 HLS fMP4 / HTTP-FLV** 和平台本地落盘录像/图片；不开放设备侧录像搜索、RTSP/RTMP 直连、WS-FLV、WebRTC。抓拍复用当前通道的设备上传/实时流 FFmpeg 能力，不再另走 ZLM getSnap。
 
 ## 应用告警订阅
 
@@ -81,7 +82,7 @@
 4. `PATCH /subscriptions/{id}` body `{revision,status:"active"}` 启用；可暂停，DELETE 取消。应用密钥轮换后使用新 AK PATCH 绑定新凭据再撤销旧 AK。撤销旧 AK 会暂停仍绑定旧组的订阅。
 5. events 与 outbox 同事务；worker 按订阅当前授权筛选，创建 `(subscription,event)` 唯一 delivery。每次投递、重试、人工重投都重新检查应用、签发凭据、订阅、目标、事件设备授权；投递中尽力取消撤权请求。
 6. 至少一次语义。接收方按 [回调签名规范](./signing-v1.md#回调签名) 验签并持久化防重放，按 delivery_id 幂等落库再返回 2xx。delivery_id 重试保持不变，nonce/timestamp 每次更新。签名无效不能返回成功；重复已处理 delivery 返回 2xx。图片只在具备 event:image 时临时签发 URL，票据不写入 outbox。
-7. 2xx 成功；重定向/其他 4xx（408/429 除外）failed；网络/超时/5xx/408/429 退避重试最多 8 次后 dead。并发全局 8、每应用默认 2；云台停止在独立循环运行。失败/死信允许管理员或应用受控重投并审计。投递记录和已完成 outbox 默认 30 天清理；抓拍文件 24 小时、审计 90 天；nonce/票据/幂等记录分批清理。
+7. 2xx 成功；重定向/其他 4xx（408/429 除外）failed；网络/超时/5xx/408/429 退避重试最多 8 次后 dead。并发全局 8、每应用默认 2；云台停止在独立循环运行。失败/死信允许管理员或应用受控重投并审计。投递记录和已完成 outbox 默认 30 天清理；临时三方抓拍文件 24 小时、通道图片记录永久保留（管理员可删除）、审计 90 天；nonce/票据/幂等记录分批清理。
 
 ## 运维与人工检查重点
 

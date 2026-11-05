@@ -26,9 +26,14 @@ func (s *Service) Run(ctx context.Context, run func(context.Context, *Record) er
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	slots := make(chan struct{}, 64)
-	ticker := time.NewTicker(time.Second)
+	scanInterval, _ := s.scheduling()
+	ticker := time.NewTicker(scanInterval)
 	defer ticker.Stop()
 	for {
+		if interval, _ := s.scheduling(); interval != scanInterval {
+			scanInterval = interval
+			ticker.Reset(interval)
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -59,7 +64,7 @@ func (s *Service) Run(ctx context.Context, run func(context.Context, *Record) er
 			wg.Add(1)
 			go func(row Record) {
 				defer wg.Done()
-				defer func() { <-slots }()
+				defer func() { <-slots; s.notify() }()
 				err := run(ctx, &row)
 				resultCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
@@ -82,6 +87,7 @@ func (s *Service) Run(ctx context.Context, run func(context.Context, *Record) er
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-s.wake:
 		}
 	}
 }

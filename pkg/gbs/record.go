@@ -21,6 +21,9 @@ const (
 
 var errRecordResponseMetadataLimit = errors.New("GB28181 RecordInfo metadata limit exceeded")
 
+// ErrRecordQueryTimeout 表示等待期限内未收到任何完整录像目录应答。
+var ErrRecordQueryTimeout = errors.New("wait RecordInfo response timeout")
+
 type RecordQueryInput struct {
 	DeviceID        string
 	ChannelID       string // RecordInfo 目录目标，可为注册设备/系统编码或其通道/区域编码
@@ -293,7 +296,7 @@ func (err *RecordInfoIncompleteError) Error() string {
 
 func recordQueryItemsResult(result multiResponseResult[RecordItem]) ([]RecordItem, error) {
 	if len(result.Items) == 0 && !result.Complete {
-		return nil, errors.New("wait RecordInfo response timeout")
+		return nil, ErrRecordQueryTimeout
 	}
 	if !result.Complete {
 		return result.Items, &RecordInfoIncompleteError{Received: len(result.Items), Expected: result.Expected}

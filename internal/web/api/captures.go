@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -236,7 +237,18 @@ func deviceSnapshotMode(ch *ipc.Channel, dev *ipc.Device) string {
 	return "ffmpeg"
 }
 
-func (a IPCAPI) runCapture(ctx context.Context, row *capture.Record) error {
+func (a IPCAPI) runCapture(ctx context.Context, row *capture.Record) (runErr error) {
+	settings := a.captureSettings()
+	dispatchWait := time.Since(row.CreatedAt)
+	var queueWait, streamWait, frameWait, saveWait time.Duration
+	method := "ffmpeg"
+	defer func() {
+		// 不记录播放地址或认证信息，只记录各阶段耗时和结果。
+		slog.InfoContext(ctx, "capture timing", "capture_id", row.ID, "channel_id", row.ChannelID, "method", method,
+			"dispatch_ms", dispatchWait.Milliseconds(), "ffmpeg_queue_ms", queueWait.Milliseconds(),
+			"stream_ms", streamWait.Milliseconds(), "ffmpeg_ms", frameWait.Milliseconds(),
+			"save_ms", saveWait.Milliseconds(), "total_ms", time.Since(row.CreatedAt).Milliseconds(), "success", runErr == nil)
+	}()
 	ch, err := a.ipc.GetChannel(ctx, row.ChannelID)
 	if err != nil {
 		if errors.Is(err, reason.ErrNotFound) {
@@ -252,6 +264,7 @@ func (a IPCAPI) runCapture(ctx context.Context, row *capture.Record) error {
 		}
 	}
 	if row.RequestURL == "" && deviceSnapshotMode(ch, dev) == "gb28181_device_upload" {
+		method = "gb28181_device_upload"
 		// 每个任务独立回传键，禁止使用旧封面冒充本次结果。
 		state, err := a.uc.SipServer.QuerySnapshotContext(ctx, ch.DeviceID, ch.ChannelID, row.ID)
 		if err != nil {
@@ -263,7 +276,7 @@ func (a IPCAPI) runCapture(ctx context.Context, row *capture.Record) error {
 		if err := a.captures.SetSession(ctx, row.ID, state.SessionID); err != nil {
 			return err
 		}
-		timeout := a.captureSettings().UploadTimeoutSeconds
+		timeout := settings.UploadTimeoutSeconds
 		waitCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 		defer cancel()
 		_, err = a.waitCapture(waitCtx, row.ID)
@@ -273,13 +286,17 @@ func (a IPCAPI) runCapture(ctx context.Context, row *capture.Record) error {
 		return err
 	}
 	// 先排队取得 FFmpeg 名额，再启动取流计时，排队不会消耗设备取帧超时。
+	queueAt := time.Now()
+	// 并发上限采用当前值，其他执行参数沿用任务开始时的配置。
 	release, _, err := a.snapshotCoordinator().acquire(ctx, a.snapshotFFmpegConcurrency())
+	queueWait = time.Since(queueAt)
 	if err != nil {
 		return err
 	}
 	defer release()
 	// 旧版国标、ONVIF 和流协议直接取流，不先尝试设备上传或多级回退。
-	streamCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	streamAt := time.Now()
+	streamCtx, cancel := context.WithTimeout(ctx, time.Duration(settings.StreamTimeoutSeconds)*time.Second)
 	defer cancel()
 	if row.RequestURL == "" && !ch.IsPlaying && ch.GetType() != ipc.TypeRTMP {
 		protocol := a.ipc.GetProtocol(ch.GetType())
@@ -304,11 +321,19 @@ func (a IPCAPI) runCapture(ctx context.Context, row *capture.Record) error {
 		rtspURL += "?session=" + url.QueryEscape(ch.Config.Session)
 	}
 	at := time.Now()
-	result, err := a.extractSnapshotByFFmpeg(streamCtx, ch.ID, rtspURL, at, 1)
+	streamWait = at.Sub(streamAt)
+	frameCount := settings.FrameCount
+	if settings.FFmpegMode == "single_frame" {
+		frameCount = 1
+	}
+	result, err := a.extractSnapshotWithSettings(streamCtx, ch.ID, rtspURL, at, frameCount, settings)
+	frameWait = time.Since(at)
 	if err != nil {
 		return err
 	}
+	saveAt := time.Now()
 	_, err = a.captures.Complete(streamCtx, row.ID, result.Image, "ffmpeg")
+	saveWait = time.Since(saveAt)
 	return err
 }
 

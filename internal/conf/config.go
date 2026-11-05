@@ -899,6 +899,20 @@ type Media struct {
 	GBSnapshotBaseURL              string `comment:"GB28181 抓拍图片回传基础地址，优先于 WebHookIP"`
 	GBSnapshotFFmpegConcurrency    int    `comment:"实时流 FFmpeg 抓拍最大并发数，0 使用默认2，可在管理端抓拍设置中修改"`
 	GBSnapshotUploadTimeoutSeconds int    `comment:"GB28181-2022 设备图片上传等待秒数，0 使用默认120，可在抓拍设置中修改"`
+	GBSnapshotImmediateDispatch    bool   `comment:"是否入队立即执行，默认false按扫描周期执行"`
+	GBSnapshotScanIntervalMS       int    `comment:"抓拍队列扫描间隔毫秒，默认1000"`
+	GBSnapshotPollIntervalMS       int    `comment:"管理端抓拍结果轮询间隔毫秒，默认2000"`
+	GBSnapshotFFmpegMode           string `comment:"FFmpeg模式：multi_frame多帧兼容（默认）/single_frame单帧快速"`
+	GBSnapshotFrameCount           int    `comment:"多帧模式候选图片数量，默认5，范围2–30"`
+	GBSnapshotSkipFrames           int    `comment:"多帧模式跳过起始帧数，默认75，范围1–1000"`
+	GBSnapshotFrameIntervalMS      int    `comment:"多帧模式采样间隔毫秒，默认1000"`
+	GBSnapshotStreamTimeoutSeconds int    `comment:"取流任务总超时秒数（不含排队），默认60"`
+	GBSnapshotFFmpegTimeoutSeconds int    `comment:"FFmpeg取帧超时秒数，默认35"`
+	GBSnapshotRTSPTimeoutSeconds   int    `comment:"RTSP套接字超时秒数，默认10"`
+	GBSnapshotProbeTimeoutSeconds  int    `comment:"多帧模式ffprobe超时秒数，默认10"`
+	GBSnapshotAnalyzeDurationMS    int    `comment:"FFmpeg分析预算毫秒，默认5000，不是固定等待时间"`
+	GBSnapshotProbeSizeBytes       int    `comment:"FFmpeg探测字节预算，默认5000000"`
+	GBSnapshotJPEGQuality          int    `comment:"FFmpeg JPEG质量参数，默认2，范围2–31，越小质量越高"`
 	WebHookIP                      string `comment:"用于流媒体 webhook 回调"`
 	RTPPortRange                   string `comment:"媒体服务器 RTP 端口范围"`
 	StreamNoneReaderDelaySeconds   int    `comment:"无人观看自动断流等待秒数，默认180；手动录像期间不自动断流"`

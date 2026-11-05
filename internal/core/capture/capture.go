@@ -53,12 +53,51 @@ type Schedule struct {
 func (Schedule) TableName() string { return "channel_capture_schedules" }
 
 type Service struct {
-	db   *gorm.DB
-	root string
-	mu   sync.Mutex // 序列化文件重命名、删除与任务去重，避免元数据和磁盘相互覆盖。
+	db                *gorm.DB
+	root              string
+	mu                sync.Mutex // 序列化文件重命名、删除与任务去重，避免元数据和磁盘相互覆盖。
+	wake              chan struct{}
+	schedulingMu      sync.RWMutex
+	scanInterval      time.Duration
+	immediateDispatch bool
 }
 
-func New(db *gorm.DB, root string) *Service { return &Service{db: db, root: root} }
+func New(db *gorm.DB, root string) *Service {
+	return &Service{db: db, root: root, wake: make(chan struct{}, 1), scanInterval: time.Second}
+}
+
+// SetScheduling 热更新队列扫描周期；默认每秒扫描，不主动唤醒入队任务。
+func (s *Service) SetScheduling(interval time.Duration, immediate bool) {
+	if interval <= 0 {
+		interval = time.Second
+	}
+	s.schedulingMu.Lock()
+	s.scanInterval, s.immediateDispatch = interval, immediate
+	s.schedulingMu.Unlock()
+	// 使新的扫描周期立即生效，不等待旧周期结束。
+	s.wakeWorker()
+}
+
+func (s *Service) scheduling() (time.Duration, bool) {
+	s.schedulingMu.RLock()
+	defer s.schedulingMu.RUnlock()
+	return s.scanInterval, s.immediateDispatch
+}
+
+// notify 合并突发入队通知；任务仍以数据库为准，定时扫描负责重启恢复和漏通知兜底。
+func (s *Service) notify() {
+	if _, immediate := s.scheduling(); !immediate {
+		return
+	}
+	s.wakeWorker()
+}
+
+func (s *Service) wakeWorker() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
 
 func (s *Service) Enqueue(ctx context.Context, channelID, source string) (*Record, error) {
 	return s.EnqueueURL(ctx, channelID, source, "")
@@ -86,6 +125,7 @@ func (s *Service) EnqueueURL(ctx context.Context, channelID, source, requestURL 
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return nil, err
 	}
+	s.notify()
 	return &row, nil
 }
 

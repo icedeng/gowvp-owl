@@ -4,7 +4,7 @@ import type { PTZProbeOutput, PTZBatchProbeOutput } from '../types/api'
 import type {
   CaptureRecord, CaptureSchedule, SnapshotConfig, ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord, MediaInspectionResource, MediaInspectionResult,
   ApiChannel as Channel, DeviceExt, GbMetrics, GBHistoryDownloadState, GBHistoryStartOutput, GBOperationOutput, GBSnapshotState, GBSubscriptionState, GBUpgradeOutput, GBUpgradeState, HealthInfo, MediaServer, MonthlyStats,
-  CascadePlatformStatus, PlayResult, SipAccessInfo, SipConfig, SipSecretStatus, TimelineRange, VersionCheck, Zone,
+  CascadePlatformStatus, PlayResult, SipAccessInfo, SipConfig, SipSecretStatus, TimelineRange, Zone,
   ResourceStats, SnapshotRefreshOutput, AnnexGAlarmAudit, AnnexGDefenceAudit, AnnexGDefenceState, AnnexGAuditPage,
 } from '../types/api'
 
@@ -75,8 +75,6 @@ export const api = {
   metrics: () => http.get<ApiMetrics>('/app/metrics/api'),
   stats: () => http.get<ResourceStats>('/stats'),
   gbMetrics: () => http.get<GbMetrics>('/gb28181/metrics'),
-  versionCheck: () => http.get<VersionCheck>('/app/version/check'),
-  upgrade: () => http.post('/app/upgrade', undefined, { timeout: 0, responseType: 'text' }),
 
   devices: (params?: ListParams) => http.get<ApiPage<ApiDevice>>('/devices', { params }),
   deviceChannels: (params?: ListParams) => http.get<ApiPage<ApiChannel>>('/devices/channels', { params }),
@@ -118,6 +116,7 @@ export const api = {
   captureSchedule: (id: string) => http.get<CaptureSchedule>(`/channels/${encodeURIComponent(id)}/capture_schedule`),
   saveCaptureSchedule: (id: string, body: CaptureSchedule) => http.put<CaptureSchedule>(`/channels/${encodeURIComponent(id)}/capture_schedule`, body),
   updateSnapshotConfig: (body: SnapshotConfig) => http.put<SnapshotConfig>('/configs/info/snapshot', body),
+  snapshotConfig: () => http.get<SnapshotConfig>('/configs/info/snapshot'),
   snapshot: (id: string, body: Record<string, unknown> = {}) => http.post<SnapshotRefreshOutput>(`/channels/${encodeURIComponent(id)}/snapshot`, body),
   snapshotState: (id: string, sessionId: string) => http.get<GBSnapshotState>(`/channels/${encodeURIComponent(id)}/snapshot/${encodeURIComponent(sessionId)}/status`),
   snapshotImage: (id: string, cacheBust?: number) => withQuery(

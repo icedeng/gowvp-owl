@@ -1,0 +1,21 @@
+[Unit]
+Description=Owl signed application upgrade agent
+After=docker.service network-online.target
+Requires=docker.service
+RequiresMountsFor=/www2/gowvp-v1
+
+[Service]
+Type=simple
+User=root
+UMask=0077
+WorkingDirectory=/www2/gowvp-v1
+ExecStart=/www2/gowvp-v1/upgrader/bin/owl-upgrade-agent -root /www2/gowvp-v1
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

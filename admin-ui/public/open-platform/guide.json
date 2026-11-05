@@ -79,9 +79,20 @@
         {
           "title": "抓拍与云台",
           "steps": [
-            "POST 编码通道路径 /snapshot-tasks 请求新抓拍，body {}；通过同一路径GET任务列表或任务id轮询，succeeded 后用任务id申请 image-tickets。queued/running 不代表已有图片。",
+            "抓拍支持mode=sync或async，均返回image_url及image_expires_at。同步等成功后返回可用图片，异步先返回任务和图片地址，未完成访问409 SNAPSHOT_PENDING（Retry-After:1），成功后原地址可用。省略mode保持异步；查询任务详情/列表会刷新图片地址。",
             "控制前 GET 编码通道路径 /ptz/capabilities；只从 actions 选择动作，再 POST 同一路径 /ptz，带幂等键。连续动作最长3秒，服务端自动停止。",
             "如需提前停止，POST /ptz-commands/{command}/stop，再查询命令状态。confirmed 表示命令流程确认，不等于真实画面到位；stop_failed 不等于已停止。"
+          ]
+        },
+        {
+          "title": "同步/异步抓拍和通道图片记录",
+          "paragraphs": [
+            "创建：POST /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/snapshot-tasks，body {\"mode\":\"sync\",\"timeout_seconds\":60} 或 {\"mode\":\"async\"}。原POST /snapshot-tasks也支持device_code+channel_code或兼容内部channel_id。创建均须Idempotency-Key，完全相同请求重试只执行一次。",
+            "同步最多等待120秒（默认60秒），不会延长底层执行期限。超时504 SNAPSHOT_TIMEOUT，任务继续；相同幂等键和原body可再次等结果，或按编码GET /snapshot-tasks查任务列表。不得换幂等键反复触发动作。客户端断开不取消已接受任务。",
+            "异步无需回调即可使用：立即保存id、state、image_url；轮询GET /snapshot-tasks/{task}，succeeded后使用图片地址。图片URL未就绪409，失败/取消/unknown不可当成图片。URL约5分钟，过期重新查任务或换票；不要把签名API地址当作图片地址。",
+            "三方抓拍复用通道持久化抓拍能力（设备上传或FFmpeg），图片同时出现在通道抓图页。GET 编码设备或通道路径 /captures 可查询图片记录，顶层 GET /captures?device_code=...&channel_code=... 也可查询。包括授权通道的手动、定时和三方成功图片；默认全部历史，支持size/cursor，显式start/end最大7天。",
+            "GET /openapi/v1/captures/{capture}查询图片详情和刷新image_url，也可POST /captures/{capture}/image-tickets独立换票。图片记录ID与三方任务ID不同；三方任务约24小时到期，通道图片持久保留直至管理员删除。权限继续使用snapshot:capture加设备授权；本期只读，不开放三方删除、重命名或定时计划修改。",
+            "图片地址不携带管理员token、AK或SK；必须经过/openmedia/v1/票据验证，应用停用、凭据撤销、设备撤权或图片删除后拒绝访问。"
           ]
         },
         {
@@ -122,7 +133,7 @@
         {
           "title": "首期能力范围",
           "paragraphs": [
-            "媒体与抓拍要求 ZLM；实时支持 HLS fMP4、HTTP-FLV，录像为平台本地落盘文件。设备侧录像检索、RTSP/RTMP 直连、WS-FLV 和 WebRTC 不属于本开放接口。",
+            "实时媒体要求 ZLM，抓拍复用通道的设备上传/FFmpeg能力；实时支持 HLS fMP4、HTTP-FLV，录像为平台本地落盘文件。设备侧录像检索、RTSP/RTMP 直连、WS-FLV 和 WebRTC 不属于本开放接口。",
             "首期仅单实例。应用编辑保守作废旧媒体会话和票据并暂停订阅，接入方需重建会话并确认恢复订阅。应用停用、到期、凭据撤销和设备撤权会阻止新请求并收敛活动命令。"
           ]
         }
@@ -648,6 +659,36 @@
               "AMBIGUOUS_RESOURCE_CODE",
               "同一设备下通道编码重复",
               "联系管理员核对重复通道；平台拒绝猜测或控制。"
+            ],
+            [
+              "400",
+              "INVALID_SNAPSHOT_MODE",
+              "mode不正确",
+              "使用sync或async。"
+            ],
+            [
+              "400",
+              "INVALID_SNAPSHOT_TIMEOUT",
+              "同步等待范围不正确",
+              "timeout_seconds使用1—120。"
+            ],
+            [
+              "409",
+              "SNAPSHOT_PENDING",
+              "异步图片仍在生成",
+              "按Retry-After重试地址或查询任务。"
+            ],
+            [
+              "503",
+              "SNAPSHOT_FAILED",
+              "同步抓拍失败/失效",
+              "查询任务状态，确认设备后重新发起。"
+            ],
+            [
+              "504",
+              "SNAPSHOT_TIMEOUT",
+              "同步等待超时，任务继续",
+              "同幂等键和body重试或查询任务列表。"
             ]
           ]
         }
