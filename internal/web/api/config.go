@@ -58,6 +58,7 @@ func registerConfig(g gin.IRouter, api ConfigAPI, handler ...gin.HandlerFunc) {
 		group.GET("/info", web.WrapH(api.getConfigInfo))
 		group.PUT("/info/sip", web.WrapH(api.updateSIP))
 		group.PUT("/info/media", web.WrapH(api.updateMedia))
+		group.PUT("/info/snapshot", web.WrapH(api.updateSnapshotConfig))
 	}
 }
 
@@ -85,6 +86,7 @@ func (a ConfigAPI) deleteConfig(c *gin.Context, in *configIDInput) (any, error) 
 }
 
 type getConfigInfoOutput struct {
+	Snapshot   snapshotConfig      `json:"snapshot"`
 	Media      mediaPlaybackConfig `json:"media"`
 	SIP        conf.SIP            `json:"sip"`
 	SIPSecrets SIPSecretStatus     `json:"sip_secrets"`
@@ -173,6 +175,7 @@ func (a ConfigAPI) getConfigInfo(c *gin.Context, _ *struct{}) (*getConfigInfoOut
 	}
 	redacted, secretStatus := redactSIPPeerSecrets(cfg)
 	return &getConfigInfoOutput{
+		Snapshot:   snapshotSettings(a.conf.Media),
 		Media:      mediaPlaybackConfig{StreamNoneReaderDelaySeconds: mediaNoneReaderDelay(a.conf.Media)},
 		SIP:        redacted,
 		SIPSecrets: secretStatus,

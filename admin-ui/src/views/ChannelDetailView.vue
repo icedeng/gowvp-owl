@@ -33,7 +33,6 @@ import type {
   ApiDevice,
   GBHistoryDownloadState,
   GBOperationOutput,
-  GBSnapshotState,
   GBUpgradeState,
   MediaServer,
   PlayResult,
@@ -42,6 +41,8 @@ import type {
 import { formatBytes, formatDate } from "../utils/format";
 import type { PTZRequest } from "../utils/ptz";
 import { useUiStore } from "../stores/ui";
+import SnapshotWorkspace from "../components/SnapshotWorkspace.vue";
+import type { CaptureRecord } from "../types/api";
 import StreamPlayer from "../components/StreamPlayer.vue";
 import ModalDialog from "../components/ModalDialog.vue";
 import ChannelRecordingsWorkspace from "../components/ChannelRecordingsWorkspace.vue";
@@ -60,12 +61,11 @@ const device = ref<ApiDevice | null>(null);
 const zones = ref<Zone[]>([]);
 const play = ref<PlayResult | null>(null);
 const snapshotUrl = ref("");
+const captureWorkspace = ref<InstanceType<typeof SnapshotWorkspace>>();
 const aiEnabled = ref(false);
 const recordMode = ref("none");
 const gbQueryResult = ref<GBOperationOutput | null>(null);
 const gbControlResult = ref<GBOperationOutput | null>(null);
-const snapshotSessionId = ref("");
-const snapshotState = ref<GBSnapshotState | null>(null);
 const upgradeSessionId = ref("");
 const upgradeState = ref<GBUpgradeState | null>(null);
 const historyActive = ref(false);
@@ -81,7 +81,7 @@ const selectedMediaServerId = ref("local");
 const resourceErrors = reactive({ device: "", zones: "", history: "", media: "" });
 const resourceLoading = reactive({ zones: false, media: false });
 const zoneError = ref("");
-type ChannelTab = "live" | "ai" | "recordings" | "gb" | "technical";
+type ChannelTab = "snapshots" | "live" | "ai" | "recordings" | "gb" | "technical";
 const activeTab = ref<ChannelTab>("live");
 const liveProtocolPriority: StreamProtocol[] = ["ws-flv", "http-flv", "webrtc", "hls"];
 let loadSequence = 0;
@@ -89,6 +89,7 @@ let loadSequence = 0;
 const detailTabs = [
   { id: "live" as const, label: "实时值守", description: "预览与控制", icon: Video },
   { id: "recordings" as const, label: "录像与回看", description: "策略与录像目录", icon: Film },
+  { id: "snapshots" as const, label: "抓拍与计划", description: "图片与定时抓拍", icon: Camera },
   { id: "ai" as const, label: "智能分析", description: "AI 与检测区域", icon: Cpu },
   { id: "gb" as const, label: "国标扩展", description: "查询、控制与任务", icon: Radio },
   { id: "technical" as const, label: "通道档案", description: "协议与流信息", icon: Link2 },
@@ -484,8 +485,6 @@ function clearContext() {
   snapshotUrl.value = "";
   gbQueryResult.value = null;
   gbControlResult.value = null;
-  snapshotSessionId.value = "";
-  snapshotState.value = null;
   upgradeSessionId.value = "";
   upgradeState.value = null;
   historyActive.value = false;
@@ -563,6 +562,7 @@ async function load() {
     if (sequence !== loadSequence) return;
     if (!data?.id) throw new Error("通道不存在或响应格式错误");
     channel.value = data;
+    snapshotUrl.value = api.snapshotImage(data.id, Date.now());
     selectedMediaServerId.value = data.config?.media_server_id?.trim() || "local";
     voiceForm.mediaServerId = selectedMediaServerId.value;
     aiEnabled.value = Boolean(data.ext?.enabled_ai);
@@ -678,28 +678,16 @@ async function copyPlayAddress(url: string) {
 
 async function refreshSnapshot() {
   if (!channel.value || actionLoading.value) return;
-  actionLoading.value = "刷新快照";
-  try {
-    const { data } = await api.snapshot(channel.value.id);
-    snapshotUrl.value = data?.link || api.snapshotImage(channel.value.id, Date.now());
-    snapshotSessionId.value = data?.session_id || "";
-    snapshotState.value = null;
-    if (snapshotSessionId.value) await loadSnapshotState();
-    ui.toast(`快照已刷新${data?.method ? ` · ${data.method}` : ""}`);
-  } catch (cause) {
-    ui.toast(errorMessage(cause, "快照刷新失败"));
-  } finally {
-    actionLoading.value = "";
-  }
+  activeTab.value = "snapshots";
+  await nextTick();
+  await captureWorkspace.value?.capture();
 }
 
-async function loadSnapshotState() {
-  if (!channel.value || !snapshotSessionId.value) return;
-  try {
-    snapshotState.value = (await api.snapshotState(channel.value.id, snapshotSessionId.value)).data || null;
-  } catch (cause) {
-    ui.toast(errorMessage(cause, "抓拍状态查询失败"));
-  }
+function captureSaved(row: CaptureRecord) {
+  if (row.channel_id === channel.value?.id) snapshotUrl.value = api.captureImage(row.id, false, row.updated_at);
+}
+function refreshCaptureCover() {
+  if (channel.value) snapshotUrl.value = api.snapshotImage(channel.value.id, Date.now());
 }
 
 async function runGBQuery() {
@@ -1161,6 +1149,10 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
         </button>
       </div>
 
+      <section v-show="activeTab === 'snapshots'" id="channel-panel-snapshots" class="channel-detail-section card form-section" role="tabpanel" aria-labelledby="channel-tab-snapshots" tabindex="0">
+        <SnapshotWorkspace ref="captureWorkspace" :channel-id="channel.id" :disabled="!channel.is_online" @captured="captureSaved" @changed="refreshCaptureCover" />
+      </section>
+
       <section v-if="activeTab === 'live'" id="channel-panel-live" class="channel-detail-section" role="tabpanel" aria-labelledby="channel-tab-live" tabindex="0">
         <div class="channel-live-grid">
           <article class="card video-workspace channel-video-workspace">
@@ -1356,12 +1348,10 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
           </article>
 
           <details class="card form-section resource-disclosure">
-            <summary><span>2022 抓拍任务</span><small>设备上传与实时流回退</small></summary>
+            <summary><span>2022 抓拍任务</span><small>按协议选择抓拍方式</small></summary>
             <div class="resource-disclosure-body">
-              <p class="capability-reason">{{ supportsDeviceSnapshot ? "设备档案支持 9.14 图像抓拍" : "当前档案不支持设备上传；刷新快照可能使用实时流回退" }}</p>
+              <p class="capability-reason">{{ supportsDeviceSnapshot ? "设备档案支持 9.14 图像抓拍" : "当前档案不支持设备上传，直接从实时流取帧" }}</p>
               <button class="btn" type="button" :disabled="!isGb || !channel.is_online || Boolean(actionLoading)" @click="refreshSnapshot"><Aperture />发起抓拍</button>
-              <div v-if="snapshotSessionId" class="read-only mt-4"><strong class="mono">{{ snapshotSessionId }}</strong><small>设备抓拍会话</small><button class="btn btn-sm" type="button" @click="loadSnapshotState">刷新状态</button></div>
-              <details v-if="snapshotState" class="detail-raw-card mt-4"><summary>查看抓拍状态</summary><pre>{{ JSON.stringify(snapshotState, null, 2) }}</pre></details>
             </div>
           </details>
 
@@ -1379,7 +1369,7 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
         </div>
       </section>
 
-      <section v-else id="channel-panel-technical" class="channel-detail-section" role="tabpanel" aria-labelledby="channel-tab-technical" tabindex="0">
+      <section v-else-if="activeTab === 'technical'" id="channel-panel-technical" class="channel-detail-section" role="tabpanel" aria-labelledby="channel-tab-technical" tabindex="0">
         <div class="channel-technical-layout">
           <article class="card card-pad"><dl class="channel-technical-grid"><div><dt>协议</dt><dd>{{ protocol }}</dd></div><div v-if="isGb"><dt>有效版本</dt><dd><span class="protocol-tag blue">{{ gbVersionLabel }}</span></dd></div><div><dt>通道编号</dt><dd class="mono">{{ channel.channel_id || channel.id }}</dd></div><div><dt>所属设备</dt><dd>{{ device?.name || channel.device_id || "—" }}</dd></div><div><dt>设备 ID</dt><dd class="mono">{{ channel.did || channel.device_id || "—" }}</dd></div><div><dt>应用 / 流</dt><dd class="mono">{{ channel.app || "—" }} / {{ channel.stream || "—" }}</dd></div><div><dt>媒体节点</dt><dd><span class="status" :class="boundMediaServerState.tone">{{ boundMediaServerId }} · {{ boundMediaServerState.label }}</span></dd></div><div><dt>更新时间</dt><dd>{{ formatDate(channel.updated_at) }}</dd></div></dl><details v-if="playAddresses.length" class="detail-raw-card mt-4"><summary><Link2 />查看全部播放地址（{{ playAddresses.length }}）</summary><div class="technical-link-list"><a v-for="item in playAddresses" :key="item.url" :href="item.url" target="_blank" rel="noreferrer"><strong>{{ item.label }}</strong><span class="mono">{{ item.url }}</span></a></div></details></article>
 

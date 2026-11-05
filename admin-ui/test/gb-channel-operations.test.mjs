@@ -115,7 +115,7 @@ test("A.2.4 标准设备信息、目录和录像查询在管理端可用", () =>
 test("抓拍和升级会话均可查询最终状态", () => {
   assert.match(apiSource, /snapshotState:.*\/snapshot\/\$\{encodeURIComponent\(sessionId\)\}\/status/);
   assert.match(apiSource, /upgradeDeviceState:.*\/upgrade\/\$\{encodeURIComponent\(sessionId\)\}/);
-  assert.match(viewSource, /api\.snapshotState\(channel\.value\.id, snapshotSessionId\.value\)/);
+  assert.match(viewSource, /captureWorkspace\.value\?\.capture\(\)/);
   assert.match(viewSource, /api\.upgradeDeviceState\(channel\.value\.id, upgradeSessionId\.value\)/);
 });
 

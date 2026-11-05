@@ -2,7 +2,7 @@ import { http } from './http'
 import { recordingMediaPath } from '../utils/recordings'
 import type { PTZProbeOutput, PTZBatchProbeOutput } from '../types/api'
 import type {
-  ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord, MediaInspectionResource, MediaInspectionResult,
+  CaptureRecord, CaptureSchedule, SnapshotConfig, ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord, MediaInspectionResource, MediaInspectionResult,
   ApiChannel as Channel, DeviceExt, GbMetrics, GBHistoryDownloadState, GBHistoryStartOutput, GBOperationOutput, GBSnapshotState, GBSubscriptionState, GBUpgradeOutput, GBUpgradeState, HealthInfo, MediaServer, MonthlyStats,
   CascadePlatformStatus, PlayResult, SipAccessInfo, SipConfig, SipSecretStatus, TimelineRange, VersionCheck, Zone,
   ResourceStats, SnapshotRefreshOutput, AnnexGAlarmAudit, AnnexGDefenceAudit, AnnexGDefenceState, AnnexGAuditPage,
@@ -109,6 +109,15 @@ export const api = {
   bindChannelMediaServer: (id: string, mediaServerId: string) => http.put<ApiChannel>(`/channels/${encodeURIComponent(id)}/media_server`, { media_server_id: mediaServerId }),
   deleteChannel: (id: string) => http.delete<ApiChannel>(`/channels/${encodeURIComponent(id)}`),
   play: (id: string) => http.post<PlayResult>(`/channels/${encodeURIComponent(id)}/play`),
+  createCapture: (id: string) => http.post<CaptureRecord>(`/channels/${encodeURIComponent(id)}/captures`, {}),
+  captures: (params?: ListParams) => http.get<ApiPage<CaptureRecord>>('/captures', { params }),
+  capture: (id: string) => http.get<CaptureRecord>(`/captures/${encodeURIComponent(id)}`),
+  captureImage: (id: string, download = false, version?: string) => withQuery(withToken(apiUrl(`/captures/${encodeURIComponent(id)}/image`)), { download: String(download), _v: version || '' }),
+  renameCapture: (id: string, name: string) => http.put<CaptureRecord>(`/captures/${encodeURIComponent(id)}`, { name }),
+  deleteCapture: (id: string) => http.delete(`/captures/${encodeURIComponent(id)}`),
+  captureSchedule: (id: string) => http.get<CaptureSchedule>(`/channels/${encodeURIComponent(id)}/capture_schedule`),
+  saveCaptureSchedule: (id: string, body: CaptureSchedule) => http.put<CaptureSchedule>(`/channels/${encodeURIComponent(id)}/capture_schedule`, body),
+  updateSnapshotConfig: (body: SnapshotConfig) => http.put<SnapshotConfig>('/configs/info/snapshot', body),
   snapshot: (id: string, body: Record<string, unknown> = {}) => http.post<SnapshotRefreshOutput>(`/channels/${encodeURIComponent(id)}/snapshot`, body),
   snapshotState: (id: string, sessionId: string) => http.get<GBSnapshotState>(`/channels/${encodeURIComponent(id)}/snapshot/${encodeURIComponent(sessionId)}/status`),
   snapshotImage: (id: string, cacheBust?: number) => withQuery(
@@ -153,7 +162,7 @@ export const api = {
   mediaServer: (id: string) => http.get<MediaServer>(`/media_servers/${encodeURIComponent(id)}`),
   inspectMediaServer: (id: string, resource: MediaInspectionResource, params?: ListParams) => http.get<MediaInspectionResult>(`/media_servers/${encodeURIComponent(id)}/inspect/${resource}`, { params }),
   editMediaServer: (id: string, body: Record<string, unknown>) => http.put<MediaServer>(`/media_servers/${encodeURIComponent(id)}`, body),
-  configInfo: () => http.get<{ sip?: SipConfig; sip_secrets?: SipSecretStatus; access_info?: SipAccessInfo; media?: { stream_none_reader_delay_seconds: number } }>('/configs/info'),
+  configInfo: () => http.get<{ sip?: SipConfig; sip_secrets?: SipSecretStatus; access_info?: SipAccessInfo; snapshot?: SnapshotConfig; media?: { stream_none_reader_delay_seconds: number } }>('/configs/info'),
   updateMedia: (seconds: number) => http.put('/configs/info/media', { stream_none_reader_delay_seconds: seconds }),
   updateSip: (body: SipConfig) => http.put('/configs/info/sip', body),
   cascadeStatuses: () => http.get<{ items?: CascadePlatformStatus[] }>('/gb28181/cascade/status'),

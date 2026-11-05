@@ -15,6 +15,7 @@ import {
   ShieldAlert,
 } from "@lucide/vue";
 import { api, apiUrl, errorMessage } from "../services/api";
+import { goroutineMetric } from "../utils/runtimeMetrics";
 import type {
   ApiMetrics,
   HealthInfo,
@@ -32,6 +33,7 @@ const loading = ref(false);
 const loadError = ref("");
 const health = ref<HealthInfo>({});
 const metrics = ref<ApiMetrics>({});
+const goroutines = computed(() => goroutineMetric(metrics.value));
 const stats = ref<ResourceStats>({});
 const media = ref<MediaServer[]>([]);
 const latest = (items?: { used?: number; up?: number; down?: number }[]) =>
@@ -289,8 +291,8 @@ onMounted(load);
           </div>
           <div class="health-row">
             <span>协程</span>
-            <span class="health-note">当前运行数量</span>
-            <strong>{{ metrics.goroutines || 0 }}</strong>
+            <span class="health-note" :title="goroutines.sampled && goroutines.time ? `采样于 ${goroutines.time}` : undefined">{{ goroutines.sampled ? "最近采样数量" : "当前运行数量" }}</span>
+            <strong>{{ goroutines.count ?? "—" }}</strong>
           </div>
           <div class="health-row">
             <span>GC 次数</span>

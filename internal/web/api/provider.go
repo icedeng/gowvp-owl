@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/gowvp/owl/internal/adapter/rtmpadapter"
 	"github.com/gowvp/owl/internal/adapter/rtspadapter"
 	"github.com/gowvp/owl/internal/conf"
+	"github.com/gowvp/owl/internal/core/capture"
 	"github.com/gowvp/owl/internal/core/event"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/ipc/store/ipccache"
@@ -98,11 +100,16 @@ func NewHTTPHandler(uc *Usecase) http.Handler {
 		web.SetupPProf(g, &cfg.HTTP.PProf.AccessIps) // 设置 Pprof 监控
 	}
 
+	uc.GB28181API.captures = capture.New(uc.DB, filepath.Join(uc.Conf.ConfigDir, "cover", "captures"))
 	setupRouter(g, uc) // 设置路由处理函数
 	// 将 SIP 层 GB 报警上报桥接到事件中心，统一落库到 events 表。
 	setupGBAlarmBridge(uc)
 	uc.Version.RecordVersion()
-	return setupOpenPlatform(g, uc)
+	handler := setupOpenPlatform(g, uc)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); uc.GB28181API.captures.Run(ctx, uc.GB28181API.runCapture) }()
+	return &captureHandler{Handler: handler, cancel: cancel, done: done}
 }
 
 // setupGBAlarmBridge 注册 GB 报警回调，并把报警转成标准事件记录。

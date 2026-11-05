@@ -22,6 +22,7 @@ const items = [
   { label: '管理 RTSP 拉流', hint: '资源管理', path: '/pull-streams', icon: RadioTower },
   { label: '检查媒体节点', hint: '平台运维', path: '/media-servers', icon: Server },
   { label: '查看系统状态', hint: '资源与 API 指标', path: '/system-status', icon: Activity },
+  { label: '管理抓拍图片', hint: '抓拍设置 / 图片记录', path: '/snapshot-settings', icon: Camera },
   { label: '调整播放器参数', hint: '协议 / 解码 / 缓冲', path: '/player-settings', icon: MonitorCog },
   { label: '查看国标能力', hint: '2011 / 2014 / 2016 / 2022', path: '/gb28181-capabilities', icon: ShieldEllipsis },
   { label: '查看级联平台', hint: '上级平台注册与版本协商', path: '/gb28181-cascade', icon: Network },

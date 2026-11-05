@@ -2,6 +2,7 @@
 package ipcdb
 
 import (
+	"github.com/gowvp/owl/internal/core/capture"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"gorm.io/gorm"
 )
@@ -62,6 +63,8 @@ func (d DB) AutoMigrate(ok bool) DB {
 		new(ipc.Channel),
 		new(ipc.GBTaskStateRecord),
 		new(ipc.GBCascadeTaskRouteRecord),
+		new(capture.Record),
+		new(capture.Schedule),
 	); err != nil {
 		panic(err)
 	}

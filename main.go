@@ -102,8 +102,8 @@ func main() {
 	}
 
 	// 如果需要执行表迁移，递增此版本号和表更新说明
-	versionapi.DBVersion = "0.0.28"
-	versionapi.DBRemark = "gb28181 device heartbeat and register history"
+	versionapi.DBVersion = "0.0.29"
+	versionapi.DBRemark = "persistent channel captures and capture schedules"
 
 	app.Run(&bc)
 }

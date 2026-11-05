@@ -33,6 +33,7 @@ const router = createRouter({
         { path: 'open-platform', name: 'open-platform', component: () => import('../views/OpenPlatformView.vue'), meta: { title: '开放平台', group: '平台运维' } },
         { path: 'open-platform/apps/:id', name: 'open-platform-detail', component: () => import('../views/OpenPlatformView.vue'), meta: { title: '应用详情', group: '平台运维' } },
         { path: 'system-status', name: 'system-status', component: () => import('../views/SystemStatusView.vue'), meta: { title: '系统状态', group: '平台运维' } },
+        { path: 'snapshot-settings', name: 'snapshot-settings', component: () => import('../views/SnapshotSettingsView.vue'), meta: { title: '抓拍设置', group: '平台运维' } },
         { path: 'player-settings', name: 'player-settings', component: () => import('../views/PlayerSettingsView.vue'), meta: { title: '播放器设置', group: '平台运维' } },
         { path: 'sip-settings', name: 'sip-settings', component: () => import('../views/SipSettingsView.vue'), meta: { title: 'SIP 设置', group: '平台运维' } },
         { path: 'gb28181-capabilities', name: 'gb28181-capabilities', component: () => import('../views/GBProtocolCapabilitiesView.vue'), meta: { title: '国标能力', group: '平台运维' } },

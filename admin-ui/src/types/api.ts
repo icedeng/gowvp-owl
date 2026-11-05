@@ -534,7 +534,8 @@ export interface ApiMetrics {
   total_responses?: number
   request_top10?: { Key?: string; Value?: number; key?: string; value?: number }[]
   status_code_top10?: { Key?: string; Value?: number; key?: string; value?: number }[]
-  goroutines?: number
+  goroutines?: number | { time?: string; num?: number }[]
+  goroutine_count?: number
   num_gc?: number
   sys_alloc?: number
   start_at?: string
@@ -645,4 +646,32 @@ export interface ApiErrorBody {
   reason?: string
   trace_id?: string
   details?: unknown
+}
+
+export interface SnapshotConfig {
+  upload_timeout_seconds: number
+  ffmpeg_concurrency: number
+}
+
+export interface CaptureRecord {
+  id: string
+  channel_id: string
+  name: string
+  state: 'queued' | 'running' | 'succeeded' | 'failed' | 'deleting'
+  source: 'manual' | 'schedule'
+  session_id?: string
+  method: string
+  error?: string
+  created_at: string
+  captured_at?: string
+  updated_at: string
+}
+
+export interface CaptureSchedule {
+  channel_id: string
+  enabled: boolean
+  interval_seconds: number
+  next_run_at?: string
+  last_run_at?: string
+  last_error?: string
 }

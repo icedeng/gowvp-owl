@@ -313,6 +313,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .row-title.compact > span:last-child { min-width: 0; }
 .row-title.compact strong, .row-title.compact small { white-space: normal; overflow-wrap: anywhere; }
 .stacked-value { min-width: 0; display: grid; gap: 3px; }
+.gb-device-data-table .stacked-value > .status { justify-self: start; }
 .stacked-value strong, .stacked-value small { display: block; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
 .stacked-value strong { color: var(--ink-strong); font-size: 12px; }
 .stacked-value small { color: var(--muted); font-size: 11px; }
@@ -806,9 +807,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .player-settings-section { min-width: 0; }
 .player-watermark-section, .player-settings-savebar { grid-column: 1 / -1; }
 .player-settings-section .card-head > svg { width: 20px; height: 20px; color: var(--blue); }
-.player-settings-summary { display: grid; align-content: center; gap: 2px; min-height: 76px; padding: 12px; color: white; background: #172944; border: 1px solid #10213b; border-radius: 8px; }
-.player-settings-summary span, .player-settings-summary small { color: #b7c5d9; font-size: 11px; }
-.player-settings-summary strong { color: white; font: 700 25px/1 "Barlow Condensed", sans-serif; }
+.player-settings-summary { display: grid; align-content: center; gap: 2px; min-height: 76px; padding: 12px; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.player-settings-summary span, .player-settings-summary small { color: var(--muted); font-size: 11px; }
+.player-settings-summary strong { color: var(--ink-strong); font: 700 25px/1 "Barlow Condensed", sans-serif; }
 .player-toggle-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 18px; }
 .player-toggle-grid .toggle-row { min-width: 0; }
 .player-toggle-grid .toggle-row strong, .player-debug-toggle strong { display: block; color: var(--ink-strong); font-size: 12px; }

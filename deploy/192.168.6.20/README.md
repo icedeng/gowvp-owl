@@ -2,7 +2,7 @@
 
 用于 `192.168.6.20`（EasyTier：`10.144.0.20`），部署设计和实施记录见 [服务器部署方案](../server-192.168.6.20.md)。本目录不含真实凭据或业务数据库。
 
-当前版本（2026-11-05）：Owl 服务镜像与后端版本统一为 `v2.3.0`，新增媒体节点六分区只读管理和 14 类查询，提供完整快照搜索、筛选、分页、全部字段与独立刷新，不提供 ZLM 配置操作。此前已上线的 PTZ、录像工作区、统一 StreamPlayer / EasyPlayer Pro、实际推流状态、侧栏和水印开关修复全部保留并纳入 Git。正式版本从根目录 `VERSION` 读取，采用 `v主版本.次版本.修订号`。ZLM 保持 `v1-20261103-manualrecord1`，独立 PostgreSQL 17.11（`owl-v1-postgres:17-20261104`）。设备、通道、录像索引、心跳和注册历史使用 PostgreSQL；录像与通道复合索引、完整录像查询、默认手动录像、媒体 `30000-50000/tcp+udp`、无人观看默认 180 秒断流均保留。发布证据和回滚见 [v2.3.0 发布记录](../releases/v2.3.0.md)。日常启动命令：
+当前版本（2026-11-05）：Owl 服务镜像与后端版本统一为 `v2.4.0`，新增永久抓拍历史、图片管理与每通道定时抓拍，上传等待默认 120 秒、FFmpeg 默认并发 2 路，可在“平台运维 → 抓拍设置”修改，数据库版本 `0.0.29`；SIP 设置分段标题增加统一样式。国标设备状态标签按内容宽度显示，消除横向拉伸空白；实时监控通道资源标题与折叠图标固定同排、统计独占下一行，顶部入口区分展开和收起；SIP 页内菜单随页面滚动停靠顶栏下方，矮窗口支持菜单内部纵向滚动，窄屏保留横向导航；页内定位、选中高亮和分区顺序修复均保留。实时协程数量、浅色播放器摘要、媒体节点六分区只读管理和 14 类查询、PTZ、录像工作区、统一 StreamPlayer / EasyPlayer Pro、实际推流状态等功能保留。正式版本从根目录 `VERSION` 读取，采用 `v主版本.次版本.修订号`。ZLM 保持 `v1-20261103-manualrecord1`，独立 PostgreSQL 17.11（`owl-v1-postgres:17-20261104`）。设备、通道、录像索引、心跳和注册历史使用 PostgreSQL；录像与通道复合索引、完整录像查询、默认手动录像、媒体 `30000-50000/tcp+udp`、无人观看默认 180 秒断流均保留。发布证据和回滚见 [v2.4.0 发布记录](../releases/v2.4.0.md)。日常启动命令：
 
 ```bash
 cd /www2/gowvp-v1
@@ -55,7 +55,7 @@ curl -fsS http://192.168.6.20:15123/health
 docker compose -p owl-v1 --env-file .env -f docker-compose.yml restart gowvp
 ```
 
-更新镜像前完成备份，导入对应镜像，再修改 `.env` 标签，执行 `./run.sh up`。`OWL_SERVICE_IMAGE_TAG`、`OWL_ZLM_IMAGE_TAG` 优先于 `OWL_IMAGE_TAG`；当前分别为 `v2.3.0`、`v1-20261103-manualrecord1`。PostgreSQL 通过独立变量 `OWL_POSTGRES_IMAGE` 固定版本，升级数据库大版本需单独执行迁移，不能直接换标签。不要使用通用 `deploy.sh release/up` 启动本服务器，不要重新执行首次准备脚本。
+更新镜像前完成备份，导入对应镜像，再修改 `.env` 标签，执行 `./run.sh up`。`OWL_SERVICE_IMAGE_TAG`、`OWL_ZLM_IMAGE_TAG` 优先于 `OWL_IMAGE_TAG`；当前分别为 `v2.4.0`、`v1-20261103-manualrecord1`。PostgreSQL 通过独立变量 `OWL_POSTGRES_IMAGE` 固定版本，升级数据库大版本需单独执行迁移，不能直接换标签。不要使用通用 `deploy.sh release/up` 启动本服务器，不要重新执行首次准备脚本。
 
 此前 apibasefix1 仅更新前端，修复开发环境 `/api` 代理前缀混入生产构建、导致开放平台和系统状态等接口 404 的问题。`admin-ui/.env.production` 将生产默认 API 地址设为同源 `/`，保留本地开发配置；生产构建需检查编译后的实际 API base，再用管理员身份检查页面接口，不能只检查静态文件和容器健康。无后端或数据库修改，ZLM、PG 容器未重启。交付目录为 `packages/apibasefix1-20261104/`，更新前环境配置和运行信息位于 `backups/before-apibasefix1-20261104/`。紧急回滚可恢复最近正常的 `v1-20261104-openplatformdocs1` 并仅更新 gowvp；不要回退到带有错误代理前缀的 openplatformui1，不恢复数据库或更换密钥。
 
@@ -165,3 +165,7 @@ ZLM 持久化配置 `data/zlm-config/config.ini` 中，`[http]` 的 `allow_ip_ra
 发布 `v1-20261104-channeltabs1`：通道详情Tab与内容统一连续白底外框，桌面16px/窄屏12px内边距。生产构建、519静态文件及6项HTTP资源检查通过，后端/PG/ZLM保持。包目录 `packages/channeltabs1-20261104/`，备份 `backups/before-channeltabs1-20261104/`；回滚恢复本轮备份.env后仅重建gowvp至historymodal1。实际页面由人工验收。
 
 发布 `v1-20261104-recordworkspace1`：云端录像与设备本地录像分区，月历目录/当天时段及点击推流回放，关闭停止会话；下载和自定义参数按需展开。前后端独立构建排除在途PTZ修改，目标Go/3项日期路径测试、生产构建及519静态文件/6项HTTP资源检查通过，PG/ZLM保持。包 `packages/recordworkspace1-20261104/`，备份 `backups/before-recordworkspace1-20261104/`；回滚至channeltabs1。真实设备回放由人工验收。
+
+## 永久抓拍与定时计划（v2.4.0）
+
+管理入口为“平台运维 → 抓拍设置”和通道“抓拍与计划”。上传等待默认 120 秒、FFmpeg 并发默认 2 路，支持在线保存。抓拍图片存于 `/www/gowvp-data/cover/captures/<UUID>/年月日时分秒.jpg`，使用现有大盘封面挂载；永久保留，界面支持预览、下载、重命名及同时删除数据库记录和图片文件。定时计划默认关闭，初始间隔 300 秒，最小 10 秒，重启保留且不补拍停机积压。数据库迁移、只读接口及鉴权核验通过，真机抓拍与计划执行待人工验收。发布与回滚详见 [v2.4.0 发布记录](../releases/v2.4.0.md)。

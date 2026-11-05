@@ -234,7 +234,10 @@
   Type = 'zlm'
   # 设备直接上传抓拍图片的公网/局域网回调基础地址，按需填写。
   GBSnapshotBaseURL = ''
+  # 实时流取帧并发上限，默认 2 路；管理端“抓拍设置”可在线修改（1–32）。
   GBSnapshotFFmpegConcurrency = 2
+  # 2022 设备接受抓拍指令后等待图片上传的时间；管理端“抓拍设置”可在线修改。
+  GBSnapshotUploadTimeoutSeconds = 120
   # ZLM 使用宿主机网络，回调宿主机上发布的管理端口。
   WebHookIP = '192.168.1.100'
   # 30000 用于 WebRTC，30001-50000 用于国标 RTP/RTCP；TCP/UDP 均允许所有来源。

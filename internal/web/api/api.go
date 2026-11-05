@@ -150,6 +150,7 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 	statapi.Register(r)
 	registerZLMWebhookAPI(r, uc.WebHookAPI)
 	registerGB28181(r, uc.GB28181API, auth)
+ registerCaptures(r, uc.GB28181API, auth)
 	uc.ConfigAPI.uc = uc
 	registerConfig(r, uc.ConfigAPI, auth)
 	registerSms(r, uc.SMSAPI, auth)
@@ -204,7 +205,8 @@ type getMetricsAPIOutput struct {
 	TotalResponses   int64  `json:"total_responses"`    // 总响应数
 	RequestTop10     []KV   `json:"request_top10"`      // 请求TOP10
 	StatusCodeTop10  []KV   `json:"status_code_top10"`  // 状态码TOP10
-	Goroutines       any    `json:"goroutines"`         // 协程数量
+	Goroutines       any    `json:"goroutines"`         // 协程历史采样
+	GoroutineCount   int    `json:"goroutine_count"`    // 当前运行协程数量
 	NumGC            uint32 `json:"num_gc"`             // gc 次数
 	SysAlloc         uint64 `json:"sys_alloc"`          // 内存占用
 	StartAt          string `json:"start_at"`           // 运行时间
@@ -237,6 +239,7 @@ func (uc *Usecase) getMetricsAPI(_ *gin.Context, _ *struct{}) (*getMetricsAPIOut
 		RequestTop10:     u,
 		StatusCodeTop10:  s,
 		Goroutines:       g(),
+		GoroutineCount:   runtime.NumGoroutine(),
 		NumGC:            stats.NumGC,
 		SysAlloc:         stats.Sys,
 		StartAt:          startRuntime.Format(time.DateTime),

@@ -892,16 +892,17 @@ type SIPLog struct {
 }
 
 type Media struct {
-	IP                           string `comment:"媒体服务器 IP"`
-	HTTPPort                     int    `comment:"媒体服务器 HTTP 端口"`
-	Secret                       string `comment:"媒体服务器密钥"`
-	Type                         string `comment:"媒体服务器类型 zlm/lalmax"`
-	GBSnapshotBaseURL            string `comment:"GB28181 抓拍图片回传基础地址，优先于 WebHookIP"`
-	GBSnapshotFFmpegConcurrency  int    `comment:"GB28181 FFmpeg 抓拍最大并发数，0 表示使用默认值 2"`
-	WebHookIP                    string `comment:"用于流媒体 webhook 回调"`
-	RTPPortRange                 string `comment:"媒体服务器 RTP 端口范围"`
-	StreamNoneReaderDelaySeconds int    `comment:"无人观看自动断流等待秒数，默认180；手动录像期间不自动断流"`
-	SDPIP                        string `comment:"媒体服务器 SDP IP"`
+	IP                             string `comment:"媒体服务器 IP"`
+	HTTPPort                       int    `comment:"媒体服务器 HTTP 端口"`
+	Secret                         string `comment:"媒体服务器密钥"`
+	Type                           string `comment:"媒体服务器类型 zlm/lalmax"`
+	GBSnapshotBaseURL              string `comment:"GB28181 抓拍图片回传基础地址，优先于 WebHookIP"`
+	GBSnapshotFFmpegConcurrency    int    `comment:"实时流 FFmpeg 抓拍最大并发数，0 使用默认2，可在管理端抓拍设置中修改"`
+	GBSnapshotUploadTimeoutSeconds int    `comment:"GB28181-2022 设备图片上传等待秒数，0 使用默认120，可在抓拍设置中修改"`
+	WebHookIP                      string `comment:"用于流媒体 webhook 回调"`
+	RTPPortRange                   string `comment:"媒体服务器 RTP 端口范围"`
+	StreamNoneReaderDelaySeconds   int    `comment:"无人观看自动断流等待秒数，默认180；手动录像期间不自动断流"`
+	SDPIP                          string `comment:"媒体服务器 SDP IP"`
 }
 
 type Duration time.Duration

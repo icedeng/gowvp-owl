@@ -11,7 +11,8 @@ import {
   LoaderCircle,
   Mic,
   Minus,
-  PanelLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelRight,
   Plus,
   Radio,
@@ -25,6 +26,8 @@ import { api, collectPages, errorMessage, typeLabel } from "../services/api";
 import type { ApiChannel, ApiDevice, PlayResult } from "../types/api";
 import { useUiStore } from "../stores/ui";
 import { canAttemptPTZ, ptzCapabilityLabel } from "../utils/ptz";
+import SnapshotWorkspace from "../components/SnapshotWorkspace.vue";
+import type { CaptureRecord } from "../types/api";
 import StreamPlayer from "../components/StreamPlayer.vue";
 
 const ui = useUiStore();
@@ -54,6 +57,9 @@ const channelTotal = ref(0);
 const loadedChannelCount = ref(0);
 const playResults = ref<Record<string, PlayResult>>({});
 const snapshots = ref<Record<string, string>>({});
+const captureWorkspace = ref<InstanceType<typeof SnapshotWorkspace>>();
+const captureChannel = ref<ApiChannel | null>(null);
+const captureRegion = ref<HTMLElement>();
 const collapsedResourceGroups = ref<Set<string>>(new Set());
 const CHANNEL_PAGE_SIZE = 200;
 let searchTimer: number | undefined;
@@ -303,19 +309,16 @@ async function startPlay(channel = selectedChannel.value) {
 
 async function snapshot() {
   if (!selectedChannel.value || actionLoading.value) return;
-  const channelID = selectedChannel.value.id;
-  actionLoading.value = "抓拍";
-  try {
-    const { data } = await api.snapshot(channelID);
-    snapshots.value[channelID] =
-      data.link ||
-      api.snapshotImage(channelID, Date.now());
-    ui.toast(`快照已刷新${data.method ? ` · ${data.method}` : ""}`);
-  } catch (cause) {
-    ui.toast(errorMessage(cause, "抓拍失败"));
-  } finally {
-    actionLoading.value = "";
-  }
+  captureChannel.value = selectedChannel.value;
+  await nextTick();
+  captureRegion.value?.scrollIntoView({ behavior: "smooth", block: "start" });
+  await captureWorkspace.value?.capture();
+}
+function captureSaved(row: CaptureRecord) {
+  snapshots.value[row.channel_id] = api.captureImage(row.id, false, row.updated_at);
+}
+function refreshCaptureCover() {
+  if (captureChannel.value) snapshots.value[captureChannel.value.id] = api.snapshotImage(captureChannel.value.id, Date.now());
 }
 
 function openVoiceControls() {
@@ -390,7 +393,7 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
         <p class="page-desc">选择窗口后切换通道，点击画面开始预览。</p>
       </div>
       <div class="head-actions">
-        <button ref="resourceToggle" class="btn" type="button" :aria-expanded="resourcesOpen" aria-controls="live-resources" @click="resourcesOpen = !resourcesOpen"><PanelLeft aria-hidden="true" />通道资源</button>
+        <button ref="resourceToggle" class="btn" type="button" :aria-expanded="resourcesOpen" aria-controls="live-resources" :aria-label="resourcesOpen ? '收起通道资源' : '展开通道资源'" :title="resourcesOpen ? '收起通道资源' : '展开通道资源'" @click="resourcesOpen = !resourcesOpen"><PanelLeftClose v-if="resourcesOpen" aria-hidden="true" /><PanelLeftOpen v-else aria-hidden="true" />通道资源</button>
         <div class="segmented" aria-label="分屏布局">
           <button
             v-for="item in ['1', '4', '9', '16']"
@@ -413,15 +416,13 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
     </div>
     <section v-if="channels.length || previewSlots.length || query" class="live-monitor-layout" :class="{ 'resources-hidden': !resourcesOpen, 'has-controls': controlsOpen && selectedChannel }">
       <aside v-if="resourcesOpen" id="live-resources" class="card resource-panel" aria-label="通道资源">
-        <div class="card-head">
-          <div>
-            <h2 class="card-title">通道资源</h2>
-            <p class="card-sub">
+        <div class="card-head live-resource-heading">
+          <h2 class="card-title">通道资源</h2>
+          <button class="icon-btn" type="button" aria-label="收起通道资源" title="收起通道资源" aria-controls="live-resources" :aria-expanded="resourcesOpen" @click="closeResources"><PanelLeftClose aria-hidden="true" /></button>
+          <p class="card-sub">
               {{ channels.filter((item) => item.is_online).length }} 路在线 /
               已加载 {{ loadedChannelCount }} / {{ channelTotal }} 路
-            </p>
-          </div>
-          <button class="icon-btn" type="button" aria-label="收起通道资源" @click="closeResources"><X aria-hidden="true" /></button>
+          </p>
         </div>
         <label class="field mb-3"
           ><Search /><input
@@ -553,7 +554,7 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
               v-if="channel"
               :key="channel.id"
               :result="playResults[channel.id]"
-              :poster="snapshots[channel.id]"
+              :poster="snapshots[channel.id] || api.snapshotImage(channel.id)"
               :muted="muted"
               :autoplay="Boolean(playResults[channel.id])"
               :loading="previewLoadingId === channel.id"
@@ -833,10 +834,15 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
         >
       </template>
     </div>
+    <section v-if="captureChannel" ref="captureRegion" class="card form-section live-capture-region" aria-label="通道抓拍管理">
+      <div class="card-head"><h2 class="card-title">{{ captureChannel.name || captureChannel.id }} · 抓拍与计划</h2><button class="btn btn-sm" type="button" @click="captureChannel = null"><X />收起</button></div>
+      <SnapshotWorkspace ref="captureWorkspace" :channel-id="captureChannel.id" :disabled="!captureChannel.is_online" @captured="captureSaved" @changed="refreshCaptureCover" />
+    </section>
   </main>
 </template>
 
 <style scoped>
+.live-capture-region { margin-top: 20px; scroll-margin-top: 80px; }
 .live-page .page-head { gap: 12px; }
 .live-page .head-actions { gap: 8px; }
 .live-monitor-layout { display: grid; grid-template-columns: 228px minmax(0, 1fr); align-items: start; gap: 12px; }
@@ -846,6 +852,9 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
 .resource-panel { display: flex; flex-direction: column; max-height: max(320px, calc(100dvh - 188px)); }
 .live-page .icon-btn { flex-shrink: 0; }
 .resource-panel > .card-head, .resource-panel > .field { flex-shrink: 0; }
+.live-resource-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 4px; }
+.live-resource-heading .card-title { min-width: 0; }
+.live-resource-heading .card-sub { grid-column: 1 / -1; margin-top: 0; overflow-wrap: anywhere; }
 .resource-tree { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-color: var(--line-strong) transparent; }
 .resource-channel-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-item > svg, .tree-item > .slot-led { flex-shrink: 0; }

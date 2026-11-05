@@ -67,6 +67,7 @@ type SwaggerPlayResponse struct {
 
 // SwaggerConfigInfoOutput 是系统配置摘要响应。
 type SwaggerConfigInfoOutput struct {
+	Snapshot   snapshotConfig      `json:"snapshot"`
 	Media      mediaPlaybackConfig `json:"media"`       // 播放和无人观看断流配置，不含媒体密钥
 	SIP        SwaggerSIPConfig    `json:"sip"`         // 当前系统使用的 SIP 配置；对端密码和摘要 seed 已脱敏
 	SIPSecrets SIPSecretStatus     `json:"sip_secrets"` // 已脱敏密钥的“是否配置”状态
@@ -324,9 +325,11 @@ type SwaggerLoginKeyOutput struct {
 
 // SwaggerSnapshotLinkOutput 是快照刷新响应。
 type SwaggerSnapshotLinkOutput struct {
-	Link     string   `json:"link" example:"http://127.0.0.1:9900/channels/xxx/snapshot?token=xxx"` // 可直接访问的快照地址
-	Method   string   `json:"method" example:"ffmpeg"`                                              // 本次快照来源：cache/gb28181_device_upload/ffmpeg/zlm_get_snap/url/none
-	Attempts []string `json:"attempts"`                                                             // 抓拍尝试过程，成功走 fallback 时会包含前序失败原因
+	SessionID string   `json:"session_id,omitempty"`                                                 // 设备上传抓拍的国标会话 ID
+	CaptureID string   `json:"capture_id,omitempty"`                                                 // 永久抓拍记录 ID
+	Link      string   `json:"link" example:"http://127.0.0.1:9900/channels/xxx/snapshot?token=xxx"` // 可直接访问的快照地址
+	Method    string   `json:"method" example:"ffmpeg"`                                              // 本次快照来源：cache/gb28181_device_upload/ffmpeg
+	Attempts  []string `json:"attempts"`                                                             // 旧版本兼容字段，新抓拍任务不再串行试探回退
 }
 
 // SwaggerZonesResponse 是区域列表响应。

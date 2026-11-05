@@ -63,6 +63,22 @@ type EditableAnnexGSystem = SipAnnexGSystem & {
 
 const ui = useUiStore();
 const route = useRoute();
+const settingSections = [
+  { id: "base", label: "基础配置", icon: RadioTower },
+  { id: "security", label: "信令安全", icon: ShieldCheck },
+  { id: "history", label: "历史保留", icon: History },
+  { id: "media", label: "视频断流", icon: SquareStack },
+  { id: "direct-download", label: "2014 下载", icon: SquareStack },
+  { id: "annex-g", label: "附录 G", icon: KeyRound },
+  { id: "alarm-receivers", label: "本域接警终端", icon: ShieldAlert },
+  { id: "upstreams", label: "上级平台", icon: Network },
+];
+// RouterLink 默认只按路由判断选中状态，页内导航需要额外区分锚点。
+const activeSection = computed(() => (
+  settingSections.some((section) => route.hash === `#${section.id}`)
+    ? route.hash.slice(1)
+    : "base"
+));
 const loading = ref(false);
 const saving = ref(false);
 const mediaSaving = ref(false);
@@ -804,33 +820,26 @@ onUnmounted(() => {
     </div>
 
     <section class="settings-layout">
-      <nav class="card settings-nav">
-        <a class="active" href="#base"><RadioTower />基础配置</a>
-        <a href="#security"><ShieldCheck />信令安全</a>
-        <a href="#history"><History />历史保留</a>
-        <a href="#media"><SquareStack />视频断流</a>
-        <a href="#direct-download"><SquareStack />2014 下载</a>
-        <a href="#annex-g"><KeyRound />附录 G</a>
-        <a href="#alarm-receivers"><ShieldAlert />本域接警终端</a>
-        <a href="#upstreams"><Network />上级平台</a>
+      <nav class="card settings-nav" aria-label="SIP 设置页内导航">
+        <RouterLink
+          v-for="section in settingSections"
+          :key="section.id"
+          :to="{ name: 'sip-settings', query: route.query, hash: `#${section.id}` }"
+          :class="{ active: activeSection === section.id }"
+          :aria-current-value="activeSection === section.id ? 'location' : 'false'"
+        ><component :is="section.icon" aria-hidden="true" />{{ section.label }}</RouterLink>
       </nav>
 
-      <form class="card form-section" @submit.prevent="save">
-        <section id="media" class="mb-6">
-          <div class="card-head"><div><h2 class="card-title">无人观看自动断流</h2><p class="card-sub">关闭视频后等待指定时间，自动停止设备推流并释放媒体端口。手动录像期间保持推流。</p></div></div>
-          <label class="form-group"><span class="form-label">等待时间（秒）</span><input v-model.number="mediaIdleSeconds" class="input plain w-full" type="number" min="1" max="86400" step="1" required /></label>
-          <p class="card-sub mt-2">默认 180 秒。保存后用于新一轮无人观看计时；已开始的计时仍使用原值。</p>
-          <button class="btn btn-primary mt-4" type="button" :disabled="loading || Boolean(loadError) || mediaSaving || saving" @click="saveMedia"><LoaderCircle v-if="mediaSaving" class="animate-spin" /><Save v-else />保存断流设置</button>
-        </section>
-        <div class="card-head">
-          <div><h2 class="card-title">SIP 服务</h2><p class="card-sub">修改服务 ID、域或密码前请同步设备侧配置</p></div>
-          <RadioTower />
+      <form class="card form-section sip-settings-form" @submit.prevent="save">
+        <div id="base" class="sip-section-heading sip-section-target">
+          <RadioTower aria-hidden="true" />
+          <div class="sip-section-copy"><h2 class="sip-section-title">SIP 服务</h2><p class="sip-section-description">修改服务 ID、域或密码前请同步设备侧配置</p></div>
         </div>
         <div class="warning-box mb-4">
           <Info /><span>后端当前会返回完整配置。管理端不显示密码原值；留空时沿用当前值。</span>
         </div>
 
-        <div id="base" class="form-grid">
+        <div class="form-grid">
           <label class="form-group"><span class="form-label">对外宣告地址</span><input v-model.trim="form.host" class="input plain w-full mono" placeholder="为空时自动探测" /></label>
           <label class="form-group"><span class="form-label">监听端口</span><input v-model.number="form.port" class="input plain w-full" type="number" min="1" max="65535" required /></label>
           <label class="form-group"><span class="form-label">传输协议</span><input class="input plain w-full" value="TCP + UDP" disabled /></label>
@@ -839,7 +848,10 @@ onUnmounted(() => {
           <label class="form-group"><span class="form-label">新注册密码</span><input v-model="passwordInput" class="input plain w-full" type="password" autocomplete="new-password" placeholder="留空保留当前密码" /></label>
         </div>
 
-        <h3 id="security" class="section-title mt-6">安全与兼容</h3>
+        <div id="security" class="sip-section-heading sip-section-target">
+          <ShieldCheck aria-hidden="true" />
+          <div class="sip-section-copy"><h2 class="sip-section-title">安全与兼容</h2><p class="sip-section-description">配置 TLS、来源校验、消息鉴权与信令摘要策略。</p></div>
+        </div>
         <label class="toggle-row"><span><strong>启用 SIP-TLS</strong><small>需要同时配置证书与私钥</small></span><span class="switch"><input v-model="form.enable_tls" type="checkbox" /><span class="slider" /></span></label>
         <div v-if="form.enable_tls" class="form-grid mt-4">
           <label class="form-group"><span class="form-label">TLS 端口</span><input v-model.number="form.tls_port" class="input plain w-full" type="number" min="1" max="65535" /></label>
@@ -897,7 +909,10 @@ onUnmounted(() => {
           </div>
         </details>
 
-        <h3 id="history" class="section-title mt-6">心跳与注册历史</h3>
+        <div id="history" class="sip-section-heading sip-section-target">
+          <History aria-hidden="true" />
+          <div class="sip-section-copy"><h2 class="sip-section-title">心跳与注册历史</h2><p class="sip-section-description">按设备设置历史记录的条数和天数限制。</p></div>
+        </div>
         <div class="form-grid">
           <label class="form-group">
             <span class="form-label">每台设备最多保留</span>
@@ -912,8 +927,19 @@ onUnmounted(() => {
         </div>
         <div class="read-only mt-4">条数和天数限制同时生效。每次写入新记录时，后端会自动清理超出任一限制的旧记录。</div>
 
-        <div id="direct-download" class="section-heading mt-6">
-          <div><h3 class="section-title">2014 附录 O 裸 TCP 文件下载</h3><p class="form-help">设备直连落盘与上级平台级联可独立启用；两条链路共享设备白名单、地址范围、文件大小和并发限制。</p></div>
+        <section>
+          <div id="media" class="sip-section-heading sip-section-target">
+            <SquareStack aria-hidden="true" />
+            <div class="sip-section-copy"><h2 class="sip-section-title">无人观看自动断流</h2><p class="sip-section-description">关闭视频后等待指定时间，自动停止设备推流并释放媒体端口。手动录像期间保持推流。</p></div>
+          </div>
+          <label class="form-group"><span class="form-label">等待时间（秒）</span><input v-model.number="mediaIdleSeconds" class="input plain w-full" type="number" min="1" max="86400" step="1" required /></label>
+          <p class="card-sub mt-2">默认 180 秒。保存后用于新一轮无人观看计时；已开始的计时仍使用原值。</p>
+          <button class="btn btn-primary mt-4" type="button" :disabled="loading || Boolean(loadError) || mediaSaving || saving" @click="saveMedia"><LoaderCircle v-if="mediaSaving" class="animate-spin" /><Save v-else />保存断流设置</button>
+        </section>
+
+        <div id="direct-download" class="sip-section-heading sip-section-target">
+          <SquareStack aria-hidden="true" />
+          <div class="sip-section-copy"><h2 class="sip-section-title">2014 附录 O 裸 TCP 文件下载</h2><p class="sip-section-description">设备直连落盘与上级平台级联可独立启用；两条链路共享设备白名单、地址范围、文件大小和并发限制。</p></div>
           <span class="protocol-tag amber">默认关闭</span>
         </div>
         <label class="toggle-row"><span><strong>启用设备直连落盘</strong><small>Owl 连接白名单设备的 TCP 服务并将原始 PS 文件保存到本地</small></span><span class="switch"><input v-model="directDownload.enabled" type="checkbox" /><span class="slider" /></span></label>
@@ -954,8 +980,9 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div id="annex-g" class="section-heading mt-6">
-          <div><h3 class="section-title">附录 G 外部系统</h3><p class="form-help">管理 2011/2014/2016 综合接处警、卡口和城市信息系统的静态身份、来源范围、Digest 与 TLS 信任。</p></div>
+        <div id="annex-g" class="sip-section-heading sip-section-target">
+          <KeyRound aria-hidden="true" />
+          <div class="sip-section-copy"><h2 class="sip-section-title">附录 G 外部系统</h2><p class="sip-section-description">管理 2011/2014/2016 综合接处警、卡口和城市信息系统的静态身份、来源范围、Digest 与 TLS 信任。</p></div>
           <span class="protocol-tag amber">只读启动配置</span>
         </div>
         <div class="version-note mt-4"><ShieldAlert /><span>2022 已删除附录 G。本区仅展示当前进程的启动配置，不参与页面底部的在线保存。请编辑 <code>./configs/config.toml</code> 中的 <code>[Sip.AnnexG]</code>，核对密钥后重启 Owl；该接入默认只允许 SIP-TLS，真实外部系统的安全、性能与业务互通仍是上线阶段门。</span></div>
@@ -1005,10 +1032,11 @@ onUnmounted(() => {
         </div>
         <div class="audit-link-row mt-4"><span>业务记录、当前布控和历史审计在“国标能力”页面统一查询。</span><RouterLink class="btn btn-sm" to="/gb28181-capabilities">查看附录 G 审计</RouterLink></div>
 
-        <div id="alarm-receivers" class="section-heading mt-6">
-          <div>
-            <h3 class="section-title">本域接警 SIP 终端</h3>
-            <p class="form-help">按 GB/T 28181 9.4 将报警 MESSAGE 分发给已向本平台注册且在线的接警客户端；每个目标默认关闭并须显式授权报警源。</p>
+        <div id="alarm-receivers" class="sip-section-heading sip-section-target">
+          <ShieldAlert aria-hidden="true" />
+          <div class="sip-section-copy">
+            <h2 class="sip-section-title">本域接警 SIP 终端</h2>
+            <p class="sip-section-description">按 GB/T 28181 9.4 将报警 MESSAGE 分发给已向本平台注册且在线的接警客户端；每个目标默认关闭并须显式授权报警源。</p>
           </div>
           <button class="btn btn-sm" type="button" @click="addAlarmReceiver"><Plus />添加接警终端</button>
         </div>
@@ -1034,10 +1062,11 @@ onUnmounted(() => {
           </div>
         </fieldset>
 
-        <div id="upstreams" class="section-heading mt-6">
-          <div>
-            <h3 class="section-title">上级平台级联</h3>
-            <p class="form-help">本平台作为下级，通过 UDP、TCP 或经证书校验的 TLS 向上级平台注册、续期并发送 Keepalive。</p>
+        <div id="upstreams" class="sip-section-heading sip-section-target">
+          <Network aria-hidden="true" />
+          <div class="sip-section-copy">
+            <h2 class="sip-section-title">上级平台级联</h2>
+            <p class="sip-section-description">本平台作为下级，通过 UDP、TCP 或经证书校验的 TLS 向上级平台注册、续期并发送 Keepalive。</p>
           </div>
           <button class="btn btn-sm" type="button" @click="addUpstream"><Plus />添加上级平台</button>
         </div>
@@ -1163,16 +1192,56 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.section-heading,
+/* 用连续标题栏标明八个配置分区，避免与字段标签和内部配置组混淆。 */
+.sip-section-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 32px -14px 16px;
+  padding: 14px 16px;
+  background: var(--panel-3);
+  border-block: 1px solid var(--line);
+}
+
+.sip-settings-form > .sip-section-heading:first-child {
+  margin-top: -14px;
+  border-top: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.sip-section-heading > svg {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  color: var(--blue);
+}
+
+.sip-section-copy { flex: 1; min-width: 0; }
+.sip-section-title { margin: 0; color: var(--ink-strong); font-size: 16px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.sip-section-description { max-width: 74ch; margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.sip-section-heading > .btn, .sip-section-heading > .protocol-tag { flex: 0 0 auto; }
+
+/* 桌面菜单随页面滚动停靠顶栏下方，矮窗口内可独立滚动；窄屏沿用横向导航。 */
+@media (min-width: 901px) {
+  .settings-nav {
+    position: sticky;
+    top: calc(var(--topbar-height) + 16px);
+    align-self: start;
+    max-height: calc(100vh - var(--topbar-height) - 32px);
+    max-height: calc(100dvh - var(--topbar-height) - 32px);
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+}
+
 .cascade-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-}
-
-.section-heading .section-title {
-  margin: 0;
 }
 
 .cascade-card {
@@ -1283,8 +1352,9 @@ onUnmounted(() => {
   white-space: pre;
 }
 .audit-link-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; color: var(--muted); background: #f7f9fb; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
-#annex-g { scroll-margin-top: 80px; }
-#annex-g:focus { outline: 3px solid rgba(23, 104, 212, .18); outline-offset: 5px; border-radius: 4px; }
+/* 与页面已有的顶栏滚动留白配合，所有导航目标采用一致的定位和焦点反馈。 */
+.sip-section-target { scroll-margin-top: 16px; }
+.sip-section-target:focus { outline: 2px solid var(--blue); outline-offset: 5px; border-radius: var(--radius-sm); }
 
 .sr-only {
   position: absolute;
@@ -1299,7 +1369,11 @@ onUnmounted(() => {
 }
 
 @media (max-width: 720px) {
-  .section-heading,
+  .sip-section-heading { align-items: flex-start; column-gap: 10px; }
+  .sip-section-heading > svg { margin-top: 2px; }
+  .sip-section-copy { flex-basis: calc(100% - 30px); }
+  .sip-section-heading > .btn, .sip-section-heading > .protocol-tag { margin-left: 30px; }
+
   .cascade-card-head {
     align-items: stretch;
     flex-direction: column;

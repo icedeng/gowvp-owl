@@ -85,6 +85,26 @@ test("附录 G 配置锚点在异步加载后滚动并聚焦", () => {
   assert.match(sipSettingsView, /await focusRouteSection\(\)/);
 });
 
+test("SIP 页内菜单保留当前路由并按锚点选中，避免覆盖哈希路由", () => {
+  const navigation = sipSettingsView.match(/<nav class="card settings-nav"[\s\S]*?<\/nav>/)?.[0];
+  assert.ok(navigation);
+  assert.match(navigation, /<RouterLink\s/);
+  assert.match(navigation, /name: 'sip-settings', query: route\.query, hash: `#\$\{section\.id\}`/);
+  assert.match(navigation, /:class="\{ active: activeSection === section\.id \}"/);
+  assert.match(navigation, /:aria-current-value="activeSection === section\.id \? 'location' : 'false'"/);
+  assert.doesNotMatch(navigation, /href=["']#/);
+});
+
+test("SIP 菜单各锚点唯一且与内容顺序一致", () => {
+  const sections = [...sipSettingsView.matchAll(/\{ id: "([^"]+)", label:/g)].map((match) => match[1]);
+  const targets = [...sipSettingsView.matchAll(/id="([^"]+)" class="[^"]*sip-section-target/g)].map((match) => match[1]);
+  assert.equal(sections.length, 8);
+  assert.deepEqual(targets, sections);
+  for (const section of sections) {
+    assert.equal(sipSettingsView.split(`id="${section}"`).length - 1, 1);
+  }
+});
+
 test("附录 G 启动配置只读展示并提供可执行的配置文件路径与复制片段", () => {
   assert.match(sipSettingsView, /只读启动配置/);
   assert.match(sipSettingsView, /<fieldset class="static-config" disabled>/);

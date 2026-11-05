@@ -86,6 +86,7 @@ const nav: { label: string; collapsible?: boolean; items: NavItem[] }[] = [
       { name: "media-servers", label: "媒体节点", icon: Server },
       { name: "open-platform", label: "开放平台", icon: KeyRound },
       { name: "system-status", label: "系统状态", icon: Activity },
+      { name: "snapshot-settings", label: "抓拍设置", icon: Camera },
       { name: "player-settings", label: "播放器设置", icon: MonitorCog },
       { name: "sip-settings", label: "SIP 设置", icon: SlidersHorizontal },
       { name: "gb28181-capabilities", label: "国标能力", icon: ShieldEllipsis },

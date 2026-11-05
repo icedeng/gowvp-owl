@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gowvp/owl/internal/adapter/onvifadapter"
 	"github.com/gowvp/owl/internal/core/bz"
+	"github.com/gowvp/owl/internal/core/capture"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/recording"
 	"github.com/gowvp/owl/internal/core/sms"
@@ -36,6 +37,7 @@ import (
 	"github.com/ixugo/goddd/pkg/reason"
 	"github.com/ixugo/goddd/pkg/web"
 	"golang.org/x/sync/singleflight"
+	"gorm.io/gorm"
 )
 
 var ErrDevice = reason.NewError("ErrDevice", "设备错误")
@@ -103,6 +105,7 @@ func readCover(dataDir, channelID string) ([]byte, error) {
 }
 
 type IPCAPI struct {
+	captures                       *capture.Service
 	ipc                            ipc.Core
 	uc                             *Usecase
 	recordingCore                  recording.Core
@@ -119,10 +122,11 @@ func NewIPCAPI(bundle IPCBundle, recordingCore recording.Core) IPCAPI {
 }
 
 type snapshotCoordinator struct {
-	mu    sync.Mutex
-	limit int
-	sem   chan struct{}
-	tasks map[string]*snapshotTask
+	mu      sync.Mutex
+	limit   int
+	active  int
+	changed chan struct{}
+	tasks   map[string]*snapshotTask
 	// generations 使删除与刚进入 singleflight、尚未来得及登记的任务也能串行收敛。
 	generations map[string]uint64
 	blocked     map[string]struct{}
@@ -138,9 +142,9 @@ func newSnapshotCoordinator(limit int) *snapshotCoordinator {
 		limit = defaultSnapshotFFmpegConcurrency
 	}
 	return &snapshotCoordinator{
-		limit: limit,
-		sem:   make(chan struct{}, limit),
-		tasks: make(map[string]*snapshotTask), generations: make(map[string]uint64), blocked: make(map[string]struct{}),
+		limit:   limit,
+		changed: make(chan struct{}),
+		tasks:   make(map[string]*snapshotTask), generations: make(map[string]uint64), blocked: make(map[string]struct{}),
 	}
 }
 
@@ -231,24 +235,59 @@ func (c *snapshotCoordinator) allowTasks(channelIDs []string) {
 	}
 }
 
+func (c *snapshotCoordinator) setLimit(limit int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if limit < 1 {
+		limit = defaultSnapshotFFmpegConcurrency
+	}
+	c.limit = limit
+	if c.changed != nil {
+		close(c.changed)
+	}
+	c.changed = make(chan struct{})
+}
+
 func (c *snapshotCoordinator) acquire(ctx context.Context, limit int) (func(), int, error) {
 	if limit <= 0 {
 		limit = defaultSnapshotFFmpegConcurrency
 	}
 	c.mu.Lock()
-	if c.sem == nil || c.limit != limit {
-		c.limit = limit
-		c.sem = make(chan struct{}, limit)
+	if c.changed == nil {
+		c.changed = make(chan struct{})
 	}
-	sem := c.sem
-	activeLimit := c.limit
-	c.mu.Unlock()
-
-	select {
-	case sem <- struct{}{}:
-		return func() { <-sem }, activeLimit, nil
-	case <-ctx.Done():
-		return nil, activeLimit, ctx.Err()
+	if c.limit != limit {
+		c.limit = limit
+		close(c.changed)
+		c.changed = make(chan struct{})
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			c.mu.Unlock()
+			return nil, limit, err
+		}
+		if c.active < c.limit {
+			c.active++
+			c.mu.Unlock()
+			var once sync.Once
+			return func() {
+				once.Do(func() {
+					c.mu.Lock()
+					defer c.mu.Unlock()
+					c.active--
+					close(c.changed)
+					c.changed = make(chan struct{})
+				})
+			}, limit, nil
+		}
+		changed := c.changed
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, limit, ctx.Err()
+		case <-changed:
+		}
+		c.mu.Lock()
 	}
 }
 
@@ -260,10 +299,7 @@ func (a IPCAPI) snapshotCoordinator() *snapshotCoordinator {
 }
 
 func (a IPCAPI) snapshotFFmpegConcurrency() int {
-	if a.uc == nil || a.uc.Conf == nil || a.uc.Conf.Media.GBSnapshotFFmpegConcurrency <= 0 {
-		return defaultSnapshotFFmpegConcurrency
-	}
-	return a.uc.Conf.Media.GBSnapshotFFmpegConcurrency
+	return a.captureSettings().FFmpegConcurrency
 }
 
 func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
@@ -331,6 +367,9 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/snapshot", web.WrapH(api.refreshSnapshot)) // 图像抓拍（所有协议）
 		group.GET("/:id/snapshot", api.getSnapshot)                 // 获取图像（所有协议）
 		group.GET("/:id/snapshot/:session_id/status", web.WrapH(api.snapshotState))
+		group.POST("/:id/captures", web.WrapH(api.createCapture))
+		group.GET("/:id/capture_schedule", web.WrapH(api.getCaptureSchedule))
+		group.PUT("/:id/capture_schedule", web.WrapH(api.saveCaptureSchedule))
 		group.POST("/:id/zones", web.WrapH(api.addZone))             // 添加区域（所有协议）
 		group.GET("/:id/zones", web.WrapH(api.getZones))             // 获取区域（所有协议）
 		group.DELETE("/:id/zones/:name", web.WrapH(api.deleteZone))  // 删除区域（所有协议）
@@ -843,13 +882,35 @@ func (a IPCAPI) gbSnapshotUpload(c *gin.Context) {
 	}
 	if len(payload) > 0 {
 		detectedContentType := http.DetectContentType(payload)
-		if err := validateSnapshotImage(payload); err != nil {
+		if err := validateLegacySnapshotUpload(payload, coverKey); err != nil {
 			slog.WarnContext(c.Request.Context(), "discard invalid gb snapshot upload", "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID, "size", len(payload), "payload_type", payloadType, "content_type", detectedContentType, "err", err)
 			c.JSON(400, gin.H{"msg": "invalid snapshot image"})
 			return
 		}
-		if err := writeCover(a.uc.Conf.ConfigDir, coverKey, payload); err != nil {
-			slog.ErrorContext(c.Request.Context(), "write cover", "err", err, "cover_key", coverKey, "device_id", deviceID, "session_id", sessionID)
+		if _, uuidErr := uuid.Parse(coverKey); uuidErr == nil {
+			if a.captures == nil {
+				c.JSON(400, gin.H{"msg": "capture service unavailable"})
+				return
+			}
+			row, err := a.captures.Get(c.Request.Context(), coverKey)
+			if err != nil {
+				c.JSON(400, gin.H{"msg": "unknown or deleted capture"})
+				return
+			}
+			ch, err := a.ipc.GetChannel(c.Request.Context(), row.ChannelID)
+			if err != nil || ch.DeviceID != deviceID {
+				c.JSON(400, gin.H{"msg": "capture channel no longer exists"})
+				return
+			}
+			if err := a.captures.SetSession(c.Request.Context(), coverKey, sessionID); err != nil {
+				c.JSON(500, gin.H{"msg": "save capture session failed"})
+				return
+			}
+			if _, err := a.captures.Complete(c.Request.Context(), coverKey, payload, "gb28181_device_upload"); err != nil {
+				c.JSON(400, gin.H{"msg": err.Error()})
+				return
+			}
+		} else if err := writeCover(a.uc.Conf.ConfigDir, coverKey, payload); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"msg": "save snapshot failed"})
 			return
 		}
@@ -982,6 +1043,11 @@ func (a IPCAPI) delDevice(c *gin.Context, _ *struct{}) (any, error) {
 	if err != nil {
 		coordinator.allowTasks(channelIDs)
 		return nil, err
+	}
+	if a.captures != nil {
+		if err := a.captures.DisableSchedules(ctx, channelIDs); err != nil {
+			return nil, err
+		}
 	}
 	// 删除锁内的最终集合可能包含初次分页读取后新建的通道。
 	coordinator.cancelTasks(finalChannelIDs)
@@ -1398,6 +1464,11 @@ func (a IPCAPI) delChannel(c *gin.Context, _ *struct{}) (any, error) {
 	if err != nil {
 		coordinator.allowTasks([]string{channelID})
 		return nil, err
+	}
+	if a.captures != nil {
+		if err := a.captures.DisableSchedules(c.Request.Context(), []string{channelID}); err != nil {
+			return nil, err
+		}
 	}
 	if a.uc != nil && a.uc.Conf != nil {
 		if err := removeCovers(a.uc.Conf.ConfigDir, []string{channelID}); err != nil {
@@ -3203,86 +3274,23 @@ func (a IPCAPI) devicePTZProbe(c *gin.Context, in *ptzProbeInput) (any, error) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /channels/{id}/snapshot [post]
 func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotInput) (any, error) {
+	if a.captures == nil {
+		return nil, reason.ErrServer.WithMsg("抓拍服务不可用")
+	}
 	channelID, err := a.resolveChannelParamID(c)
 	if err != nil {
 		return nil, err
 	}
-
-	path := readCoverPath(a.uc.Conf.ConfigDir, channelID)
-	requestAt := time.Now()
-
-	token := c.GetString("token")
-
-	prefix := web.GetBaseURL(c.Request)
-	if v := c.Request.Header.Get("X-Forwarded-Prefix"); v != "" {
-		prefix = v
-	}
-	snapshotLink := func() string {
-		return fmt.Sprintf("%s%s?token=%s&_t=%d", prefix, channelSnapshotPath(c, channelID), token, requestAt.UnixMilli())
-	}
-	snapshotMethod := "none"
-	snapshotAttempts := make([]string, 0, 4)
-	snapshotSessionID := ""
-
-	// 获取文件的修改时间
-	fileInfo, err := os.Stat(path)
-	if err == nil && in.WithinSeconds > 0 {
-		if fileInfo.ModTime().Unix() > time.Now().Unix()-in.WithinSeconds {
-			return gin.H{"link": snapshotLink(), "method": "cache"}, nil
+	if in.WithinSeconds > 0 {
+		row, err := a.captures.Latest(c.Request.Context(), channelID)
+		if err == nil && row.CapturedAt != nil && time.Since(*row.CapturedAt) < time.Duration(in.WithinSeconds)*time.Second {
+			return gin.H{"link": web.GetBaseURL(c.Request) + "/captures/" + row.ID + "/image?token=" + c.GetString("token"), "method": "cache"}, nil
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, captureError(err)
 		}
 	}
-
-	channel, err := a.ipc.GetChannel(c.Request.Context(), channelID)
-	if err != nil {
-		return nil, err
-	}
-	if channel.GetType() == ipc.TypeGB28181 {
-		// GB28181 优先走 9.14 抓拍流程，由设备回传图片到 /gb28181/snapshot。
-		ch := channel
-		if _, err = a.ipc.GetDevice(c.Request.Context(), ch.DID); err != nil {
-			return nil, err
-		}
-		needLiveSnapshotFallback := false
-		var gbSnapshotErr error
-		state, queryErr := a.uc.SipServer.QuerySnapshotContext(c.Request.Context(), ch.DeviceID, ch.ChannelID, ch.ID)
-		if queryErr != nil {
-			gbSnapshotErr = queryErr
-			needLiveSnapshotFallback = true
-			slog.WarnContext(c.Request.Context(), "gb28181 device snapshot failed, fallback to live stream snapshot", "channel_id", channelID, "err", queryErr)
-		} else if !waitForFreshCover(c.Request.Context(), path, requestAt, 10*time.Second) {
-			snapshotSessionID = state.SessionID
-			needLiveSnapshotFallback = true
-			slog.WarnContext(c.Request.Context(), "gb28181 snapshot not uploaded in time", "channel_id", channelID)
-		} else {
-			snapshotSessionID = state.SessionID
-			snapshotMethod = "gb28181_device_upload"
-		}
-		if needLiveSnapshotFallback && in.URL == "" {
-			result, err := a.refreshGBSnapshotByLiveStreamSingleflight(c.Request.Context(), channelID, requestAt)
-			if err != nil {
-				if gbSnapshotErr != nil {
-					return nil, ErrDevice.SetMsg(fmt.Sprintf("%s; live stream snapshot fallback failed: %s", gbSnapshotErr.Error(), err.Error()))
-				}
-				return nil, ErrDevice.SetMsg(err.Error())
-			}
-			snapshotMethod = result.Method
-			snapshotAttempts = append(snapshotAttempts, result.Attempts...)
-		}
-	}
-
-	if in.URL != "" {
-		if err := a.refreshSnapshotFromURL(c.Request.Context(), channelID, in.URL, requestAt, 1, 0); err != nil {
-			slog.ErrorContext(c.Request.Context(), "get snapshot", "err", err)
-			// return nil, reason.ErrBadRequest.Msg(err.Error())
-		} else {
-			snapshotMethod = "url"
-		}
-		if !waitForFreshCover(c.Request.Context(), path, requestAt, 3*time.Second) {
-			slog.WarnContext(c.Request.Context(), "snapshot file not refreshed in time", "channel_id", channelID)
-		}
-	}
-
-	return gin.H{"link": snapshotLink(), "method": snapshotMethod, "attempts": snapshotAttempts, "session_id": snapshotSessionID}, nil
+	return a.captureSynchronously(c, in.URL)
 }
 
 // snapshotState godoc
@@ -3322,6 +3330,7 @@ func (a IPCAPI) snapshotState(c *gin.Context, _ *struct{}) (any, error) {
 }
 
 type snapshotResult struct {
+	Image    []byte
 	Method   string
 	Attempts []string
 }
@@ -3515,6 +3524,15 @@ func (a IPCAPI) refreshSnapshotFromURL(ctx context.Context, channelID, snapshotU
 }
 
 func (a IPCAPI) refreshGBSnapshotByFFmpeg(ctx context.Context, channelID, rtspURL string, requestAt time.Time, frameCount int) (snapshotResult, error) {
+	release, _, err := a.snapshotCoordinator().acquire(ctx, a.snapshotFFmpegConcurrency())
+	if err != nil {
+		return snapshotResult{}, err
+	}
+	defer release()
+	return a.extractSnapshotByFFmpeg(ctx, channelID, rtspURL, requestAt, frameCount)
+}
+
+func (a IPCAPI) extractSnapshotByFFmpeg(ctx context.Context, channelID, rtspURL string, requestAt time.Time, frameCount int) (snapshotResult, error) {
 	startedAt := time.Now()
 	result := snapshotResult{Method: "ffmpeg", Attempts: make([]string, 0, 8)}
 	if frameCount <= 0 {
@@ -3523,22 +3541,14 @@ func (a IPCAPI) refreshGBSnapshotByFFmpeg(ctx context.Context, channelID, rtspUR
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return result, fmt.Errorf("ffmpeg not found: %w", err)
 	}
-	waitStartedAt := time.Now()
-	release, limit, err := a.snapshotCoordinator().acquire(ctx, a.snapshotFFmpegConcurrency())
-	if err != nil {
-		result.Attempts = append(result.Attempts, fmt.Sprintf("ffmpeg_wait: concurrency_limit=%d,wait_ms=%d", limit, time.Since(waitStartedAt).Milliseconds()))
-		return result, err
-	}
-	defer release()
-	result.Attempts = append(result.Attempts, fmt.Sprintf("ffmpeg_wait: concurrency_limit=%d,wait_ms=%d", limit, time.Since(waitStartedAt).Milliseconds()))
 
-	if _, err := exec.LookPath("ffprobe"); err == nil {
+	if _, err := exec.LookPath("ffprobe"); frameCount > 1 && err == nil {
 		probeInfo, err := probeRTSPVideoStream(ctx, rtspURL)
 		if err != nil {
 			return result, err
 		}
 		result.Attempts = append(result.Attempts, "ffprobe: "+probeInfo)
-	} else {
+	} else if frameCount > 1 {
 		slog.WarnContext(ctx, "ffprobe not found, skip video stream probe", "channel_id", channelID, "err", err)
 		result.Attempts = append(result.Attempts, fmt.Sprintf("ffprobe: skipped err=%s", err.Error()))
 	}
@@ -3563,10 +3573,13 @@ func (a IPCAPI) refreshGBSnapshotByFFmpeg(ctx context.Context, channelID, rtspUR
 		"-err_detect", "ignore_err",
 		"-i", rtspURL,
 		"-an",
-		"-vf", "select=gte(n\\,75),fps=1",
+		"-threads", "1",
 		"-frames:v", strconv.Itoa(frameCount),
 		"-q:v", "2",
 		outputPattern,
+	}
+	if frameCount > 1 {
+		args = append(args[:len(args)-1], "-vf", "select=gte(n\\,75),fps=1", outputPattern)
 	}
 	output, cmdErr := runCommandCombinedOutput(ffmpegCtx, "ffmpeg", args...)
 
@@ -3583,11 +3596,15 @@ func (a IPCAPI) refreshGBSnapshotByFFmpeg(ctx context.Context, channelID, rtspUR
 			lastErr = err
 			continue
 		}
-		if err := validateSnapshotImage(img); err != nil {
+		if err := validateLegacySnapshotFrame(img, frameCount); err != nil {
 			lastErr = err
 			slog.WarnContext(ctx, "discard invalid ffmpeg snapshot", "channel_id", channelID, "file", filepath.Base(file), "err", err)
 			result.Attempts = append(result.Attempts, fmt.Sprintf("ffmpeg_frame_%d: invalid err=%s,size=%d", i+1, err.Error(), len(img)))
 			continue
+		}
+		if frameCount == 1 {
+			result.Image = img
+			return result, nil
 		}
 		if err := writeCover(a.uc.Conf.ConfigDir, channelID, img); err != nil {
 			return result, err
@@ -3674,6 +3691,10 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 func validateSnapshotImage(body []byte) error {
 	if len(body) < 4*1024 {
 		return fmt.Errorf("snapshot image too small")
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(body))
+	if err != nil || cfg.Width < 1 || cfg.Height < 1 || int64(cfg.Width)*int64(cfg.Height) > 32000000 {
+		return fmt.Errorf("invalid snapshot dimensions")
 	}
 	img, _, err := image.Decode(bytes.NewReader(body))
 	if err != nil {
@@ -3902,6 +3923,23 @@ func (a IPCAPI) getSnapshot(c *gin.Context) {
 	if err != nil {
 		web.Fail(c, err)
 		return
+	}
+	if a.captures != nil {
+		row, err := a.captures.Latest(c.Request.Context(), channelID)
+		if err == nil {
+			path, err := a.captures.Path(row)
+			if err != nil {
+				web.Fail(c, captureError(err))
+				return
+			}
+			c.Header("Cache-Control", "private, no-store")
+			c.File(path)
+			return
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			web.Fail(c, captureError(err))
+			return
+		}
 	}
 	body, err := readCover(a.uc.Conf.ConfigDir, channelID)
 	if err != nil {

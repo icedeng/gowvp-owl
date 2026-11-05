@@ -96,6 +96,196 @@ const docTemplate = `{
                 }
             }
         },
+        "/captures": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Capture"
+                ],
+                "summary": "分页查询永久抓拍记录",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "通道 ID",
+                        "name": "channel_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量，最大 100",
+                        "name": "size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.capturePage"
+                        }
+                    }
+                }
+            }
+        },
+        "/captures/{capture_id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Capture"
+                ],
+                "summary": "查询抓拍任务与图片状态",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "抓拍 ID",
+                        "name": "capture_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/capture.Record"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Capture"
+                ],
+                "summary": "重命名抓拍图片（同时更新磁盘文件）",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "抓拍 ID",
+                        "name": "capture_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "JPG 文件名",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.renameCaptureInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/capture.Record"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Capture"
+                ],
+                "summary": "永久删除抓拍记录和图片文件",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "抓拍 ID",
+                        "name": "capture_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerMessageResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/captures/{capture_id}/image": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "image/jpeg"
+                ],
+                "tags": [
+                    "Capture"
+                ],
+                "summary": "查看或下载抓拍图片",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "抓拍 ID",
+                        "name": "capture_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "下载文件",
+                        "name": "download",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    }
+                }
+            }
+        },
         "/channels": {
             "get": {
                 "security": [
@@ -1504,6 +1694,115 @@ const docTemplate = `{
                 }
             }
         },
+        "/channels/{id}/capture_schedule": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Capture"
+                ],
+                "summary": "获取通道定时抓拍计划",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "通道 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/capture.Schedule"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Capture"
+                ],
+                "summary": "保存通道定时抓拍计划",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "通道 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "间隔秒数，最少 10 秒；可选首次执行时间",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/capture.Schedule"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/capture.Schedule"
+                        }
+                    }
+                }
+            }
+        },
+        "/channels/{id}/captures": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Capture"
+                ],
+                "summary": "创建后台抓拍任务",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "通道 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/capture.Record"
+                        }
+                    }
+                }
+            }
+        },
         "/channels/{id}/history/control": {
             "post": {
                 "security": [
@@ -1850,7 +2149,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "仅发送停止命令检查信令连通性。signaling_ok 表示设备接受信令；ptz_verified 和 verified_now 始终为 false，不证明实际转动。",
+                "description": "对指定通道发送一次停止命令检查控制信令连通性，不能验证实际转动能力。\n调用前置条件：1. 通道存在；2. 设备已在线；3. 对应协议适配器实现了 PTZ 控制。\n失败场景：1. 通道不存在；2. 设备离线；3. 协议不支持 PTZ；4. 设备未返回应答。\n` + "`" + `signaling_ok` + "`" + ` 表示设备接受信令；兼容字段 ` + "`" + `ptz_verified/verified_now` + "`" + ` 始终为 false，不再持久化能力验证标记。\n请求示例：` + "`" + `{ \"action\": \"stop\", \"timeout\": 5 }` + "`" + `\n响应示例：` + "`" + `{ \"channel_id\": \"GB_34020000001320000001\", \"ptz_capable\": false, \"ptz_verified\": false, \"verified_now\": false, \"signaling_ok\": true, \"message\": \"设备已接受停止信令，实际云台能力仍需观察画面确认\" }` + "`" + `",
                 "consumes": [
                     "application/json"
                 ],
@@ -2449,6 +2748,44 @@ const docTemplate = `{
                 }
             }
         },
+        "/configs/info/media": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Config"
+                ],
+                "summary": "设置无人观看自动断流等待时间",
+                "parameters": [
+                    {
+                        "description": "无人观看等待秒数，1–86400，默认180",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.mediaPlaybackConfig"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SwaggerMessageResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/configs/info/sip": {
             "put": {
                 "security": [
@@ -2488,6 +2825,44 @@ const docTemplate = `{
                         "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/api.SwaggerErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/configs/info/snapshot": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Config"
+                ],
+                "summary": "设置抓拍上传等待时间与 FFmpeg 并发",
+                "parameters": [
+                    {
+                        "description": "上传等待秒数 1–3600，并发 1–32",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.snapshotConfig"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.snapshotConfig"
                         }
                     }
                 }
@@ -4287,28 +4662,6 @@ const docTemplate = `{
                 }
             }
         },
-        "api.channelStreamStatus": {
-            "description": "通道列表项；仅 include_stream_status=true 时返回 stream_status。",
-            "allOf": [
-                {
-                    "$ref": "#/definitions/ipc.Channel"
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "stream_status": {
-                            "description": "streaming 为媒体节点已注册直播流，idle 为未推流，unknown 为查询失败或不支持；历史回放与下载不计入。",
-                            "type": "string",
-                            "enum": [
-                                "streaming",
-                                "idle",
-                                "unknown"
-                            ]
-                        }
-                    }
-                }
-            ]
-        },
         "api.SwaggerChannelsResponse": {
             "type": "object",
             "properties": {
@@ -4334,6 +4687,14 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "media": {
+                    "description": "播放和无人观看断流配置，不含媒体密钥",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/api.mediaPlaybackConfig"
+                        }
+                    ]
+                },
                 "sip": {
                     "description": "当前系统使用的 SIP 配置；对端密码和摘要 seed 已脱敏",
                     "allOf": [
@@ -4349,6 +4710,9 @@ const docTemplate = `{
                             "$ref": "#/definitions/api.SIPSecretStatus"
                         }
                     ]
+                },
+                "snapshot": {
+                    "$ref": "#/definitions/api.snapshotConfig"
                 }
             }
         },
@@ -6175,11 +6539,15 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "attempts": {
-                    "description": "抓拍尝试过程，成功走 fallback 时会包含前序失败原因",
+                    "description": "旧版本兼容字段，新抓拍任务不再串行试探回退",
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
+                },
+                "capture_id": {
+                    "description": "永久抓拍记录 ID",
+                    "type": "string"
                 },
                 "link": {
                     "description": "可直接访问的快照地址",
@@ -6187,9 +6555,13 @@ const docTemplate = `{
                     "example": "http://127.0.0.1:9900/channels/xxx/snapshot?token=xxx"
                 },
                 "method": {
-                    "description": "本次快照来源：cache/gb28181_device_upload/ffmpeg/zlm_get_snap/url/none",
+                    "description": "本次快照来源：cache/gb28181_device_upload/ffmpeg",
                     "type": "string",
                     "example": "ffmpeg"
+                },
+                "session_id": {
+                    "description": "设备上传抓拍的国标会话 ID",
+                    "type": "string"
                 }
             }
         },
@@ -6260,6 +6632,109 @@ const docTemplate = `{
                 }
             }
         },
+        "api.capturePage": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/capture.Record"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.channelStreamStatus": {
+            "type": "object",
+            "properties": {
+                "app": {
+                    "description": "RTMP/RTSP 流配置字段",
+                    "type": "string"
+                },
+                "channel_id": {
+                    "description": "国标编码",
+                    "type": "string"
+                },
+                "config": {
+                    "description": "流配置 (RTMP/RTSP)",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/ipc.StreamConfig"
+                        }
+                    ]
+                },
+                "created_at": {
+                    "description": "创建时间",
+                    "type": "string"
+                },
+                "device_id": {
+                    "description": "国标编码",
+                    "type": "string"
+                },
+                "did": {
+                    "type": "string"
+                },
+                "ext": {
+                    "$ref": "#/definitions/ipc.DeviceExt"
+                },
+                "has_recording": {
+                    "description": "非持久化字段，用于 API 响应",
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_online": {
+                    "description": "是否在线",
+                    "type": "boolean"
+                },
+                "is_playing": {
+                    "description": "是否播放中",
+                    "type": "boolean"
+                },
+                "name": {
+                    "description": "通道名称",
+                    "type": "string"
+                },
+                "ptz_capable": {
+                    "description": "是否具备 PTZ 静态能力",
+                    "type": "boolean",
+                    "example": true
+                },
+                "ptz_verified": {
+                    "description": "是否已通过实际命令验证支持 PTZ",
+                    "type": "boolean",
+                    "example": true
+                },
+                "ptztype": {
+                    "description": "云台类型",
+                    "type": "integer"
+                },
+                "stream": {
+                    "description": "流 ID (RTMP/RTSP)",
+                    "type": "string"
+                },
+                "stream_status": {
+                    "description": "仅 include_stream_status=true 返回；直播推流中、未推流或未知",
+                    "type": "string",
+                    "enum": [
+                        "streaming",
+                        "idle",
+                        "unknown"
+                    ]
+                },
+                "type": {
+                    "description": "通道类型，继承父级设备类型",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "description": "更新时间",
+                    "type": "string"
+                }
+            }
+        },
         "api.checkVersionOutput": {
             "type": "object",
             "properties": {
@@ -6305,8 +6780,12 @@ const docTemplate = `{
         "api.getMetricsAPIOutput": {
             "type": "object",
             "properties": {
+                "goroutine_count": {
+                    "description": "当前运行协程数量",
+                    "type": "integer"
+                },
                 "goroutines": {
-                    "description": "协程数量"
+                    "description": "协程历史采样"
                 },
                 "num_gc": {
                     "description": "gc 次数",
@@ -6400,6 +6879,19 @@ const docTemplate = `{
                     "description": "rtp 或 direct_tcp；direct_tcp 仅支持 1.1 下载",
                     "type": "string",
                     "example": "rtp"
+                }
+            }
+        },
+        "api.mediaPlaybackConfig": {
+            "type": "object",
+            "required": [
+                "stream_none_reader_delay_seconds"
+            ],
+            "properties": {
+                "stream_none_reader_delay_seconds": {
+                    "type": "integer",
+                    "maximum": 86400,
+                    "minimum": 1
                 }
             }
         },
@@ -6938,6 +7430,14 @@ const docTemplate = `{
                 }
             }
         },
+        "api.renameCaptureInput": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "api.setRecordModeInput": {
             "type": "object",
             "required": [
@@ -6953,6 +7453,17 @@ const docTemplate = `{
                         "none"
                     ],
                     "example": "always"
+                }
+            }
+        },
+        "api.snapshotConfig": {
+            "type": "object",
+            "properties": {
+                "ffmpeg_concurrency": {
+                    "type": "integer"
+                },
+                "upload_timeout_seconds": {
+                    "type": "integer"
                 }
             }
         },
@@ -7102,6 +7613,70 @@ const docTemplate = `{
                     "description": "ZLM 音频源虚拟主机",
                     "type": "string",
                     "example": "__defaultVhost__"
+                }
+            }
+        },
+        "capture.Record": {
+            "type": "object",
+            "properties": {
+                "captured_at": {
+                    "type": "string"
+                },
+                "channel_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "method": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "capture.Schedule": {
+            "type": "object",
+            "properties": {
+                "channel_id": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "interval_seconds": {
+                    "type": "integer"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "last_run_at": {
+                    "type": "string"
+                },
+                "next_run_at": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
                 }
             }
         },
@@ -7798,7 +8373,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "record_mode": {
-                    "description": "空串表示 always",
+                    "description": "空串使用全局默认模式（默认 none）。",
                     "type": "string"
                 },
                 "zones": {
