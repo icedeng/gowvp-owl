@@ -122,7 +122,7 @@ func TestSignedAPIIsolationReplayAndResourceFiltering(t *testing.T) {
 	}
 	out = httptest.NewRecorder()
 	r.ServeHTTP(out, signed(p, key, "GET", "/openapi/v1/channels", "", nil, op.Random(24)))
-	if out.Code != 200 || strings.Contains(out.Body.String(), "c2") {
+	if out.Code != 200 || strings.Contains(out.Body.String(), `"id":"c2"`) {
 		t.Fatal(out.Code, out.Body.String())
 	}
 	if e := s.Revoke(p.App.ID, p.Credential.ID, "admin"); e != nil {

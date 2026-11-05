@@ -91,7 +91,7 @@ func (a *API) media(c *gin.Context) {
 	defer func() {
 		a.S.Record(op.Audit{RequestID: c.GetString("open_request_id"), AppID: t.AppID, CredentialID: t.CredentialID, Action: "media." + kind, ResourceID: id, Route: c.FullPath(), Status: c.Writer.Status(), DurationMS: time.Since(started).Milliseconds(), Result: "completed"})
 	}()
-	if kind != "live" {
+	if kind != "live" && kind != "playback" {
 		if c.Param("path") != "/content" {
 			respond(c, nil, op.ErrNotFound)
 			return
@@ -134,8 +134,15 @@ func (a *API) media(c *gin.Context) {
 		http.ServeContent(c.Writer, c.Request.WithContext(ctx), info.Name(), info.ModTime(), &pacedFile{File: f, ctx: ctx, s: a.S, app: t.AppID})
 		return
 	}
-	var session op.Session
-	if e = a.S.DB.First(&session, "id = ?", id).Error; e != nil {
+	var session struct {
+		Source   op.Source `gorm:"serializer:json;type:text"`
+		Protocol string
+	}
+	table := "open_media_sessions"
+	if kind == "playback" {
+		table = "open_playback_sessions"
+	}
+	if e = a.S.DB.Table(table).First(&session, "id = ?", id).Error; e != nil {
 		respond(c, nil, e)
 		return
 	}
@@ -206,7 +213,7 @@ func (a *API) media(c *gin.Context) {
 			if strings.HasPrefix(resource, "/") || strings.HasPrefix(r, "../") || r == "" {
 				return "", op.ErrNotFound
 			}
-			return a.S.Config.PublicBaseURL + "/openmedia/v1/live/" + id + "/" + r + "?ticket=" + url.QueryEscape(raw), nil
+			return a.S.Config.PublicBaseURL + "/openmedia/v1/" + kind + "/" + id + "/" + r + "?ticket=" + url.QueryEscape(raw), nil
 		})
 		if e != nil {
 			respond(c, nil, op.ErrUnavailable)

@@ -357,6 +357,12 @@ func (s *Service) cleanup() {
 		}
 	}
 	s.DB.Model(&Session{}).Where("expires_at < ? AND state IN ?", now, []string{"ready", "preparing"}).Update("state", "expired")
+	var playbacks []Playback
+	if s.DB.Where("stop_pending = ? AND expires_at < ?", false, now.Add(-30*24*time.Hour)).Limit(200).Find(&playbacks).Error == nil {
+		for _, row := range playbacks {
+			s.DB.Delete(&row)
+		}
+	}
 	var deliveries []Delivery
 	s.DB.Where("created_at < ? AND state IN ?", now.Add(-30*24*time.Hour), []string{"delivered", "dead", "failed", "cancelled"}).Limit(200).Find(&deliveries)
 	for _, v := range deliveries {
@@ -407,6 +413,20 @@ func (s *Service) run(ctx context.Context) {
 		defer tick.Stop()
 		for {
 			s.maintainCommands(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	control.Add(1)
+	go func() {
+		defer control.Done()
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for {
+			s.maintainPlaybacks(ctx)
 			select {
 			case <-ctx.Done():
 				return

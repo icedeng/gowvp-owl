@@ -2228,6 +2228,350 @@
         },
         "type": "object"
       },
+      "Playback": {
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "description": "所属三方应用的内部 ID。",
+            "example": "app-001",
+            "type": "string"
+          },
+          "channel_code": {
+            "description": "创建时绑定的完整通道编码。",
+            "example": "50010700001320000011",
+            "type": "string"
+          },
+          "channel_id": {
+            "description": "通道内部 ID，使用通道列表返回的 id，不是国标 channel_id 编码。",
+            "example": "channel-001",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "记录创建时间，RFC3339。",
+            "example": "2026-11-04T08:00:00Z",
+            "format": "date-time",
+            "type": "string"
+          },
+          "device_code": {
+            "description": "创建时绑定的设备完整编码。",
+            "example": "50010700001110000001",
+            "type": "string"
+          },
+          "end_at": {
+            "description": "设备录像结束时间，Unix秒，必须大于start_at。",
+            "example": 1700000060,
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "error": {
+            "description": "启动失败时返回固定错误PLAYBACK_START_FAILED，不含原始信令或内网信息；无错误时省略。",
+            "example": "PLAYBACK_START_FAILED",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "会话最长 30 分钟；续签票据不会延长会话。",
+            "example": "2026-11-04T08:30:00Z",
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "平台生成的独立设备录像回放会话UUID，详情、控制、停止及换票都使用此ID。",
+            "example": "00000000-0000-4000-8000-000000000001",
+            "type": "string"
+          },
+          "protocol": {
+            "description": "输出协议：hls为HLS fMP4，flv为HTTP-FLV。",
+            "enum": [
+              "hls",
+              "flv"
+            ],
+            "example": "hls",
+            "type": "string"
+          },
+          "record_type": {
+            "default": 0,
+            "description": "设备录像类型：0=all全部，1=manual手动，2=alarm告警，3=time定时。",
+            "enum": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "example": 0,
+            "type": "integer"
+          },
+          "start_at": {
+            "description": "设备录像开始时间，Unix秒（非毫秒）。与end_at跨度最大7天。",
+            "example": 1700000000,
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "description": "preparing准备中；ready可播放；paused已暂停（仍可换票/恢复）；failed启动失败；stopped已停止；expired到期/结束/重启失效；revoked授权已撤销。后四种不可重新播放。",
+            "enum": [
+              "preparing",
+              "ready",
+              "paused",
+              "failed",
+              "stopped",
+              "expired",
+              "revoked"
+            ],
+            "example": "preparing",
+            "type": "string"
+          },
+          "stop_pending": {
+            "description": "true表示仍占用或待回收设备/媒体资源（活动会话也为true）；终态且true表示后台正在重试停止，false表示已完成资源回收。",
+            "example": true,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "PlaybackByCodeInput": {
+        "additionalProperties": false,
+        "properties": {
+          "end_at": {
+            "description": "设备录像结束时间，Unix秒，必须大于start_at。",
+            "example": 1700000060,
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "protocol": {
+            "default": "hls",
+            "description": "输出协议：hls为HLS fMP4，flv为HTTP-FLV。",
+            "enum": [
+              "hls",
+              "flv"
+            ],
+            "example": "hls",
+            "type": "string"
+          },
+          "record_type": {
+            "default": 0,
+            "description": "设备录像类型：0=all全部，1=manual手动，2=alarm告警，3=time定时。",
+            "enum": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "example": 0,
+            "type": "integer"
+          },
+          "start_at": {
+            "description": "设备录像开始时间，Unix秒（非毫秒）。与end_at跨度最大7天。",
+            "example": 1700000000,
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_at",
+          "end_at"
+        ],
+        "type": "object"
+      },
+      "PlaybackControl": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "scale"
+                  ]
+                },
+                {
+                  "required": [
+                    "seek_at"
+                  ]
+                }
+              ]
+            },
+            "properties": {
+              "action": {
+                "enum": [
+                  "pause",
+                  "play"
+                ]
+              }
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "scale"
+              ]
+            },
+            "properties": {
+              "action": {
+                "enum": [
+                  "seek"
+                ]
+              }
+            },
+            "required": [
+              "seek_at"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "seek_at"
+              ]
+            },
+            "properties": {
+              "action": {
+                "enum": [
+                  "speed"
+                ]
+              }
+            },
+            "required": [
+              "scale"
+            ]
+          }
+        ],
+        "properties": {
+          "action": {
+            "description": "暂停、恢复、定位、倍速；seek/speed会恢复播放，均不延长会话。",
+            "enum": [
+              "pause",
+              "play",
+              "seek",
+              "speed"
+            ],
+            "example": "pause",
+            "type": "string"
+          },
+          "scale": {
+            "description": "仅action=speed时传，必须由设备支持；其他动作省略。",
+            "enum": [
+              0.25,
+              0.5,
+              1,
+              2,
+              4
+            ],
+            "example": 2,
+            "type": "number"
+          },
+          "seek_at": {
+            "description": "仅action=seek时传Unix秒，start_at \u003c= seek_at \u003c end_at。其他动作省略。",
+            "example": 1700000030,
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      "PlaybackInput": {
+        "additionalProperties": false,
+        "description": "二选一定位通道：device_code + channel_code 完整编码，或 channel_id 内部 ID；禁止混用或只传一个编码。",
+        "oneOf": [
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "device_code"
+                  ]
+                },
+                {
+                  "required": [
+                    "channel_code"
+                  ]
+                }
+              ]
+            },
+            "required": [
+              "channel_id"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "channel_id"
+              ]
+            },
+            "required": [
+              "device_code",
+              "channel_code"
+            ]
+          }
+        ],
+        "properties": {
+          "channel_code": {
+            "description": "设备上报的完整通道编码，非数字序号；与另一个编码字段成对传入，与内部 channel_id 互斥。",
+            "example": "50010700001320000011",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "channel_id": {
+            "description": "通道内部 ID，使用通道列表返回的 id，不是国标 channel_id 编码。",
+            "example": "channel-001",
+            "type": "string"
+          },
+          "device_code": {
+            "description": "设备完整编码；与另一个编码字段成对传入，与内部 channel_id 互斥。",
+            "example": "50010700001110000001",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "end_at": {
+            "description": "设备录像结束时间，Unix秒，必须大于start_at。",
+            "example": 1700000060,
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "protocol": {
+            "default": "hls",
+            "description": "输出协议：hls为HLS fMP4，flv为HTTP-FLV。",
+            "enum": [
+              "hls",
+              "flv"
+            ],
+            "example": "hls",
+            "type": "string"
+          },
+          "record_type": {
+            "default": 0,
+            "description": "设备录像类型：0=all全部，1=manual手动，2=alarm告警，3=time定时。",
+            "enum": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "example": 0,
+            "type": "integer"
+          },
+          "start_at": {
+            "description": "设备录像开始时间，Unix秒（非毫秒）。与end_at跨度最大7天。",
+            "example": 1700000000,
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_at",
+          "end_at"
+        ],
+        "type": "object"
+      },
       "PublicConfig": {
         "additionalProperties": false,
         "properties": {
@@ -7641,7 +7985,7 @@
     },
     "/openapi/v1/channels/{id}/records/query": {
       "post": {
-        "description": "内部 ID 兼容入口；推荐POST /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/records/query。实时向设备查询SD卡/NVR本地录像时间目录（GB28181 RecordInfo），区别于仅查询平台落盘文件的/recordings。只需recording:read和设备授权，不另要求device:read/channel:read。只读POST无需Idempotency-Key，不创建录像或播放会话。start_at/end_at必填Unix秒，最大7天；type默认all；timeout默认10秒、1—60秒，信令另预留最多5秒。每应用最多2个并发目录查询，超限429 CONCURRENT_LIMIT。仅支持在线且支持录像查询的GB28181设备；其他协议400 UNSUPPORTED_RECORD_QUERY，离线409 DEVICE_OFFLINE。成功返回按日期分组的start/end片段；完整无录像list=[]且complete=true。部分分包返回200、complete=false及incomplete已收/应收数量；零应答504 DEVICE_RECORD_TIMEOUT；拒绝或其他错误503 DEVICE_RECORD_QUERY_FAILED。请求取消会终止查询，返回前重新核对应用、凭据、Scope和设备授权。结果不含设备文件路径、原始XML或播放/下载URL；不是平台录像ID，不能用于/recordings/{id}/tickets。设备录像回放/下载尚未向三方开放。",
+        "description": "内部 ID 兼容入口；推荐POST /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/records/query。实时向设备查询SD卡/NVR本地录像时间目录（GB28181 RecordInfo），区别于仅查询平台落盘文件的/recordings。只需recording:read和设备授权，不另要求device:read/channel:read。只读POST无需Idempotency-Key，不创建录像或播放会话。start_at/end_at必填Unix秒，最大7天；type默认all；timeout默认10秒、1—60秒，信令另预留最多5秒。每应用最多2个并发目录查询，超限429 CONCURRENT_LIMIT。仅支持在线且支持录像查询的GB28181设备；其他协议400 UNSUPPORTED_RECORD_QUERY，离线409 DEVICE_OFFLINE。成功返回按日期分组的start/end片段；完整无录像list=[]且complete=true。部分分包返回200、complete=false及incomplete已收/应收数量；零应答504 DEVICE_RECORD_TIMEOUT；拒绝或其他错误503 DEVICE_RECORD_QUERY_FAILED。请求取消会终止查询，返回前重新核对应用、凭据、Scope和设备授权。结果不含设备文件路径、原始XML或播放/下载URL；不是平台录像ID，不能用于/recordings/{id}/tickets。设备回放使用/playback-sessions按时间段申请；设备录像下载尚未开放。",
         "operationId": "post_openapi_v1_channels_id_records_query",
         "parameters": [
           {
@@ -9288,6 +9632,374 @@
         "x-scope": "live:play"
       }
     },
+    "/openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/playback-sessions": {
+      "get": {
+        "description": "只查询本应用在当前授权设备/通道上的回放记录，不触发设备动作。支持size/cursor分页、state过滤、start/end创建时间过滤（RFC3339，默认最近24小时、最大7天）。路径定位设备或通道范围，不再传额外资源定位筛选参数；未知/未授权编码404，重复通道编码409。",
+        "operationId": "get_openapi_v1_devices_by_code_device_code_channels_channel_code_playback_sessions",
+        "parameters": [
+          {
+            "description": "设备完整编码，对应设备对象 device_id，按原字符串精确匹配；不是内部 id。",
+            "in": "path",
+            "name": "device_code",
+            "required": true,
+            "schema": {
+              "example": "50010700001110000001",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "设备上报的完整通道编码，对应通道对象 channel_id；不是内部 id，也不是录像机数字序号。必须属于路径中的设备。",
+            "in": "path",
+            "name": "channel_code",
+            "required": true,
+            "schema": {
+              "example": "50010700001320000011",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "每页 1—100 条，默认 50。",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 next_cursor；首次不传。翻页时保留相同筛选条件。",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "包含边界的 RFC3339 开始时间。录像/事件/投递列表默认最近 24 小时，最大查询跨度 7 天。",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "包含边界的 RFC3339 结束时间。默认当前时间；仅传 end 时 start 默认其前 24 小时。",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "精确匹配记录状态，枚举见对应实体状态说明。",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "items": [
+                      {
+                        "app_id": "app-001",
+                        "channel_code": "50010700001320000011",
+                        "channel_id": "channel-001",
+                        "created_at": "2026-11-04T08:00:00Z",
+                        "device_code": "50010700001110000001",
+                        "end_at": 1700000060,
+                        "expires_at": "2026-11-04T08:30:00Z",
+                        "id": "00000000-0000-4000-8000-000000000001",
+                        "protocol": "hls",
+                        "record_type": 0,
+                        "start_at": 1700000000,
+                        "state": "preparing",
+                        "stop_pending": true
+                      }
+                    ],
+                    "next_cursor": null
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "additionalProperties": false,
+                          "description": "业务结果。失败时为 null；媒体成功响应为原始字节，不使用此 envelope。",
+                          "properties": {
+                            "items": {
+                              "description": "当前页结果数组。",
+                              "items": {
+                                "$ref": "#/components/schemas/Playback"
+                              },
+                              "type": "array"
+                            },
+                            "next_cursor": {
+                              "description": "下一页游标；null 表示没有下一页。只可用于同一应用、同一路径及筛选参数，有效约 1 小时。",
+                              "example": null,
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；请检查data.state和expires_at。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "查询本应用设备录像回放会话列表",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "recording:play"
+      },
+      "post": {
+        "description": "使用独立AK/SK签名及recording:play，继续检查当前设备授权、来源与额度，不另要求device:read/channel:read。仅支持在线GB28181设备和ZLM节点。每次创建独立SIP会话与媒体流，不复用管理端或其他应用回放。会话最长30分钟，不能续期。 start_at/end_at必填Unix秒，跨度不超过7天；protocol默认hls，可选flv；record_type默认0(all)。必须携带Idempotency-Key，同键同请求返回原会话，不重复起流；同键异请求409 IDEMPOTENCY_MISMATCH。返回preparing后轮询详情，ready后申请tickets；后台准备最长约35秒，失败state=failed/error=PLAYBACK_START_FAILED。直播和设备回放共用应用live_limit及channel_limit，全局最多500会话/10个准备任务；终态仍stop_pending时继续占用名额。其他协议400 UNSUPPORTED_PLAYBACK，非ZLM400 UNSUPPORTED_MEDIA_SERVER，离线409 DEVICE_OFFLINE，超限429 CONCURRENT_LIMIT或SOURCE_LIMIT。 路径已定位设备和通道，body不再传资源定位字段；未知/未授权编码404，同设备重复通道编码409。",
+        "operationId": "post_openapi_v1_devices_by_code_device_code_channels_channel_code_playback_sessions",
+        "parameters": [
+          {
+            "description": "设备完整编码，对应设备对象 device_id，按原字符串精确匹配；不是内部 id。",
+            "in": "path",
+            "name": "device_code",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "设备上报的完整通道编码，对应通道对象 channel_id；不是内部 id，也不是录像机数字序号。必须属于路径中的设备。",
+            "in": "path",
+            "name": "channel_code",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "POST/PATCH/PUT 为 application/json，不带 charset；GET/DELETE 不传此头。",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "end_at": 1700000060,
+                "protocol": "hls",
+                "record_type": 0,
+                "start_at": 1700000000
+              },
+              "schema": {
+                "$ref": "#/components/schemas/PlaybackByCodeInput"
+              }
+            }
+          },
+          "description": "JSON 请求体，未知或重复属性拒绝。签名必须使用实际发送字节。",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "app_id": "app-001",
+                    "channel_code": "50010700001320000011",
+                    "channel_id": "channel-001",
+                    "created_at": "2026-11-04T08:00:00Z",
+                    "device_code": "50010700001110000001",
+                    "end_at": 1700000060,
+                    "expires_at": "2026-11-04T08:30:00Z",
+                    "id": "00000000-0000-4000-8000-000000000001",
+                    "protocol": "hls",
+                    "record_type": 0,
+                    "start_at": 1700000000,
+                    "state": "preparing",
+                    "stop_pending": true
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Playback"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；请检查data.state和expires_at。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "按设备编码与通道编码申请录像回放",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "recording:play"
+      }
+    },
     "/openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/ptz": {
       "post": {
         "description": "直接使用设备完整编码与完整通道编码定位授权资源，无需先换取内部 ID。设备不存在或未授权均返回 404；同一设备下重复通道编码返回 409 AMBIGUOUS_RESOURCE_CODE。先查询 capabilities。连续动作 1—3 秒并由服务端停止；独占通道租约。HTTP 200 或 confirmed 仅表示命令流程结果，不代表真实到位；停止失败保留租约，阻止后续控制。安全停止沿用 POST /openapi/v1/ptz-commands/{command}/stop，command 为本响应中的命令 id。",
@@ -9991,7 +10703,7 @@
     },
     "/openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/records/query": {
       "post": {
-        "description": "设备完整编码+完整通道编码定位，未知/未授权统一404，同设备下重复通道编码409。实时向设备查询SD卡/NVR本地录像时间目录（GB28181 RecordInfo），区别于仅查询平台落盘文件的/recordings。只需recording:read和设备授权，不另要求device:read/channel:read。只读POST无需Idempotency-Key，不创建录像或播放会话。start_at/end_at必填Unix秒，最大7天；type默认all；timeout默认10秒、1—60秒，信令另预留最多5秒。每应用最多2个并发目录查询，超限429 CONCURRENT_LIMIT。仅支持在线且支持录像查询的GB28181设备；其他协议400 UNSUPPORTED_RECORD_QUERY，离线409 DEVICE_OFFLINE。成功返回按日期分组的start/end片段；完整无录像list=[]且complete=true。部分分包返回200、complete=false及incomplete已收/应收数量；零应答504 DEVICE_RECORD_TIMEOUT；拒绝或其他错误503 DEVICE_RECORD_QUERY_FAILED。请求取消会终止查询，返回前重新核对应用、凭据、Scope和设备授权。结果不含设备文件路径、原始XML或播放/下载URL；不是平台录像ID，不能用于/recordings/{id}/tickets。设备录像回放/下载尚未向三方开放。",
+        "description": "设备完整编码+完整通道编码定位，未知/未授权统一404，同设备下重复通道编码409。实时向设备查询SD卡/NVR本地录像时间目录（GB28181 RecordInfo），区别于仅查询平台落盘文件的/recordings。只需recording:read和设备授权，不另要求device:read/channel:read。只读POST无需Idempotency-Key，不创建录像或播放会话。start_at/end_at必填Unix秒，最大7天；type默认all；timeout默认10秒、1—60秒，信令另预留最多5秒。每应用最多2个并发目录查询，超限429 CONCURRENT_LIMIT。仅支持在线且支持录像查询的GB28181设备；其他协议400 UNSUPPORTED_RECORD_QUERY，离线409 DEVICE_OFFLINE。成功返回按日期分组的start/end片段；完整无录像list=[]且complete=true。部分分包返回200、complete=false及incomplete已收/应收数量；零应答504 DEVICE_RECORD_TIMEOUT；拒绝或其他错误503 DEVICE_RECORD_QUERY_FAILED。请求取消会终止查询，返回前重新核对应用、凭据、Scope和设备授权。结果不含设备文件路径、原始XML或播放/下载URL；不是平台录像ID，不能用于/recordings/{id}/tickets。设备回放使用/playback-sessions按时间段申请；设备录像下载尚未开放。",
         "operationId": "post_openapi_v1_devices_by_code_device_code_channels_channel_code_records_query",
         "parameters": [
           {
@@ -10919,6 +11631,200 @@
           "业务"
         ],
         "x-scope": "live:play"
+      }
+    },
+    "/openapi/v1/devices/by-code/{device_code}/playback-sessions": {
+      "get": {
+        "description": "只查询本应用在当前授权设备/通道上的回放记录，不触发设备动作。支持size/cursor分页、state过滤、start/end创建时间过滤（RFC3339，默认最近24小时、最大7天）。路径定位设备或通道范围，不再传额外资源定位筛选参数；未知/未授权编码404，重复通道编码409。",
+        "operationId": "get_openapi_v1_devices_by_code_device_code_playback_sessions",
+        "parameters": [
+          {
+            "description": "设备完整编码，对应设备对象 device_id，按原字符串精确匹配；不是内部 id。",
+            "in": "path",
+            "name": "device_code",
+            "required": true,
+            "schema": {
+              "example": "50010700001110000001",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "每页 1—100 条，默认 50。",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 next_cursor；首次不传。翻页时保留相同筛选条件。",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "包含边界的 RFC3339 开始时间。录像/事件/投递列表默认最近 24 小时，最大查询跨度 7 天。",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "包含边界的 RFC3339 结束时间。默认当前时间；仅传 end 时 start 默认其前 24 小时。",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "精确匹配记录状态，枚举见对应实体状态说明。",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "items": [
+                      {
+                        "app_id": "app-001",
+                        "channel_code": "50010700001320000011",
+                        "channel_id": "channel-001",
+                        "created_at": "2026-11-04T08:00:00Z",
+                        "device_code": "50010700001110000001",
+                        "end_at": 1700000060,
+                        "expires_at": "2026-11-04T08:30:00Z",
+                        "id": "00000000-0000-4000-8000-000000000001",
+                        "protocol": "hls",
+                        "record_type": 0,
+                        "start_at": 1700000000,
+                        "state": "preparing",
+                        "stop_pending": true
+                      }
+                    ],
+                    "next_cursor": null
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "additionalProperties": false,
+                          "description": "业务结果。失败时为 null；媒体成功响应为原始字节，不使用此 envelope。",
+                          "properties": {
+                            "items": {
+                              "description": "当前页结果数组。",
+                              "items": {
+                                "$ref": "#/components/schemas/Playback"
+                              },
+                              "type": "array"
+                            },
+                            "next_cursor": {
+                              "description": "下一页游标；null 表示没有下一页。只可用于同一应用、同一路径及筛选参数，有效约 1 小时。",
+                              "example": null,
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；请检查data.state和expires_at。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "查询本应用设备录像回放会话列表",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "recording:play"
       }
     },
     "/openapi/v1/devices/by-code/{device_code}/ptz-commands": {
@@ -12764,6 +13670,877 @@
           "业务"
         ],
         "x-scope": "live:play"
+      }
+    },
+    "/openapi/v1/playback-sessions": {
+      "get": {
+        "description": "只查询本应用在当前授权设备/通道上的回放记录，不触发设备动作。支持size/cursor分页、state过滤、start/end创建时间过滤（RFC3339，默认最近24小时、最大7天）。支持device_code+channel_code或内部device_id/channel_id筛选，所有条件取交集，未知/未授权编码返回空列表。",
+        "operationId": "get_openapi_v1_playback_sessions",
+        "parameters": [
+          {
+            "description": "每页 1—100 条，默认 50。",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "上一页返回的 next_cursor；首次不传。翻页时保留相同筛选条件。",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "设备完整编码精确筛选，未知或未授权编码返回空列表；可与 channel_code 组合，无须先查内部 ID。",
+            "in": "query",
+            "name": "device_code",
+            "required": false,
+            "schema": {
+              "example": "50010700001110000001",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "完整通道编码精确筛选；与 device_code 组合可限定设备，单独使用时匹配授权设备下的同码通道。",
+            "in": "query",
+            "name": "channel_code",
+            "required": false,
+            "schema": {
+              "example": "50010700001320000011",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "内部设备 ID 兼容参数，与所有其他筛选条件取交集。",
+            "in": "query",
+            "name": "device_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "内部通道 ID 兼容参数，与所有其他筛选条件取交集。",
+            "in": "query",
+            "name": "channel_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "包含边界的 RFC3339 开始时间。录像/事件/投递列表默认最近 24 小时，最大查询跨度 7 天。",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "包含边界的 RFC3339 结束时间。默认当前时间；仅传 end 时 start 默认其前 24 小时。",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "精确匹配记录状态，枚举见对应实体状态说明。",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "items": [
+                      {
+                        "app_id": "app-001",
+                        "channel_code": "50010700001320000011",
+                        "channel_id": "channel-001",
+                        "created_at": "2026-11-04T08:00:00Z",
+                        "device_code": "50010700001110000001",
+                        "end_at": 1700000060,
+                        "expires_at": "2026-11-04T08:30:00Z",
+                        "id": "00000000-0000-4000-8000-000000000001",
+                        "protocol": "hls",
+                        "record_type": 0,
+                        "start_at": 1700000000,
+                        "state": "preparing",
+                        "stop_pending": true
+                      }
+                    ],
+                    "next_cursor": null
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "additionalProperties": false,
+                          "description": "业务结果。失败时为 null；媒体成功响应为原始字节，不使用此 envelope。",
+                          "properties": {
+                            "items": {
+                              "description": "当前页结果数组。",
+                              "items": {
+                                "$ref": "#/components/schemas/Playback"
+                              },
+                              "type": "array"
+                            },
+                            "next_cursor": {
+                              "description": "下一页游标；null 表示没有下一页。只可用于同一应用、同一路径及筛选参数，有效约 1 小时。",
+                              "example": null,
+                              "nullable": true,
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；请检查data.state和expires_at。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "查询本应用设备录像回放会话列表",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "recording:play"
+      },
+      "post": {
+        "description": "使用独立AK/SK签名及recording:play，继续检查当前设备授权、来源与额度，不另要求device:read/channel:read。仅支持在线GB28181设备和ZLM节点。每次创建独立SIP会话与媒体流，不复用管理端或其他应用回放。会话最长30分钟，不能续期。 start_at/end_at必填Unix秒，跨度不超过7天；protocol默认hls，可选flv；record_type默认0(all)。必须携带Idempotency-Key，同键同请求返回原会话，不重复起流；同键异请求409 IDEMPOTENCY_MISMATCH。返回preparing后轮询详情，ready后申请tickets；后台准备最长约35秒，失败state=failed/error=PLAYBACK_START_FAILED。直播和设备回放共用应用live_limit及channel_limit，全局最多500会话/10个准备任务；终态仍stop_pending时继续占用名额。其他协议400 UNSUPPORTED_PLAYBACK，非ZLM400 UNSUPPORTED_MEDIA_SERVER，离线409 DEVICE_OFFLINE，超限429 CONCURRENT_LIMIT或SOURCE_LIMIT。 JSON定位使用device_code+channel_code，与内部channel_id互斥。",
+        "operationId": "post_openapi_v1_playback_sessions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "POST/PATCH/PUT 为 application/json，不带 charset；GET/DELETE 不传此头。",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "channel_code": "50010700001320000011",
+                "device_code": "50010700001110000001",
+                "end_at": 1700000060,
+                "protocol": "hls",
+                "record_type": 0,
+                "start_at": 1700000000
+              },
+              "schema": {
+                "$ref": "#/components/schemas/PlaybackInput"
+              }
+            }
+          },
+          "description": "JSON 请求体，未知或重复属性拒绝。签名必须使用实际发送字节。",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "app_id": "app-001",
+                    "channel_code": "50010700001320000011",
+                    "channel_id": "channel-001",
+                    "created_at": "2026-11-04T08:00:00Z",
+                    "device_code": "50010700001110000001",
+                    "end_at": 1700000060,
+                    "expires_at": "2026-11-04T08:30:00Z",
+                    "id": "00000000-0000-4000-8000-000000000001",
+                    "protocol": "hls",
+                    "record_type": 0,
+                    "start_at": 1700000000,
+                    "state": "preparing",
+                    "stop_pending": true
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Playback"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；请检查data.state和expires_at。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "创建设备录像回放会话（支持编码）",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "recording:play"
+      }
+    },
+    "/openapi/v1/playback-sessions/{session}": {
+      "delete": {
+        "description": "仅停止本应用指定会话及其独立媒体流，立即失效媒体访问，不影响其他会话。无需Idempotency-Key，重复停止保持幂等。设备/媒体停止未确认时返回503 PLAYBACK_STOP_PENDING，已禁用播放并由后台按1—60秒退避重试；GET详情可见终态stop_pending=true，成功回收后为false。应用停用、权限修改、凭据撤销或到期也会后台回收。",
+        "operationId": "delete_openapi_v1_playback_sessions_session",
+        "parameters": [
+          {
+            "description": "本应用创建的设备录像回放会话UUID。",
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "stopped": true
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Stopped"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；请检查data.state和expires_at。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "停止设备录像回放",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "recording:play"
+      },
+      "get": {
+        "description": "仅查询本应用及当前有权访问设备的会话；原创建凭据失效不可继续操作。preparing时建议每秒轮询，ready/paused可换票，failed/stopped/expired/revoked不可换票或控制。终态stop_pending=true表示正在后台回收。准备中长时间未进入ready时读取error；不要盲目重复创建。",
+        "operationId": "get_openapi_v1_playback_sessions_session",
+        "parameters": [
+          {
+            "description": "本应用创建的设备录像回放会话UUID。",
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "app_id": "app-001",
+                    "channel_code": "50010700001320000011",
+                    "channel_id": "channel-001",
+                    "created_at": "2026-11-04T08:00:00Z",
+                    "device_code": "50010700001110000001",
+                    "end_at": 1700000060,
+                    "expires_at": "2026-11-04T08:30:00Z",
+                    "id": "00000000-0000-4000-8000-000000000001",
+                    "protocol": "hls",
+                    "record_type": 0,
+                    "start_at": 1700000000,
+                    "state": "preparing",
+                    "stop_pending": true
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Playback"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；请检查data.state和expires_at。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "查询设备录像回放状态",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "recording:play"
+      }
+    },
+    "/openapi/v1/playback-sessions/{session}/control": {
+      "post": {
+        "description": "必须携带Idempotency-Key；同键重试不重复控制，返回当前会话状态。只操作本应用ready/paused且未到期的会话，否则409 PLAYBACK_NOT_READY。action=pause暂停；play恢复；seek跳转并恢复，传seek_at Unix秒且start_at\u003c=seek_at\u003cend_at；speed倍速并恢复，传scale=0.25/0.5/1/2/4。其他动作不传scale/seek_at，不接受原始MANSRTSP控制文本。非法参数400 INVALID_PLAYBACK_CONTROL。设备协议版本和固件决定是否支持，设备未确认返回503 PLAYBACK_CONTROL_FAILED，不宣称操作成功；使用新幂等键重试。seek/speed恢复播放但不改变本次时间范围与到期时间。HLS有分片缓冲，控制效果可能延后，跳转后可重载清单。",
+        "operationId": "post_openapi_v1_playback_sessions_session_control",
+        "parameters": [
+          {
+            "description": "本应用回放会话UUID。",
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "POST/PATCH/PUT 为 application/json，不带 charset；GET/DELETE 不传此头。",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "action": "seek",
+                "seek_at": 1700000030
+              },
+              "schema": {
+                "$ref": "#/components/schemas/PlaybackControl"
+              }
+            }
+          },
+          "description": "JSON 请求体，未知或重复属性拒绝。签名必须使用实际发送字节。",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "app_id": "app-001",
+                    "channel_code": "50010700001320000011",
+                    "channel_id": "channel-001",
+                    "created_at": "2026-11-04T08:00:00Z",
+                    "device_code": "50010700001110000001",
+                    "end_at": 1700000060,
+                    "expires_at": "2026-11-04T08:30:00Z",
+                    "id": "00000000-0000-4000-8000-000000000001",
+                    "protocol": "hls",
+                    "record_type": 0,
+                    "start_at": 1700000000,
+                    "state": "ready",
+                    "stop_pending": true
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Playback"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；请检查data.state和expires_at。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "控制设备录像回放（暂停、恢复、倍速、定位）",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "recording:play"
+      }
+    },
+    "/openapi/v1/playback-sessions/{session}/tickets": {
+      "post": {
+        "description": "回放须处于ready或paused且未到期，否则409 PLAYBACK_NOT_READY。空body {}，无需Idempotency-Key。返回约5分钟有效的HLS fMP4或HTTP-FLV URL，且不超过会话有效期。所有清单子资源均通过playback媒体入口验票；勿拼接ZLM直连地址。票据到期前换票并刷新播放器，不延长回放会话；停止、撤权或到期后旧票据也不可用。",
+        "operationId": "post_openapi_v1_playback_sessions_session_tickets",
+        "parameters": [
+          {
+            "description": "本应用创建的设备录像回放会话UUID。",
+            "in": "path",
+            "name": "session",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "POST/PATCH/PUT 为 application/json，不带 charset；GET/DELETE 不传此头。",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {},
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          },
+          "description": "JSON 请求体，未知或重复属性拒绝。签名必须使用实际发送字节。",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "expires_at": "2026-11-04T08:05:00Z",
+                    "url": "\u003c当前部署开放地址\u003e/openmedia/v1/playback/00000000-0000-4000-8000-000000000001/hls.fmp4.m3u8?ticket=\u003c短期票据\u003e"
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Ticket"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；请检查data.state和expires_at。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "申请设备录像回放播放地址",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "recording:play"
       }
     },
     "/openapi/v1/ptz-commands": {
@@ -15490,18 +17267,27 @@
     },
     "/openmedia/v1/{kind}/{id}/{path}": {
       "get": {
-        "description": "使用票据接口返回 URL 原样访问。GET 成功返回 HLS 清单、FLV、MP4 或图片字节；不使用 JSON 成功包装。HLS 全部子资源经授权重写，不能拼接任意回源。新连接检查票据到期，活动连接约每秒检查撤权。 capture为通道永久图片、snapshot为三方抓拍任务结果，均支持直接使用API返回地址。异步snapshot未完成时409 SNAPSHOT_PENDING并带Retry-After:1，成功后同一地址取图；失败/删除/撤权后拒绝访问。",
+        "description": "使用票据接口返回 URL 原样访问。GET 成功返回 HLS 清单、FLV、MP4 或图片字节；不使用 JSON 成功包装。HLS 全部子资源经授权重写，不能拼接任意回源。新连接检查票据到期，活动连接约每秒检查撤权。 capture为通道永久图片、snapshot为三方抓拍任务结果，均支持直接使用API返回地址。异步snapshot未完成时409 SNAPSHOT_PENDING并带Retry-After:1，成功后同一地址取图；失败/删除/撤权后拒绝访问。 playback为独立设备录像回放流，ready/paused可播放；会话停止/到期/撤权后拒绝新请求并中断活动连接，不会自动重启流。",
         "operationId": "get_openmedia_v1_kind_id_path",
         "parameters": [
           {
             "$ref": "#/components/parameters/Range"
           },
           {
-            "description": "媒体种类：live / recording / download / event / snapshot / capture。",
+            "description": "媒体种类：live / playback / recording / download / event / snapshot / capture。",
             "in": "path",
             "name": "kind",
             "required": true,
             "schema": {
+              "enum": [
+                "live",
+                "playback",
+                "recording",
+                "download",
+                "event",
+                "snapshot",
+                "capture"
+              ],
               "type": "string"
             }
           },
@@ -15515,7 +17301,7 @@
             }
           },
           {
-            "description": "由票据接口返回的路径，原样使用。live 为 hls.fmp4.m3u8、清单重写子资源或 stream.live.flv；其他种类为 content。",
+            "description": "由票据接口返回的路径，原样使用。live/playback 为 hls.fmp4.m3u8、清单重写子资源或 stream.live.flv；其他种类为 content。",
             "in": "path",
             "name": "path",
             "required": true,

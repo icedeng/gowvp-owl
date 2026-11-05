@@ -47,30 +47,8 @@ func (s *Service) CreateSession(ctx context.Context, p Principal, ch, protocol s
 		return row, Fail(400, "UNSUPPORTED_PROTOCOL", "首期支持hls和flv")
 	}
 	e = s.DB.Transaction(func(tx *gorm.DB) error {
-		var total, perChannel int64
-		q := tx.Model(&Session{}).Where("app_id = ? AND state IN ? AND expires_at > ?", p.App.ID, []string{"preparing", "ready"}, time.Now())
-		if err := q.Count(&total).Error; err != nil {
+		if err := checkSessionLimits(tx, p, ch); err != nil {
 			return err
-		}
-		if err := q.Where("channel_id = ?", ch).Count(&perChannel).Error; err != nil {
-			return err
-		}
-		if total >= int64(p.App.LiveLimit) || perChannel >= int64(p.App.ChannelLimit) {
-			return Fail(429, "CONCURRENT_LIMIT", "播放会话超过配额")
-		}
-		var global int64
-		if err := tx.Model(&Session{}).Where("state = ?", "preparing").Count(&global).Error; err != nil {
-			return err
-		}
-		if global >= 10 {
-			return Fail(429, "SOURCE_LIMIT", "拉流准备任务已满")
-		}
-		var active int64
-		if err := tx.Model(&Session{}).Where("state IN ? AND expires_at > ?", []string{"preparing", "ready"}, time.Now()).Count(&active).Error; err != nil {
-			return err
-		}
-		if active >= 500 {
-			return Fail(429, "CONCURRENT_LIMIT", "全局播放会话已满")
 		}
 		row = Session{ID: uuid.NewString(), AppID: p.App.ID, CredentialID: p.Credential.ID, ChannelID: ch, Protocol: protocol, State: "preparing", Revision: p.App.Revision, ExpiresAt: time.Now().Add(30 * time.Minute)}
 		if err := tx.Create(&row).Error; err != nil {
@@ -137,6 +115,18 @@ func (s *Service) IssueTicket(p Principal, kind, id string) (string, Ticket, err
 		}
 		t.ChannelID = row.ChannelID
 		t.SessionID = row.ID
+		if row.ExpiresAt.Before(t.ExpiresAt) {
+			t.ExpiresAt = row.ExpiresAt
+		}
+	case "playback":
+		row, err := s.Playback(p, id)
+		if err != nil {
+			return "", t, err
+		}
+		if !row.ExpiresAt.After(time.Now()) || !Has([]string{"ready", "paused"}, row.State) {
+			return "", t, Fail(409, "PLAYBACK_NOT_READY", "回放会话未就绪或已结束")
+		}
+		t.ChannelID, t.SessionID = row.ChannelID, row.ID
 		if row.ExpiresAt.Before(t.ExpiresAt) {
 			t.ExpiresAt = row.ExpiresAt
 		}
@@ -232,6 +222,11 @@ func (s *Service) CheckTicket(raw, kind, id string) (Ticket, Principal, error) {
 		}
 		if _, e = s.Current(row.AppID, row.CredentialID); e != nil {
 			return t, p, e
+		}
+	}
+	if kind == "playback" {
+		if err := s.checkPlaybackTicket(t); err != nil {
+			return t, p, err
 		}
 	}
 	return t, p, nil

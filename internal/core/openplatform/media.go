@@ -94,9 +94,12 @@ func (s *Service) CheckActive(t Ticket) error {
 			return e
 		}
 	}
+	if t.Kind == "playback" {
+		return s.checkPlaybackTicket(t)
+	}
 	return nil
 }
 
 func mediaScope(kind string) string {
-	return map[string]string{"live": "live:play", "recording": "recording:play", "download": "recording:download", "event": "event:image", "snapshot": "snapshot:capture", "capture": "snapshot:capture"}[kind]
+	return map[string]string{"live": "live:play", "playback": "recording:play", "recording": "recording:play", "download": "recording:download", "event": "event:image", "snapshot": "snapshot:capture", "capture": "snapshot:capture"}[kind]
 }

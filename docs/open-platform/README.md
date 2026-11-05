@@ -1,6 +1,6 @@
 # Owl 三方应用开放平台
 
-首期与 Owl 同进程，独立认证与表空间，**仅支持单实例**。已提供设备/通道、实时播放、平台落盘录像、事件/图片、独立抓拍任务、云台控制、应用告警订阅和管理页面。真实设备、播放器与生产网络效果由人工验收。
+首期与 Owl 同进程，独立认证与表空间，**仅支持单实例**。已提供设备/通道、实时播放、设备录像目录与回放、平台落盘录像、事件/图片、独立抓拍任务、云台控制、应用告警订阅和管理页面。真实设备、播放器与生产网络效果由人工验收。
 
 ## 在线开发文档
 
@@ -72,7 +72,7 @@
 7. 图片记录：`GET /captures` 或编码设备/通道路径 `/captures`，返回与管理端通道抓图页相同的成功图片记录，含手动、定时和三方抓拍。顶层列表支持 `device_code/channel_code` 或兼容内部ID，`size/cursor`分页；默认全部历史，显式 `start/end` 时最大7天。`GET /captures/{capture}` 查询详情/刷新图片地址，`POST /captures/{capture}/image-tickets` 独立换票。权限沿用 `snapshot:capture` 与应用设备授权，本期只读；管理员重命名后按ID解析最新路径，图片删除或设备撤权后拒绝地址访问。图片记录ID与三方任务ID不同；永久图片不因三方任务到期删除。
 8. 云台先读编码通道路径 `/ptz/capabilities`；`POST` 同一路径 `/ptz` body `{action:"left",speed:30,duration:1}`，带幂等键。连续动作 1—3 秒；后端独立下发停止，查 command 状态；协议确认不代表实际到位。停止自身命令走 `/ptz-commands/{id}/stop`，管理员可从记录执行安全停止。停止失败保留通道租约，阻止后续控制；旧定时器只停止自己的代次。GB 聚焦/光圈、巡航/扫描采用对应停止码；预置位写入等须显式授权。ONVIF 首期仅声明方向、变倍、预置位，聚焦缺少成像停止链路，光圈未声明；不支持的动作拒绝。RTSP/RTMP 无云台能力。
 
-媒体入口首期支持 **ZLM 的 HLS fMP4 / HTTP-FLV** 和平台本地落盘录像/图片；设备侧录像目录查询支持 GB28181；设备侧回放/下载、RTSP/RTMP 直连、WS-FLV、WebRTC 尚未开放。抓拍复用当前通道的设备上传/实时流 FFmpeg 能力，不再另走 ZLM getSnap。
+媒体入口首期支持 **ZLM 的 HLS fMP4 / HTTP-FLV** 和平台本地落盘录像/图片；设备侧录像目录查询支持 GB28181；设备侧录像下载、RTSP/RTMP 直连、WS-FLV、WebRTC 尚未开放。抓拍复用当前通道的设备上传/实时流 FFmpeg 能力，不再另走 ZLM getSnap。
 
 ## 设备本地录像目录查询
 
@@ -92,7 +92,7 @@ Content-Type: application/json
 - 仅支持在线且支持 RecordInfo 的 GB28181 设备，每应用最多2个并发查询。不创建平台录像、播放会话或下载任务。
 - `data` 返回 `daynum/timenum/list:[{date,items:[{start,end}]}]/complete`。按平台查询时区分组，跨日切分，片段为Unix秒。完整无录像返回 `complete=true,list=[]`。
 - 部分分包返回200、`complete=false` 和 `incomplete:{received_count,expected_count}`；零应答504 `DEVICE_RECORD_TIMEOUT`，不可当作无录像。离线409 `DEVICE_OFFLINE`，不支持协议400 `UNSUPPORTED_RECORD_QUERY`，其他设备错误503 `DEVICE_RECORD_QUERY_FAILED`。
-- 返回前再次检查当前授权。结果不含设备文件路径、原始XML或播放地址，也不是 `/recordings/{id}/tickets` 所需的平台录像ID；设备录像回放和下载尚未向三方开放。
+- 返回前再次检查当前授权。结果不含设备文件路径、原始XML或播放地址，也不是 `/recordings/{id}/tickets` 所需的平台录像ID；设备录像回放通过 `/playback-sessions` 按时间段申请，设备录像下载尚未开放。
 
 ## 应用告警订阅
 
@@ -110,3 +110,17 @@ Content-Type: application/json
 - 回滚：停止接入、正常停止 Owl（触发控制收敛），将 enabled 置 false 后回滚程序，保留所有新表与密钥环，不删表。不强杀正在控制的进程；发生异常重启，租约核对完成前该通道拒绝新移动。
 - 关注日志中的审计写入失败计数、云台停止失败、配置/迁移失败；不得把应用请求/响应体、完整 URL query 或 Authorization 写入网关、APM 或调试日志。新增入口已从旧请求/响应体日志中排除。
 - 人工重点：真实设备抓拍与最长控制/断连/停止效果；指定应用对其他设备及历史图片/录像无法访问；网关隔离、HLS换票/FLV撤权、接收方验签与幂等重试。
+
+
+## 三方设备录像回放
+
+- 申请：`POST /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/playback-sessions`，body为 `{"start_at":1700000000,"end_at":1700000060,"protocol":"hls","record_type":0}`。也可用 `POST /openapi/v1/playback-sessions` 在body传 `device_code`+`channel_code`（或兼容内部 `channel_id`，不能混用）。需要 `recording:play`、设备授权和 `Idempotency-Key`。仅在线GB28181设备、ZLM；Unix秒时间范围最大7天。
+- 轮询：`GET /openapi/v1/playback-sessions/{session}`，创建时 `preparing`，最长约35秒准备，成功 `ready`，失败 `failed`（固定 `PLAYBACK_START_FAILED`）。同幂等键同请求返回原会话，不重复起流。
+- 播放：`POST /openapi/v1/playback-sessions/{session}/tickets`，body `{}`，返回 `url`、`expires_at`。支持HLS fMP4和HTTP-FLV，均经独立 `playback` 票据代理。会话最长30分钟、票据约5分钟；换票不续会话。
+- 控制：`POST /openapi/v1/playback-sessions/{session}/control`，需幂等键。`{"action":"pause"}`、`{"action":"play"}`、`{"action":"speed","scale":2}`、`{"action":"seek","seek_at":1700000030}`。倍速支持0.25/0.5/1/2/4，跳转在会话时间范围内；seek/speed下发PLAY并恢复播放。设备协议/固件决定支持度，未确认返回503 `PLAYBACK_CONTROL_FAILED`。HLS缓冲会延迟效果，可重载清单。
+- 列表：`GET /openapi/v1/playback-sessions`，支持编码、state、size/cursor和start/end筛选；设备及通道编码路径同样支持 `/playback-sessions` 列表。详情和控制使用会话结果ID，只能操作本应用资源。
+- 停止：`DELETE /openapi/v1/playback-sessions/{session}`，重复停止幂等，不影响管理员或其他应用的会话。503 `PLAYBACK_STOP_PENDING`表示票据访问已禁用，设备/媒体回收后台退避重试；详情中终态 `stop_pending=true`表示待回收，false表示完成。活动会话的stop_pending本来就是true。终态待回收仍占用会话配额，避免媒体故障时无限起流。
+
+每个回放使用独立UUID、SIP会话键、SSRC和ZLM流。应用/凭据撤销、授权变化、到期、失流或正常关闭服务时失效并回收；异常重启后旧会话不会恢复，按持久化的原媒体节点关闭独立RTP接收端。重启丢失SIP对话后无法补发原BYE，设备侧资源仍依赖设备的超时释放。首期仍仅支持单实例。
+
+本能力新增 `open_playback_sessions` 表。已有开放平台升级须先在维护窗口备份并运行 `go run ./tools/openplatform-migrate`（使用现有库的 `OWL_DATABASE_DSN`），再启动新版；不执行迁移会使开放平台入口返回503。普通无迁移升级通道不能直接用于本版。迁移只增开放表，原设备和录像数据不变；回滚程序后保留新增表，避免删除回放记录影响排查。完整参数、返回字段、状态及错误说明已同步到公开在线开发文档。

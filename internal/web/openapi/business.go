@@ -66,6 +66,7 @@ func (a *API) business(g *gin.RouterGroup) {
 	a.codeRoutes(g)
 	a.captureRoutes(g)
 	a.deviceRecordRoutes(g)
+	a.playbackRoutes(g)
 	for _, resource := range []string{"live-sessions", "snapshot-tasks", "ptz-commands"} {
 		name := resource
 		g.GET("/"+name, func(c *gin.Context) { a.listChannelResources(c, name) })
@@ -223,9 +224,13 @@ func (a *API) ticket(c *gin.Context, kind, id string) {
 		return
 	}
 	suffix := "content"
-	if kind == "live" {
-		var row op.Session
-		if e = a.S.DB.First(&row, "id = ?", id).Error; e != nil {
+	if kind == "live" || kind == "playback" {
+		var row struct{ Protocol string }
+		table := "open_media_sessions"
+		if kind == "playback" {
+			table = "open_playback_sessions"
+		}
+		if e = a.S.DB.Table(table).First(&row, "id = ?", id).Error; e != nil {
 			respond(c, nil, e)
 			return
 		}

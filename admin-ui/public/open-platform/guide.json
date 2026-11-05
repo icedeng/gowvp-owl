@@ -83,7 +83,23 @@
             "body：{\"start_at\":1710864000,\"end_at\":1710950400,\"timeout\":10,\"type\":\"all\"}。start_at/end_at必填Unix秒，结束大于开始，最多7天；type可选time/alarm/manual/all，默认all；timeout默认10秒、1—60秒，HTTP客户端超时应大于timeout+5秒。",
             "仅支持在线且支持RecordInfo的GB28181设备。返回daynum、timenum、list:[{date,items:[{start,end}]}]、complete；日期按平台查询时区分组，start/end为Unix秒，跨日片段切分。完整无录像返回complete=true、list=[]。部分分包返回200和complete=false、incomplete:{received_count,expected_count}，应缩小时间范围重查，不可据此认为其余部分没有录像。",
             "设备离线409 DEVICE_OFFLINE；不支持协议400 UNSUPPORTED_RECORD_QUERY；零应答504 DEVICE_RECORD_TIMEOUT；其他设备错误503 DEVICE_RECORD_QUERY_FAILED。每应用最多2个并发查询，超限429 CONCURRENT_LIMIT。返回前再次校验应用、凭据、Scope和设备授权。",
-            "只返回时间目录，不包含设备文件路径、原始XML或播放URL；不是/recordings/{id}/tickets需要的平台录像ID。设备侧录像回放和下载尚未向三方开放。"
+            "只返回时间目录，不包含设备文件路径、原始XML或播放URL；不是/recordings/{id}/tickets需要的平台录像ID。设备录像回放使用/playback-sessions按时间段申请；设备侧录像下载尚未开放。"
+          ]
+        },
+        {
+          "title": "设备录像回放（SD卡/NVR）",
+          "paragraphs": [
+            "使用独立AK/SK签名及recording:play，继续检查当前设备授权、来源与额度，不另要求device:read/channel:read。仅支持在线GB28181设备和ZLM节点。每次创建独立SIP会话与媒体流，不复用管理端或其他应用回放。会话最长30分钟，不能续期。",
+            "与/recordings平台落盘文件不同，设备回放通过GB28181按时间段取设备录像。先查询本地录像目录，再使用返回片段的start/end作为start_at/end_at，均为Unix秒，最长跨度7天；record_type为0/all、1/manual、2/alarm、3/time，默认0。",
+            "应用创建的回放与直播共用播放会话数和单通道额度。设备或协议不支持某个控制操作时返回PLAYBACK_CONTROL_FAILED，实际兼容性由人工使用目标设备确认。HLS会有分片缓冲，控制后可重新加载清单。"
+          ],
+          "steps": [
+            "POST 编码通道路径 /playback-sessions，传start_at/end_at及可选protocol（默认hls，可选flv）、record_type，带Idempotency-Key；也支持POST /openapi/v1/playback-sessions，body加device_code+channel_code。",
+            "创建返回state=preparing和会话id；GET /openapi/v1/playback-sessions/{session}轮询状态。ready后POST同一路径/tickets，body {}，得到回放视频 URL；约5分钟换票，最长30分钟会话，换票不续期。",
+            "POST /playback-sessions/{session}/control，携带新Idempotency-Key。body示例：{\"action\":\"pause\"}、{\"action\":\"play\"}、{\"action\":\"speed\",\"scale\":2}、{\"action\":\"seek\",\"seek_at\":1700000030}。seek/speed恢复播放，seek_at须在本次时间范围内。",
+            "GET 编码设备/通道路径 /playback-sessions 可查询本应用回放列表，也支持GET /playback-sessions?device_code=...&channel_code=...及state/size/cursor/start/end。",
+            "结束时DELETE /playback-sessions/{session}，无需幂等键。503 PLAYBACK_STOP_PENDING表示播放已失效、后台仍在回收；GET详情检查终态stop_pending，false表示回收完成。权限撤销、应用停用、凭据撤销、会话到期及服务重启也使会话失效。",
+            "failed的error固定为PLAYBACK_START_FAILED；重新申请使用新幂等键。停止/控制只能使用对应session结果ID，同一通道的多次回放不能用编码猜测。异常重启后无法恢复内存SIP对话发送BYE，平台会关闭原节点接收端，设备侧释放还依赖其超时机制。"
           ]
         },
         {
@@ -143,7 +159,7 @@
         {
           "title": "首期能力范围",
           "paragraphs": [
-            "实时媒体要求ZLM，抓拍复用通道设备上传/FFmpeg能力；实时支持HLS fMP4和HTTP-FLV。录像文件播放/下载为平台落盘文件；另已开放GB28181设备本地录像目录查询。设备录像回放/下载、RTSP/RTMP直连、WS-FLV和WebRTC尚未向三方开放。",
+            "实时媒体要求ZLM，抓拍复用通道设备上传/FFmpeg能力；实时支持HLS fMP4和HTTP-FLV。录像文件播放/下载为平台落盘文件；另已开放GB28181设备本地录像目录查询。设备录像下载、RTSP/RTMP直连、WS-FLV和WebRTC尚未向三方开放。",
             "首期仅单实例。应用编辑保守作废旧媒体会话和票据并暂停订阅，接入方需重建会话并确认恢复订阅。应用停用、到期、凭据撤销和设备撤权会阻止新请求并收敛活动命令。"
           ]
         }

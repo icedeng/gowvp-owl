@@ -29,6 +29,7 @@ type Service struct {
 	callbackTransport http.RoundTripper
 	resolveCallback   func(context.Context, string) ([]net.IPAddr, error)
 	channels          sync.Map
+	playbackLocks     [256]sync.Mutex
 	deliveryMu        sync.Mutex
 	delivering        map[string]int
 	DB                *gorm.DB
@@ -45,7 +46,7 @@ type Service struct {
 }
 
 func Models() []any {
-	return []any{&App{}, &Resource{}, &Credential{}, &Nonce{}, &Idempotency{}, &Audit{}, &Session{}, &Ticket{}, &Snapshot{}, &Command{}, &Lease{}, &CallbackTarget{}, &Subscription{}, &Outbox{}, &Delivery{}}
+	return []any{&App{}, &Resource{}, &Credential{}, &Nonce{}, &Idempotency{}, &Audit{}, &Session{}, &Playback{}, &Ticket{}, &Snapshot{}, &Command{}, &Lease{}, &CallbackTarget{}, &Subscription{}, &Outbox{}, &Delivery{}}
 }
 func Migrate(db *gorm.DB) error { return db.AutoMigrate(Models()...) }
 func New(db *gorm.DB, cfg Config, host Host) (*Service, error) {
@@ -68,6 +69,9 @@ func New(db *gorm.DB, cfg Config, host Host) (*Service, error) {
 	if err := db.Model(&Session{}).Where("state IN ?", []string{"preparing", "ready"}).Update("state", "expired").Error; err != nil {
 		return nil, err
 	}
+	if err := db.Model(&Playback{}).Where("state IN ?", []string{"preparing", "ready", "paused"}).Update("state", "expired").Error; err != nil {
+		return nil, err
+	}
 	if err := db.Model(&Snapshot{}).Where("state IN ?", []string{"queued", "running"}).Update("state", "unknown").Error; err != nil {
 		return nil, err
 	}
@@ -88,6 +92,7 @@ func (s *Service) Close() {
 	if s.cancel != nil {
 		s.cancel()
 		s.wg.Wait()
+		s.shutdownPlaybacks()
 	}
 }
 func (s *Service) Spawn(fn func()) { s.wg.Add(1); go func() { defer s.wg.Done(); fn() }() }
@@ -335,15 +340,17 @@ func (s *Service) SaveApp(a App, create bool, actor string) (App, error) {
 func (s *Service) invalidate(tx *gorm.DB, app, credential string) error {
 	q := tx.Model(&Ticket{}).Where("app_id = ?", app)
 	sessions := tx.Model(&Session{}).Where("app_id = ? AND state IN ?", app, []string{"preparing", "ready"})
+	playbacks := tx.Model(&Playback{}).Where("app_id = ? AND state IN ?", app, []string{"preparing", "ready", "paused"})
 	snap := tx.Model(&Snapshot{}).Where("app_id = ? AND state = ?", app, "queued")
 	subs := tx.Model(&Subscription{}).Where("app_id = ? AND status = ?", app, "active")
 	if credential != "" {
 		q = q.Where("credential_id = ?", credential)
 		sessions = sessions.Where("credential_id = ?", credential)
+		playbacks = playbacks.Where("credential_id = ?", credential)
 		snap = snap.Where("credential_id = ?", credential)
 		subs = subs.Where("credential_id = ?", credential)
 	}
-	for _, r := range []*gorm.DB{q.Update("revoked", true), sessions.Update("state", "revoked"), snap.Update("state", "cancelled"), subs.Update("status", "paused")} {
+	for _, r := range []*gorm.DB{q.Update("revoked", true), sessions.Update("state", "revoked"), playbacks.Update("state", "revoked"), snap.Update("state", "cancelled"), subs.Update("status", "paused")} {
 		if r.Error != nil {
 			return r.Error
 		}
