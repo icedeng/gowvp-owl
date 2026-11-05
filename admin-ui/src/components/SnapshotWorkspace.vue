@@ -32,6 +32,10 @@ const schedule = ref<CaptureSchedule>({ channel_id: '', enabled: false, interval
 const scheduleLoaded = ref(false)
 const scheduleError = ref('')
 const savingSchedule = ref(false)
+const scheduleLoading = ref(false)
+const scheduleOpen = ref(false)
+const scheduleSaveError = ref('')
+const scheduleDraft = reactive({ enabled: false, interval_seconds: 300 })
 const planEnabled = ref(false)
 const firstRun = ref('')
 const size = ref(24)
@@ -43,6 +47,15 @@ let requestSequence = 0
 let pollFailures = 0
 let pollingSequence: number | undefined
 let latestCoverId = ''
+let scheduleRevision = 0
+const hasScheduledTime = computed(() => Boolean(schedule.value.next_run_at && new Date(schedule.value.next_run_at).getTime() > 0))
+const scheduleConfigured = computed(() => hasScheduledTime.value || Boolean(schedule.value.last_run_at))
+const scheduleSummary = computed(() => {
+  if (!scheduleLoaded.value) return scheduleError.value ? '定时计划读取失败，请重试。' : '正在读取定时计划…'
+  if (!schedule.value.enabled) return '未开启定时抓拍，已有图片继续保留。'
+  const next = hasScheduledTime.value ? `，下一次将于 ${formatDate(schedule.value.next_run_at)} 开始执行。` : '，正在等待调度。'
+  return `已开启，每 ${schedule.value.interval_seconds} 秒抓拍一次${next}`
+})
 const pages = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
 const rangeStart = computed(() => rows.value.length ? (page.value - 1) * size.value + 1 : 0)
 const rangeEnd = computed(() => rows.value.length ? Math.min(total.value, (page.value - 1) * size.value + rows.value.length) : 0)
@@ -123,10 +136,13 @@ async function poll(current: number) {
     await load()
     if (current !== sequence) return
     if (props.channelId && planEnabled.value) {
+      const revision = scheduleRevision
       const { data } = await api.captureSchedule(props.channelId)
       if (current !== sequence) return
-      Object.assign(schedule.value, { next_run_at: data.next_run_at, last_run_at: data.last_run_at, last_error: data.last_error })
-      planEnabled.value = data.enabled
+      if (revision === scheduleRevision && !savingSchedule.value) {
+        schedule.value = data
+        planEnabled.value = data.enabled
+      }
     }
     pollFailures = 0
     if (pending.value || rows.value.some(row => row.state === 'queued' || row.state === 'running' || row.state === 'deleting') || planEnabled.value) schedulePoll()
@@ -166,6 +182,7 @@ defineExpose({ capture })
 async function loadSchedule() {
   if (!props.channelId) return
   const current = sequence
+  scheduleLoading.value = true
   try {
     const { data } = await api.captureSchedule(props.channelId)
     if (current !== sequence) return
@@ -176,27 +193,42 @@ async function loadSchedule() {
     if (data.enabled) schedulePoll()
   } catch (cause) {
     if (current === sequence) scheduleError.value = errorMessage(cause, '定时计划读取失败，请重试')
-  }
+  } finally { if (current === sequence) scheduleLoading.value = false }
 }
 
+function openSchedule() {
+  if (!scheduleLoaded.value || savingSchedule.value) return
+  Object.assign(scheduleDraft, { enabled: schedule.value.enabled, interval_seconds: schedule.value.interval_seconds })
+  firstRun.value = ''
+  scheduleSaveError.value = ''
+  scheduleOpen.value = true
+}
+function closeSchedule() {
+  if (!savingSchedule.value) scheduleOpen.value = false
+}
 async function saveSchedule() {
-  if (!props.channelId || !scheduleLoaded.value) return
+  if (!props.channelId || !scheduleLoaded.value || !scheduleOpen.value || savingSchedule.value) return
   const current = sequence
+  scheduleRevision += 1
   savingSchedule.value = true
-  scheduleError.value = ''
+  scheduleSaveError.value = ''
   try {
     const next = firstRun.value ? new Date(firstRun.value).toISOString() : undefined
-    const { data } = await api.saveCaptureSchedule(props.channelId, { ...schedule.value, next_run_at: next })
+    const { data } = await api.saveCaptureSchedule(props.channelId, { channel_id: props.channelId, ...scheduleDraft, next_run_at: next })
     if (current !== sequence) return
     schedule.value = data
     planEnabled.value = data.enabled
     firstRun.value = ''
+    scheduleOpen.value = false
     ui.toast(data.enabled ? '定时抓拍已启用' : '定时抓拍已停用')
-    if (data.enabled) schedulePoll()
   } catch (cause) {
-    if (current === sequence) scheduleError.value = errorMessage(cause, '定时计划保存失败')
+    if (current === sequence) scheduleSaveError.value = errorMessage(cause, '定时计划保存失败')
   } finally {
-    if (current === sequence) savingSchedule.value = false
+    if (current === sequence) {
+      scheduleRevision += 1
+      savingSchedule.value = false
+      if (planEnabled.value) schedulePoll()
+    }
   }
 }
 
@@ -268,6 +300,8 @@ watch(() => props.channelId, () => {
   selected.value = null; pending.value = null; submitting.value = false
   editing.value = null; removing.value = null; mutating.value = false
   error.value = ''; taskError.value = ''; scheduleError.value = ''; firstRun.value = ''
+  scheduleOpen.value = false; scheduleSaveError.value = ''; scheduleLoading.value = false
+  scheduleRevision += 1
   brokenImages.clear(); pollFailures = 0; latestCoverId = ''
   schedule.value = { channel_id: props.channelId || '', enabled: false, interval_seconds: 300 }
   scheduleLoaded.value = false; planEnabled.value = false; savingSchedule.value = false
@@ -282,36 +316,35 @@ onBeforeUnmount(() => { sequence += 1; clearTimeout(pollTimer) })
 
 <template>
   <div class="capture-workspace">
-    <section v-if="channelId" class="capture-plan" aria-labelledby="capture-plan-title">
-      <div class="capture-heading"><div><h3 id="capture-plan-title">定时抓拍</h3><p>按固定间隔自动保存图片；停用计划会保留已有图片。</p></div><RouterLink to="/snapshot-settings">全局抓拍设置</RouterLink></div>
-      <p v-if="scheduleError" class="warning-box" role="alert">{{ scheduleError }} <button v-if="!scheduleLoaded" class="btn btn-sm" type="button" @click="loadSchedule">重试</button></p>
-      <form class="capture-plan-form" @submit.prevent="saveSchedule">
-        <label class="capture-plan-toggle">
-          <span>启用定时抓拍</span>
-          <span class="switch"><input v-model="schedule.enabled" type="checkbox" role="switch" :disabled="!scheduleLoaded || savingSchedule" /><span class="slider" /></span>
-        </label>
-        <div class="capture-plan-fields">
-          <label class="form-group">
-            <span class="form-label">抓拍间隔（秒）</span>
-            <input v-model.number="schedule.interval_seconds" class="input plain" type="number" min="10" max="31536000" required :disabled="!scheduleLoaded || savingSchedule" />
-          </label>
-          <label class="form-group">
-            <span class="form-label">首次执行时间（可选）</span>
-            <input v-model="firstRun" class="input plain" type="datetime-local" :disabled="!scheduleLoaded || savingSchedule" />
-            <small class="capture-plan-help">留空则在保存后等待一个间隔</small>
-          </label>
-        </div>
-        <div class="capture-plan-footer">
-          <dl v-if="scheduleLoaded" class="capture-schedule-result">
-            <div><dt>下次执行</dt><dd>{{ planEnabled ? formatDate(schedule.next_run_at) : '未启用' }}</dd></div>
-            <div><dt>上次执行</dt><dd>{{ formatDate(schedule.last_run_at) }}</dd></div>
-          </dl>
-          <p v-else class="capture-plan-help" role="status">{{ scheduleError ? '定时计划未加载' : '正在读取定时计划…' }}</p>
-          <button class="btn btn-primary" type="submit" :disabled="!scheduleLoaded || savingSchedule"><LoaderCircle v-if="savingSchedule" class="animate-spin" /><Save v-else />{{ savingSchedule ? '保存中' : '保存计划' }}</button>
-        </div>
-      </form>
-      <p v-if="scheduleLoaded && schedule.last_error" class="capture-error capture-plan-error">{{ schedule.last_error }}</p>
+    <section v-if="channelId" class="capture-plan" :aria-labelledby="`capture-plan-title-${channelId}`">
+      <div class="capture-plan-summary">
+        <div><h3 :id="`capture-plan-title-${channelId}`">定时抓拍</h3><p>{{ scheduleSummary }}</p></div>
+        <button v-if="scheduleError && !scheduleLoaded" class="btn" type="button" :disabled="scheduleLoading" @click="loadSchedule"><RefreshCw :class="{ 'animate-spin': scheduleLoading }" aria-hidden="true" />重试</button>
+        <button v-else class="btn" type="button" :disabled="!scheduleLoaded || scheduleLoading || savingSchedule" aria-haspopup="dialog" @click="openSchedule"><Pencil aria-hidden="true" />{{ scheduleLoading ? '读取中' : scheduleConfigured ? '修改' : '配置' }}</button>
+      </div>
+      <p v-if="scheduleError" class="capture-error capture-plan-error" role="alert">{{ scheduleError }}</p>
+      <p v-if="scheduleLoaded && schedule.last_error" class="capture-error capture-plan-error">最近执行异常：{{ schedule.last_error }}</p>
     </section>
+
+    <ModalDialog :open="scheduleOpen" title="定时抓拍配置" description="按固定间隔自动保存当前通道图片；停用计划会保留已有图片。" scroll-body @close="closeSchedule">
+      <form :id="`capture-schedule-${channelId}`" class="capture-plan-form" @submit.prevent="saveSchedule">
+        <fieldset :disabled="savingSchedule">
+          <legend class="sr-only">定时抓拍计划</legend>
+          <label class="capture-plan-toggle"><span>启用定时抓拍</span><span class="switch"><input v-model="scheduleDraft.enabled" type="checkbox" role="switch" /><span class="slider" /></span></label>
+          <div class="capture-plan-fields">
+            <label class="form-group"><span class="form-label">抓拍间隔（秒）</span><input v-model.number="scheduleDraft.interval_seconds" class="input plain" type="number" min="10" max="31536000" step="1" required /></label>
+            <label class="form-group"><span class="form-label">首次执行时间（可选）</span><input v-model="firstRun" class="input plain" type="datetime-local" :aria-describedby="`capture-first-run-help-${channelId}`" /><small :id="`capture-first-run-help-${channelId}`" class="capture-plan-help">留空则在本次保存后等待一个抓拍间隔。</small></label>
+          </div>
+        </fieldset>
+        <dl v-if="scheduleLoaded" class="capture-schedule-result">
+          <div><dt>当前下次执行</dt><dd>{{ schedule.enabled && hasScheduledTime ? formatDate(schedule.next_run_at) : '未安排' }}</dd></div>
+          <div><dt>最近执行</dt><dd>{{ formatDate(schedule.last_run_at) }}</dd></div>
+        </dl>
+        <p v-if="scheduleSaveError" class="warning-box" role="alert">{{ scheduleSaveError }}</p>
+        <RouterLink class="capture-settings-link" to="/snapshot-settings?tab=settings">全局抓拍设置</RouterLink>
+      </form>
+      <template #footer><button class="btn" type="button" :disabled="savingSchedule" @click="closeSchedule">取消</button><button class="btn btn-primary" type="submit" :form="`capture-schedule-${channelId}`" :disabled="savingSchedule"><LoaderCircle v-if="savingSchedule" class="animate-spin" aria-hidden="true" /><Save v-else aria-hidden="true" />{{ savingSchedule ? '保存中' : '保存计划' }}</button></template>
+    </ModalDialog>
 
     <section aria-label="抓拍图片">
       <div class="capture-heading"><div><h3>抓拍图片 <span class="capture-count">{{ total }}</span></h3><p>长期保存，可预览、下载和重命名；删除会同时移除原文件。</p></div><div class="button-row"><button class="btn" type="button" :disabled="loading" @click="refresh"><RefreshCw :class="{ 'animate-spin': loading }" />刷新记录</button><button v-if="channelId" class="btn btn-primary" type="button" :disabled="disabled || busy" @click="capture"><LoaderCircle v-if="busy" class="animate-spin" /><Camera v-else />{{ pending ? stateNames[pending.state] : submitting ? '提交中' : '立即抓拍' }}</button></div></div>
@@ -373,21 +406,26 @@ onBeforeUnmount(() => { sequence += 1; clearTimeout(pollTimer) })
 
 <style scoped>
 .capture-workspace { min-width: 0; container-type: inline-size; }
-.capture-plan { padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
+.capture-plan { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
 .capture-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
 .capture-heading h3 { margin: 0; font-size: 16px; font-weight: 700; color: var(--ink-strong); }
 .capture-heading p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 .capture-heading a { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; }
 .capture-count { margin-left: 8px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
-/* 开关、参数和保存区分层排列，字段说明不参与输入框的对齐。 */
-.capture-plan-form { display: grid; gap: 16px; max-width: 800px; }
-.capture-plan-toggle { display: inline-flex; align-items: center; justify-self: start; gap: 12px; min-height: var(--control-height); font-size: 13px; cursor: pointer; }
+.capture-plan-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.capture-plan-summary > div { min-width: 0; }
+.capture-plan-summary h3 { margin: 0; color: var(--ink-strong); font-size: 14px; font-weight: 600; }
+.capture-plan-summary p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.capture-plan-summary > .btn { flex: 0 0 auto; }
+.capture-plan-form { display: grid; gap: 16px; padding: 2px; }
+.capture-plan-form fieldset { display: grid; gap: 16px; min-width: 0; padding: 0; margin: 0; border: 0; }
+.capture-plan-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: var(--control-height); font-size: 13px; cursor: pointer; }
 .capture-plan-toggle input:disabled + .slider { opacity: .6; cursor: not-allowed; }
-.capture-plan-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); align-items: start; gap: 16px; }
+.capture-plan-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 .capture-plan-fields .form-group { margin: 0; }
 .capture-plan-help { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.capture-plan-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
-.capture-plan-footer > .btn { flex: 0 0 auto; margin-left: auto; }
+.capture-settings-link { justify-self: start; color: var(--blue); font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
+.capture-plan-form .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .capture-schedule-result { display: flex; flex-wrap: wrap; gap: 8px 24px; min-width: 0; margin: 0; font-size: 12px; line-height: 1.5; }
 .capture-schedule-result > div { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .capture-schedule-result dt { color: var(--muted); }
@@ -424,9 +462,6 @@ onBeforeUnmount(() => { sequence += 1; clearTimeout(pollTimer) })
 .capture-full-image { display: block; width: 100%; height: auto; max-height: 70dvh; object-fit: contain; background: var(--panel-2); }
 .capture-modal-form { padding: 20px; overflow-wrap: anywhere; }
 @container (max-width: 560px) {
-  .capture-plan-fields { grid-template-columns: minmax(0, 1fr); }
-  .capture-plan-footer { flex-direction: column; align-items: stretch; }
-  .capture-plan-footer > .btn { width: 100%; margin-left: 0; }
   .capture-pagination, .capture-page-controls { flex-direction: column; align-items: flex-start; }
   .capture-page-summary { width: 100%; justify-content: space-between; }
 }
