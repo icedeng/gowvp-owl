@@ -72,7 +72,27 @@
 7. 图片记录：`GET /captures` 或编码设备/通道路径 `/captures`，返回与管理端通道抓图页相同的成功图片记录，含手动、定时和三方抓拍。顶层列表支持 `device_code/channel_code` 或兼容内部ID，`size/cursor`分页；默认全部历史，显式 `start/end` 时最大7天。`GET /captures/{capture}` 查询详情/刷新图片地址，`POST /captures/{capture}/image-tickets` 独立换票。权限沿用 `snapshot:capture` 与应用设备授权，本期只读；管理员重命名后按ID解析最新路径，图片删除或设备撤权后拒绝地址访问。图片记录ID与三方任务ID不同；永久图片不因三方任务到期删除。
 8. 云台先读编码通道路径 `/ptz/capabilities`；`POST` 同一路径 `/ptz` body `{action:"left",speed:30,duration:1}`，带幂等键。连续动作 1—3 秒；后端独立下发停止，查 command 状态；协议确认不代表实际到位。停止自身命令走 `/ptz-commands/{id}/stop`，管理员可从记录执行安全停止。停止失败保留通道租约，阻止后续控制；旧定时器只停止自己的代次。GB 聚焦/光圈、巡航/扫描采用对应停止码；预置位写入等须显式授权。ONVIF 首期仅声明方向、变倍、预置位，聚焦缺少成像停止链路，光圈未声明；不支持的动作拒绝。RTSP/RTMP 无云台能力。
 
-媒体入口首期支持 **ZLM 的 HLS fMP4 / HTTP-FLV** 和平台本地落盘录像/图片；不开放设备侧录像搜索、RTSP/RTMP 直连、WS-FLV、WebRTC。抓拍复用当前通道的设备上传/实时流 FFmpeg 能力，不再另走 ZLM getSnap。
+媒体入口首期支持 **ZLM 的 HLS fMP4 / HTTP-FLV** 和平台本地落盘录像/图片；设备侧录像目录查询支持 GB28181；设备侧回放/下载、RTSP/RTMP 直连、WS-FLV、WebRTC 尚未开放。抓拍复用当前通道的设备上传/实时流 FFmpeg 能力，不再另走 ZLM getSnap。
+
+## 设备本地录像目录查询
+
+平台 `/recordings` 只包含平台落盘录像。设备 SD 卡/NVR 录像目录使用：
+
+```http
+POST /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/records/query
+Content-Type: application/json
+```
+
+```json
+{"start_at":1710864000,"end_at":1710950400,"timeout":10,"type":"all"}
+```
+
+- AK/SK 签名，沿用 `recording:read` 和设备授权；只读 POST 无需 `Idempotency-Key`。兼容 `POST /openapi/v1/channels/{id}/records/query`，id为内部通道ID。
+- `start_at/end_at` 必填 Unix 秒，结束大于开始，跨度最多7天；`timeout` 默认10秒、1—60秒，信令另预留最多5秒；`type` 可选 `time/alarm/manual/all`，默认全部。
+- 仅支持在线且支持 RecordInfo 的 GB28181 设备，每应用最多2个并发查询。不创建平台录像、播放会话或下载任务。
+- `data` 返回 `daynum/timenum/list:[{date,items:[{start,end}]}]/complete`。按平台查询时区分组，跨日切分，片段为Unix秒。完整无录像返回 `complete=true,list=[]`。
+- 部分分包返回200、`complete=false` 和 `incomplete:{received_count,expected_count}`；零应答504 `DEVICE_RECORD_TIMEOUT`，不可当作无录像。离线409 `DEVICE_OFFLINE`，不支持协议400 `UNSUPPORTED_RECORD_QUERY`，其他设备错误503 `DEVICE_RECORD_QUERY_FAILED`。
+- 返回前再次检查当前授权。结果不含设备文件路径、原始XML或播放地址，也不是 `/recordings/{id}/tickets` 所需的平台录像ID；设备录像回放和下载尚未向三方开放。
 
 ## 应用告警订阅
 

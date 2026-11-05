@@ -77,6 +77,16 @@
           ]
         },
         {
+          "title": "设备本地录像目录（SD卡/NVR）",
+          "paragraphs": [
+            "平台/recordings只包含平台落盘录像。设备本地录像请POST /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/records/query；兼容POST /openapi/v1/channels/{id}/records/query，id为内部通道ID。使用AK/SK签名，沿用recording:read与设备授权，不需要其他设备/通道读取Scope或Idempotency-Key。",
+            "body：{\"start_at\":1710864000,\"end_at\":1710950400,\"timeout\":10,\"type\":\"all\"}。start_at/end_at必填Unix秒，结束大于开始，最多7天；type可选time/alarm/manual/all，默认all；timeout默认10秒、1—60秒，HTTP客户端超时应大于timeout+5秒。",
+            "仅支持在线且支持RecordInfo的GB28181设备。返回daynum、timenum、list:[{date,items:[{start,end}]}]、complete；日期按平台查询时区分组，start/end为Unix秒，跨日片段切分。完整无录像返回complete=true、list=[]。部分分包返回200和complete=false、incomplete:{received_count,expected_count}，应缩小时间范围重查，不可据此认为其余部分没有录像。",
+            "设备离线409 DEVICE_OFFLINE；不支持协议400 UNSUPPORTED_RECORD_QUERY；零应答504 DEVICE_RECORD_TIMEOUT；其他设备错误503 DEVICE_RECORD_QUERY_FAILED。每应用最多2个并发查询，超限429 CONCURRENT_LIMIT。返回前再次校验应用、凭据、Scope和设备授权。",
+            "只返回时间目录，不包含设备文件路径、原始XML或播放URL；不是/recordings/{id}/tickets需要的平台录像ID。设备侧录像回放和下载尚未向三方开放。"
+          ]
+        },
+        {
           "title": "抓拍与云台",
           "steps": [
             "抓拍支持mode=sync或async，均返回image_url及image_expires_at。同步等成功后返回可用图片，异步先返回任务和图片地址，未完成访问409 SNAPSHOT_PENDING（Retry-After:1），成功后原地址可用。省略mode保持异步；查询任务详情/列表会刷新图片地址。",
@@ -133,7 +143,7 @@
         {
           "title": "首期能力范围",
           "paragraphs": [
-            "实时媒体要求 ZLM，抓拍复用通道的设备上传/FFmpeg能力；实时支持 HLS fMP4、HTTP-FLV，录像为平台本地落盘文件。设备侧录像检索、RTSP/RTMP 直连、WS-FLV 和 WebRTC 不属于本开放接口。",
+            "实时媒体要求ZLM，抓拍复用通道设备上传/FFmpeg能力；实时支持HLS fMP4和HTTP-FLV。录像文件播放/下载为平台落盘文件；另已开放GB28181设备本地录像目录查询。设备录像回放/下载、RTSP/RTMP直连、WS-FLV和WebRTC尚未向三方开放。",
             "首期仅单实例。应用编辑保守作废旧媒体会话和票据并暂停订阅，接入方需重建会话并确认恢复订阅。应用停用、到期、凭据撤销和设备撤权会阻止新请求并收敛活动命令。"
           ]
         }
@@ -348,6 +358,11 @@
               "审计日志",
               "start/end 可选，page/size 分页",
               "均不传时不加时间筛选；传任意时间后按最长7天校验。"
+            ],
+            [
+              "设备本地录像目录",
+              "start_at/end_at为Unix秒、必填、最多7天；timeout=1—60秒",
+              "实时请求设备，返回完整/部分时间目录，不使用size/cursor分页。"
             ]
           ]
         },
@@ -689,6 +704,54 @@
               "SNAPSHOT_TIMEOUT",
               "同步等待超时，任务继续",
               "同幂等键和body重试或查询任务列表。"
+            ],
+            [
+              "400",
+              "INVALID_TIME_RANGE",
+              "设备目录查询时间非法或跨度超过7天",
+              "使用Unix秒，end_at大于start_at。"
+            ],
+            [
+              "400",
+              "INVALID_RECORD_TIMEOUT",
+              "timeout不在1—60秒",
+              "调整后重新签名。"
+            ],
+            [
+              "400",
+              "INVALID_RECORD_TYPE",
+              "录像类型非法",
+              "使用time、alarm、manual或all。"
+            ],
+            [
+              "400",
+              "UNSUPPORTED_RECORD_QUERY",
+              "设备协议不支持查询",
+              "当前仅支持GB28181。"
+            ],
+            [
+              "409",
+              "DEVICE_OFFLINE",
+              "设备离线",
+              "恢复在线后重试。"
+            ],
+            [
+              "503",
+              "RECORD_QUERY_UNAVAILABLE",
+              "宿主未提供查询能力",
+              "检查服务版本及适配器。"
+            ],
+            [
+              "503",
+              "DEVICE_RECORD_QUERY_FAILED",
+              "设备拒绝或查询失败",
+              "确认支持RecordInfo；缩小时间范围。"
+            ],
+            [
+              "504",
+              "DEVICE_RECORD_TIMEOUT",
+              "未收到可用目录应答",
+              "调整timeout或缩小时间范围重新签名。"
             ]
           ]
         }

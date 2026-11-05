@@ -305,6 +305,37 @@
           }
         },
         "description": "模块/依赖不可用"
+      },
+      "HTTP504": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "data": {
+                  "nullable": true
+                },
+                "message": {
+                  "type": "string"
+                },
+                "request_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "request_id",
+                "data"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        "description": "设备录像查询超时（DEVICE_RECORD_TIMEOUT）；缩小时间范围或调整timeout后重新签名重试。"
       }
     },
     "schemas": {
@@ -1696,6 +1727,158 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "DeviceRecordDate": {
+        "additionalProperties": false,
+        "properties": {
+          "date": {
+            "description": "按平台设备录像查询时区分组的录像日期。",
+            "example": "2024-03-20",
+            "format": "date",
+            "type": "string"
+          },
+          "items": {
+            "description": "该日期的录像时间片段。",
+            "items": {
+              "$ref": "#/components/schemas/DeviceRecordSegment"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "date",
+          "items"
+        ],
+        "type": "object"
+      },
+      "DeviceRecordIncomplete": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_count": {
+            "description": "设备声明的原始目录项总数。",
+            "example": 2,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "received_count": {
+            "description": "实际收到的设备原始目录项数，可能与跨日切分后的timenum不同。",
+            "example": 1,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "received_count",
+          "expected_count"
+        ],
+        "type": "object"
+      },
+      "DeviceRecordQueryInput": {
+        "additionalProperties": false,
+        "properties": {
+          "end_at": {
+            "description": "必填结束时间，Unix秒；大于start_at，跨度最多7天。",
+            "example": 1710950400,
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "start_at": {
+            "description": "必填查询开始时间，Unix秒，不是毫秒或RFC3339。",
+            "example": 1710864000,
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "timeout": {
+            "default": 10,
+            "description": "设备分包等待秒数，默认10秒；信令另预留最多5秒，客户端超时应大于timeout+5。",
+            "example": 10,
+            "maximum": 60,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": {
+            "default": "all",
+            "description": "time定时、alarm报警、manual手动、all全部；省略或空字符串默认all。",
+            "enum": [
+              "",
+              "time",
+              "alarm",
+              "manual",
+              "all"
+            ],
+            "example": "all",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_at",
+          "end_at"
+        ],
+        "type": "object"
+      },
+      "DeviceRecordSegment": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "description": "录像片段结束时间，Unix秒；跨日片段按日期切分。",
+            "example": 1710867600,
+            "format": "int64",
+            "type": "integer"
+          },
+          "start": {
+            "description": "录像片段开始时间，Unix秒。",
+            "example": 1710864000,
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "DeviceRecords": {
+        "additionalProperties": false,
+        "properties": {
+          "complete": {
+            "description": "true应答完整，false只收到部分分包。",
+            "example": true,
+            "type": "boolean"
+          },
+          "daynum": {
+            "description": "结果中有录像的日期数。",
+            "example": 1,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "incomplete": {
+            "$ref": "#/components/schemas/DeviceRecordIncomplete",
+            "description": "仅complete=false时返回已收/应收数量。"
+          },
+          "list": {
+            "description": "按日期分组的时间目录；无录像为空数组。",
+            "items": {
+              "$ref": "#/components/schemas/DeviceRecordDate"
+            },
+            "type": "array"
+          },
+          "timenum": {
+            "description": "结果的录像时间片段总数（跨日分段后）。",
+            "example": 1,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "daynum",
+          "timenum",
+          "list",
+          "complete"
+        ],
         "type": "object"
       },
       "Empty": {
@@ -7456,6 +7639,158 @@
         "x-scope": "ptz:control"
       }
     },
+    "/openapi/v1/channels/{id}/records/query": {
+      "post": {
+        "description": "内部 ID 兼容入口；推荐POST /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/records/query。实时向设备查询SD卡/NVR本地录像时间目录（GB28181 RecordInfo），区别于仅查询平台落盘文件的/recordings。只需recording:read和设备授权，不另要求device:read/channel:read。只读POST无需Idempotency-Key，不创建录像或播放会话。start_at/end_at必填Unix秒，最大7天；type默认all；timeout默认10秒、1—60秒，信令另预留最多5秒。每应用最多2个并发目录查询，超限429 CONCURRENT_LIMIT。仅支持在线且支持录像查询的GB28181设备；其他协议400 UNSUPPORTED_RECORD_QUERY，离线409 DEVICE_OFFLINE。成功返回按日期分组的start/end片段；完整无录像list=[]且complete=true。部分分包返回200、complete=false及incomplete已收/应收数量；零应答504 DEVICE_RECORD_TIMEOUT；拒绝或其他错误503 DEVICE_RECORD_QUERY_FAILED。请求取消会终止查询，返回前重新核对应用、凭据、Scope和设备授权。结果不含设备文件路径、原始XML或播放/下载URL；不是平台录像ID，不能用于/recordings/{id}/tickets。设备录像回放/下载尚未向三方开放。",
+        "operationId": "post_openapi_v1_channels_id_records_query",
+        "parameters": [
+          {
+            "description": "通道内部ID；推荐使用设备完整编码+完整通道编码入口。",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "POST/PATCH/PUT 为 application/json，不带 charset；GET/DELETE 不传此头。",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "end_at": 1710950400,
+                "start_at": 1710864000,
+                "timeout": 10,
+                "type": "all"
+              },
+              "schema": {
+                "$ref": "#/components/schemas/DeviceRecordQueryInput"
+              }
+            }
+          },
+          "description": "资源定位仅从路径读取，未知/重复属性拒绝；签名使用实际JSON字节。",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "complete": true,
+                    "daynum": 1,
+                    "list": [
+                      {
+                        "date": "2024-03-20",
+                        "items": [
+                          {
+                            "end": 1710867600,
+                            "start": 1710864000
+                          }
+                        ]
+                      }
+                    ],
+                    "timenum": 1
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/DeviceRecords"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "返回完整、空目录或明确标记的部分目录；须检查data.complete。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          },
+          "504": {
+            "$ref": "#/components/responses/HTTP504"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "查询设备本地录像目录（内部 ID 兼容）",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "recording:read"
+      }
+    },
     "/openapi/v1/devices": {
       "get": {
         "description": "返回当前应用设备授权范围内的设备。结果采用游标分页，next_cursor=null 表示结束。支持 device_code 精确筛选。未授权或不存在的资源在列表中均为空。",
@@ -9466,7 +9801,7 @@
     },
     "/openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/recordings": {
       "get": {
-        "description": "直接按设备完整编码与完整通道编码查询录像。无需内部设备/通道 ID，不额外要求 device:read 或 channel:read。路径资源不存在或未授权统一 404；通道编码不唯一返回 409。路径已限定资源，不接受 device_id/channel_id/device_code/channel_code 查询参数。 使用 size/cursor 分页，保留 start/end、state（若有）等筛选，时间默认最近 24 小时、最大 7 天。",
+        "description": "直接按设备完整编码与完整通道编码查询录像。无需内部设备/通道 ID，不额外要求 device:read 或 channel:read。路径资源不存在或未授权统一 404；通道编码不唯一返回 409。路径已限定资源，不接受 device_id/channel_id/device_code/channel_code 查询参数。 使用 size/cursor 分页，保留 start/end、state（若有）等筛选，时间默认最近 24 小时、最大 7 天。 此入口仅查询平台落盘录像；设备本地SD卡/NVR录像目录请POST /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/records/query。",
         "operationId": "get_openapi_v1_devices_by_code_device_code_channels_channel_code_recordings",
         "parameters": [
           {
@@ -9648,6 +9983,171 @@
           }
         ],
         "summary": "按设备和通道编码查询录像列表",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "recording:read"
+      }
+    },
+    "/openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/records/query": {
+      "post": {
+        "description": "设备完整编码+完整通道编码定位，未知/未授权统一404，同设备下重复通道编码409。实时向设备查询SD卡/NVR本地录像时间目录（GB28181 RecordInfo），区别于仅查询平台落盘文件的/recordings。只需recording:read和设备授权，不另要求device:read/channel:read。只读POST无需Idempotency-Key，不创建录像或播放会话。start_at/end_at必填Unix秒，最大7天；type默认all；timeout默认10秒、1—60秒，信令另预留最多5秒。每应用最多2个并发目录查询，超限429 CONCURRENT_LIMIT。仅支持在线且支持录像查询的GB28181设备；其他协议400 UNSUPPORTED_RECORD_QUERY，离线409 DEVICE_OFFLINE。成功返回按日期分组的start/end片段；完整无录像list=[]且complete=true。部分分包返回200、complete=false及incomplete已收/应收数量；零应答504 DEVICE_RECORD_TIMEOUT；拒绝或其他错误503 DEVICE_RECORD_QUERY_FAILED。请求取消会终止查询，返回前重新核对应用、凭据、Scope和设备授权。结果不含设备文件路径、原始XML或播放/下载URL；不是平台录像ID，不能用于/recordings/{id}/tickets。设备录像回放/下载尚未向三方开放。",
+        "operationId": "post_openapi_v1_devices_by_code_device_code_channels_channel_code_records_query",
+        "parameters": [
+          {
+            "description": "设备完整编码，对应设备对象 device_id，按原字符串精确匹配；不是内部 id。",
+            "in": "path",
+            "name": "device_code",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "设备上报的完整通道编码，对应通道对象 channel_id；不是内部 id，也不是录像机数字序号。必须属于路径中的设备。",
+            "in": "path",
+            "name": "channel_code",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "POST/PATCH/PUT 为 application/json，不带 charset；GET/DELETE 不传此头。",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "end_at": 1710950400,
+                "start_at": 1710864000,
+                "timeout": 10,
+                "type": "all"
+              },
+              "schema": {
+                "$ref": "#/components/schemas/DeviceRecordQueryInput"
+              }
+            }
+          },
+          "description": "资源定位仅从路径读取，未知/重复属性拒绝；签名使用实际JSON字节。",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "complete": true,
+                    "daynum": 1,
+                    "list": [
+                      {
+                        "date": "2024-03-20",
+                        "items": [
+                          {
+                            "end": 1710867600,
+                            "start": 1710864000
+                          }
+                        ]
+                      }
+                    ],
+                    "timenum": 1
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/DeviceRecords"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "返回完整、空目录或明确标记的部分目录；须检查data.complete。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          },
+          "504": {
+            "$ref": "#/components/responses/HTTP504"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "查询设备本地录像目录（按设备和通道编码）",
         "tags": [
           "业务"
         ],
@@ -10622,7 +11122,7 @@
     },
     "/openapi/v1/devices/by-code/{device_code}/recordings": {
       "get": {
-        "description": "直接按设备完整编码查询录像。无需内部设备/通道 ID，不额外要求 device:read 或 channel:read。路径资源不存在或未授权统一 404；通道编码不唯一返回 409。路径已限定资源，不接受 device_id/channel_id/device_code/channel_code 查询参数。 使用 size/cursor 分页，保留 start/end、state（若有）等筛选，时间默认最近 24 小时、最大 7 天。",
+        "description": "直接按设备完整编码查询录像。无需内部设备/通道 ID，不额外要求 device:read 或 channel:read。路径资源不存在或未授权统一 404；通道编码不唯一返回 409。路径已限定资源，不接受 device_id/channel_id/device_code/channel_code 查询参数。 使用 size/cursor 分页，保留 start/end、state（若有）等筛选，时间默认最近 24 小时、最大 7 天。 此入口仅查询平台落盘录像；设备本地SD卡/NVR录像目录请POST /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/records/query。",
         "operationId": "get_openapi_v1_devices_by_code_device_code_recordings",
         "parameters": [
           {
@@ -12752,7 +13252,7 @@
     },
     "/openapi/v1/recordings": {
       "get": {
-        "description": "返回当前应用设备授权范围内的录像。结果采用游标分页，next_cursor=null 表示结束。 仅平台录像，不查询设备侧录像。 支持 device_code、channel_code 编码精确筛选，也保留内部 device_id、channel_id；所有条件取交集，不会因未知编码退化为全量结果。仅传 channel_code 时匹配所有授权设备的同码通道。",
+        "description": "返回当前应用设备授权范围内的录像。结果采用游标分页，next_cursor=null 表示结束。 仅平台录像，不查询设备侧录像。 支持 device_code、channel_code 编码精确筛选，也保留内部 device_id、channel_id；所有条件取交集，不会因未知编码退化为全量结果。仅传 channel_code 时匹配所有授权设备的同码通道。 此入口仅查询平台落盘录像；设备本地SD卡/NVR录像目录请POST /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/records/query。",
         "operationId": "get_openapi_v1_recordings",
         "parameters": [
           {
