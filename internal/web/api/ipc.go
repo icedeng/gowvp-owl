@@ -1350,6 +1350,11 @@ func (a IPCAPI) editChannel(c *gin.Context, in *ipc.EditChannelInput) (any, erro
 	if err != nil {
 		return nil, err
 	}
+	unlock, err := a.lockRequestedMediaNode(c.Request.Context(), in.Config.MediaServerID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	return a.ipc.EditChannel(c.Request.Context(), in, cid)
 }
 
@@ -1394,6 +1399,11 @@ func (a IPCAPI) editChannelMediaServer(c *gin.Context, in *editChannelMediaServe
 		}
 	}
 
+	if a.uc == nil {
+		return nil, reason.ErrServer.SetMsg("流媒体服务不可用")
+	}
+	unlockNode := a.uc.SMSAPI.smsCore.LockMediaServerAssignment()
+	defer unlockNode()
 	mediaServerID := strings.TrimSpace(in.MediaServerID)
 	if mediaServerID == "" {
 		mediaServerID = sms.DefaultMediaServerID
@@ -1404,11 +1414,10 @@ func (a IPCAPI) editChannelMediaServer(c *gin.Context, in *editChannelMediaServe
 	if channel.IsPlaying {
 		return nil, reason.ErrBadRequest.SetMsg("通道存在活动媒体会话，请先停止预览、回放、下载或语音会话")
 	}
-	if a.uc == nil {
-		return nil, reason.ErrServer.SetMsg("流媒体服务不可用")
-	}
-	if _, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, mediaServerID); err != nil {
+	if node, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, mediaServerID); err != nil {
 		return nil, reason.ErrBadRequest.SetMsg("目标媒体节点不存在")
+	} else if node.Disabled {
+		return nil, reason.ErrBadRequest.SetMsg("目标媒体节点已停用")
 	}
 
 	return a.ipc.EditChannelConfig(ctx, channelID, func(config *ipc.StreamConfig) {
@@ -1433,6 +1442,11 @@ func (a IPCAPI) addChannel(c *gin.Context, in *ipc.AddChannelInput) (any, error)
 	if !slices.Contains([]string{ipc.TypeRTMP, ipc.TypeRTSP}, in.Type) {
 		return nil, reason.ErrBadRequest.SetMsg("仅支持 RTMP/RTSP 类型通道")
 	}
+	unlock, err := a.lockRequestedMediaNode(c.Request.Context(), in.Config.MediaServerID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	return a.ipc.AddChannel(c.Request.Context(), in)
 }
 
@@ -1537,6 +1551,9 @@ func (a IPCAPI) play(c *gin.Context, _ *struct{}) (*playOutput, error) {
 	svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(c.Request.Context(), mediaServerID)
 	if err != nil {
 		return nil, err
+	}
+	if svr.Disabled {
+		return nil, reason.ErrBadRequest.SetMsg("媒体节点已停用")
 	}
 	if ch.GetType() == ipc.TypeGB28181 && svr.GetSDPIP() == "127.0.0.1" {
 		return nil, reason.ErrUsedLogic.SetMsg("请先配置流媒体 SDP 收流地址")
@@ -4157,6 +4174,9 @@ func buildChannelRTSPURL(ctx context.Context, smsCore sms.Core, ch *ipc.Channel)
 		return "", err
 	}
 
+	if svr.Disabled {
+		return "", reason.ErrBadRequest.WithMsg("媒体节点已停用")
+	}
 	host := strings.TrimSpace(svr.StreamIP)
 	if host == "" {
 		host = strings.TrimSpace(svr.IP)

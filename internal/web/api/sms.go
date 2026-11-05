@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/internal/core/sms"
@@ -10,6 +11,7 @@ import (
 	"github.com/ixugo/goddd/pkg/reason"
 	"github.com/ixugo/goddd/pkg/web"
 	"gorm.io/gorm"
+	"strings"
 )
 
 type SmsAPI struct {
@@ -46,11 +48,12 @@ func registerSms(g gin.IRouter, api SmsAPI, handler ...gin.HandlerFunc) {
 		group := g.Group("/media_servers", handler...)
 		group.GET("", web.WrapH(api.listMediaServers))
 		group.PUT("/:id", web.WrapH(api.updateMediaServer))
+		group.PUT("/:id/state", web.WrapH(api.setMediaServerState))
 		group.GET("/:id", web.WrapH(api.mediaServerDetail))
 		group.GET("/:id/inspect/:resource", web.WrapH(api.inspectMediaServer))
 
-		// group.POST("", web.WrapH(api.createMediaServer))
-		// group.DELETE("/:id", web.WrapH(api.deleteMediaServer))
+		group.POST("", web.WrapH(api.createMediaServer))
+		group.DELETE("/:id", web.WrapH(api.deleteMediaServer))
 	}
 }
 
@@ -74,26 +77,68 @@ func (a SmsAPI) getMediaServer(c *gin.Context, in *mediaServerIDInput) (any, err
 
 func (a SmsAPI) updateMediaServer(c *gin.Context, in *updateMediaServerInput) (any, error) {
 	out, err := a.smsCore.UpdateMediaServer(c.Request.Context(), &in.EditMediaServerInput, in.ID, a.uc.Conf.Server.HTTP.Port)
+	if err != nil {
+		return nil, err
+	}
 	if out != nil && in.ID == "local" {
 		a.uc.Conf.Media.IP = out.IP
 		a.uc.Conf.Media.SDPIP = out.SDPIP
 		a.uc.Conf.Media.Secret = out.Secret
 		a.uc.Conf.Media.WebHookIP = out.HookIP
 		a.uc.Conf.Media.Type = out.Type
+		a.uc.Conf.Media.HTTPPort = out.Ports.HTTP
+		a.uc.Conf.Media.RTPPortRange = out.RTPPortRange
 		if err := conf.WriteConfig(a.uc.Conf, a.uc.Conf.ConfigPath); err != nil {
 			return nil, reason.ErrServer.WithMsg(err.Error())
 		}
 	}
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
+	return mediaServerListItem{MediaServer: out}, nil
 }
 
 func (a SmsAPI) createMediaServer(c *gin.Context, in *sms.AddMediaServerInput) (any, error) {
-	return a.smsCore.CreateMediaServer(c.Request.Context(), in)
+	out, err := a.smsCore.CreateMediaServer(c.Request.Context(), in)
+	if err != nil {
+		return nil, err
+	}
+	return mediaServerListItem{MediaServer: out}, nil
 }
 
 func (a SmsAPI) deleteMediaServer(c *gin.Context, in *mediaServerIDInput) (any, error) {
-	return a.smsCore.DeleteMediaServer(c.Request.Context(), in.ID)
+	_, err := a.smsCore.DeleteMediaServer(c.Request.Context(), in.ID)
+	return gin.H{"id": in.ID}, err
+}
+
+type mediaServerStateInput struct {
+	ID       string `uri:"id" binding:"required"`
+	Disabled *bool  `json:"disabled" binding:"required"`
+}
+
+func (a SmsAPI) setMediaServerState(c *gin.Context, in *mediaServerStateInput) (any, error) {
+	out, err := a.smsCore.SetMediaServerDisabled(c.Request.Context(), in.ID, *in.Disabled)
+	if err != nil {
+		return nil, err
+	}
+	return mediaServerListItem{MediaServer: out}, nil
+}
+
+// lockRequestedMediaNode 防止通用通道新增、编辑接口与节点删除并发产生悬空引用。
+func (a IPCAPI) lockRequestedMediaNode(ctx context.Context, id string) (func(), error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return func() {}, nil
+	}
+	if a.uc == nil {
+		return nil, reason.ErrServer.WithMsg("流媒体服务不可用")
+	}
+	unlock := a.uc.SMSAPI.smsCore.LockMediaServerAssignment()
+	node, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, id)
+	if err != nil {
+		unlock()
+		return nil, reason.ErrBadRequest.WithMsg("目标媒体节点不存在")
+	}
+	if node.Disabled {
+		unlock()
+		return nil, reason.ErrBadRequest.WithMsg("目标媒体节点已停用")
+	}
+	return unlock, nil
 }

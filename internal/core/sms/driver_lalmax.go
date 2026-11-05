@@ -327,7 +327,7 @@ func NewLalmaxDriver() *LalmaxDriver {
 }
 
 func (l *LalmaxDriver) withConfig(ms *MediaServer) lalmax.Engine {
-	url := fmt.Sprintf("http://%s:%d", ms.IP, ms.Ports.HTTP)
+	url := "http://" + net.JoinHostPort(ms.IP, strconv.Itoa(ms.Ports.HTTP))
 	return l.engine.SetConfig(lalmax.Config{
 		URL:    url,
 		Secret: ms.Secret,

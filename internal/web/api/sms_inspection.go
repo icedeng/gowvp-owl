@@ -25,6 +25,7 @@ type mediaServerListItem struct {
 
 // 使用独立输出模型，节点连接密钥不会进入详情或原始诊断响应。
 type mediaServerDetail struct {
+	Disabled          bool                 `json:"disabled"`
 	ID                string               `json:"id"`
 	Type              string               `json:"type"`
 	IP                string               `json:"ip"`
@@ -45,7 +46,7 @@ func (a SmsAPI) mediaServerDetail(c *gin.Context, in *mediaServerIDInput) (any, 
 		return nil, err
 	}
 	return mediaServerDetail{
-		ID: server.ID, Type: server.Type, IP: server.IP, HookIP: server.HookIP,
+		Disabled: server.Disabled, ID: server.ID, Type: server.Type, IP: server.IP, HookIP: server.HookIP,
 		SDPIP: server.SDPIP, StreamIP: server.StreamIP, Ports: server.Ports,
 		Status: server.Status, LastKeepaliveAt: server.LastKeepaliveAt,
 		RTPPortRange: server.RTPPortRange, RecordPath: server.RecordPath, HookAliveInterval: server.HookAliveInterval,

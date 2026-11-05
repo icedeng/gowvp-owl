@@ -3,11 +3,9 @@ package sms
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/reason"
-	"github.com/jinzhu/copier"
 )
 
 // MediaServerStorer Instantiation interface
@@ -30,7 +28,7 @@ func (c Core) ListMediaServers(ctx context.Context, in *FindMediaServerInput) ([
 	for _, item := range items {
 		item.Status = false
 		value, ok := c.cacheServers.Load(item.ID)
-		if ok {
+		if ok && !item.Disabled {
 			online, updatedAt, _ := value.status()
 			item.Status = online
 			if !updatedAt.IsZero() {
@@ -49,43 +47,6 @@ func (c Core) GetMediaServer(ctx context.Context, id string) (*MediaServer, erro
 			return nil, reason.ErrNotFound.Withf(`Get err[%s]`, err.Error())
 		}
 		return nil, reason.ErrDB.Withf(`Get err[%s]`, err.Error())
-	}
-	return &out, nil
-}
-
-// CreateMediaServer Insert into database
-func (c Core) CreateMediaServer(ctx context.Context, in *AddMediaServerInput) (*MediaServer, error) {
-	var out MediaServer
-	if err := copier.Copy(&out, in); err != nil {
-		slog.ErrorContext(ctx, "Copy", "err", err)
-	}
-	if err := c.storer.MediaServer().Create(ctx, &out); err != nil {
-		return nil, reason.ErrDB.Withf(`Create err[%s]`, err.Error())
-	}
-	return &out, nil
-}
-
-// UpdateMediaServer Update object information
-func (c Core) UpdateMediaServer(ctx context.Context, in *EditMediaServerInput, id string, serverPort int) (*MediaServer, error) {
-	var out MediaServer
-	if err := c.storer.MediaServer().Update(ctx, &out, func(b *MediaServer) {
-		if err := copier.Copy(b, in); err != nil {
-			slog.ErrorContext(ctx, "Copy", "err", err)
-		}
-	}, orm.Where("id=?", id)); err != nil {
-		return nil, reason.ErrDB.Withf(`Update err[%s]`, err.Error())
-	}
-	if err := c.connection(&out, serverPort); err != nil {
-		return &out, reason.ErrServer.Withf(`Connect err[%s]`, err.Error())
-	}
-	return &out, nil
-}
-
-// DeleteMediaServer Delete object
-func (c Core) DeleteMediaServer(ctx context.Context, id string) (*MediaServer, error) {
-	var out MediaServer
-	if err := c.storer.MediaServer().Delete(ctx, &out, orm.Where("id=?", id)); err != nil {
-		return nil, reason.ErrDB.Withf(`Delete err[%s]`, err.Error())
 	}
 	return &out, nil
 }

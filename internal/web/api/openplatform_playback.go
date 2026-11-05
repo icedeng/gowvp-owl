@@ -25,6 +25,9 @@ func (h openHost) PreparePlayback(ctx context.Context, row op.Playback) (op.Sour
 	if err != nil {
 		return op.Source{}, op.ErrUnavailable
 	}
+	if ms.Disabled {
+		return op.Source{}, op.ErrUnavailable
+	}
 	if ms.Type != "" && !strings.EqualFold(ms.Type, "zlm") {
 		return op.Source{}, op.Fail(400, "UNSUPPORTED_MEDIA_SERVER", "设备回放支持ZLM节点")
 	}

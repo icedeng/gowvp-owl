@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,6 +60,7 @@ type NodeManager struct {
 	cacheServers conc.Map[string, *WarpMediaServer]
 	quit         chan struct{}
 	connectionMu sync.Mutex
+	managementMu sync.RWMutex
 	closeOnce    sync.Once
 	wg           sync.WaitGroup
 	serverPort   atomic.Int64
@@ -254,6 +257,9 @@ func (n *NodeManager) Run(bc *conf.Bootstrap, serverPort int) error {
 	}
 
 	for _, ms := range mediaServers {
+		if ms.Disabled {
+			continue
+		}
 		n.wg.Add(1)
 		go func(ms *MediaServer) {
 			defer n.wg.Done()
@@ -273,7 +279,22 @@ func (n *NodeManager) connection(server *MediaServer, serverPort int) error {
 	n.connectionMu.Lock()
 	defer n.connectionMu.Unlock()
 
-	state := &WarpMediaServer{Config: server}
+	// 重新读取持久状态，旧心跳检查不能复活已停用、删除或更新的节点。
+	var current MediaServer
+	if err := n.storer.MediaServer().Get(context.Background(), &current, orm.Where("id=?", server.ID)); err != nil {
+		return err
+	}
+	fresh := *server
+	if current.ID != "" {
+		fresh = current
+	}
+	server = &fresh
+	if server.Disabled {
+		n.cacheServers.Delete(server.ID)
+		return nil
+	}
+	initial := *server
+	state := &WarpMediaServer{Config: &initial}
 	n.cacheServers.Store(server.ID, state)
 
 	driver, err := n.getDriver(server.Type)
@@ -293,13 +314,14 @@ func (n *NodeManager) connection(server *MediaServer, serverPort int) error {
 	log.Info("MediaServer 连接成功")
 
 	log.Info("MediaServer 配置设置...")
-	hookPrefix := fmt.Sprintf("http://%s:%d/webhook", server.HookIP, serverPort)
+	hookPrefix := "http://" + net.JoinHostPort(server.HookIP, strconv.Itoa(serverPort)) + "/webhook"
 	u, err := url.Parse(hookPrefix)
 	if err != nil {
 		return fmt.Errorf("build media webhook URL: %w", err)
 	}
 	query := u.Query()
 	query.Set("secret", server.Secret)
+	query.Set("media_server_id", server.ID)
 	u.RawQuery = query.Encode()
 	hookPrefix = u.String()
 	if err := driver.Setup(ctx, server, hookPrefix); err != nil {
@@ -315,7 +337,11 @@ func (n *NodeManager) connection(server *MediaServer, serverPort int) error {
 	}, orm.Where("id=?", server.ID)); err != nil {
 		return fmt.Errorf("save media server: %w", err)
 	}
-	state.update(true, time.Now())
+	state.mu.Lock()
+	state.Config = server
+	state.IsOnline = true
+	state.LastUpdatedAt = time.Now()
+	state.mu.Unlock()
 
 	return nil
 }
@@ -353,6 +379,11 @@ func (n *NodeManager) OpenRTPServer(server *MediaServer, in zlm.OpenRTPServerReq
 }
 
 func (n *NodeManager) OpenRTPServerContext(ctx context.Context, server *MediaServer, in zlm.OpenRTPServerRequest) (*zlm.OpenRTPServerResponse, error) {
+	unlock, err := n.beginMediaOperation(ctx, server)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
@@ -392,6 +423,11 @@ func (n *NodeManager) StartSendRTP(server *MediaServer, in zlm.StartSendRTPReque
 }
 
 func (n *NodeManager) StartSendRTPContext(ctx context.Context, server *MediaServer, in zlm.StartSendRTPRequest) (*zlm.StartSendRTPResponse, error) {
+	unlock, err := n.beginMediaOperation(ctx, server)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
@@ -405,6 +441,11 @@ func (n *NodeManager) StartSendRTPTalk(server *MediaServer, in zlm.StartSendRTPT
 }
 
 func (n *NodeManager) StartSendRTPTalkContext(ctx context.Context, server *MediaServer, in zlm.StartSendRTPTalkRequest) (*zlm.StartSendRTPResponse, error) {
+	unlock, err := n.beginMediaOperation(ctx, server)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
@@ -436,6 +477,11 @@ func (n *NodeManager) CloseStreams(server *MediaServer, in zlm.CloseStreamsReque
 
 // CreateStreamProxy 添加流代理
 func (n *NodeManager) CreateStreamProxy(server *MediaServer, in AddStreamProxyRequest) (*zlm.AddStreamProxyResponse, error) {
+	unlock, err := n.beginMediaOperation(context.Background(), server)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
@@ -444,6 +490,11 @@ func (n *NodeManager) CreateStreamProxy(server *MediaServer, in AddStreamProxyRe
 }
 
 func (n *NodeManager) GetSnapshot(server *MediaServer, in GetSnapRequest) ([]byte, error) {
+	unlock, err := n.beginMediaOperation(context.Background(), server)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err
@@ -474,6 +525,11 @@ func (n *NodeManager) GetMediaInfoContext(ctx context.Context, server *MediaServ
 
 // StartRecord 开始录制指定流
 func (n *NodeManager) StartRecord(server *MediaServer, in zlm.StartRecordRequest) (*zlm.StartRecordResponse, error) {
+	unlock, err := n.beginMediaOperation(context.Background(), server)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return nil, err

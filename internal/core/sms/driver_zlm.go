@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -85,7 +86,7 @@ func (d *ZLMDriver) Protocol() string {
 }
 
 func (d *ZLMDriver) withConfig(ms *MediaServer) zlm.Engine {
-	url := fmt.Sprintf("http://%s:%d", ms.IP, ms.Ports.HTTP)
+	url := "http://" + net.JoinHostPort(ms.IP, strconv.Itoa(ms.Ports.HTTP))
 	return d.engine.SetConfig(zlm.Config{
 		URL:    url,
 		Secret: ms.Secret,

@@ -25,7 +25,7 @@ func (c Core) MediaServerSnapshot(ctx context.Context, id string) (*MediaServer,
 		return nil, err
 	}
 	server.Status = false
-	if state, ok := c.cacheServers.Load(id); ok {
+	if state, ok := c.cacheServers.Load(id); ok && !server.Disabled {
 		online, updatedAt, _ := state.status()
 		server.Status = online
 		if !updatedAt.IsZero() {

@@ -183,6 +183,7 @@ const isGb = computed(() => protocol.value === "GB28181");
 const boundMediaServerId = computed(() => channel.value?.config?.media_server_id?.trim() || "local");
 const boundMediaServer = computed(() => mediaServers.value.find((item) => item.id === boundMediaServerId.value));
 const boundMediaServerState = computed(() => {
+  if (boundMediaServer.value?.disabled) return { tone: "offline", label: "已停用" };
   if (resourceLoading.media) return { tone: "pending", label: "读取中" };
   if (resourceErrors.media || !boundMediaServer.value || boundMediaServer.value.status === undefined) {
     return { tone: "pending", label: "状态未知" };
@@ -1210,7 +1211,7 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
               <div class="resource-disclosure-body">
                 <div class="form-grid">
                   <label class="form-group"><span class="form-label">语音模式</span><select v-model="voiceForm.mode" class="input plain w-full"><option value="talk_standard" :disabled="!supportsStandardVoiceTalk">标准对讲（2016/2022）</option><option value="talk" :disabled="!supportsVoiceTalk">兼容对讲（2011+ 单 INVITE）</option><option value="broadcast" :disabled="!supportsVoiceBroadcast">语音广播（2014+）</option></select></label>
-                  <label class="form-group"><span class="form-label">音频源节点</span><select v-model="voiceForm.mediaServerId" class="select w-full" :disabled="resourceLoading.media"><option v-if="!mediaServers.some((item) => item.id === voiceForm.mediaServerId)" :value="voiceForm.mediaServerId">{{ voiceForm.mediaServerId }} · 当前绑定</option><option v-for="item in mediaServers" :key="item.id" :value="item.id">{{ item.id }} · {{ mediaServerStatusLabel(item.status) }}</option></select></label>
+                  <label class="form-group"><span class="form-label">音频源节点</span><select v-model="voiceForm.mediaServerId" class="select w-full" :disabled="resourceLoading.media"><option v-if="!mediaServers.some((item) => item.id === voiceForm.mediaServerId)" :value="voiceForm.mediaServerId">{{ voiceForm.mediaServerId }} · 当前绑定</option><option v-for="item in mediaServers" :key="item.id" :value="item.id" :disabled="item.disabled">{{ item.id }} · {{ item.disabled ? "已停用" : mediaServerStatusLabel(item.status) }}</option></select></label>
                   <label class="form-group"><span class="form-label">G.711 音频源流</span><input v-model.trim="voiceForm.sourceStream" class="input plain w-full" placeholder="例如 voice-microphone-1" /></label>
                 </div>
                 <div class="channel-quick-actions">
@@ -1379,7 +1380,7 @@ watch([supportsVoiceTalk, supportsStandardVoiceTalk, supportsVoiceBroadcast], ([
           <article v-if="isGb" class="card form-section media-binding-card">
             <div class="card-head"><div><h3 class="card-title">媒体节点路由</h3><p class="card-sub">直播、回放、下载、快照、语音与级联媒体共用此绑定</p></div><Server /></div>
             <div v-if="resourceErrors.media" class="inline-resource-error" role="alert"><span>{{ resourceErrors.media }}</span><button class="btn btn-sm" type="button" @click="loadMediaServers()">重试</button></div>
-            <label v-else class="form-group"><span class="form-label">接收与处理节点</span><select v-model="selectedMediaServerId" class="select w-full" :disabled="Boolean(mediaBindingDisabledReason)" aria-describedby="media-binding-help"><option v-if="!mediaServers.some((item) => item.id === selectedMediaServerId)" :value="selectedMediaServerId">{{ selectedMediaServerId }} · 当前绑定</option><option v-for="item in mediaServers" :key="item.id" :value="item.id">{{ item.id }} · {{ mediaServerStatusLabel(item.status) }} · {{ item.ip || "地址未配置" }}</option></select></label>
+            <label v-else class="form-group"><span class="form-label">接收与处理节点</span><select v-model="selectedMediaServerId" class="select w-full" :disabled="Boolean(mediaBindingDisabledReason)" aria-describedby="media-binding-help"><option v-if="!mediaServers.some((item) => item.id === selectedMediaServerId)" :value="selectedMediaServerId">{{ selectedMediaServerId }} · 当前绑定</option><option v-for="item in mediaServers" :key="item.id" :value="item.id" :disabled="item.disabled">{{ item.id }} · {{ item.disabled ? "已停用" : mediaServerStatusLabel(item.status) }} · {{ item.ip || "地址未配置" }}</option></select></label>
             <div class="media-binding-route" aria-live="polite"><span><small>当前节点</small><strong class="mono">{{ boundMediaServerId }}</strong></span><span aria-hidden="true">→</span><span><small>保存后</small><strong class="mono">{{ selectedMediaServerId }}</strong></span></div>
             <p id="media-binding-help" class="capability-reason">{{ mediaBindingDisabledReason || (mediaBindingChanged ? "保存后仅影响新建媒体会话；当前播放地址将清空并需重新预览" : "当前绑定已生效，无需保存") }}</p>
             <button class="btn btn-primary" type="button" :aria-disabled="Boolean(mediaBindingDisabledReason) || !mediaBindingChanged || Boolean(actionLoading)" aria-describedby="media-binding-help" @click="saveMediaServerBinding"><LoaderCircle v-if="actionLoading === '保存媒体节点'" class="animate-spin" /><Save v-else />保存节点绑定</button>

@@ -294,6 +294,7 @@ export interface MediaServerPorts {
 }
 
 export interface MediaServer {
+  disabled?: boolean
   id: string
   type?: string
   ip?: string

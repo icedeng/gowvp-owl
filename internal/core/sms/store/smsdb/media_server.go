@@ -58,3 +58,13 @@ func (d MediaServer) Session(ctx context.Context, changeFns ...func(*gorm.DB) er
 func (d MediaServer) UpdateWithSession(tx *gorm.DB, model *sms.MediaServer, changeFn func(b *sms.MediaServer) error, opts ...orm.QueryOption) error {
 	return orm.UpdateWithSession(tx, model, changeFn, opts...)
 }
+
+// MediaServerUsage 兼容 PostgreSQL 与测试用 SQLite 的 JSON 文本提取。
+func (d MediaServer) MediaServerUsage(ctx context.Context, id string) (bound, active int64, err error) {
+	query := d.db.WithContext(ctx).Table("channels").Where("COALESCE(NULLIF(TRIM(config ->> 'media_server_id'), ''), 'local') = ?", id)
+	if err = query.Count(&bound).Error; err != nil {
+		return
+	}
+	err = query.Where("is_playing = ?", true).Count(&active).Error
+	return
+}

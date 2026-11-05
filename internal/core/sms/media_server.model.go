@@ -8,6 +8,7 @@ const DefaultMediaServerID = "local"
 
 // MediaServer domain model
 type MediaServer struct {
+	Disabled          bool             `gorm:"column:disabled;notNull;default:FALSE" json:"disabled"`
 	ID                string           `gorm:"primaryKey" json:"id"`
 	IP                string           `gorm:"column:ip;notNull;default:''" json:"ip"`
 	CreatedAt         orm.Time         `gorm:"column:created_at;notNull;default:CURRENT_TIMESTAMP" json:"created_at"`

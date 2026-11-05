@@ -29,47 +29,18 @@ type FindMediaServerInput struct {
 	TranscodeSuffix   string           `form:"transcode_suffix"`
 }
 
+// EditMediaServerInput 仅管理连接参数，不暴露 ZLM 的任意配置。
 type EditMediaServerInput struct {
-	IP     string `json:"ip"`
-	HookIP string `json:"hook_ip"`
-	SDPIP  string `json:"sdp_ip"`
-	// StreamIP          string           `json:"stream_ip"`
-	// Ports MediaServerPorts `json:"ports"`
-	// AutoConfig        bool             `json:"auto_config"`
-	Secret string `json:"secret"`
-	Type   string `json:"type"` // lalmax/zlm
-	// HookAliveInterval int              `json:"hook_alive_interval"`
-	// RTPEnable         bool             `json:"rtpenable"`
-	// Status            bool             `json:"status"`
-	// RTPPortRange     string   `json:"rtpport_range"`
-	// SendRTPPortRange string   `json:"send_rtpport_range"`
-	// RecordAssistPort int      `json:"record_assist_port"`
-	// LastKeepaliveAt orm.Time `json:"last_keepalive_at"`
-	// IsDefault       bool     `json:"is_default"`
-	// RecordDay       int      `json:"record_day"`
-	// RecordPath      string   `json:"record_path"`
-	// Type            string `json:"type"`
-	// TranscodeSuffix string `json:"transcode_suffix"`
+	IP           string `json:"ip"`
+	HookIP       string `json:"hook_ip"`
+	SDPIP        string `json:"sdp_ip"`
+	Secret       string `json:"secret"` // 编辑时留空保留原密钥。
+	Type         string `json:"type"`
+	HTTPPort     int    `json:"http_port"`
+	RTPPortRange string `json:"rtpport_range"`
 }
 
 type AddMediaServerInput struct {
-	IP                string           `json:"ip"`
-	HookIP            string           `json:"hook_ip"`
-	SDPIP             string           `json:"sdpip"`
-	StreamIP          string           `json:"stream_ip"`
-	Ports             MediaServerPorts `json:"ports"`
-	AutoConfig        bool             `json:"auto_config"`
-	Secret            string           `json:"secret"`
-	HookAliveInterval int              `json:"hook_alive_interval"`
-	RTPEnable         bool             `json:"rtpenable"`
-	Status            bool             `json:"status"`
-	RTPPortRange      string           `json:"rtpport_range"`
-	SendRTPPortRange  string           `json:"send_rtpport_range"`
-	RecordAssistPort  int              `json:"record_assist_port"`
-	LastKeepaliveAt   orm.Time         `json:"last_keepalive_at"`
-	IsDefault         bool             `json:"is_default"`
-	RecordDay         int              `json:"record_day"`
-	RecordPath        string           `json:"record_path"`
-	Type              string           `json:"type"`
-	TranscodeSuffix   string           `json:"transcode_suffix"`
+	ID string `json:"id"`
+	EditMediaServerInput
 }

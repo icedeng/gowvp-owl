@@ -324,6 +324,10 @@ func (uc *Usecase) proxySMS(c *gin.Context) {
 		server = &sms.MediaServer{ID: sms.DefaultMediaServerID, IP: uc.Conf.Media.IP}
 		server.Ports.HTTP = uc.Conf.Media.HTTPPort
 	}
+	if server.Disabled {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"msg": "媒体节点已停用"})
+		return
+	}
 	host := strings.TrimSpace(server.IP)
 	port := server.Ports.HTTP
 	if mediaServerID == sms.DefaultMediaServerID {

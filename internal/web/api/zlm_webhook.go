@@ -59,7 +59,7 @@ func NewWebHookAPI(core sms.Core, conf *conf.Bootstrap, gbs *gbs.Server, ipcBund
 func registerZLMWebhookAPI(r gin.IRouter, api WebHookAPI, handler ...gin.HandlerFunc) {
 	{
 		group := r.Group("/webhook", handler...)
-		zlmGroup := group.Group("", sharedSecretAuth(func() string { return api.conf.Media.Secret }))
+		zlmGroup := group.Group("", api.mediaServerWebhookAuth())
 		zlmGroup.POST("/on_server_started", web.WrapH(api.onServerStarted))
 		zlmGroup.POST("/on_server_keepalive", web.WrapH(api.onServerKeepalive))
 		zlmGroup.POST("/on_stream_changed", web.WrapH(api.onStreamChanged))
@@ -96,8 +96,8 @@ func (w WebHookAPI) getChannelType(ctx context.Context, app, stream string) stri
 // @Router /webhook/on_server_started [post]
 func (w WebHookAPI) onServerStarted(c *gin.Context, _ *struct{}) (DefaultOutput, error) {
 	w.log.InfoContext(c.Request.Context(), "webhook onServerStarted")
-	// 所有 rtmp 通道离线
-	if err := w.ipcCore.BatchOfflineRTMP(context.Background()); err != nil {
+	// 仅当前节点的 RTMP 通道离线
+	if err := w.ipcCore.BatchOfflineRTMPOnMediaServer(c.Request.Context(), c.GetString("webhook_media_server_id")); err != nil {
 		w.log.ErrorContext(c.Request.Context(), "webhook onServerStarted", "err", err)
 	}
 

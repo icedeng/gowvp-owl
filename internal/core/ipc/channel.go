@@ -499,3 +499,8 @@ func (c *Core) EditChannelOnlineAndPlaying(ctx context.Context, stream string, i
 func (c *Core) UpdateChannelOnlineAndPlaying(ctx context.Context, stream string, isOnline, isPlaying bool) (*Channel, error) {
 	return c.EditChannelOnlineAndPlaying(ctx, stream, isOnline, isPlaying)
 }
+
+// BatchOfflineRTMPOnMediaServer 仅清理重启节点上的推流通道。
+func (c *Core) BatchOfflineRTMPOnMediaServer(ctx context.Context, id string) error {
+	return c.store.Channel().BatchEdit(ctx, "is_online", false, orm.Where("type=? AND COALESCE(NULLIF(TRIM(config ->> 'media_server_id'), ''), 'local') = ?", TypeRTMP, id))
+}

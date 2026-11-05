@@ -46,6 +46,9 @@ func (h openHost) Start(ctx context.Context, id string) (op.Source, error) {
 	if e != nil {
 		return op.Source{}, e
 	}
+	if ms.Disabled {
+		return op.Source{}, op.ErrUnavailable
+	}
 	if ms.Type != "" && !strings.EqualFold(ms.Type, "zlm") {
 		return op.Source{}, op.Fail(400, "UNSUPPORTED_MEDIA_SERVER", "开放媒体入口首期支持ZLM节点")
 	}
