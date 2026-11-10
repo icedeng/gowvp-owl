@@ -88,8 +88,9 @@ func NewUserAPI(conf *conf.Bootstrap) UserAPI {
 }
 
 func RegisterUser(r gin.IRouter, api UserAPI, mid ...gin.HandlerFunc) {
-	r.POST("/login", web.WrapH(api.login))
-	r.GET("/login/key", web.WrapH(api.getPublicKey))
+	guard := newLoginGuard()
+	r.POST("/login", guard.middleware(false), web.WrapH(api.login))
+	r.GET("/login/key", guard.middleware(true), web.WrapH(api.getPublicKey))
 
 	group := r.Group("/users", mid...)
 	group.PUT("", web.WrapHs(api.updateCredentials, mid...)...)
@@ -109,7 +110,7 @@ type loginOutput struct {
 }
 
 // 登录接口
-func (api UserAPI) login(_ *gin.Context, in *loginInput) (*loginOutput, error) {
+func (api UserAPI) login(c *gin.Context, in *loginInput) (*loginOutput, error) {
 	body, err := api.secret.Decrypt(in.Data)
 	if err != nil {
 		return nil, reason.ErrServer.WithMsg(err.Error())
@@ -129,7 +130,13 @@ func (api UserAPI) login(_ *gin.Context, in *loginInput) (*loginOutput, error) {
 		return nil, reason.ErrServer.WithMsg("管理员凭据未配置")
 	}
 	if credentials.Username != api.conf.Server.Username || credentials.Password != api.conf.Server.Password {
+		if c != nil {
+			c.Set("login_credentials_result", false)
+		}
 		return nil, reason.ErrNameOrPasswd
+	}
+	if c != nil {
+		c.Set("login_credentials_result", true)
 	}
 
 	data := web.NewClaimsData().SetUsername(credentials.Username)

@@ -2,6 +2,7 @@ package stat
 
 import (
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/ixugo/goddd/pkg/orm"
@@ -26,8 +27,9 @@ const (
 )
 
 var (
-	memData = NewCircleQueue(TopQueneCap)
-	cpuData = NewCircleQueue(TopQueneCap)
+	currentMu sync.RWMutex
+	memData   = NewCircleQueue(TopQueneCap)
+	cpuData   = NewCircleQueue(TopQueneCap)
 	// netUpData         = NewCircleQueue(TopQueneCap)
 	netData           = NewCircleQueue(TopQueneCap)
 	currentMem        float64
@@ -39,26 +41,38 @@ var (
 )
 
 func GetCurrentMem() float64 {
+	currentMu.RLock()
+	defer currentMu.RUnlock()
 	return currentMem
 }
 
 func GetCurrentCPU() float64 {
+	currentMu.RLock()
+	defer currentMu.RUnlock()
 	return currentCPU
 }
 
 func GetCurrentMainDisk() uint64 {
+	currentMu.RLock()
+	defer currentMu.RUnlock()
 	return currentMainDisk
 }
 
 func GetTotalMainDisk() uint64 {
+	currentMu.RLock()
+	defer currentMu.RUnlock()
 	return totalMainDisk
 }
 
 func GetCurrentKernelDisk() float64 {
+	currentMu.RLock()
+	defer currentMu.RUnlock()
 	return currentKernelDisk
 }
 
 func GetTotalKernelDisk() uint64 {
+	currentMu.RLock()
+	defer currentMu.RUnlock()
 	return totalKernelDisk
 }
 
@@ -74,67 +88,75 @@ func GetNetData() []PercentData {
 	return netData.Range()
 }
 
-func LoadTop(path string, fn func(map[string]any)) {
-	ticker := time.NewTicker(50 * time.Millisecond)
+func LoadTop(path string) {
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	var network networkSampler
 	for {
 		<-ticker.C
-		// cpu
-		now := orm.Now()
-		cpu, err := cpu.Percent(0, false)
-		if err != nil && err.Error() != `not implemented yet` {
-			slog.Error("LoadTop cpu", "err", err)
-		}
-		if len(cpu) > 0 {
-			cpuData.Push(PercentData{Time: now, Used: cpu[0]})
-		}
-
-		// memory
-		mem, err := mem.VirtualMemory()
-		if err != nil && err.Error() != `not implemented yet` {
-			slog.Error("LoadTop VirtualMemory", "err", err)
-		}
-		if mem != nil {
-			memData.Push(PercentData{Time: now, Used: mem.UsedPercent})
-		}
-
-		// net flow
-		n1, _ := net.IOCounters(false)
-		time.Sleep(1000 * time.Millisecond)
-		n2, _ := net.IOCounters(false)
-		if len(n1) > 0 && len(n2) > 0 {
-			netData.Push(PercentData{
-				Time: now, Up: float64(n2[0].BytesSent-n1[0].BytesSent) * 8,
-				Down: float64(n2[0].BytesRecv-n1[0].BytesRecv) * 8,
-			})
-		}
-		// 当前值统计
-		if mem != nil {
-			currentMem = mem.UsedPercent
-			if len(cpu) > 0 {
-				currentCPU = cpu[0]
-			}
-		}
-
-		if diskres, err := disk.Usage(path); err == nil {
-			currentMainDisk = diskres.Used
-			totalMainDisk = diskres.Total
-		}
-		fn(map[string]any{
-			"mem": memData.Last(),
-			"cpu": cpuData.Last(),
-			"net": netData.Last(),
-			// "netup":   netUpData.Last(),
-			// "netdown": netDownData.Last(),
-			"disk": []map[string]any{
-				{
-					"name":  path,
-					"used":  currentMainDisk,
-					"total": totalMainDisk,
-				},
-			},
-		})
-
-		ticker.Reset(200 * time.Millisecond)
+		collectTop(path, &network)
 	}
+}
+
+func collectTop(path string, network *networkSampler) {
+	now := orm.Now()
+	cpuValues, err := cpu.Percent(0, false)
+	if err != nil && err.Error() != `not implemented yet` {
+		slog.Error("LoadTop cpu", "err", err)
+	}
+	if len(cpuValues) > 0 {
+		cpuData.Push(PercentData{Time: now, Used: cpuValues[0]})
+	}
+	memory, err := mem.VirtualMemory()
+	if err != nil && err.Error() != `not implemented yet` {
+		slog.Error("LoadTop VirtualMemory", "err", err)
+	}
+	if memory != nil {
+		memData.Push(PercentData{Time: now, Used: memory.UsedPercent})
+	}
+	if counters, err := net.IOCounters(true); err == nil {
+		sampledAt := time.Now()
+		if up, down, ready := network.sample(counters, sampledAt); ready {
+			netData.Push(PercentData{Time: orm.Time{Time: sampledAt}, Up: up, Down: down})
+		}
+	}
+	diskUsage, diskErr := disk.Usage(path)
+	currentMu.Lock()
+	defer currentMu.Unlock()
+	if memory != nil {
+		currentMem = memory.UsedPercent
+		if len(cpuValues) > 0 {
+			currentCPU = cpuValues[0]
+		}
+	}
+	if diskErr == nil {
+		currentMainDisk, totalMainDisk = diskUsage.Used, diskUsage.Total
+	}
+}
+
+type networkSampler struct {
+	previous map[string]net.IOCountersStat
+	at       time.Time
+}
+
+// 逐网卡检查回退和集合变化；重置基线时不生成伪造的零速率或下溢尖峰。
+func (s *networkSampler) sample(counters []net.IOCountersStat, now time.Time) (up, down float64, ready bool) {
+	current := make(map[string]net.IOCountersStat, len(counters))
+	for _, counter := range counters {
+		current[counter.Name] = counter
+	}
+	defer func() { s.previous, s.at = current, now }()
+	elapsed := now.Sub(s.at).Seconds()
+	if s.at.IsZero() || elapsed <= 0 || len(current) == 0 || len(current) != len(s.previous) {
+		return 0, 0, false
+	}
+	for name, counter := range current {
+		previous, exists := s.previous[name]
+		if !exists || counter.BytesSent < previous.BytesSent || counter.BytesRecv < previous.BytesRecv {
+			return 0, 0, false
+		}
+		up += float64(counter.BytesSent-previous.BytesSent) * 8 / elapsed
+		down += float64(counter.BytesRecv-previous.BytesRecv) * 8 / elapsed
+	}
+	return up, down, true
 }

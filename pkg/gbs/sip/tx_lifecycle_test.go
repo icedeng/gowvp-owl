@@ -35,6 +35,70 @@ func TestTransactionOwnershipIsIsolatedPerStore(t *testing.T) {
 	}
 }
 
+func TestFinalResponseQueueSaturationDoesNotBlockOtherTransactions(t *testing.T) {
+	serverURI, err := ParseSipURI("sip:34020000002000000001@192.0.2.20:5060")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(&Address{URI: &serverURI, Params: NewParams()})
+	t.Cleanup(server.Close)
+	makeBoundResponse := func() (*Transaction, *Response) {
+		request := newSignalDigestTestRequest(t, MethodMessage, nil)
+		request.SetDestination(&net.UDPAddr{IP: net.ParseIP("192.0.2.30"), Port: 5060})
+		tx := server.txs.newTX(getTXKey(request), nil)
+		tx.bindResponse(request)
+		response := NewResponseFromRequest("", request, 200, "OK", nil)
+		response.SetSource(request.Destination())
+		return tx, response
+	}
+	full, first := makeBoundResponse()
+	other, otherResponse := makeBoundResponse()
+	if full == other {
+		t.Fatal("test responses share transaction")
+	}
+	for range cap(full.resp) {
+		server.handlerResponse(first)
+	}
+	next := first.Clone().(*Response)
+	next.SetReason("New response after queue saturation")
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		for range 100 {
+			server.handlerResponse(next)
+		}
+		server.handlerResponse(otherResponse)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		full.Close()
+		<-finished
+		t.Fatal("full response queue blocked message dispatch")
+	}
+	if full.responseQueueDrops.Load() != 100 {
+		t.Fatalf("unexpected drop count: %d", full.responseQueueDrops.Load())
+	}
+	select {
+	case <-full.done:
+		t.Fatal("queue overload closed a live transaction")
+	default:
+	}
+	for range cap(full.resp) {
+		if got := <-full.resp; got != first {
+			t.Fatal("saturated queue overwrote an earlier response")
+		}
+	}
+	if got, err := other.GetResponseContext(t.Context()); err != nil || got != otherResponse {
+		t.Fatalf("other transaction response = %p, %v", got, err)
+	}
+	// 消费后仍可交付响应，饱和不会改变事务生命周期。
+	server.handlerResponse(next)
+	if got, err := full.GetResponseContext(t.Context()); err != nil || got != next {
+		t.Fatalf("transaction did not recover after draining: %p %v", got, err)
+	}
+}
+
 func TestTransactionCloseIsIdempotentAndUnblocksWaiter(t *testing.T) {
 	tx := NewTransaction("close-waiter", nil)
 	waitDone := make(chan struct{})

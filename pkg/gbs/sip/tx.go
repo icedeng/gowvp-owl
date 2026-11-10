@@ -159,6 +159,7 @@ type Transaction struct {
 	closeOnFinal               atomic.Bool
 	detachedCancel             atomic.Bool
 	inviteNon2xxFinalDelivered atomic.Bool
+	responseQueueDrops         atomic.Uint64
 	inviteCleanupMu            sync.Mutex
 	inviteCleanupBYE           map[string]struct{}
 	backgroundMu               sync.Mutex
@@ -1265,6 +1266,12 @@ func (tx *Transaction) receiveResponse(msg *Response) {
 	case <-tx.done:
 		return
 	case tx.resp <- msg:
+	default:
+		// 仅丢弃队列饱和后新到的响应，保留先到的合法结果，不阻塞其他事务分发。
+		// 前面的摘要校验、INVITE ACK/分叉处理及后面的连接收尾仍照常执行。
+		if tx.responseQueueDrops.Add(1) == 1 {
+			slog.Warn("SIP final response queue full, discard new response", "tx_key", tx.key, "capacity", cap(tx.resp))
+		}
 	}
 	tx.markActive(1)
 	if msg.StatusCode() >= 200 {

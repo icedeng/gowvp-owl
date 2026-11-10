@@ -98,14 +98,22 @@ func (c Core) cleanupExpiredEvents(days int) {
 		}
 
 		// 批量删除数据库记录，使用 WHERE IN 一次性删除
+		var deletedRows int64
 		err = c.store.Event().Session(ctx, func(tx *gorm.DB) error {
-			return tx.Where("id IN ?", eventIDs).Delete(&Event{}).Error
+			result := tx.Where("id IN ?", eventIDs).Delete(&Event{})
+			deletedRows = result.RowsAffected
+			return result.Error
 		})
 		if err != nil {
 			slog.Warn("failed to batch delete events", "count", len(eventIDs), "err", err)
-		} else {
-			totalDeleted += len(eventIDs)
+			break
 		}
+		// 删除无实际进展时不反复查询同一批事件，保留记录供下一轮重试。
+		if deletedRows == 0 {
+			slog.Warn("event cleanup made no progress, stop current run", "count", len(eventIDs))
+			break
+		}
+		totalDeleted += int(deletedRows)
 	}
 
 	// 清理空目录

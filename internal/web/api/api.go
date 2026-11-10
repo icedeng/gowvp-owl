@@ -42,9 +42,7 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 	// uc.MediaAPI.uc = uc // 已移除 push 模块
 	const staticPrefix = "/web"
 
-	go stat.LoadTop(system.Getwd(), func(m map[string]any) {
-		_ = m
-	})
+	go stat.LoadTop(system.Getwd())
 	r.Use(
 		// 格式化输出到控制台，然后记录到日志
 		// 此处不做 recover，底层 http.server 也会 recover，但不会输出方便查看的格式
@@ -119,6 +117,8 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 	})
 
 	const staticDir = "www"
+	r.GET(staticPrefix, redirectWebRoot)
+	r.HEAD(staticPrefix, redirectWebRoot)
 	admin := r.Group(staticPrefix, gzip.Gzip(gzip.DefaultCompression))
 	admin.Static("/", filepath.Join(system.Getwd(), staticDir))
 	r.NoRoute(func(c *gin.Context) {
@@ -291,7 +291,7 @@ func (uc *Usecase) proxySMS(c *gin.Context) {
 
 	path := c.Param("path")
 
-	// 播放流鉴权：校验 token 中的 app+stream 与请求路径的包含关系
+	// 播放链接自行携带凭据，第三方播放器无需管理端登录态。
 	if err := uc.verifyPlayToken(c, path); err != nil {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": err.Error()})
 		return
@@ -328,6 +328,11 @@ func (uc *Usecase) proxySMS(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"msg": "媒体节点已停用"})
 		return
 	}
+	grant := c.MustGet("sms_play_grant").(smsPlayGrant)
+	if err := grant.authorize(c.Request.Method, upstreamPath, c.Request.URL.RawQuery, server.Type); err != nil {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": err.Error()})
+		return
+	}
 	host := strings.TrimSpace(server.IP)
 	port := server.Ports.HTTP
 	if mediaServerID == sms.DefaultMediaServerID {
@@ -343,25 +348,29 @@ func (uc *Usecase) proxySMS(c *gin.Context) {
 		return
 	}
 	fullAddr := &url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(port))}
-	c.Request.URL.Path = ""
 	proxy := httputil.NewSingleHostReverseProxy(fullAddr)
 
 	proxy.Director = func(req *http.Request) {
 		req.URL.Scheme = "http"
 		req.URL.Host = fullAddr.Host
 		req.URL.Path = upstreamPath
+		req.URL.RawPath = ""
+		req.Host = fullAddr.Host
+		query, _ := url.ParseQuery(req.URL.RawQuery) // 鉴权已拒绝非法或重复参数。
+		req.URL.RawQuery = query.Encode()
+		if strings.HasSuffix(upstreamPath, ".m3u8") {
+			// 清单必须完整重写，防止缓存或部分响应绕过子资源凭据传递。
+			req.Header.Set("Accept-Encoding", "identity")
+			req.Header.Del("Range")
+			req.Header.Del("If-Range")
+			req.Header.Del("If-None-Match")
+			req.Header.Del("If-Modified-Since")
+		}
 	}
 	proxy.ModifyResponse = func(r *http.Response) error {
 		r.Header.Del("Access-Control-Allow-Credentials")
 		r.Header.Del("Access-Control-Allow-Origin")
-		if r.StatusCode >= 300 && r.StatusCode < 400 {
-			if l := r.Header.Get("Location"); l != "" {
-				if !strings.HasPrefix(l, "http") {
-					r.Header.Set("Location", "/proxy/sms/"+sms.MediaServerProxyRoute(mediaServerID)+"/"+strings.TrimPrefix(l, "/"))
-				}
-			}
-		}
-		return nil
+		return grant.rewriteResponse(r, fullAddr, upstreamPath, server.Type)
 	}
 	proxy.ServeHTTP(c.Writer, c.Request)
 }
@@ -402,61 +411,4 @@ func stripSMSProxyRoute(path, mediaServerID string) (string, bool) {
 		return "/", true
 	}
 	return "/" + rest, true
-}
-
-// verifyPlayToken 校验播放 token：解析 JWT，确认 token 中的 app+stream 被请求路径包含
-// HLS 子片段（init.mp4、ts 切片等）由播放器自动请求且不带 token，予以豁免
-func (uc *Usecase) verifyPlayToken(c *gin.Context, path string) error {
-	tokenStr := c.Query("token")
-	if tokenStr == "" {
-		if isHLSSegment(path) {
-			return nil
-		}
-		return fmt.Errorf("缺少播放鉴权 token")
-	}
-
-	secret := uc.Conf.Server.HTTP.JwtSecret + "_play"
-	claims, err := web.ParseToken(tokenStr, secret)
-	if err != nil {
-		return fmt.Errorf("无效的播放 token")
-	}
-	if err := claims.Valid(); err != nil {
-		return fmt.Errorf("播放 token 已过期")
-	}
-
-	app, _ := claims.Data["app"].(string)
-	stream, _ := claims.Data["stream"].(string)
-	mediaServerID, _ := claims.Data["media_server_id"].(string)
-	mediaServerID = strings.TrimSpace(mediaServerID)
-	if mediaServerID != "" {
-		if _, ok := stripSMSProxyRoute(path, mediaServerID); !ok {
-			return fmt.Errorf("播放 token 与媒体节点路由不匹配")
-		}
-		c.Set("play_media_server_id", mediaServerID)
-	}
-	if stream == "" {
-		return fmt.Errorf("播放 token 缺少 stream 信息")
-	}
-
-	// 校验：path 中必须包含 stream（对于 webrtc 类请求，stream 在 query 参数中）
-	if strings.Contains(path, stream) {
-		return nil
-	}
-	// webrtc 的 path 是 /index/api/webrtc，stream 在 query 中
-	if qStream := c.Query("stream"); qStream == stream && c.Query("app") == app {
-		return nil
-	}
-
-	return fmt.Errorf("播放 token 与请求流不匹配")
-}
-
-// isHLSSegment 判断路径是否为 HLS 子片段资源（m3u8 播放列表引用的 init.mp4、ts 切片等）
-// 这些资源由播放器内部解析 m3u8 后自动请求，无法携带 query token，故豁免鉴权
-func isHLSSegment(path string) bool {
-	for _, suffix := range []string{".mp4", ".m4s", ".ts"} {
-		if strings.HasSuffix(path, suffix) {
-			return true
-		}
-	}
-	return false
 }
