@@ -573,13 +573,11 @@ onBeforeUnmount(() => {
                 class="tree-item"
                 :class="{ active: selected === channel.id }"
                 :aria-pressed="selected === channel.id"
+                :aria-label="`${channel.name || channel.channel_id || channel.id} · ${channel.is_online ? '在线' : '离线'}`"
+                :title="`${channel.name || channel.channel_id || channel.id} · ${channel.is_online ? '在线' : '离线'}`"
                 @click="selectResource(channel)"
               >
-                <Radio aria-hidden="true" /><span class="resource-channel-name" :title="channel.name || channel.channel_id || channel.id">{{ channel.name || channel.channel_id || channel.id }}</span><i
-                  class="slot-led"
-                  :class="{ warn: !channel.is_online }"
-                  :aria-label="channel.is_online ? '在线' : '离线'"
-                />
+                <Radio aria-hidden="true" /><span class="resource-channel-name">{{ channel.name || channel.channel_id || channel.id }}</span><i class="resource-status-dot" :class="{ 'is-online': channel.is_online }" aria-hidden="true" />
               </button>
             </div>
           </template>
@@ -607,9 +605,11 @@ onBeforeUnmount(() => {
               class="tree-item"
               :class="{ active: selected === channel.id }"
               :aria-pressed="selected === channel.id"
+              :aria-label="`${channel.name || channel.channel_id || channel.id} · ${channel.is_online ? '在线' : '离线'}`"
+              :title="`${channel.name || channel.channel_id || channel.id} · ${channel.is_online ? '在线' : '离线'}`"
               @click="selectResource(channel)"
             >
-              <Radio aria-hidden="true" /><span class="resource-channel-name" :title="channel.name || channel.id">{{ channel.name || channel.id }}</span><i class="slot-led" :class="{ warn: !channel.is_online }" :aria-label="channel.is_online ? '在线' : '离线'" />
+              <Radio aria-hidden="true" /><span class="resource-channel-name">{{ channel.name || channel.channel_id || channel.id }}</span><i class="resource-status-dot" :class="{ 'is-online': channel.is_online }" aria-hidden="true" />
             </button>
           </div>
           <button
@@ -969,10 +969,13 @@ onBeforeUnmount(() => {
 .live-resource-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 4px; }
 .live-resource-heading .card-title { min-width: 0; }
 .live-resource-heading .card-sub { grid-column: 1 / -1; margin-top: 0; overflow-wrap: anywhere; }
-.resource-tree { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-color: var(--line-strong) transparent; }
+.resource-tree { grid-template-columns: minmax(0, 1fr); min-width: 0; min-height: 0; padding-right: 10px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-color: var(--line-strong) transparent; }
 .resource-channel-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-item > svg, .tree-item > .slot-led { flex-shrink: 0; }
-.tree-item { font-size: 12px; }
+.resource-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.resource-status-dot.is-online { background: var(--green); }
+.tree-group-items { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.tree-item { display: grid; grid-template-columns: 14px minmax(0, 1fr) 7px; min-width: 0; font-size: 12px; }
+.tree-item > svg { width: 14px; }
 .live-resource-hint { margin: 12px 0 0; padding-top: 10px; color: var(--muted); border-top: 1px solid var(--line); font-size: 12px; }
 .live-resource-empty { padding: 16px 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .live-video-workspace { min-width: 0; }
