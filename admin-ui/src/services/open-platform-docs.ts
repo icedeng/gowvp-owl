@@ -77,11 +77,4 @@ export function requestExample(spec: Spec, endpoint: Endpoint): unknown {
   return content.example??schemaExample(spec,content.schema)
 }
 
-export async function copyDocumentation(text: string): Promise<void> {
-  if(navigator.clipboard && window.isSecureContext) {await navigator.clipboard.writeText(text);return}
-  // 现有 HTTP 管理入口不提供 Clipboard API，保留浏览器复制回退。
-  const element=document.createElement('textarea');element.value=text;element.style.position='fixed';element.style.opacity='0';element.setAttribute('readonly','');
-  const active=document.activeElement as HTMLElement|null
-  document.body.appendChild(element);element.select()
-  try {if(!document.execCommand('copy')) throw new Error('复制未成功，请选择文本复制')} finally {element.remove();active?.focus()}
-}
+export { copyText as copyDocumentation } from '../utils/clipboard'

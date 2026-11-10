@@ -29,6 +29,7 @@ import type {
 } from "../types/api";
 import { useUiStore } from "../stores/ui";
 import { formatDate } from "../utils/format";
+import { copyText } from "../utils/clipboard";
 
 type EditableUpstream = SipUpstream & {
   keepalive_seconds: number;
@@ -415,10 +416,10 @@ function editableAnnexGSystem(
 
 async function copyAnnexGConfig() {
   try {
-    await navigator.clipboard.writeText(annexGConfigSnippet.value);
+    await copyText(annexGConfigSnippet.value);
     ui.toast("附录 G 配置片段已复制；请先替换密钥占位符");
   } catch {
-    ui.toast("复制失败，请检查浏览器剪贴板权限");
+    ui.toast("浏览器未允许自动复制，请选中配置片段手动复制");
   }
 }
 

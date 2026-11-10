@@ -30,6 +30,7 @@ const props = withDefaults(defineProps<{
   poster?: string
   autoplay?: boolean
   idleTheme?: 'dark' | 'light'
+  wall?: boolean
   protocolPriority?: StreamProtocol[]
 }>(), {
   result: null,
@@ -45,6 +46,7 @@ const props = withDefaults(defineProps<{
   poster: '',
   autoplay: true,
   idleTheme: 'light',
+  wall: false,
 })
 
 const emit = defineEmits<{
@@ -133,7 +135,7 @@ async function start() {
       const nextSession = await selected.adapter.play(container, selected.source, {
         muted: props.muted,
         poster: props.poster || undefined,
-        settings: playerSettings.settings,
+        settings: props.wall ? { ...playerSettings.settings, stretch: false } : playerSettings.settings,
         duration: props.duration,
         onError: (reason) => {
           if (currentGeneration !== generation) return
@@ -219,7 +221,7 @@ defineExpose({ play: start, destroy: stop })
         <button v-if="displayState === 'error'" class="stream-player-action" type="button" :disabled="disabled" aria-label="重试播放" title="重试播放" @click.stop="retry"><Play aria-hidden="true" /></button>
       </template>
     </div>
-    <span v-if="activeProtocol && activeProtocol !== 'mp4' && displayState === 'ready'" class="stream-player-protocol">{{ activeProtocol }}</span>
+    <span v-if="!wall && activeProtocol && activeProtocol !== 'mp4' && displayState === 'ready'" class="stream-player-protocol">{{ activeProtocol }}</span>
   </div>
 </template>
 

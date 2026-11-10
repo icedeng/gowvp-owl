@@ -9,8 +9,10 @@ import {
   CircleStop,
   ExternalLink,
   LoaderCircle,
+  Maximize,
   Mic,
   Minus,
+  Minimize,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRight,
@@ -44,6 +46,20 @@ const resourceSearch = ref<HTMLInputElement>();
 const controlsPanel = ref<HTMLElement>();
 const resourceToggle = ref<HTMLButtonElement>();
 const controlsToggle = ref<HTMLButtonElement>();
+const wallStage = ref<HTMLElement>();
+const wallToolbar = ref<HTMLElement>();
+const fullscreenToggle = ref<HTMLButtonElement>();
+const wallNativeFullscreen = ref(false);
+const wallPageExpanded = ref(false);
+const fullscreenBusy = ref(false);
+const wallToolsVisible = ref(true);
+const interactingSlot = ref(-1);
+const readyChannels = ref<Record<string, boolean>>({});
+const wallImmersive = computed(() => wallNativeFullscreen.value || wallPageExpanded.value);
+let wallToolsTimer: number | undefined;
+let tileControlsTimer: number | undefined;
+let previousBodyOverflow = '';
+let wallDisposed = false;
 const muted = ref(false);
 const query = ref("");
 const loading = ref(false);
@@ -145,6 +161,7 @@ function selectResource(channel: ApiChannel) {
 }
 
 async function openResourcePicker() {
+  if (!await exitWallFullscreen()) return;
   resourcesOpen.value = true;
   await nextTick();
   resourceSearch.value?.focus();
@@ -161,6 +178,7 @@ function closeControls() {
 }
 
 async function toggleControls() {
+  if (!await exitWallFullscreen()) return;
   controlsOpen.value = !controlsOpen.value;
   if (controlsOpen.value) {
     await nextTick();
@@ -292,6 +310,7 @@ async function action(name: string, fn: () => Promise<unknown>) {
 async function startPlay(channel = selectedChannel.value) {
   if (!channel?.is_online || actionLoading.value) return;
   const channelID = channel.id;
+  readyChannels.value[channelID] = false;
   previewLoadingId.value = channelID;
   actionLoading.value = "加载预览";
   try {
@@ -309,6 +328,7 @@ async function startPlay(channel = selectedChannel.value) {
 
 async function snapshot() {
   if (!selectedChannel.value || actionLoading.value) return;
+  if (!await exitWallFullscreen()) return;
   captureChannel.value = selectedChannel.value;
   await nextTick();
   captureRegion.value?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -320,6 +340,102 @@ function captureSaved(row: CaptureRecord) {
 function refreshCaptureCover() {
   if (captureChannel.value) snapshots.value[captureChannel.value.id] = api.snapshotImage(captureChannel.value.id, Date.now());
 }
+
+function showWallTools() {
+  wallToolsVisible.value = true;
+  window.clearTimeout(wallToolsTimer);
+  if (!wallImmersive.value) return;
+  wallToolsTimer = window.setTimeout(() => {
+    if (!wallToolbar.value?.querySelector(':focus-visible') && !wallToolbar.value?.matches(':hover')) wallToolsVisible.value = false;
+  }, 2500);
+}
+
+function showTileControls(index: number) {
+  interactingSlot.value = index;
+  window.clearTimeout(tileControlsTimer);
+  tileControlsTimer = window.setTimeout(() => { interactingSlot.value = -1; }, 3000);
+}
+
+function syncWallFullscreen() {
+  const current = document.fullscreenElement;
+  const stage = wallStage.value;
+  // 单路播放器全屏不等于整墙全屏；整墙中的嵌套全屏仍保留整墙布局。
+  wallNativeFullscreen.value = Boolean(stage && (current === stage || (wallNativeFullscreen.value && current && stage.contains(current))));
+  showWallTools();
+}
+
+async function exitWallFullscreen() {
+  if (!wallImmersive.value) return true;
+  try {
+    for (let depth = 0; depth < 2 && document.fullscreenElement && wallStage.value?.contains(document.fullscreenElement); depth += 1) {
+      await document.exitFullscreen();
+    }
+  } catch {
+    ui.toast('退出全屏未成功，请按 Esc 退出');
+    return false;
+  }
+  wallPageExpanded.value = false;
+  syncWallFullscreen();
+  await nextTick();
+  fullscreenToggle.value?.focus({ preventScroll: true });
+  return true;
+}
+
+async function toggleWallFullscreen() {
+  if (fullscreenBusy.value || !wallStage.value) return;
+  if (wallImmersive.value) return exitWallFullscreen();
+  const stage = wallStage.value;
+  fullscreenBusy.value = true;
+  try {
+    if (!document.fullscreenEnabled || !stage.requestFullscreen) throw new Error('fullscreen unavailable');
+    await stage.requestFullscreen();
+    if (wallDisposed) {
+      if (document.fullscreenElement === stage) await document.exitFullscreen();
+      return;
+    }
+    syncWallFullscreen();
+  } catch {
+    if (!wallDisposed) {
+      wallPageExpanded.value = true;
+      ui.toast('浏览器未允许系统全屏，已切换为页面铺满模式');
+    }
+  } finally {
+    fullscreenBusy.value = false;
+    if (!wallDisposed && wallImmersive.value) {
+      await nextTick();
+      stage.focus({ preventScroll: true });
+      showWallTools();
+    }
+  }
+}
+
+function onWallKeydown(event: KeyboardEvent) {
+  if (wallImmersive.value && event.key === 'Tab' && (!document.fullscreenElement || document.fullscreenElement === wallStage.value)) {
+    const items = [...(wallStage.value?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex="0"]') || [])].filter(item => item.tabIndex >= 0 && item.getClientRects().length);
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (first && (event.shiftKey ? document.activeElement === first || document.activeElement === wallStage.value : document.activeElement === last || document.activeElement === wallStage.value)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first)?.focus();
+    }
+  }
+  if (wallPageExpanded.value && event.key === 'Escape' && !document.fullscreenElement) {
+    event.preventDefault();
+    void exitWallFullscreen();
+  }
+}
+
+watch(wallImmersive, (expanded) => {
+  if (expanded) {
+    previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+  } else {
+    document.body.style.overflow = previousBodyOverflow;
+    window.clearTimeout(wallToolsTimer);
+    wallToolsVisible.value = true;
+    void nextTick(() => fullscreenToggle.value?.focus({ preventScroll: true }));
+  }
+}, { flush: 'sync' });
 
 function openVoiceControls() {
   if (!selectedChannel.value) return;
@@ -379,10 +495,21 @@ watch(query, () => {
   }, 350);
 });
 onMounted(() => {
+  document.addEventListener('fullscreenchange', syncWallFullscreen);
+  document.addEventListener('keydown', onWallKeydown);
   resourcesOpen.value = window.matchMedia('(min-width: 901px)').matches;
   void load();
 });
-onBeforeUnmount(() => window.clearTimeout(searchTimer));
+onBeforeUnmount(() => {
+  wallDisposed = true;
+  window.clearTimeout(searchTimer);
+  window.clearTimeout(wallToolsTimer);
+  window.clearTimeout(tileControlsTimer);
+  document.removeEventListener('fullscreenchange', syncWallFullscreen);
+  document.removeEventListener('keydown', onWallKeydown);
+  if (wallImmersive.value) document.body.style.overflow = previousBodyOverflow;
+  if (wallNativeFullscreen.value && document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+});
 </script>
 
 <template>
@@ -394,18 +521,6 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
       </div>
       <div class="head-actions">
         <button ref="resourceToggle" class="btn" type="button" :aria-expanded="resourcesOpen" aria-controls="live-resources" :aria-label="resourcesOpen ? '收起通道资源' : '展开通道资源'" :title="resourcesOpen ? '收起通道资源' : '展开通道资源'" @click="resourcesOpen = !resourcesOpen"><PanelLeftClose v-if="resourcesOpen" aria-hidden="true" /><PanelLeftOpen v-else aria-hidden="true" />通道资源</button>
-        <div class="segmented" aria-label="分屏布局">
-          <button
-            v-for="item in ['1', '4', '9', '16']"
-            :key="item"
-            type="button"
-            :class="{ active: layout === item }"
-            :aria-pressed="layout === item"
-            @click="layout = item"
-          >
-            {{ item }} 分屏
-          </button>
-        </div>
         <button class="btn" :disabled="loading" @click="load">
           <RefreshCcw :class="{ 'animate-spin': loading }" />刷新</button>
       </div>
@@ -512,7 +627,8 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
         <p class="live-resource-hint">选择通道以替换窗口 {{ activeSlot + 1 }}</p>
       </aside>
       <article class="card video-workspace channel-video-workspace live-video-workspace">
-        <div class="live-toolbar">
+        <div ref="wallStage" class="live-wall-stage" :class="{ 'wall-immersive': wallImmersive, 'wall-page-expanded': wallPageExpanded, 'wall-tools-visible': wallToolsVisible }" role="region" aria-label="电视墙" tabindex="-1" @pointermove="showWallTools" @pointerdown="showWallTools" @focusin="showWallTools" @keydown="showWallTools">
+        <div ref="wallToolbar" class="live-toolbar" @pointerenter="showWallTools" @pointerleave="showWallTools" @focusout="showWallTools">
           <div class="live-current-channel">
             <strong>{{ selectedChannel ? selectedChannel.name || "未命名通道" : `窗口 ${activeSlot + 1} · 尚未选择通道` }}</strong
             ><span v-if="selectedChannel"
@@ -536,8 +652,12 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
             >
           </div>
           <div class="live-workspace-actions">
+            <div class="segmented live-layout-switch" aria-label="分屏布局"><button v-for="item in ['1', '4', '9', '16']" :key="item" type="button" :class="{ active: layout === item }" :aria-pressed="layout === item" @click="layout = item">{{ item }} 分屏</button></div>
+            <button v-if="wallImmersive" class="btn" type="button" @click="openResourcePicker"><PanelLeftOpen aria-hidden="true" />选择通道</button>
             <button v-if="playResults[selectedChannel?.id || '']" class="btn" type="button" :disabled="!selectedChannel?.is_online || Boolean(actionLoading)" @click="startPlay()"><LoaderCircle v-if="previewLoadingId === selectedChannel?.id" class="animate-spin" aria-hidden="true" /><RefreshCcw v-else aria-hidden="true" />重新预览</button>
+            <button class="btn" type="button" :disabled="!selectedChannel?.is_online || Boolean(actionLoading)" @click="snapshot"><LoaderCircle v-if="actionLoading === '抓拍'" class="animate-spin" aria-hidden="true" /><Aperture v-else aria-hidden="true" />抓拍</button>
             <button ref="controlsToggle" class="btn" type="button" :disabled="!selectedChannel" :aria-expanded="controlsOpen && Boolean(selectedChannel)" aria-controls="live-controls" @click="toggleControls"><PanelRight aria-hidden="true" />通道控制</button>
+            <button ref="fullscreenToggle" class="btn" type="button" :disabled="fullscreenBusy" :aria-pressed="wallImmersive" :title="wallImmersive ? '退出电视墙全屏（Esc）' : '电视墙全屏'" @click="toggleWallFullscreen"><Minimize v-if="wallImmersive" aria-hidden="true" /><Maximize v-else aria-hidden="true" />{{ wallImmersive ? '退出全屏' : '电视墙全屏' }}</button>
           </div>
         </div>
         <div class="live-video-wall" :class="`grid-${layout}`" aria-label="视频分屏">
@@ -545,14 +665,16 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
             v-for="(channel, index) in wallChannels"
             :key="index"
             class="live-tile"
-            :class="{ active: activeSlot === index }"
+            :class="{ active: activeSlot === index, 'is-ready': channel && readyChannels[channel.id], 'tile-interacting': interactingSlot === index }"
             :aria-label="`窗口 ${index + 1} · ${channel?.name || channel?.channel_id || '未选择通道'}`"
             @click.capture="selectSlot(index)"
+            @pointerdown.capture="$event.pointerType !== 'mouse' && showTileControls(index)"
           >
             <div class="live-tile-picture">
             <StreamPlayer
               v-if="channel"
               :key="channel.id"
+              wall
               :result="playResults[channel.id]"
               :poster="snapshots[channel.id] || api.snapshotImage(channel.id)"
               :muted="muted"
@@ -564,35 +686,27 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
               :disabled="!channel.is_online || Boolean(actionLoading)"
               @request-play="startPlay(channel)"
               @retry="startPlay(channel)"
-              @error="(message) => ui.toast(message)"
+              @ready="readyChannels[channel.id] = true"
+              @error="(message) => { readyChannels[channel.id] = false; ui.toast(message); }"
             />
             <div v-else class="live-empty-slot">
               <button class="channel-preview-start" type="button" :aria-label="`为窗口 ${index + 1} 选择通道`" @click="openResourcePicker"><Plus aria-hidden="true" /><span class="live-preview-label">选择通道</span></button>
               <small class="live-preview-hint">从通道资源添加画面</small>
             </div>
-            <span v-if="channel" class="video-meta"
-              ><span
-                class="status"
-                :class="channel.is_online ? 'online' : 'offline'"
-                >{{ channel.is_online ? "在线" : "离线" }}</span
+            <span v-if="channel && (!channel.is_online || (channel.ext?.record_mode || 'none') !== 'none')" class="video-meta"
+              ><span v-if="!channel.is_online" class="status offline">离线</span
               ><span
                 v-if="(channel.ext?.record_mode || 'none') !== 'none'"
                 class="rec"
                 >REC</span
               ></span
             >
-            </div>
             <button class="live-tile-caption" type="button" :aria-pressed="activeSlot === index" :title="channel ? `${channel.name || '未命名通道'} · ${channel.channel_id || channel.id}` : '选择此窗口'" @click="selectSlot(index)">
               <span class="live-window-index">{{ index + 1 }}</span><span>{{ channel ? channel.name || channel.channel_id || channel.id : '未选择通道' }}</span>
             </button>
+            </div>
           </section>
         </div>
-        <div class="video-foot channel-video-foot">
-          <div class="stream-context">
-            <strong>当前窗口 {{ activeSlot + 1 }}<template v-if="selectedChannel"> · {{ selectedChannel.name || selectedChannel.channel_id || selectedChannel.id }}</template></strong>
-            <span>{{ selectedChannel ? playResults[selectedChannel.id] ? '可在播放器中调节音量或切换全屏' : '点击画面中的开始预览，查看实时视频' : '打开通道资源，为当前窗口选择通道' }}</span>
-          </div>
-          <button class="stream-link" type="button" :disabled="!selectedChannel?.is_online || Boolean(actionLoading)" @click="snapshot"><LoaderCircle v-if="actionLoading === '抓拍'" class="animate-spin" aria-hidden="true" /><Aperture v-else aria-hidden="true" />抓拍</button>
         </div>
         <details v-if="playResults[selectedChannel?.id || '']" :key="selectedChannel?.id" class="live-play-addresses">
           <summary>播放地址 <span>{{ playAddresses.length }} 个地址</span></summary>
@@ -862,28 +976,36 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
 .live-resource-hint { margin: 12px 0 0; padding-top: 10px; color: var(--muted); border-top: 1px solid var(--line); font-size: 12px; }
 .live-resource-empty { padding: 16px 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .live-video-workspace { min-width: 0; }
+.live-wall-stage { position: relative; min-width: 0; isolation: isolate; }
 .live-toolbar { gap: 12px; color: var(--ink); background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .live-current-channel { flex: 1 1 160px; min-width: 0; }
 .live-current-channel strong { overflow: hidden; color: var(--ink-strong); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .live-current-channel > span { margin-top: 3px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.live-workspace-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.live-video-wall { display: grid; gap: 8px; padding: 8px; background: var(--panel-2); }
+.live-workspace-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.live-layout-switch { flex: 0 0 auto; }
+.live-video-wall { display: grid; gap: 0; padding: 0; background: #0b1422; }
 .live-video-wall.grid-1 { grid-template-columns: minmax(0, 1fr); }
 .live-video-wall.grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .live-video-wall.grid-9 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .live-video-wall.grid-16 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.live-tile { min-width: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); container-type: inline-size; container-name: live-tile; }
-.live-tile.active { border-color: var(--blue); }
-.live-tile:focus-within { outline: 2px solid var(--blue); outline-offset: 1px; }
-.live-tile-picture { position: relative; aspect-ratio: 16 / 9; background: var(--panel-3); }
-.live-empty-slot { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 16px; color: var(--muted); }
+.live-tile { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #0b1422; border: 0; border-radius: 0; container-type: inline-size; container-name: live-tile; }
+.live-tile::after { position: absolute; z-index: 8; inset: 0; border: 2px solid transparent; pointer-events: none; content: ''; }
+.live-tile.active::after { border-color: var(--blue); }
+.live-tile-picture { position: relative; aspect-ratio: 16 / 9; background: #0b1422; }
+.live-empty-slot { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px 16px 36px; color: var(--muted); background: var(--panel-3); text-align: center; }
 .live-empty-slot small { font-size: 12px; }
-.live-tile-caption { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 10px; color: var(--ink); background: var(--panel); border: 0; border-top: 1px solid var(--line); text-align: left; font-size: 12px; cursor: pointer; }
-.live-tile-caption > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.live-tile-caption:hover, .live-tile.active .live-tile-caption { color: var(--blue); background: var(--blue-soft); }
-.live-window-index { flex-shrink: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+.live-tile-caption { position: absolute; z-index: 6; inset: auto 0 0; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 4px 10px; color: #fff; background: rgba(5, 12, 22, .76); border: 0; border-radius: 0; text-align: left; font-size: 12px; cursor: pointer; opacity: 0; pointer-events: none; }
+.live-tile-caption > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-tile-caption:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+/* 名称与底部播放控件分区，避免同时出现时互相遮挡。 */
+.live-tile.is-ready .live-tile-caption { bottom: 48px; }
+.live-tile.is-ready:has(video[controls]) .live-tile-caption { bottom: 64px; }
+.live-tile.tile-interacting .live-tile-caption, .live-tile:has(:focus-visible) .live-tile-caption { opacity: 1; pointer-events: auto; }
+.live-window-index { flex-shrink: 0; color: #d8e8fb; font-variant-numeric: tabular-nums; }
+@media (hover: hover) {
+  .live-tile:hover .live-tile-caption { opacity: 1; pointer-events: auto; }
+}
 .video-meta .status { font-size: 11px; }
-.channel-video-foot { flex-wrap: wrap; }
 .live-play-addresses { padding: 10px 13px; border-top: 1px solid var(--line); font-size: 12px; }
 .live-play-addresses summary { color: var(--muted); cursor: pointer; }
 .live-play-addresses summary > span { margin-left: 8px; }
@@ -916,14 +1038,40 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer));
   .live-monitor-layout, .live-monitor-layout.resources-hidden, .live-monitor-layout.has-controls, .live-monitor-layout.resources-hidden.has-controls { grid-template-columns: minmax(0, 1fr); }
   .live-controls { grid-column: 1; }
   .resource-panel { order: initial; max-height: 360px; }
-  .live-workspace-actions .btn, .live-tile-caption, .live-page .icon-btn, .channel-video-foot .stream-link { min-height: 44px; }
+  .live-workspace-actions .btn, .live-layout-switch button, .live-tile-caption, .live-page .icon-btn { min-height: 44px; }
   .live-video-wall.grid-9, .live-video-wall.grid-16 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 480px) {
-  .live-video-wall { gap: 4px; padding: 4px; }
   .live-video-wall.grid-4 { grid-template-columns: minmax(0, 1fr); }
   .live-toolbar { padding: 12px; }
   .live-workspace-actions { width: 100%; }
   .live-workspace-actions .btn { flex: 1; justify-content: center; }
+  .live-layout-switch { width: 100%; }
+  .live-layout-switch button { flex: 1; }
+}
+/* 全屏只改变容器尺寸，播放器节点始终留在原位。 */
+.wall-immersive { width: 100%; height: 100dvh; overflow: hidden; background: #0b1422; }
+.wall-page-expanded { position: fixed; z-index: 1000; inset: 0; }
+.wall-immersive .live-toolbar { position: absolute; z-index: 20; inset: 0 0 auto; padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left)); color: #fff; background: rgba(5, 12, 22, .94); border-bottom: 0; opacity: 0; transform: translateY(-100%); pointer-events: none; transition: opacity .16s ease, transform .16s ease; }
+.wall-tools-visible.wall-immersive .live-toolbar { opacity: 1; transform: none; pointer-events: auto; }
+.wall-immersive .live-current-channel strong { color: #fff; }
+.wall-immersive .live-current-channel > span { color: #d8e8fb; }
+.wall-immersive .live-workspace-actions .btn { color: #fff; background: #253247; border-color: #526078; }
+.wall-immersive .live-workspace-actions .btn:hover:not(:disabled) { background: #354862; }
+.wall-immersive .live-layout-switch { background: #253247; }
+.wall-immersive .live-layout-switch button { color: #d8e8fb; }
+.wall-immersive .live-layout-switch button.active { color: #fff; background: var(--blue); }
+.wall-immersive .live-video-wall { width: 100%; height: 100%; grid-template-rows: repeat(var(--wall-columns), minmax(0, 1fr)); grid-template-columns: repeat(var(--wall-columns), minmax(0, 1fr)); }
+.wall-immersive .grid-1 { --wall-columns: 1; }
+.wall-immersive .grid-4 { --wall-columns: 2; }
+.wall-immersive .grid-9 { --wall-columns: 3; }
+.wall-immersive .grid-16 { --wall-columns: 4; }
+.wall-immersive .live-tile-picture { width: 100%; height: 100%; aspect-ratio: auto; }
+.wall-immersive .live-tile.active::after { border-color: transparent; }
+@media (pointer: coarse) {
+  .live-workspace-actions .btn, .live-layout-switch button, .live-tile-caption { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wall-immersive .live-toolbar { transition: none; }
 }
 </style>

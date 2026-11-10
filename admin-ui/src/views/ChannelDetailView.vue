@@ -39,6 +39,7 @@ import type {
   Zone,
 } from "../types/api";
 import { formatBytes, formatDate } from "../utils/format";
+import { copyText } from "../utils/clipboard";
 import type { PTZRequest } from "../utils/ptz";
 import { useUiStore } from "../stores/ui";
 import SnapshotWorkspace from "../components/SnapshotWorkspace.vue";
@@ -670,10 +671,10 @@ async function saveMediaServerBinding() {
 
 async function copyPlayAddress(url: string) {
   try {
-    await navigator.clipboard.writeText(url);
+    await copyText(url);
     ui.toast("播放地址已复制");
   } catch {
-    ui.toast("复制失败，请检查浏览器剪贴板权限");
+    ui.toast("浏览器未允许自动复制，请选中播放地址手动复制");
   }
 }
 

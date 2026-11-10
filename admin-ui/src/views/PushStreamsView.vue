@@ -18,6 +18,7 @@ import {
 import { api, countDevicesByType, countItems, errorMessage } from "../services/api";
 import type { ApiChannel, MediaServer } from "../types/api";
 import { relativeTime } from "../utils/format";
+import { copyText } from "../utils/clipboard";
 import { useUiStore } from "../stores/ui";
 import ModalDialog from "../components/ModalDialog.vue";
 import RemoteChannelSelect from "../components/RemoteChannelSelect.vue";
@@ -250,10 +251,10 @@ async function remove() {
 async function copyAddress(row: ApiChannel) {
   if (!row.config?.push_addr) return ui.toast("后端未返回推流地址");
   try {
-    await navigator.clipboard.writeText(row.config.push_addr);
+    await copyText(row.config.push_addr);
     ui.toast("推流地址已复制，请妥善保管鉴权参数");
   } catch {
-    ui.toast("复制失败，请检查浏览器剪贴板权限");
+    ui.toast("浏览器未允许自动复制，请选中推流地址手动复制");
   }
 }
 
