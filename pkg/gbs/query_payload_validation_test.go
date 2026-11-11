@@ -9,25 +9,26 @@ import (
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
-func TestGenericQueryPayloadRejectsInvalidDataBeforeSideEffects(t *testing.T) {
+func TestGenericQueryPayloadValidationBeforeSideEffects(t *testing.T) {
 	tests := []struct {
 		name    string
 		cmdType string
 		payload string
+		ok      bool
 	}{
 		{name: "preset missing sum", cmdType: "PresetQuery", payload: `<PresetList Num="0"/>`},
 		{name: "preset count mismatch", cmdType: "PresetQuery", payload: `<SumNum>1</SumNum><PresetList Num="0"/>`},
 		{name: "preset missing item name", cmdType: "PresetQuery", payload: `<SumNum>1</SumNum><PresetList Num="1"><Item><PresetID>1</PresetID></Item></PresetList>`},
 		{name: "preset duplicate sum", cmdType: "PresetQuery", payload: `<SumNum>1</SumNum><SumNum>1</SumNum><PresetList Num="1"><Item><PresetID>1</PresetID><PresetName>one</PresetName></Item></PresetList>`},
 		{name: "preset unknown field", cmdType: "PresetQuery", payload: `<SumNum>0</SumNum><VendorField>value</VendorField><PresetList Num="0"/>`},
-		{name: "preset out of order", cmdType: "PresetQuery", payload: `<PresetList Num="0"/><SumNum>0</SumNum>`},
+		{name: "preset out of order", ok: true, cmdType: "PresetQuery", payload: `<PresetList Num="0"/><SumNum>0</SumNum>`},
 		{name: "preset nested name", cmdType: "PresetQuery", payload: `<SumNum>1</SumNum><PresetList Num="1"><Item><PresetID>1</PresetID><PresetName><Value>one</Value></PresetName></Item></PresetList>`},
 		{name: "home missing enabled", cmdType: "HomePositionQuery", payload: `<HomePosition><PresetIndex>1</PresetIndex></HomePosition>`},
 		{name: "home invalid enabled", cmdType: "HomePositionQuery", payload: `<HomePosition><Enabled>2</Enabled></HomePosition>`},
 		{name: "home invalid preset", cmdType: "HomePositionQuery", payload: `<HomePosition><Enabled>1</Enabled><PresetIndex>256</PresetIndex></HomePosition>`},
 		{name: "home duplicate enabled", cmdType: "HomePositionQuery", payload: `<HomePosition><Enabled>1</Enabled><Enabled>1</Enabled></HomePosition>`},
 		{name: "home unknown field", cmdType: "HomePositionQuery", payload: `<HomePosition><Enabled>1</Enabled><VendorField>value</VendorField></HomePosition>`},
-		{name: "home out of order", cmdType: "HomePositionQuery", payload: `<HomePosition><Enabled>1</Enabled><PresetIndex>1</PresetIndex><ResetTime>1</ResetTime></HomePosition>`},
+		{name: "home out of order", ok: true, cmdType: "HomePositionQuery", payload: `<HomePosition><Enabled>1</Enabled><PresetIndex>1</PresetIndex><ResetTime>1</ResetTime></HomePosition>`},
 		{name: "cruise list missing sum", cmdType: "CruiseTrackListQuery", payload: `<CruiseTrackList Num="0"/>`},
 		{name: "cruise list missing number", cmdType: "CruiseTrackListQuery", payload: `<SumNum>1</SumNum><CruiseTrackList Num="1"><CruiseTrack/></CruiseTrackList>`},
 		{name: "cruise list invalid number", cmdType: "CruiseTrackListQuery", payload: `<SumNum>1</SumNum><CruiseTrackList Num="1"><CruiseTrack><Number>2</Number></CruiseTrack></CruiseTrackList>`},
@@ -36,17 +37,17 @@ func TestGenericQueryPayloadRejectsInvalidDataBeforeSideEffects(t *testing.T) {
 		{name: "cruise list nested number", cmdType: "CruiseTrackListQuery", payload: `<SumNum>1</SumNum><CruiseTrackList Num="1"><CruiseTrack><Number><Value>0</Value></Number></CruiseTrack></CruiseTrackList>`},
 		{name: "cruise missing point speed", cmdType: "CruiseTrackQuery", payload: `<Number>0</Number><SumNum>1</SumNum><CruisePointList Num="1"><CruisePoint><PresetIndex>1</PresetIndex><StayTime>1</StayTime></CruisePoint></CruisePointList>`},
 		{name: "cruise invalid speed", cmdType: "CruiseTrackQuery", payload: `<Number>0</Number><SumNum>1</SumNum><CruisePointList Num="1"><CruisePoint><PresetIndex>1</PresetIndex><StayTime>1</StayTime><Speed>16</Speed></CruisePoint></CruisePointList>`},
-		{name: "cruise point out of order", cmdType: "CruiseTrackQuery", payload: `<Number>0</Number><SumNum>1</SumNum><CruisePointList Num="1"><CruisePoint><StayTime>1</StayTime><PresetIndex>1</PresetIndex><Speed>1</Speed></CruisePoint></CruisePointList>`},
+		{name: "cruise point out of order", ok: true, cmdType: "CruiseTrackQuery", payload: `<Number>0</Number><SumNum>1</SumNum><CruisePointList Num="1"><CruisePoint><StayTime>1</StayTime><PresetIndex>1</PresetIndex><Speed>1</Speed></CruisePoint></CruisePointList>`},
 		{name: "cruise duplicate number", cmdType: "CruiseTrackQuery", payload: `<Number>0</Number><Number>0</Number><SumNum>0</SumNum>`},
 		{name: "ptz non finite", cmdType: "PTZPosition", payload: `<Pan>NaN</Pan>`},
 		{name: "ptz duplicate pan", cmdType: "PTZPosition", payload: `<Pan>1</Pan><Pan>2</Pan>`},
 		{name: "ptz unknown field", cmdType: "PTZPosition", payload: `<VendorField>value</VendorField>`},
-		{name: "ptz out of order", cmdType: "PTZPosition", payload: `<Zoom>1</Zoom><Tilt>1</Tilt>`},
+		{name: "ptz out of order", ok: true, cmdType: "PTZPosition", payload: `<Zoom>1</Zoom><Tilt>1</Tilt>`},
 		{name: "sd missing sum", cmdType: "SDCardStatus", payload: `<SDCardStatusInfo Num="0"/>`},
 		{name: "sd missing name", cmdType: "SDCardStatus", payload: `<SumNum>1</SumNum><SDCardStatusInfo Num="1"><Item><ID>1</ID><Status>ok</Status><Capacity>10</Capacity><FreeSpace>5</FreeSpace></Item></SDCardStatusInfo>`},
 		{name: "sd invalid status", cmdType: "SDCardStatus", payload: `<SumNum>1</SumNum><SDCardStatusInfo Num="1"><Item><ID>1</ID><HddName>card</HddName><Status>ready</Status><Capacity>10</Capacity><FreeSpace>5</FreeSpace></Item></SDCardStatusInfo>`},
 		{name: "sd missing Num", cmdType: "SDCardStatus", payload: `<SumNum>0</SumNum><SDCardStatusInfo/>`},
-		{name: "sd out of order", cmdType: "SDCardStatus", payload: `<SumNum>1</SumNum><SDCardStatusInfo Num="1"><Item><ID>1</ID><Status>ok</Status><HddName>card</HddName><Capacity>10</Capacity><FreeSpace>5</FreeSpace></Item></SDCardStatusInfo>`},
+		{name: "sd out of order", ok: true, cmdType: "SDCardStatus", payload: `<SumNum>1</SumNum><SDCardStatusInfo Num="1"><Item><ID>1</ID><Status>ok</Status><HddName>card</HddName><Capacity>10</Capacity><FreeSpace>5</FreeSpace></Item></SDCardStatusInfo>`},
 		{name: "sd unknown item field", cmdType: "SDCardStatus", payload: `<SumNum>1</SumNum><SDCardStatusInfo Num="1"><Item><ID>1</ID><HddName>card</HddName><Status>ok</Status><Capacity>10</Capacity><FreeSpace>5</FreeSpace><VendorField>value</VendorField></Item></SDCardStatusInfo>`},
 		{name: "device status invalid encode", cmdType: "DeviceStatus", payload: `<Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Encode>YES</Encode>`},
 		{name: "device status invalid record", cmdType: "DeviceStatus", payload: `<Result>OK</Result><Online>ONLINE</Online><Status>OK</Status><Record>YES</Record>`},
@@ -65,6 +66,15 @@ func TestGenericQueryPayloadRejectsInvalidDataBeforeSideEffects(t *testing.T) {
 			api.pendingDeviceQuery.Store(buildPendingQueryKey(gb10DeviceID, test.cmdType, sn), pending)
 			body := []byte(fmt.Sprintf(`<Response><CmdType>%s</CmdType><SN>%d</SN><DeviceID>%s</DeviceID>%s</Response>`, test.cmdType, sn, gb10DeviceID, test.payload))
 			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage, "query-payload-invalid", body, api.sipMessageQueryGeneric)
+			if test.ok {
+				assertFlowOK(t, response)
+				select {
+				case <-pending.wait:
+				default:
+					t.Fatal("compatible response did not complete pending query")
+				}
+				return
+			}
 			if !strings.Contains(response, "SIP/2.0 400") {
 				t.Fatalf("invalid %s response = %s", test.cmdType, response)
 			}

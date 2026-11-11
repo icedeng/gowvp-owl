@@ -70,7 +70,14 @@ func (r *Repository) SaveRecovery(ctx context.Context, gatewayPK, ownerID string
 	})
 }
 func (r *Repository) RuntimeCheckpoint(ctx context.Context, gatewayPK, ownerID string, ownerEpoch int64, seen *time.Time, failure *protocol.Error) error {
-	return r.GatewayRuntimeUpdate(ctx, gatewayPK, ownerID, ownerEpoch, map[string]any{"last_seen_at": seen, "last_error": failure})
+	return r.Transaction(ctx, func(tx *gorm.DB) error {
+		if err := CheckOwner(tx, gatewayPK, ownerID, ownerEpoch); err != nil {
+			return err
+		}
+		// 结构体更新会应用 LastError 的 JSON serializer；Select 同时保证 nil 能清除旧错误。
+		return tx.Model(&Gateway{}).Where("id = ? AND owner_id = ? AND owner_epoch = ?", gatewayPK, ownerID, ownerEpoch).
+			Select("LastSeenAt", "LastError").Updates(&Gateway{LastSeenAt: seen, LastError: failure}).Error
+	})
 }
 
 func (r *Repository) RuntimeLeasesRenewed(ctx context.Context, gatewayPK, ownerID string, epoch int64, refs []protocol.ResourceRef, sent time.Time, ttlMS int) error {

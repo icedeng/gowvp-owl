@@ -140,7 +140,7 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 		return
 	}
 	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
-	if err := validateDeviceInfoResponseStructure(ctx.Request.Body(), version); err != nil {
+	if err := validateDeviceInfoStructure(ctx.Request.Body(), version); err != nil {
 		ctx.String(400, err.Error())
 		return
 	}
@@ -148,7 +148,7 @@ func (g *GB28181API) sipMessageDeviceInfo(ctx *sip.Context) {
 		ctx.String(400, "DeviceInfo DeviceName requires protocol 1.1")
 		return
 	}
-	if err := validateVersionedInfo(version, "DeviceInfo", msg.Info, msg.ExtraInfo); err != nil {
+	if err := validateDeviceVersionedInfo(version, "DeviceInfo", msg.Info, msg.ExtraInfo); err != nil {
 		ctx.String(400, err.Error())
 		return
 	}

@@ -235,7 +235,46 @@ export interface DeviceRecordQueryOutput {
   incomplete?: { received_count?: number; expected_count?: number }
 }
 
+export type EventStatus = 'pending' | 'processing' | 'resolved' | 'ignored'
+export interface EventPolicy {
+ did: string
+ snapshot: boolean
+ record: boolean
+ clip_seconds: number
+ cooldown_seconds: number
+ revision: number
+ updated_by?: string
+ updated_at?: string
+}
+export interface EventAction {
+ id: number
+ event_id: number
+ from_status: EventStatus
+ to_status: EventStatus
+ note: string
+ actor: string
+ created_at: string
+}
+export interface EventEvidence {
+ state: string
+ snapshot_state: string
+ video_state: string
+ snapshot_error?: string
+ video_error?: string
+ clip_seconds?: number
+ created_at?: string
+ started_at?: string
+ finished_at?: string
+}
 export interface ApiEvent {
+ status: EventStatus
+ revision: number
+ device_name?: string
+ device_code?: string
+ channel_name?: string
+ channel_code?: string
+ video_path?: string
+ evidence?: EventEvidence
   id: number
   did?: string
   cid?: string

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gowvp/owl/internal/core/event"
 	"github.com/ixugo/goddd/pkg/orm"
+	"github.com/ixugo/goddd/pkg/reason"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -34,7 +35,12 @@ func (d Event) Get(ctx context.Context, model *event.Event, opts ...orm.QueryOpt
 // Create implements event.EventStorer.
 func (d Event) Create(ctx context.Context, model *event.Event) error {
 	// 宿主默认关闭GORM隐式事务；事件及开放平台outbox必须显式原子提交。
-	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return tx.Create(model).Error })
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(model).Error; err != nil {
+			return err
+		}
+		return event.EnqueueEvidence(tx, model)
+	})
 }
 
 // CreateIdempotent 通过 source_key 唯一索引原子去重，并在重复时返回已有事件。
@@ -48,7 +54,13 @@ func (d Event) CreateIdempotent(ctx context.Context, model *event.Event) (bool, 
 			Columns:   []clause.Column{{Name: "source_key"}},
 			DoNothing: true,
 		}).Create(model)
-		return result.Error
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected > 0 {
+			return event.EnqueueEvidence(tx, model)
+		}
+		return nil
 	})
 	if err != nil {
 		return false, err
@@ -66,7 +78,25 @@ func (d Event) Update(ctx context.Context, model *event.Event, changeFn func(*ev
 
 // Delete implements event.EventStorer.
 func (d Event) Delete(ctx context.Context, model *event.Event, opts ...orm.QueryOption) error {
-	return orm.DeleteWithContext(ctx, d.db, model, opts...)
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := orm.FirstWithContext(ctx, tx.Clauses(clause.Locking{Strength: "UPDATE"}), model, opts...); err != nil {
+			return err
+		}
+		var active int64
+		if err := tx.Model(&event.EvidenceTask{}).Where("event_id = ? AND state IN ?", model.ID, []string{"queued", "working"}).Count(&active).Error; err != nil {
+			return err
+		}
+		if active > 0 {
+			return reason.ErrBadRequest.WithMsg("事件正在取证，请完成后再删除")
+		}
+		if err := tx.Where("event_id = ?", model.ID).Delete(&event.Action{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("event_id = ?", model.ID).Delete(&event.EvidenceTask{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(model).Error
+	})
 }
 
 // Count implements event.EventStorer.

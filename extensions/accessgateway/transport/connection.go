@@ -3,6 +3,7 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -120,9 +121,16 @@ func (p *Peer) enqueueControl(kind int, data []byte) error {
 	}
 }
 func (p *Peer) Send(ctx context.Context, env protocol.Envelope) error {
-	data := protocol.Payload(env)
+	data, err := json.Marshal(env)
+	if err != nil {
+		return fmt.Errorf("encode outgoing control message: %w", err)
+	}
 	if len(data) > protocol.MaxControlBytes {
 		return fmt.Errorf("control message too large")
+	}
+	// 本端构造错误只使本次调用失败，不能交由远端解码后关闭整个控制连接。
+	if _, _, err := protocol.DecodeEnvelope(data); err != nil {
+		return fmt.Errorf("invalid outgoing %s: %w", env.Type, err)
 	}
 	item := outgoing{kind: websocket.TextMessage, data: data, queued: time.Now(), result: make(chan error, 1), priority: priorityType(env.Type)}
 	queue, budget, limit := p.normal, &p.normalQueued, int64(normalBytes)

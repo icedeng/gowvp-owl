@@ -9,9 +9,13 @@ import (
 type FindEventInput struct {
 	web.PagerFilter
 	web.DateFilter
-	DID   string `form:"did"`   // 设备 ID
-	CID   string `form:"cid"`   // 通道 ID
-	Label string `form:"label"` // 检测标签
+	Key      string `form:"key" binding:"max=128"`
+	Status   string `form:"status" binding:"omitempty,oneof=pending processing resolved ignored"`
+	Evidence string `form:"evidence" binding:"omitempty,oneof=image video failed"`
+	DID      string `form:"did"`                                           // 设备 ID
+	CID      string `form:"cid"`                                           // 通道 ID
+	Label    string `form:"label"`                                         // 检测标签
+	Source   string `form:"source" binding:"omitempty,oneof=all alarm ai"` // 事件来源
 }
 
 type EditEventInput struct {

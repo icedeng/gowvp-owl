@@ -28,7 +28,7 @@ type EventAPI struct {
 func NewEventCore(db *gorm.DB, conf *conf.Bootstrap, notifier event.Dispatcher) (event.Core, func()) {
 	var store event.Storer
 	store = eventdb.NewDB(db).AutoMigrate(orm.GetEnabledAutoMigrate())
-	core := event.NewCore(store, notifier)
+	core := event.NewCore(store, notifier).WithWorkflow(event.NewWorkflow(db))
 
 	// 启动定时清理协程
 	days := conf.Server.AI.RetainDays
@@ -68,22 +68,35 @@ func RegisterEvent(g gin.IRouter, api EventAPI, handler ...gin.HandlerFunc) {
 		group := g.Group("/events", handler...)
 		group.GET("", web.WrapH(api.listEvents))
 		group.GET("/:id", web.WrapH(api.getEvent))
+		group.GET("/:id/actions", web.WrapH(api.eventActions))
+		group.GET("/:id/video", api.getEventVideo)
+		group.POST("/process", web.WrapH(api.processEvents))
 		group.PUT("/:id", web.WrapH(api.updateEvent))
 		group.DELETE("/:id", web.WrapH(api.deleteEvent))
 	}
 	g.Group("/events", handler...).GET("/image/*path", api.getEventImage)
+	policies := g.Group("/event_policies", handler...)
+	policies.GET("/:did", web.WrapH(api.getEventPolicy))
+	policies.PUT("/:did", web.WrapH(api.saveEventPolicy))
 }
 
 // listEvents 分页查询事件列表
 func (a EventAPI) listEvents(c *gin.Context, in *event.FindEventInput) (any, error) {
 	ctx := web.WithContext(c.Request)
 	items, total, err := a.eventCore.ListEvents(ctx, in)
+	if err == nil && a.eventCore.Workflow() != nil {
+		err = a.eventCore.Workflow().FillNames(ctx, items)
+	}
 	return gin.H{"items": items, "total": total}, err
 }
 
 // getEvent 获取单个事件详情
 func (a EventAPI) getEvent(c *gin.Context, in *eventIDInput) (*event.Event, error) {
-	return a.eventCore.GetEvent(c.Request.Context(), in.ID)
+	out, err := a.eventCore.GetEvent(c.Request.Context(), in.ID)
+	if err == nil && a.eventCore.Workflow() != nil {
+		err = a.eventCore.Workflow().FillNames(c.Request.Context(), []*event.Event{out})
+	}
+	return out, err
 }
 
 // updateEvent 更新事件信息

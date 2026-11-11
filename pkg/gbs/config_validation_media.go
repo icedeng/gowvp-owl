@@ -79,6 +79,10 @@ type audioParamConfigItem struct {
 }
 
 func validateConfigDownloadResponseSingletons(body []byte) error {
+	return validateConfigDownloadResponseSingletonsWithCompatibility(body, false)
+}
+
+func validateConfigDownloadResponseSingletonsWithCompatibility(body []byte, compatible bool) error {
 	decoder := sip.NewGBXMLDecoder(body)
 	depth := 0
 	seenRoot := false
@@ -131,7 +135,7 @@ func validateConfigDownloadResponseSingletons(body []byte) error {
 				return fmt.Errorf("ConfigDownload response contains unsupported %s element", name)
 			}
 			order := configDownloadResponseOrder[name]
-			if order < lastOrder {
+			if !compatible && order < lastOrder {
 				return fmt.Errorf("ConfigDownload response contains out-of-order %s element", name)
 			}
 			lastOrder = order
@@ -331,6 +335,11 @@ func basicParamFieldSupported(version GBProtocolVersion, name string) bool {
 }
 
 func validateBasicParamResponseStructure(body []byte, version GBProtocolVersion) error {
+	return validateBasicParamResponseStructureWithCompatibility(body, version, false)
+}
+
+func validateBasicParamResponseStructureWithCompatibility(body []byte, version GBProtocolVersion, compatible bool) error {
+	compatible = compatible && (version == GBVersion20 || version == GBVersion30)
 	decoder := sip.NewGBXMLDecoder(body)
 	depth := 0
 	basicDepth := 0
@@ -367,11 +376,15 @@ func validateBasicParamResponseStructure(body []byte, version GBProtocolVersion)
 			if current.Name.Space != "" || len(current.Attr) != 0 {
 				return fmt.Errorf("ConfigDownload BasicParam field %s must not contain attributes or namespaces", name)
 			}
-			order, supported := basicParamResponseFieldOrder(version, name)
+			fieldVersion := version
+			if compatible && version == GBVersion30 {
+				fieldVersion = GBVersion20
+			}
+			order, supported := basicParamResponseFieldOrder(fieldVersion, name)
 			if !supported {
 				return fmt.Errorf("ConfigDownload BasicParam field %s is not supported by %s", name, version.StandardName())
 			}
-			if order < lastOrder {
+			if !compatible && order < lastOrder {
 				return fmt.Errorf("ConfigDownload BasicParam contains out-of-order %s field", name)
 			}
 			lastOrder = order

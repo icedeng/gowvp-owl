@@ -1168,9 +1168,20 @@ func decodeSDCardStatusData(body []byte) []SDCardItemData {
 }
 
 func validateGenericQueryPayload(version GBProtocolVersion, cmdType string, body []byte) error {
+	return validateGenericQueryPayloadWithCompatibility(version, cmdType, body, false)
+}
+
+func validateGenericQueryPayloadWithCompatibility(version GBProtocolVersion, cmdType string, body []byte, compatible bool) error {
+	compatible = compatible && (version == GBVersion20 || version == GBVersion30)
+	structure := func(rules []notificationElementRule) error {
+		if compatible {
+			return validateDeviceMANSCDPStructure(body, version, "Response", cmdType, rules)
+		}
+		return validateMANSCDPStructure(body, "Response", cmdType, rules)
+	}
 	switch cmdType {
 	case "Alarm":
-		if err := validateAlarmBusinessResponseStructure(body); err != nil {
+		if err := structure(broadcastResponseRules); err != nil {
 			return err
 		}
 		var msg alarmBusinessResponse
@@ -1181,7 +1192,7 @@ func validateGenericQueryPayload(version GBProtocolVersion, cmdType string, body
 			return fmt.Errorf("Alarm Result must be OK or ERROR")
 		}
 	case "DeviceStatus":
-		if err := validateDeviceStatusResponseStructure(body, version); err != nil {
+		if err := structure(deviceStatusReceiveRules(version, compatible)); err != nil {
 			return err
 		}
 		var msg queryDeviceStatusXML
@@ -1197,14 +1208,14 @@ func validateGenericQueryPayload(version GBProtocolVersion, cmdType string, body
 		if msg.DeviceTime != nil && !validGBDateTime(*msg.DeviceTime) {
 			return fmt.Errorf("DeviceStatus DeviceTime must be dateTime")
 		}
-		if err := validateVersionedInfo(version, "DeviceStatus", msg.Info, msg.ExtraInfo); err != nil {
+		if err := validateResponseInfo(version, "DeviceStatus", msg.Info, msg.ExtraInfo, compatible); err != nil {
 			return err
 		}
-		if err := validateDeviceAlarmStatus(version, msg.Alarm); err != nil {
+		if err := validateDeviceAlarmStatusWithCompatibility(version, msg.Alarm, compatible); err != nil {
 			return err
 		}
 	case "PresetQuery":
-		if err := validatePresetQueryResponseStructure(body, version); err != nil {
+		if err := structure(presetQueryResponseRules(version)); err != nil {
 			return err
 		}
 		var msg presetQueryXML
@@ -1234,7 +1245,7 @@ func validateGenericQueryPayload(version GBProtocolVersion, cmdType string, body
 			}
 		}
 	case "HomePositionQuery":
-		if err := validateHomePositionQueryResponseStructure(body); err != nil {
+		if err := structure(homePositionQueryResponseRules); err != nil {
 			return err
 		}
 		var msg homePositionQueryXML
@@ -1252,7 +1263,7 @@ func validateGenericQueryPayload(version GBProtocolVersion, cmdType string, body
 			return fmt.Errorf("HomePositionQuery PresetIndex must be in [0,255]")
 		}
 	case "CruiseTrackListQuery":
-		if err := validateCruiseTrackListQueryResponseStructure(body); err != nil {
+		if err := structure(cruiseTrackListQueryResponseRules); err != nil {
 			return err
 		}
 		var msg cruiseTrackListQueryXML
@@ -1280,7 +1291,7 @@ func validateGenericQueryPayload(version GBProtocolVersion, cmdType string, body
 			}
 		}
 	case "CruiseTrackQuery":
-		if err := validateCruiseTrackQueryResponseStructure(body); err != nil {
+		if err := structure(cruiseTrackQueryResponseRules); err != nil {
 			return err
 		}
 		var msg cruiseTrackQueryXML
@@ -1316,7 +1327,16 @@ func validateGenericQueryPayload(version GBProtocolVersion, cmdType string, body
 			}
 		}
 	case "PTZPosition":
-		if err := validatePTZPositionQueryStructure(body); err != nil {
+		validatePTZ := func() error {
+			if !compatible {
+				return validatePTZPositionQueryStructure(body)
+			}
+			if err := structure(ptzPositionQueryResponseRules); err == nil {
+				return nil
+			}
+			return validateDeviceMANSCDPStructure(body, version, "Notify", cmdType, ptzPositionQueryResponseRules)
+		}
+		if err := validatePTZ(); err != nil {
 			return err
 		}
 		var msg ptzPositionQueryXML
@@ -1333,7 +1353,7 @@ func validateGenericQueryPayload(version GBProtocolVersion, cmdType string, body
 			}
 		}
 	case "SDCardStatus":
-		if err := validateSDCardStatusQueryResponseStructure(body); err != nil {
+		if err := structure(sdCardStatusQueryResponseRules); err != nil {
 			return err
 		}
 		var msg sdCardStatusXML
@@ -1406,6 +1426,10 @@ func validateVersionedInfo(version GBProtocolVersion, cmdType string, info []ver
 }
 
 func validateDeviceAlarmStatus(version GBProtocolVersion, alarm *deviceAlarmStatusXML) error {
+	return validateDeviceAlarmStatusWithCompatibility(version, alarm, false)
+}
+
+func validateDeviceAlarmStatusWithCompatibility(version GBProtocolVersion, alarm *deviceAlarmStatusXML, compatible bool) error {
 	if alarm == nil {
 		return nil
 	}
@@ -1413,7 +1437,12 @@ func validateDeviceAlarmStatus(version GBProtocolVersion, alarm *deviceAlarmStat
 		return fmt.Errorf("DeviceStatus Alarmstatus has duplicate Num")
 	}
 	var num *int
-	if version == GBVersion20 {
+	if compatible && (version == GBVersion20 || version == GBVersion30) {
+		num = alarm.Num
+		if num == nil {
+			num = alarm.LowerNum
+		}
+	} else if version == GBVersion20 {
 		if alarm.Num != nil {
 			return fmt.Errorf("DeviceStatus Alarmstatus count field does not match protocol")
 		}

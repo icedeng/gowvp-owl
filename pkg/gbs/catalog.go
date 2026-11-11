@@ -183,7 +183,7 @@ func catalogChannelExt(item Channels) ipc.DeviceExt {
 // GB/T28181 90 页 A.2.6.4
 func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
-	if err := validateCatalogStructure(ctx.Request.Body(), version, false); err != nil {
+	if err := validateDeviceCatalogStructure(ctx.Request.Body(), version, false); err != nil {
 		ctx.String(400, err.Error())
 		return
 	}
@@ -274,7 +274,7 @@ func (g *GB28181API) validateCatalogEnvelope(ctx *sip.Context, msg MessageDevice
 		if !validCatalogTargetID(version, item.ChannelID) {
 			return fmt.Errorf("invalid Catalog item DeviceID")
 		}
-		if err := validateCatalogItemValues(item, version); err != nil {
+		if err := validateDeviceCatalogItemValues(item, version); err != nil {
 			return err
 		}
 		if notification && version.AtLeast(GBVersion11) && !validCatalogNotifyEvent(item.Event) {
@@ -303,6 +303,10 @@ func validCatalogNotifyEvent(value string) bool {
 }
 
 func validateCatalogItemValues(item Channels, version GBProtocolVersion) error {
+	return validateCatalogItemValuesWithCompatibility(item, version, false)
+}
+
+func validateCatalogItemValuesWithCompatibility(item Channels, version GBProtocolVersion, compatible bool) error {
 	status := strings.TrimSpace(item.Status)
 	if status != "" && !equalFoldAny(status, "ON", "OFF") {
 		return fmt.Errorf("Catalog item Status must be ON or OFF")
@@ -369,7 +373,7 @@ func validateCatalogItemValues(item Channels, version GBProtocolVersion) error {
 	if version != GBVersion30 && hasCatalog30Info(info) {
 		return fmt.Errorf("Catalog item Info extension requires protocol 3.0")
 	}
-	if version == GBVersion30 {
+	if version == GBVersion30 && !compatible {
 		if item.hasOwner || item.Owner != "" || item.hasSafetyWay || item.SafetyWay != 0 || item.hasCertNum || item.CertNum != "" || item.hasCertifiable || item.Certifiable != 0 || item.hasErrCode || item.ErrCode != 0 || item.hasEndTime || item.EndTime != "" {
 			return fmt.Errorf("Catalog item contains fields removed by protocol 3.0")
 		}
@@ -390,7 +394,7 @@ func validateCatalogItemValues(item Channels, version GBProtocolVersion) error {
 		}
 	}
 	if version == GBVersion30 {
-		if err := validateCatalog30RequiredFields(item); err != nil {
+		if err := validateCatalog30RequiredFields(item, compatible); err != nil {
 			return err
 		}
 		if err := validateCatalog30Info(info); err != nil {
@@ -409,7 +413,7 @@ func validateCatalogItemValues(item Channels, version GBProtocolVersion) error {
 	return nil
 }
 
-func validateCatalog30RequiredFields(item Channels) error {
+func validateCatalog30RequiredFields(item Channels, compatible bool) error {
 	deviceID := strings.TrimSpace(item.ChannelID)
 	if deviceID == "" {
 		// 内部字段级校验调用可不带目录项标识；协议入口在调用本函数前已校验 DeviceID。
@@ -422,6 +426,10 @@ func validateCatalog30RequiredFields(item Channels) error {
 	kind := classifyGBCatalogItem(deviceID)
 	requireCivilCode := func() error {
 		civilCode := strings.TrimSpace(item.CivilCode)
+		// 部分 2022 设备沿用十位 SIP 域作为行政区划编码，接收时保留原值。
+		if compatible && len(civilCode) == 10 && isASCIIDigits(civilCode) {
+			return nil
+		}
 		if !validCatalogAdministrativeCode(civilCode) {
 			return fmt.Errorf("protocol 3.0 Catalog item CivilCode must contain 2, 4, 6 or 8 ASCII digits")
 		}

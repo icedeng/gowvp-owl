@@ -166,6 +166,13 @@ func (g *GB28181API) cleanupTaskStates(now time.Time) {
 	if store == nil {
 		return
 	}
+	// 只清理已完成事件的回执；未入库和失败记录保留，不能按普通任务 TTL 丢弃。
+	eventCtx, eventCancel := taskStateContext(context.Background())
+	eventErr := store.CleanupGBTaskStates(eventCtx, gbTaskKindAlarmEventReceipt, now.Add(-alarmInboxRetention), alarmInboxMaxStates)
+	eventCancel()
+	if eventErr != nil {
+		slog.Error("cleanup Alarm event receipts", "err", eventErr)
+	}
 	ctx, cancel := taskStateContext(context.Background())
 	err := store.CleanupGBTaskStates(ctx, gbTaskKindUpgrade, now.Add(-upgradeStateTTL), maxUpgradeStates)
 	cancel()

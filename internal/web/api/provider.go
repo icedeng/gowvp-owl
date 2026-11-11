@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -111,6 +112,7 @@ func NewHTTPHandler(uc *Usecase) http.Handler {
 	setupRouter(g, uc) // 设置路由处理函数
 	// 将 SIP 层 GB 报警上报桥接到事件中心，统一落库到 events 表。
 	setupGBAlarmBridge(uc)
+	setupEventEvidence(uc)
 	uc.Version.RecordVersion()
 	handler := setupOpenPlatform(g, uc)
 	if uc.AccessGateway != nil {
@@ -119,7 +121,17 @@ func NewHTTPHandler(uc *Usecase) http.Handler {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); uc.GB28181API.captures.Run(ctx, uc.GB28181API.runCapture) }()
+	go func() {
+		defer close(done)
+		var workers sync.WaitGroup
+		workers.Add(1)
+		go func() { defer workers.Done(); uc.GB28181API.captures.Run(ctx, uc.GB28181API.runCapture) }()
+		if w := uc.EventAPI.eventCore.Workflow(); w != nil {
+			workers.Add(1)
+			go func() { defer workers.Done(); w.RunEvidenceWorkers(ctx) }()
+		}
+		workers.Wait()
+	}()
 	return &captureHandler{Handler: handler, cancel: cancel, done: done}
 }
 
@@ -129,27 +141,22 @@ func setupGBAlarmBridge(uc *Usecase) {
 		return
 	}
 
-	uc.SipServer.SetReliableAlarmHandler(func(ctx context.Context, in *gbs.AlarmEvent) error {
-		if in == nil || strings.TrimSpace(in.DeviceID) == "" {
-			return nil
-		}
-
-		// 1) 设备国标编码 -> 内部设备ID。
+	uc.SipServer.SetDurableAlarmHandler(func(ctx context.Context, in *gbs.AlarmEvent) error {
 		dev, err := uc.GB28181API.ipc.GetDeviceByDeviceID(ctx, in.DeviceID)
 		if err != nil {
-			slog.Warn("alarm: device not found", "deviceID", in.DeviceID, "err", err)
 			return err
 		}
-
-		var cid string
-		if in.ChannelID != "" && in.ChannelID != in.DeviceID {
-			// 2) 通道国标编码 -> 内部通道ID（查不到时允许为空）。
+		in.InternalDeviceID = dev.ID
+		if len(in.ChannelID) == 20 && in.ChannelID != in.DeviceID {
 			ch, err := uc.GB28181API.ipc.GetChannelByDeviceChannelID(ctx, in.DeviceID, in.ChannelID)
-			if err == nil {
-				cid = ch.ID
+			if err != nil {
+				return err
 			}
+			in.InternalChannelID = ch.ID
 		}
-
+		return nil
+	}, func(ctx context.Context, in *gbs.AlarmEvent) error {
+		// 使用接纳时冻结的内部身份，设备离线或同国标编码重建不改变历史归属。
 		started := orm.Now()
 		if t, ok := in.ParseTime(); ok {
 			// 使用设备上报时间；解析失败时退化为服务端当前时间。
@@ -172,8 +179,8 @@ func setupGBAlarmBridge(uc *Usecase) {
 			sourceKey = &key
 		}
 		if _, err := uc.EventAPI.eventCore.CreateEventAndNotify(ctx, &event.AddEventInput{
-			DID:       dev.ID,
-			CID:       cid,
+			DID:       in.InternalDeviceID,
+			CID:       in.InternalChannelID,
 			StartedAt: started,
 			EndedAt:   orm.Time{Time: started.Time.Add(1 * time.Second)},
 			Label:     label,

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="GB18030"?>
+<Response>
+<CmdType>Catalog</CmdType>
+<SN>301</SN>
+<DeviceID>34020000001320000001</DeviceID>
+<SumNum>1</SumNum>
+<DeviceList Num="1">
+<Item>
+<DeviceID>34020000001320000002</DeviceID>
+<Name>Camera 01</Name>
+<Manufacturer>Hikvision</Manufacturer>
+<Model>IP Camera</Model>
+<Owner>Owner</Owner>
+<CivilCode>5001070000</CivilCode>
+<Address>Address</Address>
+<Parental>0</Parental>
+<ParentID>34020000002000000001</ParentID>
+<SafetyWay>0</SafetyWay>
+<RegisterWay>1</RegisterWay>
+<Secrecy>0</Secrecy>
+<Status>ON</Status>
+<IPAddress>192.0.2.64</IPAddress>
+<Port>5060</Port>
+</Item>
+</DeviceList>
+</Response>

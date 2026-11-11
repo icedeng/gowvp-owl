@@ -472,7 +472,7 @@ func TestMobilePositionRejectsInvalidNotificationBeforeState(t *testing.T) {
 		{name: "2016 Appendix A.4 extension", version: GBVersion20, body: strings.Replace(valid, "</Notify>", `<Info><doorType><DeviceID>`+gb10DeviceID+`</DeviceID></doorType></Info></Notify>`, 1)},
 		{name: "duplicate SN", version: GBVersion20, body: strings.Replace(valid, "</SN>", "</SN><SN>2</SN>", 1)},
 		{name: "unknown field", version: GBVersion20, body: strings.Replace(valid, "</Notify>", "<VendorField>value</VendorField></Notify>", 1)},
-		{name: "out of order field", version: GBVersion20, body: strings.Replace(valid, "<Time>2026-08-26T12:00:00</Time><Longitude>120</Longitude>", "<Longitude>120</Longitude><Time>2026-08-26T12:00:00</Time>", 1)},
+		{name: "reordered duplicate Time", version: GBVersion20, body: strings.Replace(valid, "<Time>2026-08-26T12:00:00</Time><Longitude>120</Longitude>", "<Longitude>120</Longitude><Time>2026-08-26T12:00:00</Time><Time>2026-08-26T12:00:00</Time>", 1)},
 		{name: "root attribute", version: GBVersion20, body: strings.Replace(valid, "<Notify>", `<Notify vendor="value">`, 1)},
 	}
 	for _, test := range tests {
@@ -686,9 +686,9 @@ func TestGB30MobilePositionRejectsInvalidStructureBeforeState(t *testing.T) {
 	tests := map[string]string{
 		"duplicate SumNum":        strings.Replace(valid, "</SumNum>", "</SumNum><SumNum>1</SumNum>", 1),
 		"unknown top-level field": strings.Replace(valid, "<SumNum>", "<VendorField>value</VendorField><SumNum>", 1),
-		"out of order top-level field": strings.Replace(valid,
+		"reordered duplicate Time": strings.Replace(valid,
 			"<Time>2026-08-26T12:00:00</Time><SumNum>1</SumNum>",
-			"<SumNum>1</SumNum><Time>2026-08-26T12:00:00</Time>", 1),
+			"<SumNum>1</SumNum><Time>2026-08-26T12:00:00</Time><Time>2026-08-26T12:00:00</Time>", 1),
 		"duplicate item DeviceID": strings.Replace(valid, "</DeviceID><CaptureTime>", "</DeviceID><DeviceID>"+gb10ChannelID+"</DeviceID><CaptureTime>", 1),
 		"unknown item field":      strings.Replace(valid, "</Latitude></Item>", "</Latitude><VendorField>value</VendorField></Item>", 1),
 		"item attribute":          strings.Replace(valid, "<Item>", `<Item vendor="value">`, 1),

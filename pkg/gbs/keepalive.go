@@ -33,7 +33,7 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
-	if err := validateKeepaliveStructure(ctx.Request.Body()); err != nil {
+	if err := validateDeviceMANSCDPStructure(ctx.Request.Body(), g.getDeviceGBProtocolVersion(ctx.DeviceID), "Notify", "Keepalive", keepaliveRules); err != nil {
 		ctx.String(400, err.Error())
 		return
 	}

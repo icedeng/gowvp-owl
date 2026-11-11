@@ -4,6 +4,7 @@ package event
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/reason"
@@ -32,8 +33,24 @@ type idempotentEventStorer interface {
 
 // ListEvents 分页查询事件列表，支持按 CID 和时间范围筛选
 func (c Core) ListEvents(ctx context.Context, in *FindEventInput) ([]*Event, int64, error) {
-	query := orm.NewQuery(4).OrderBy("started_at DESC")
+	query := orm.NewQuery(4).OrderBy("started_at DESC, id DESC")
 
+	if in.Status != "" {
+		query.Where("status = ?", in.Status)
+	}
+	if in.Evidence == "image" {
+		query.Where("image_path <> ''")
+	}
+	if in.Evidence == "video" {
+		query.Where("video_path <> ''")
+	}
+	if in.Evidence == "failed" {
+		query.Where("EXISTS (SELECT 1 FROM event_evidence_tasks t WHERE t.event_id = events.id AND (t.snapshot_state = 'failed' OR t.video_state = 'failed'))")
+	}
+	if key := strings.TrimSpace(in.Key); key != "" {
+		key = "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(strings.ToLower(key)) + "%"
+		query.Where(`(LOWER(label) LIKE ? ESCAPE '!' OR LOWER(model) LIKE ? ESCAPE '!' OR LOWER(did) LIKE ? ESCAPE '!' OR LOWER(cid) LIKE ? ESCAPE '!' OR EXISTS (SELECT 1 FROM devices d WHERE d.id = events.did AND (LOWER(d.name) LIKE ? ESCAPE '!' OR LOWER(d.device_id) LIKE ? ESCAPE '!' OR LOWER(CAST(d.ext AS TEXT)) LIKE ? ESCAPE '!')) OR EXISTS (SELECT 1 FROM channels ch WHERE ch.id = events.cid AND (events.did = '' OR ch.did = events.did) AND (LOWER(ch.name) LIKE ? ESCAPE '!' OR LOWER(ch.channel_id) LIKE ? ESCAPE '!')))`, key, key, key, key, key, key, key, key, key)
+	}
 	if in.CID != "" {
 		query.Where("cid = ?", in.CID)
 	}
@@ -43,6 +60,14 @@ func (c Core) ListEvents(ctx context.Context, in *FindEventInput) ([]*Event, int
 	if in.Label != "" {
 		query.Where("label = ?", in.Label)
 	}
+	// 在分页前筛选来源，避免仅在当前页过滤导致漏看设备报警。
+	alarmSource := "(LOWER(model) = ? OR LOWER(model) LIKE ? OR LOWER(label) LIKE ? OR label LIKE ?)"
+	if in.Source == "alarm" {
+		query.Where(alarmSource, "gb28181", "%alarm%", "%alarm%", "%报警%")
+	} else if in.Source == "ai" {
+		query.Where("NOT "+alarmSource, "gb28181", "%alarm%", "%alarm%", "%报警%")
+	}
+
 	if in.StartMs > 0 && in.EndMs > 0 {
 		query.Where("started_at >= ? AND started_at <= ?", in.StartAt(), in.EndAt())
 	}
@@ -114,7 +139,8 @@ func (c Core) UpdateEvent(ctx context.Context, in *EditEventInput, id int64) (*E
 func (c Core) DeleteEvent(ctx context.Context, id int64) (*Event, error) {
 	var out Event
 	if err := c.store.Event().Delete(ctx, &out, orm.Where("id=?", id)); err != nil {
-		return nil, reason.ErrDB.Withf(`Del id[%v] err[%s]`, id, err.Error())
+		return nil, err
 	}
+	removeEventMedia(out.ImagePath, out.VideoPath)
 	return &out, nil
 }

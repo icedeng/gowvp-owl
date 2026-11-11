@@ -56,20 +56,23 @@ type alarmBusinessResponse struct {
 // AlarmEvent 是系统内部统一的报警事件模型。
 // DeviceID 使用设备国标编码，ChannelID 使用通道国标编码（无通道时回退为设备编码）。
 type AlarmEvent struct {
-	DeliveryID       string `json:"delivery_id"`
-	CmdType          string `json:"cmd_type"`
-	SN               int    `json:"sn"`
-	DeviceID         string `json:"device_id"`
-	ChannelID        string `json:"channel_id"`
-	AlarmPriority    string `json:"alarm_priority"`
-	AlarmMethod      string `json:"alarm_method"`
-	AlarmType        string `json:"alarm_type"`
-	EventType        *int   `json:"event_type,omitempty"`
-	AlarmDescription string `json:"alarm_description"`
-	AlarmTime        string `json:"alarm_time"`
-	Longitude        string `json:"longitude"`
-	Latitude         string `json:"latitude"`
-	SourceMethod     string `json:"source_method"`
+	InternalDeviceID  string `json:"internal_device_id,omitempty"`
+	InternalChannelID string `json:"internal_channel_id,omitempty"`
+	ProtocolVersion   string `json:"protocol_version,omitempty"`
+	DeliveryID        string `json:"delivery_id"`
+	CmdType           string `json:"cmd_type"`
+	SN                int    `json:"sn"`
+	DeviceID          string `json:"device_id"`
+	ChannelID         string `json:"channel_id"`
+	AlarmPriority     string `json:"alarm_priority"`
+	AlarmMethod       string `json:"alarm_method"`
+	AlarmType         string `json:"alarm_type"`
+	EventType         *int   `json:"event_type,omitempty"`
+	AlarmDescription  string `json:"alarm_description"`
+	AlarmTime         string `json:"alarm_time"`
+	Longitude         string `json:"longitude"`
+	Latitude          string `json:"latitude"`
+	SourceMethod      string `json:"source_method"`
 }
 
 // ParseTime 将报警时间字符串解析为 time.Time，兼容常见时间格式。
@@ -150,7 +153,7 @@ func (g *GB28181API) sipNotifyAlarm(ctx *sip.Context) {
 // handleAlarm 统一解析报警消息，并触发回调与对外通知。
 func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
-	if err := validateAlarmStructure(ctx.Request.Body(), version); err != nil {
+	if err := validateAlarmStructureWithCompatibility(ctx.Request.Body(), version, true); err != nil {
 		ctx.String(400, err.Error())
 		return
 	}
@@ -203,6 +206,12 @@ func (g *GB28181API) handleAlarm(ctx *sip.Context, sourceMethod string) {
 	}
 	defer unlockDeviceCommit()
 
+	// 在认证及注册代次门禁内保存事件中心任务；后续协议副作用失败不影响恢复入库。
+	if err := g.persistAlarmEventDelivery(g.serviceContext(), event, ctx.Request.Body()); err != nil {
+		ctx.Log.Error("persist Alarm event delivery", "err", err, "delivery_id", event.DeliveryID)
+		ctx.String(500, "alarm event persistence unavailable")
+		return
+	}
 	handler := g.alarmHandlerSnapshot()
 	inboxPersisted, err := g.persistAlarmInbox(g.serviceContext(), event)
 	if err != nil {

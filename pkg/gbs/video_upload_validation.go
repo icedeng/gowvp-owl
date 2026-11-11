@@ -533,6 +533,16 @@ func validateKeepaliveStructure(body []byte) error {
 }
 
 func validateMobilePositionNotifyStructure(body []byte, version GBProtocolVersion) error {
+	return validateMobilePositionNotifyStructureWithCompatibility(body, version, false)
+}
+
+func validateMobilePositionNotifyStructureWithCompatibility(body []byte, version GBProtocolVersion, compatible bool) error {
+	structure := func(body []byte, cmd string, rules []notificationElementRule) error {
+		if compatible {
+			return validateDeviceMANSCDPStructure(body, version, "Notify", cmd, rules)
+		}
+		return validateIndependentNotificationStructure(body, cmd, rules)
+	}
 	rules := []notificationElementRule{
 		{name: "CmdType", minOccurs: 1, maxOccurs: 1},
 		{name: "SN", minOccurs: 1, maxOccurs: 1},
@@ -572,10 +582,20 @@ func validateMobilePositionNotifyStructure(body []byte, version GBProtocolVersio
 			notificationElementRule{name: "Altitude", minOccurs: 0, maxOccurs: 1},
 		)
 	}
-	return validateIndependentNotificationStructure(body, "MobilePosition", rules)
+	return structure(body, "MobilePosition", rules)
 }
 
 func validateAlarmStructure(body []byte, version GBProtocolVersion) error {
+	return validateAlarmStructureWithCompatibility(body, version, false)
+}
+
+func validateAlarmStructureWithCompatibility(body []byte, version GBProtocolVersion, compatible bool) error {
+	structure := func(body []byte, cmd string, rules []notificationElementRule) error {
+		if compatible {
+			return validateDeviceMANSCDPStructure(body, version, "Notify", cmd, rules)
+		}
+		return validateIndependentNotificationStructure(body, cmd, rules)
+	}
 	rules := []notificationElementRule{
 		{name: "CmdType", minOccurs: 1, maxOccurs: 1},
 		{name: "SN", minOccurs: 1, maxOccurs: 1},
@@ -597,7 +617,7 @@ func validateAlarmStructure(body []byte, version GBProtocolVersion) error {
 				children: []notificationElementRule{{name: "EventType", minOccurs: 0, maxOccurs: 1, requireText: true}},
 			},
 		}
-		return validateIndependentNotificationStructure(body, "Alarm", append(rules,
+		return structure(body, "Alarm", append(rules,
 			notificationElementRule{
 				// 2016 A.2.5 允许一个结构化 Info 后继续携带多项纯文本 Info。
 				// 每个元素只能选择结构化子元素或简单文本，二者不能混用。
@@ -606,7 +626,7 @@ func validateAlarmStructure(body []byte, version GBProtocolVersion) error {
 			},
 		))
 	case GBVersion30:
-		return validateIndependentNotificationStructure(body, "Alarm", append(rules,
+		return structure(body, "Alarm", append(rules,
 			notificationElementRule{
 				name: "Info", minOccurs: 0, maxOccurs: 1,
 				children: alarmTypedInfoRules, knownChildren: []string{"AlarmType", "AlarmTypeParam"},
@@ -615,7 +635,7 @@ func validateAlarmStructure(body []byte, version GBProtocolVersion) error {
 			notificationElementRule{name: "ExtraInfo", minOccurs: 0, maxOccurs: maxNotificationOccurs, maxRunes: 1024},
 		))
 	default:
-		return validateIndependentNotificationStructure(body, "Alarm", append(rules,
+		return structure(body, "Alarm", append(rules,
 			notificationElementRule{name: "Info", minOccurs: 0, maxOccurs: maxNotificationOccurs, maxRunes: 1024},
 		))
 	}
@@ -1069,6 +1089,11 @@ func validateIndependentNotificationStructure(body []byte, cmdType string, child
 }
 
 func validateMANSCDPStructure(body []byte, rootName, cmdType string, children []notificationElementRule) error {
+	return validateMANSCDPStructureRule(body, cmdType, notificationElementRule{name: rootName, minOccurs: 1, maxOccurs: 1, children: children})
+}
+
+func validateMANSCDPStructureRule(body []byte, cmdType string, root notificationElementRule) error {
+	rootName := root.name
 	decoder := sip.NewGBXMLDecoder(body)
 	seenRoot := false
 	seenXMLDeclaration := false
@@ -1092,7 +1117,7 @@ func validateMANSCDPStructure(body []byte, rootName, cmdType string, children []
 			if current.Name.Local != rootName {
 				return fmt.Errorf("%s root must be %s", cmdType, rootName)
 			}
-			if err := validateNotificationElement(decoder, current, notificationElementRule{name: rootName, minOccurs: 1, maxOccurs: 1, children: children}, cmdType); err != nil {
+			if err := validateNotificationElement(decoder, current, root, cmdType); err != nil {
 				return err
 			}
 		case xml.CharData:

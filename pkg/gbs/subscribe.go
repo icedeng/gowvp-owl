@@ -630,7 +630,7 @@ func applyServerSubscriptionDialog(request, dialogRequest *sip.Request) {
 // sipNotifyCatalog 处理目录变更通知；应答后通过完整 Catalog 查询收敛本地快照。
 func (g *GB28181API) sipNotifyCatalog(ctx *sip.Context) {
 	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
-	if err := validateCatalogStructure(ctx.Request.Body(), version, true); err != nil {
+	if err := validateDeviceCatalogStructure(ctx.Request.Body(), version, true); err != nil {
 		ctx.String(400, "invalid catalog notify")
 		return
 	}
@@ -672,7 +672,7 @@ func (g *GB28181API) sipNotifyCatalog(ctx *sip.Context) {
 // sipNotifyMobilePosition 处理位置订阅通知，结构化保存并转发给本级订阅方。
 func (g *GB28181API) sipNotifyMobilePosition(ctx *sip.Context) {
 	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
-	if err := validateMobilePositionNotifyStructure(ctx.Request.Body(), version); err != nil {
+	if err := validateMobilePositionNotifyStructureWithCompatibility(ctx.Request.Body(), version, true); err != nil {
 		ctx.String(400, err.Error())
 		return
 	}

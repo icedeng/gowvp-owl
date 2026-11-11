@@ -15,6 +15,7 @@ type Dispatcher interface {
 
 // Core business domain
 type Core struct {
+	workflow *Workflow
 	store    Storer
 	notifier Dispatcher
 }

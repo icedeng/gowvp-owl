@@ -62,9 +62,11 @@ func (c Core) cleanupExpiredEvents(days int) {
 		// 查询一批过期事件
 		var events []*Event
 		pager := web.PagerFilter{Page: 1, Size: batchSize}
-		_, err := c.store.Event().List(ctx, &events, &pager,
-			orm.Where("started_at < ?", orm.Time{Time: cutoffTime}),
-		)
+		options := []orm.QueryOption{orm.Where("started_at < ?", orm.Time{Time: cutoffTime})}
+		if c.workflow != nil {
+			options = append(options, orm.Where("NOT EXISTS (SELECT 1 FROM event_evidence_tasks t WHERE t.event_id = events.id AND t.state IN ('queued','working'))"))
+		}
+		_, err := c.store.Event().List(ctx, &events, &pager, options...)
 		if err != nil {
 			slog.Error("failed to query expired events", "err", err)
 			break
@@ -79,6 +81,9 @@ func (c Core) cleanupExpiredEvents(days int) {
 		eventIDs := make([]int64, 0, len(events))
 		for _, e := range events {
 			eventIDs = append(eventIDs, e.ID)
+			if e.VideoPath != "" {
+				imagePaths[e.VideoPath] = struct{}{}
+			}
 			if e.ImagePath != "" {
 				imagePaths[e.ImagePath] = struct{}{}
 			}
@@ -100,6 +105,14 @@ func (c Core) cleanupExpiredEvents(days int) {
 		// 批量删除数据库记录，使用 WHERE IN 一次性删除
 		var deletedRows int64
 		err = c.store.Event().Session(ctx, func(tx *gorm.DB) error {
+			if c.workflow != nil {
+				if err := tx.Where("event_id IN ?", eventIDs).Delete(&Action{}).Error; err != nil {
+					return err
+				}
+				if err := tx.Where("event_id IN ?", eventIDs).Delete(&EvidenceTask{}).Error; err != nil {
+					return err
+				}
+			}
 			result := tx.Where("id IN ?", eventIDs).Delete(&Event{})
 			deletedRows = result.RowsAffected
 			return result.Error

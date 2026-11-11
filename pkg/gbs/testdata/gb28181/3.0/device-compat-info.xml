@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="GB18030"?>
+<Response>
+<CmdType>DeviceInfo</CmdType>
+<SN>302</SN>
+<DeviceID>34020000001320000001</DeviceID>
+<Result>OK</Result>
+<DeviceName>IP CAMERA</DeviceName>
+<Manufacturer>Hikvision</Manufacturer>
+<Model>DS-2CD3T47SWDV3-LT</Model>
+<Firmware>V5.8.21</Firmware>
+<Channel>1</Channel>
+</Response>

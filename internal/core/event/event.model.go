@@ -9,19 +9,27 @@ import (
 
 // Event domain model
 type Event struct {
-	ID        int64    `gorm:"primaryKey" json:"id"`                                                                        // 事件 ID
-	DID       string   `gorm:"column:did;notNull;default:'';comment:设备 ID (device 表的 id)" json:"did"`                       // 设备 ID (device 表的 id)
-	CID       string   `gorm:"column:cid;notNull;default:'';comment:通道 ID (channel 表的 id)" json:"cid"`                      // 通道 ID (channel 表的 id)
-	StartedAt orm.Time `gorm:"column:started_at;notNull;default:CURRENT_TIMESTAMP;comment:事件开始时间" json:"started_at"`        // 事件开始时间
-	EndedAt   orm.Time `gorm:"column:ended_at;notNull;default:CURRENT_TIMESTAMP;comment:事件结束时间" json:"ended_at"`            // 事件结束时间
-	Label     string   `gorm:"column:label;notNull;default:'';comment:检测标签 (person, car 等)" json:"label"`                   // 检测标签 (person, car 等)
-	Score     float32  `gorm:"column:score;notNull;default:0;comment:置信度 (0.0-1.0)" json:"score"`                           // 置信度 (0.0-1.0)
-	Zones     string   `gorm:"column:zones;notNull;default:'';comment:检测区域，JSON 格式存储边界框信息" json:"zones"`                    // 检测区域，JSON 格式存储边界框信息
-	ImagePath string   `gorm:"column:image_path;notNull;default:'';comment:图片相对路径 (cid/年月日时分秒_随机6位.jpg)" json:"image_path"` // 图片相对路径 (cid/年月日时分秒_随机6位.jpg)
-	Model     string   `gorm:"column:model;notNull;default:'';comment:分析模型名称" json:"model"`                                 // 分析模型名称
-	SourceKey *string  `gorm:"column:source_key;uniqueIndex:idx_events_source_key;comment:外部事件幂等键" json:"-"`                // 外部事件幂等键；普通事件保持 NULL
-	CreatedAt orm.Time `gorm:"column:created_at;notNull;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`          // 创建时间
-	UpdatedAt orm.Time `gorm:"column:updated_at;notNull;default:CURRENT_TIMESTAMP;comment:更新时间" json:"updated_at"`          // 更新时间
+	Status      string        `gorm:"size:16;not null;default:pending;index:idx_events_status_started,priority:1" json:"status"`
+	Revision    int           `gorm:"not null;default:1" json:"revision"`
+	VideoPath   string        `gorm:"not null;default:''" json:"video_path"`
+	DeviceName  string        `gorm:"-" json:"device_name"`
+	DeviceCode  string        `gorm:"-" json:"device_code"`
+	ChannelName string        `gorm:"-" json:"channel_name"`
+	ChannelCode string        `gorm:"-" json:"channel_code"`
+	Evidence    *EvidenceTask `gorm:"-" json:"evidence,omitempty"`
+	ID          int64         `gorm:"primaryKey" json:"id"`                                                                                                                      // 事件 ID
+	DID         string        `gorm:"column:did;notNull;default:'';comment:设备 ID (device 表的 id)" json:"did"`                                                                     // 设备 ID (device 表的 id)
+	CID         string        `gorm:"column:cid;notNull;default:'';comment:通道 ID (channel 表的 id)" json:"cid"`                                                                    // 通道 ID (channel 表的 id)
+	StartedAt   orm.Time      `gorm:"column:started_at;index:idx_events_status_started,priority:2,sort:desc;notNull;default:CURRENT_TIMESTAMP;comment:事件开始时间" json:"started_at"` // 事件开始时间
+	EndedAt     orm.Time      `gorm:"column:ended_at;notNull;default:CURRENT_TIMESTAMP;comment:事件结束时间" json:"ended_at"`                                                          // 事件结束时间
+	Label       string        `gorm:"column:label;notNull;default:'';comment:检测标签 (person, car 等)" json:"label"`                                                                 // 检测标签 (person, car 等)
+	Score       float32       `gorm:"column:score;notNull;default:0;comment:置信度 (0.0-1.0)" json:"score"`                                                                         // 置信度 (0.0-1.0)
+	Zones       string        `gorm:"column:zones;notNull;default:'';comment:检测区域，JSON 格式存储边界框信息" json:"zones"`                                                                  // 检测区域，JSON 格式存储边界框信息
+	ImagePath   string        `gorm:"column:image_path;notNull;default:'';comment:图片相对路径 (cid/年月日时分秒_随机6位.jpg)" json:"image_path"`                                               // 图片相对路径 (cid/年月日时分秒_随机6位.jpg)
+	Model       string        `gorm:"column:model;notNull;default:'';comment:分析模型名称" json:"model"`                                                                               // 分析模型名称
+	SourceKey   *string       `gorm:"column:source_key;uniqueIndex:idx_events_source_key;comment:外部事件幂等键" json:"-"`                                                              // 外部事件幂等键；普通事件保持 NULL
+	CreatedAt   orm.Time      `gorm:"column:created_at;notNull;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`                                                        // 创建时间
+	UpdatedAt   orm.Time      `gorm:"column:updated_at;notNull;default:CURRENT_TIMESTAMP;comment:更新时间" json:"updated_at"`                                                        // 更新时间
 }
 
 // TableName database table name

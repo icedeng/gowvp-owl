@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="GB18030"?>
+<Response>
+<CmdType>RecordInfo</CmdType>
+<SN>181278</SN>
+<DeviceID>34020000001320000002</DeviceID>
+<Result>ERROR</Result>
+<Reason>Cannot get record file</Reason>
+</Response>

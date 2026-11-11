@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: 事件管理 API
   version: 1.0.0
-  description: AI 检测事件的查询和管理接口
+  description: AI 检测与国标设备报警事件的查询和管理接口
 
 tags:
   - name: events
@@ -16,7 +16,8 @@ paths:
       summary: 分页查询事件列表
       operationId: findEvents
       description: |
-        分页查询 AI 检测事件，支持按通道 ID、设备 ID、标签和时间范围筛选。
+        分页查询 AI 检测与国标设备报警事件，支持按来源、处理状态、取证结果、设备/通道名称与编码、通道 ID、设备 ID、标签和时间范围筛选。
+        未提供时间范围时查询保留期内全部事件。
         结果按事件开始时间倒序排列。
       parameters:
         - name: page
@@ -58,6 +59,24 @@ paths:
           description: 通道 ID
           schema:
             type: string
+        - name: key
+          in: query
+          description: 设备或通道名称、编码、标签与模型；在数据库分页前搜索，最多128字
+          schema: {type: string, maxLength: 128}
+        - name: status
+          in: query
+          description: 处理状态；省略时不限制，管理端默认待处理
+          schema: {type: string, enum: [pending, processing, resolved, ignored]}
+        - name: evidence
+          in: query
+          description: 有图片、有视频或取证失败
+          schema: {type: string, enum: [image, video, failed]}
+        - name: source
+          in: query
+          description: 事件来源，在分页前筛选；省略或 all 为全部，alarm 为设备报警，ai 为 AI 检测
+          schema:
+            type: string
+            enum: [all, alarm, ai]
         - name: label
           in: query
           description: 检测标签（如 person, car）
@@ -179,11 +198,137 @@ paths:
         "404":
           description: 图片不存在
 
+  /events/process:
+    post:
+      tags: [events]
+      summary: 单条或批量处理事件
+      description: 最多100条，按revision检查并在同一事务提交。resolved、ignored和pending必须填写note；已结束事件须先转回pending。操作者从鉴权身份获取，不接受客户端指定。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items, status]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [id, revision]
+                    properties:
+                      id: {type: integer, format: int64, minimum: 1}
+                      revision: {type: integer, minimum: 1}
+                status: {type: string, enum: [pending, processing, resolved, ignored]}
+                note: {type: string, maxLength: 1000}
+      responses:
+        '200':
+          description: 本次事件及处理记录已原子提交
+        '400':
+          description: 状态冲突、说明缺失或参数无效；批量操作全部取消
+        '401':
+          description: 未登录
+  /events/{id}/actions:
+    get:
+      tags: [events]
+      summary: 查询最近100条人工处理记录
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer, format: int64}}
+      responses:
+        '200':
+          description: items中包含from_status、to_status、note、actor及ISO时间created_at
+        '404':
+          description: 事件不存在或已过期
+  /events/{id}/video:
+    get:
+      tags: [events]
+      summary: 获取报警后视频片段
+      description: 需要管理端鉴权，支持Range播放；download=1下载。视频从平台取流后开始，不含报警前画面。
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer, format: int64}}
+        - {name: download, in: query, schema: {type: string, enum: ['1']}}
+      responses:
+        '200':
+          description: MP4视频
+          content:
+            video/mp4:
+              schema: {type: string, format: binary}
+        '206':
+          description: 分段视频内容
+        '404':
+          description: 没有片段或附件已过期
+  /event_policies/{did}:
+    get:
+      tags: [events]
+      summary: 获取国标设备报警取证策略
+      parameters:
+        - {name: did, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: 未配置的设备返回默认关闭的策略，revision为0
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EventPolicy'}
+        '404':
+          description: 国标设备不存在
+    put:
+      tags: [events]
+      summary: 保存国标设备报警取证策略
+      description: 只影响后续国标报警，不回补历史取证、不改动设备侦测/布防/常规录像；同通道冷却或已有任务时跳过重复取证，原始事件仍全部记录。revision冲突时拒绝覆盖。
+      parameters:
+        - {name: did, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EventPolicy'}
+      responses:
+        '200':
+          description: 已保存
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EventPolicy'}
+        '400':
+          description: 参数无效、版本冲突或全局禁用录制
+
 components:
   schemas:
+    EventPolicy:
+      type: object
+      required: [snapshot, record, clip_seconds, cooldown_seconds, revision]
+      properties:
+        did: {type: string, readOnly: true}
+        snapshot: {type: boolean, default: false}
+        record: {type: boolean, default: false}
+        clip_seconds: {type: integer, minimum: 5, maximum: 120, default: 15}
+        cooldown_seconds: {type: integer, minimum: 10, maximum: 3600, default: 60}
+        revision: {type: integer, minimum: 0}
+        updated_by: {type: string, readOnly: true}
+        updated_at: {type: string, format: date-time, readOnly: true}
     Event:
       type: object
       properties:
+        status: {type: string, enum: [pending, processing, resolved, ignored], default: pending}
+        revision: {type: integer, minimum: 1}
+        device_name: {type: string, description: 当前设备名称，设备移除后为空}
+        device_code: {type: string, description: 当前设备编码}
+        channel_name: {type: string, description: 当前通道名称}
+        channel_code: {type: string, description: 当前通道编码}
+        video_path: {type: string, description: 附件存在标记，实际访问使用事件video接口}
+        evidence:
+          type: object
+          description: 未开启取证的历史事件不提供此字段；任务时间为ISO格式
+          properties:
+            state: {type: string, enum: [queued, working, succeeded, failed, skipped]}
+            snapshot_state: {type: string, enum: [not_requested, queued, working, succeeded, failed, skipped]}
+            video_state: {type: string, enum: [not_requested, queued, working, succeeded, failed, skipped]}
+            snapshot_error: {type: string}
+            video_error: {type: string}
+            clip_seconds: {type: integer}
+            started_at: {type: string, format: date-time}
+            finished_at: {type: string, format: date-time}
         id:
           type: integer
           format: int64

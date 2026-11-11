@@ -1,7 +1,7 @@
 import { http } from './http'
 import type { PTZProbeOutput, PTZBatchProbeOutput } from '../types/api'
 import type {
-  CaptureRecord, CaptureSchedule, CaptureSchedulePage, SnapshotConfig, ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord, MediaInspectionResource, MediaInspectionResult,
+  EventPolicy, EventAction, EventStatus, CaptureRecord, CaptureSchedule, CaptureSchedulePage, SnapshotConfig, ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord, MediaInspectionResource, MediaInspectionResult,
   ApiChannel as Channel, DeviceExt, GbMetrics, GBHistoryDownloadState, GBHistoryStartOutput, GBOperationOutput, GBSnapshotState, GBSubscriptionState, GBUpgradeOutput, GBUpgradeState, HealthInfo, MediaServer, MonthlyStats,
   CascadePlatformStatus, PlayResult, SipAccessInfo, SipConfig, SipSecretStatus, TimelineRange, Zone,
   ResourceStats, SnapshotRefreshOutput, AnnexGAlarmAudit, AnnexGDefenceAudit, AnnexGDefenceState, AnnexGAuditPage,
@@ -144,6 +144,11 @@ export const api = {
 
   events: (params?: ListParams) => http.get<ApiPage<ApiEvent>>('/events', { params }),
   event: (id: number | string) => http.get<ApiEvent>(`/events/${id}`),
+  eventActions: (id: number) => http.get<{ items: EventAction[] }>(`/events/${id}/actions`),
+  processEvents: (items: { id: number; revision: number }[], status: EventStatus, note: string) => http.post('/events/process', { items, status, note }),
+  eventPolicy: (did: string) => http.get<EventPolicy>(`/event_policies/${encodeURIComponent(did)}`),
+  saveEventPolicy: (did: string, policy: EventPolicy) => http.put<EventPolicy>(`/event_policies/${encodeURIComponent(did)}`, policy),
+  eventVideo: (id: number, download = false) => withToken(apiUrl(`/events/${id}/video${download ? '?download=1' : ''}`)),
   deleteEvent: (id: number | string) => http.delete<ApiEvent>(`/events/${id}`),
   eventImage: (path: string) => withToken(apiUrl(`/events/image/${path.replace(/^\/+/, '')}`)),
 

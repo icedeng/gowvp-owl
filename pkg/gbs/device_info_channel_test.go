@@ -310,7 +310,7 @@ func TestDeviceInfoResponseAcceptsVersionFields(t *testing.T) {
 	}
 }
 
-func TestDeviceInfoResponse2022RejectsRemovedCompatibilityFields(t *testing.T) {
+func TestDeviceInfoResponse2022AcceptsLegacyMetadata(t *testing.T) {
 	for _, field := range []string{
 		`<DeviceType>DVR</DeviceType>`,
 		`<MaxCamera>1</MaxCamera>`,
@@ -322,9 +322,7 @@ func TestDeviceInfoResponse2022RejectsRemovedCompatibilityFields(t *testing.T) {
 				`</DeviceID><DeviceName>camera</DeviceName><Result>ERROR</Result>` + field + `<Channel>0</Channel></Response>`
 			response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage,
 				"device-info-2022-removed-field", []byte(body), api.sipMessageDeviceInfo)
-			if !strings.Contains(response, "SIP/2.0 400") {
-				t.Fatalf("protocol 3.0 accepted removed DeviceInfo field %s: %s", field, response)
-			}
+			assertFlowOK(t, response)
 		})
 	}
 }
@@ -346,10 +344,9 @@ func TestDeviceInfoResponseRejectsInvalidStructureByVersion(t *testing.T) {
 				`</DeviceID><DeviceName>one</DeviceName><DeviceName>two</DeviceName><Result>OK</Result></Response>`,
 		},
 		{
-			name: "2022 Info after ExtraInfo", version: GBVersion30,
+			name: "2022 duplicate Result", version: GBVersion30,
 			body: `<Response><CmdType>DeviceInfo</CmdType><SN>910</SN><DeviceID>` + gb10DeviceID +
-				`</DeviceID><Result>ERROR</Result><ExtraInfo>plain</ExtraInfo><Info><doorType><DeviceID>` + gb10DeviceID +
-				`</DeviceID></doorType></Info></Response>`,
+				`</DeviceID><Result>ERROR</Result><Result>OK</Result></Response>`,
 		},
 		{
 			name: "2022 nested ExtraInfo", version: GBVersion30,
@@ -386,10 +383,8 @@ func TestDeviceInfoExtensionInfoVersionMatrix(t *testing.T) {
 		assertFlowOK(t, response)
 	}
 	api, _ := newVersionGateAPI(GBVersion30)
-	if response := runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage,
-		"device-info-modern-legacy-info", []byte(legacyBody), api.sipMessageDeviceInfo); !strings.Contains(response, "SIP/2.0 400") {
-		t.Fatalf("protocol 3.0 accepted legacy DeviceInfo Info: %s", response)
-	}
+	assertFlowOK(t, runFlowHandler(t, newFlowConnection(), api, sip.MethodMessage,
+		"device-info-modern-legacy-info", []byte(legacyBody), api.sipMessageDeviceInfo))
 
 	modernBody := `<Response><CmdType>DeviceInfo</CmdType><SN>906</SN><DeviceID>` + gb10DeviceID +
 		`</DeviceID><Result>ERROR</Result><ExtraInfo>plain</ExtraInfo></Response>`

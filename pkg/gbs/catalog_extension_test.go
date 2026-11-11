@@ -375,7 +375,7 @@ func TestCatalogNotifyUsesVersionedTopLevelExtensions(t *testing.T) {
 		{name: "2014 status and Info", version: GBVersion11, tail: `<Info>vendor</Info>`, wantOK: true},
 		{name: "2014 rejects ExtraInfo", version: GBVersion11, tail: `<ExtraInfo>vendor</ExtraInfo>`},
 		{name: "2022 ExtraInfo", version: GBVersion30, tail: `<ExtraInfo>vendor</ExtraInfo>`, wantOK: true},
-		{name: "2022 rejects legacy Info", version: GBVersion30, tail: `<Info>vendor</Info>`},
+		{name: "2022 accepts legacy Info", version: GBVersion30, tail: `<Info>vendor</Info>`, wantOK: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

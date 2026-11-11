@@ -125,6 +125,34 @@ func waitForAlarmReceipt(t *testing.T, store *alarmInboxTestMemory, deviceID, de
 	}
 }
 
+func TestAlarmInboxWithoutLegacyNotifyConfig(t *testing.T) {
+	previousConfig := config
+	config = nil
+	t.Cleanup(func() { config = previousConfig })
+
+	for _, method := range []string{sip.MethodMessage, sip.MethodNotify} {
+		t.Run(method, func(t *testing.T) {
+			store := &alarmInboxTestMemory{persistentTaskMemory: newPersistentTaskMemory(GBVersion10)}
+			api := &GB28181API{svr: &Server{memoryStorer: store}}
+			var calls atomic.Int32
+			api.SetReliableAlarmHandler(func(context.Context, *AlarmEvent) error {
+				calls.Add(1)
+				return nil
+			})
+			body := readGB10Fixture(t, "alarm-notify.xml")
+			handler := api.sipMessageAlarm
+			if method == sip.MethodNotify {
+				handler = api.sipNotifyAlarm
+			}
+			assertFlowOK(t, runFlowHandler(t, newFlowConnection(), api, method, "alarm-no-legacy-config", body, handler))
+			if got := calls.Load(); got != 1 {
+				t.Fatalf("Alarm callback calls = %d, want 1", got)
+			}
+			waitForAlarmReceipt(t, store, gb10DeviceID, alarmDeliveryID(gb10DeviceID, method, body))
+		})
+	}
+}
+
 func TestAlarmInboxPersistenceFailureRejectsBeforeSIPSuccess(t *testing.T) {
 	previousConfig := config
 	config = &m.Config{NotifyMap: map[string]string{}}

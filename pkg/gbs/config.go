@@ -895,7 +895,8 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
-	if err := validateConfigDownloadResponseSingletons(ctx.Request.Body()); err != nil {
+	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
+	if err := validateConfigDownloadResponseSingletonsWithCompatibility(ctx.Request.Body(), version.AtLeast(GBVersion20)); err != nil {
 		ctx.String(400, err.Error())
 		return
 	}
@@ -918,8 +919,7 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 	}
 
 	resultOK := strings.EqualFold(msg.Result, "OK")
-	version := g.getDeviceGBProtocolVersion(ctx.DeviceID)
-	if err := validateBasicParamResponseStructure(ctx.Request.Body(), version); err != nil {
+	if err := validateBasicParamResponseStructureWithCompatibility(ctx.Request.Body(), version, true); err != nil {
 		ctx.String(400, err.Error())
 		return
 	}
@@ -1037,7 +1037,7 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 		}
 	}
 	if resultOK && msg.BasicParam != nil {
-		if err := validateBasicParamResponse(msg.BasicParam, version); err != nil {
+		if err := validateDeviceBasicParamResponse(msg.BasicParam, version); err != nil {
 			ctx.String(400, err.Error())
 			return
 		}

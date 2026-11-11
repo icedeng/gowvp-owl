@@ -29,6 +29,10 @@ type Notify struct {
 }
 
 func notify(data *Notify) {
+	// 新版服务未初始化旧版通知配置时，仍需继续报警入库等业务处理。
+	if config == nil || data == nil {
+		return
+	}
 	if url, ok := config.NotifyMap[data.Method]; ok {
 		res, err := sip.PostJSONRequest(url, data)
 		if err != nil {

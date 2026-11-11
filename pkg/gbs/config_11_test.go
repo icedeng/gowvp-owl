@@ -665,12 +665,12 @@ func TestConfigDownloadBasicParamValidationByVersion(t *testing.T) {
 		{name: "2016 expiration below minimum", version: GBVersion20, param: `<BasicParam><Name>IPC</Name><Expiration>3599</Expiration><HeartBeatInterval>60</HeartBeatInterval><HeartBeatCount>3</HeartBeatCount></BasicParam>`},
 		{name: "2022 partial", version: GBVersion30, param: `<BasicParam><Name>IPC</Name></BasicParam>`, ok: true},
 		{name: "2022 rejects 2014 identity", version: GBVersion30, param: `<BasicParam><Name>IPC</Name><DeviceID>` + gb10DeviceID + `</DeviceID></BasicParam>`},
-		{name: "2022 rejects 2016 positioning", version: GBVersion30, param: `<BasicParam><Name>IPC</Name><PositionCapability>1</PositionCapability></BasicParam>`},
+		{name: "2022 accepts legacy positioning", version: GBVersion30, param: `<BasicParam><Name>IPC</Name><PositionCapability>1</PositionCapability></BasicParam>`, ok: true},
 		{name: "2022 expiration below minimum", version: GBVersion30, param: `<BasicParam><Expiration>3599</Expiration></BasicParam>`},
 		{name: "2022 invalid present heartbeat", version: GBVersion30, param: `<BasicParam><HeartBeatInterval>0</HeartBeatInterval></BasicParam>`},
 		{name: "2022 rejects unknown field", version: GBVersion30, param: `<BasicParam><Name>IPC</Name><VendorField>1</VendorField></BasicParam>`},
 		{name: "2022 rejects duplicate field", version: GBVersion30, param: `<BasicParam><Name>IPC</Name><Name>duplicate</Name></BasicParam>`},
-		{name: "2022 rejects out of order fields", version: GBVersion30, param: `<BasicParam><HeartBeatCount>3</HeartBeatCount><Name>IPC</Name></BasicParam>`},
+		{name: "2022 accepts out of order fields", version: GBVersion30, param: `<BasicParam><HeartBeatCount>3</HeartBeatCount><Name>IPC</Name></BasicParam>`, ok: true},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -862,8 +862,8 @@ func TestConfigDownloadRejectsDuplicateEnvelopeAndSnapshotAliases(t *testing.T) 
 			body: `<Response><CmdType>ConfigDownload</CmdType><SN>404</SN><DeviceID>` + gb10DeviceID + `</DeviceID><Result>OK</Result><VendorConfig>1</VendorConfig></Response>`,
 		},
 		{
-			name: "out-of-order envelope", version: GBVersion30,
-			body: `<Response><CmdType>ConfigDownload</CmdType><DeviceID>` + gb10DeviceID + `</DeviceID><SN>405</SN><Result>OK</Result></Response>`,
+			name: "reordered duplicate SN", version: GBVersion30,
+			body: `<Response><CmdType>ConfigDownload</CmdType><DeviceID>` + gb10DeviceID + `</DeviceID><SN>405</SN><SN>405</SN><Result>OK</Result></Response>`,
 		},
 		{
 			name: "error with cross-version section", version: GBVersion11,

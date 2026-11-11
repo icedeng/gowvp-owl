@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import EventPolicyEditor from "../components/EventPolicyEditor.vue";
 import IngressBadge from "../features/access-gateway/components/IngressBadge.vue";
 import MigrationPanel from "../features/access-gateway/components/MigrationPanel.vue";
 import { computed, onMounted, reactive, ref } from "vue";
@@ -39,7 +40,7 @@ import ModalDialog from "../components/ModalDialog.vue";
 const route = useRoute();
 const router = useRouter();
 const ui = useUiStore();
-type DetailTab = "overview" | "channels" | "operations" | "diagnostics";
+type DetailTab = "overview" | "channels" | "operations" | "diagnostics" | "events";
 type HistoryKind = "heartbeat" | "register";
 type SubscriptionEvent = "catalog" | "alarm" | "mobile_position" | "ptz_position";
 
@@ -62,7 +63,7 @@ interface SubscriptionReceipt {
   payload: Record<string, unknown>;
 }
 
-const tab = ref<DetailTab>("channels");
+const tab = ref<DetailTab>(route.query.tab === "events" ? "events" : "channels");
 const loading = ref(false);
 const loadError = ref("");
 const actionLoading = ref("");
@@ -179,6 +180,7 @@ const isGb = computed(
 const allTabs: Array<{ key: DetailTab; name: string; note: string; icon: typeof Activity }> = [
   { key: "channels", name: "通道资源", note: "预览与通道能力", icon: ListVideo },
   { key: "overview", name: "设备信息", note: "档案、能力与最近活动", icon: Activity },
+  { key: "events", name: "事件联动", note: "报警取证与处理", icon: ShieldAlert },
   { key: "operations", name: "设备运维", note: "同步、订阅与参数下发", icon: Wrench },
   { key: "diagnostics", name: "协议诊断", note: "版本、探测与高级查询", icon: ShieldCheck },
 ];
@@ -914,6 +916,9 @@ onMounted(load);
         </nav>
 
         <div class="device-workspace-content">
+ <template v-if="tab === 'events' && isGb">
+ <section class="card card-pad"><EventPolicyEditor :device-id="device.id"/><div class="button-row mt-6"><RouterLink class="btn" :to="`/events?did=${encodeURIComponent(device.id)}&status=all`">查看该设备全部事件</RouterLink><RouterLink class="btn" :to="`/events?did=${encodeURIComponent(device.id)}&status=pending`">处理该设备报警</RouterLink></div></section>
+ </template>
           <template v-if="tab === 'overview'">
             <section class="detail-section-head">
               <div><h2>设备信息</h2><p>设备档案、协议能力与最近信令活动。</p></div>
@@ -1021,7 +1026,7 @@ onMounted(load);
                   <Radio />
                 </div>
                 <div class="operation-notice" :class="{ warning: !selectedSubscription.available }">
-                  <Info />{{ selectedSubscription.available ? `${selectedSubscription.name}可按当前协议档案使用；手工订阅需在到期前续订。` : selectedSubscription.reason }}
+                  <Info />{{ selectedSubscription.available ? `${selectedSubscription.name}可按当前协议档案使用；有效订阅由服务端自动续订；设备不支持订阅时可主动上报报警。` : selectedSubscription.reason }}
                 </div>
                 <form class="subscription-form" @submit.prevent="submitSubscription">
                   <div class="form-grid">

@@ -1066,7 +1066,7 @@ func (g *GB28181API) sipMessageQueryGeneric(ctx *sip.Context) {
 		ctx.String(400, err.Error())
 		return
 	}
-	if err := validateGenericQueryPayload(g.getDeviceGBProtocolVersion(ctx.DeviceID), msg.CmdType, ctx.Request.Body()); err != nil {
+	if err := validateGenericQueryPayloadWithCompatibility(g.getDeviceGBProtocolVersion(ctx.DeviceID), msg.CmdType, ctx.Request.Body(), true); err != nil {
 		ctx.String(400, err.Error())
 		return
 	}

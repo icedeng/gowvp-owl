@@ -212,6 +212,16 @@ type MediaSpec struct {
 	SourceIPs      []string `json:"source_ips"`
 	RTCP           string   `json:"rtcp"`
 }
+
+// 空来源列表表示沿用已认证 SIP 对端；线协议要求数组，不能编码为 null。
+func (s MediaSpec) MarshalJSON() ([]byte, error) {
+	type plain MediaSpec
+	if s.SourceIPs == nil {
+		s.SourceIPs = []string{}
+	}
+	return json.Marshal(plain(s))
+}
+
 type Lease struct {
 	SessionID      string    `json:"session_id"`
 	State          string    `json:"state"`

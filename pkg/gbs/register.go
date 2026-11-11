@@ -123,6 +123,11 @@ type GB28181API struct {
 	alarmInboxWorkerOnce  sync.Once
 	alarmInboxOperationMu sync.Mutex
 	alarmInboxOperations  map[string]*keyedOperationLock
+	// 事件中心独立消费已接纳报警，不依赖 SIP 转发副作用的完成状态。
+	alarmEventPrepare    func(context.Context, *AlarmEvent) error
+	alarmEventDeliver    func(context.Context, *AlarmEvent) error
+	alarmEventWake       chan struct{}
+	alarmEventWorkerOnce sync.Once
 	// 2022 VideoUploadNotify 先进入持久化 outbox，再由后台工作器转发到 3.0 上级。
 	videoUploadOutboxWake       chan struct{}
 	videoUploadOutboxWorkerOnce sync.Once

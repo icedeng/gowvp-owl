@@ -65,6 +65,22 @@ func TestSchemaReapplyUniquenessAndOwnerFencing(t *testing.T) {
 	if e = repo.RenewOwner(ctx, lower.ID, one, epoch); e != nil {
 		t.Fatal("cannot renew owner", e)
 	}
+	seen := time.Now().UTC().Truncate(time.Second)
+	failure := protocol.Failure(protocol.IOError, "control connection closed")
+	if e = repo.RuntimeCheckpoint(ctx, lower.ID, one, epoch, &seen, failure); e != nil {
+		t.Fatal("cannot persist serialized runtime error", e)
+	}
+	var checkpoint store.Gateway
+	if e = db.First(&checkpoint, "id = ?", lower.ID).Error; e != nil || checkpoint.LastError == nil || checkpoint.LastError.Code != failure.Code || checkpoint.LastSeenAt == nil || !checkpoint.LastSeenAt.Equal(seen) {
+		t.Fatal("runtime error did not round-trip", e)
+	}
+	if e = repo.RuntimeCheckpoint(ctx, lower.ID, one, epoch, nil, nil); e != nil {
+		t.Fatal("cannot clear runtime error", e)
+	}
+	checkpoint = store.Gateway{}
+	if e = db.First(&checkpoint, "id = ?", lower.ID).Error; e != nil || checkpoint.LastError != nil || checkpoint.LastSeenAt != nil {
+		t.Fatal("runtime error was not cleared", e)
+	}
 	if e = db.Model(&store.Gateway{}).Where("id = ?", lower.ID).Update("owner_expires_at", time.Now().UTC().Add(-time.Minute)).Error; e != nil {
 		t.Fatal(e)
 	}

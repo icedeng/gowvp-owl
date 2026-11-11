@@ -317,6 +317,8 @@ type MessageRecordInfoResponse struct {
 	Item      []RecordItem `xml:"-"`
 	ListNum   *int         `xml:"-"`
 	HasList   bool         `xml:"-"`
+	Result    *string      `xml:"-"`
+	Reason    *string      `xml:"-"`
 }
 
 func (m *MessageRecordInfoResponse) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
@@ -326,6 +328,8 @@ func (m *MessageRecordInfoResponse) UnmarshalXML(decoder *xml.Decoder, start xml
 		DeviceID string  `xml:"DeviceID"`
 		Name     *string `xml:"Name"`
 		SumNum   *int    `xml:"SumNum"`
+		Result   *string `xml:"Result"`
+		Reason   *string `xml:"Reason"`
 		List     *struct {
 			Num  *int         `xml:"Num,attr"`
 			Item []RecordItem `xml:"Item"`
@@ -336,6 +340,7 @@ func (m *MessageRecordInfoResponse) UnmarshalXML(decoder *xml.Decoder, start xml
 	}
 	*m = MessageRecordInfoResponse{
 		XMLName: start.Name, CmdType: value.CmdType, SN: value.SN, DeviceID: value.DeviceID,
+		Result: value.Result, Reason: value.Reason,
 	}
 	if value.Name != nil {
 		m.Name, m.HasName = *value.Name, true
@@ -421,7 +426,11 @@ func (g *GB28181API) sipMessageRecordInfo(ctx *sip.Context) {
 		ctx.String(400, ErrXMLDecode.Error())
 		return
 	}
-	if err := validateRecordInfoResponseStructure(ctx.Request.Body(), g.getDeviceGBProtocolVersion(ctx.DeviceID)); err != nil {
+	if message.Result != nil {
+		g.handleRecordInfoFailure(ctx, message)
+		return
+	}
+	if err := validateDeviceMANSCDPStructure(ctx.Request.Body(), g.getDeviceGBProtocolVersion(ctx.DeviceID), "Response", "RecordInfo", deviceRecordInfoRules(g.getDeviceGBProtocolVersion(ctx.DeviceID))); err != nil {
 		ctx.String(400, err.Error())
 		return
 	}

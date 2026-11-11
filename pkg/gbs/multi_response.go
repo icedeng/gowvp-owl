@@ -179,6 +179,31 @@ func (c *multiResponseCollector[T]) Has(key string) bool {
 	return ok
 }
 
+// Entry 取得当前查询代次，供确认响应后按原代次结束等待。
+func (c *multiResponseCollector[T]) Entry(key string) *multiResponseEntry[T] {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.entries[key]
+}
+
+// AbortEntry 不允许旧响应在写出 SIP 确认期间结束同键的新查询。
+func (c *multiResponseCollector[T]) AbortEntry(key string, entry *multiResponseEntry[T], cause error) bool {
+	if c == nil || entry == nil || cause == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries[key] != entry || entry.complete || entry.cancelled || entry.err != nil {
+		return false
+	}
+	entry.err = cause
+	close(entry.done)
+	return true
+}
+
 func (c *multiResponseCollector[T]) Wait(ctx context.Context, key string) multiResponseResult[T] {
 	c.mu.Lock()
 	entry, ok := c.entries[key]
