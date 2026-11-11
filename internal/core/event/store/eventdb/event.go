@@ -89,6 +89,9 @@ func (d Event) Delete(ctx context.Context, model *event.Event, opts ...orm.Query
 		if active > 0 {
 			return reason.ErrBadRequest.WithMsg("事件正在取证，请完成后再删除")
 		}
+		if err := tx.Where("event_id = ?", model.ID).Delete(&event.AlarmReport{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("event_id = ?", model.ID).Delete(&event.Action{}).Error; err != nil {
 			return err
 		}

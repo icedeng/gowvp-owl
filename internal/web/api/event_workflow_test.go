@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -51,7 +52,7 @@ func TestEventWorkflowAPIAuthenticationIdentityAndPolicyBinding(t *testing.T) {
 		r.ServeHTTP(out, req)
 		return out
 	}
-	for _, path := range []string{"/events", "/events/1/actions", "/events/1/video", "/event_policies/device"} {
+	for _, path := range []string{"/events", "/events/1/actions", "/events/1/reports", "/events/1/video", "/event_policies/device"} {
 		if out := request(http.MethodGet, path, "", false); out.Code != 401 {
 			t.Fatal(path, out.Code, out.Body.String())
 		}
@@ -91,6 +92,27 @@ func TestEventWorkflowAPIAuthenticationIdentityAndPolicyBinding(t *testing.T) {
 	out = request(http.MethodPost, "/events/process", body, true)
 	if out.Code == 200 {
 		t.Fatal("stale event accepted")
+	}
+	// 聚合明细复用事件鉴权，分页返回各次有效报警，不暴露内部语义键。
+	at := orm.Now()
+	identity := event.AlarmIdentity{Method: "5", Type: "2"}
+	for i := range 3 {
+		_, err = core.CreateAlarmAndNotify(t.Context(), &event.AddEventInput{DID: "device", CID: "channel", Model: "GB28181", StartedAt: orm.Time{Time: at.Add(time.Duration(i) * time.Second)}, Zones: fmt.Sprintf(`{"sn":%d}`, i)}, identity)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var alarm event.Event
+	if err := db.Where("aggregation_key IS NOT NULL").First(&alarm).Error; err != nil {
+		t.Fatal(err)
+	}
+	out = request(http.MethodGet, fmt.Sprintf("/events/%d/reports?page=2&size=2", alarm.ID), "", true)
+	var reports struct {
+		Items []event.AlarmReport
+		Total int
+	}
+	if out.Code != 200 || json.Unmarshal(out.Body.Bytes(), &reports) != nil || reports.Total != 3 || len(reports.Items) != 1 || reports.Items[0].Payload != `{"sn":0}` || strings.Contains(out.Body.String(), "report_key") {
+		t.Fatal("聚合上报分页错误", out.Code, out.Body.String())
 	}
 }
 

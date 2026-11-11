@@ -12,6 +12,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/glebarez/sqlite"
+	"github.com/gowvp/owl/pkg/thumbnail"
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/system"
 	"gorm.io/driver/postgres"
@@ -119,7 +120,7 @@ func newProgressCleanupEventStore(t *testing.T) *progressCleanupEventStore {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&Event{}); err != nil {
+	if err := db.AutoMigrate(&Event{}, &AlarmReport{}); err != nil {
 		t.Fatal(err)
 	}
 	return &progressCleanupEventStore{db: db}
@@ -187,6 +188,10 @@ func TestExpiredEventCleanupContinuesWithProgressAndPreservesRecentImages(t *tes
 	for i := range items {
 		image := fmt.Sprintf("expired-%d.jpg", i)
 		items[i] = Event{StartedAt: orm.Time{Time: time.Now().AddDate(0, 0, -10)}, ImagePath: filepath.Join(filepath.Base(dir), image)}
+		// 包含原图缺失的孤立缩略图，也必须随到期记录清理。
+		if err := os.WriteFile(thumbnail.Path(filepath.Join(dir, image)), []byte("preview"), 0600); err != nil {
+			t.Fatal(err)
+		}
 		if i%2 == 0 {
 			if err := os.WriteFile(filepath.Join(dir, image), nil, 0600); err != nil {
 				t.Fatal(err)
@@ -200,7 +205,15 @@ func TestExpiredEventCleanupContinuesWithProgressAndPreservesRecentImages(t *tes
 	if err := store.db.Create(&recent).Error; err != nil {
 		t.Fatal(err)
 	}
+	for key, id := range map[string]int64{"expired-report": items[0].ID, "recent-report": recent.ID} {
+		if err := store.db.Create(&AlarmReport{Key: key, EventID: id, ReportedAt: time.Now(), Payload: "retained"}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(dir, "recent.jpg"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(thumbnail.Path(filepath.Join(dir, "recent.jpg")), []byte("keep-preview"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	core.cleanupExpiredEvents(7)
@@ -211,12 +224,22 @@ func TestExpiredEventCleanupContinuesWithProgressAndPreservesRecentImages(t *tes
 	if len(remaining) != 1 || remaining[0].ID != recent.ID || store.queries != 4 {
 		t.Fatalf("retention or batching changed: remaining=%v queries=%d", remaining, store.queries)
 	}
+	var reports []AlarmReport
+	if err := store.db.Find(&reports).Error; err != nil || len(reports) != 1 || reports[0].EventID != recent.ID {
+		t.Fatal("报警明细未随事件到期清理，或误删近期明细", reports, err)
+	}
 	for _, item := range items {
 		if _, err := os.Stat(filepath.Join(imagesRoot, item.ImagePath)); !os.IsNotExist(err) {
 			t.Fatalf("expired image remains: %s %v", item.ImagePath, err)
 		}
+		if _, err := os.Stat(thumbnail.Path(filepath.Join(imagesRoot, item.ImagePath))); !os.IsNotExist(err) {
+			t.Fatalf("expired thumbnail remains: %s %v", item.ImagePath, err)
+		}
 	}
 	if body, err := os.ReadFile(filepath.Join(dir, "recent.jpg")); err != nil || string(body) != "keep" {
 		t.Fatal("recent event image changed")
+	}
+	if body, err := os.ReadFile(thumbnail.Path(filepath.Join(dir, "recent.jpg"))); err != nil || string(body) != "keep-preview" {
+		t.Fatal("recent event thumbnail changed")
 	}
 }

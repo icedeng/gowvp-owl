@@ -13,7 +13,7 @@ const emit = defineEmits<{ open: [id: number]; select: [id: number, checked: boo
   <article class="event-preview-card" :class="{ 'is-selected': selected }">
     <div class="event-preview-frame">
       <button type="button" class="event-preview-open" :aria-label="`查看 ${deviceLabel(item)} 的 ${eventTitle(item)}事件`" @click="emit('open', item.id)">
-        <img v-if="item.image_path && !imageFailed" :src="api.eventImage(item.image_path)" :alt="`${deviceLabel(item)} · ${eventTitle(item)}现场抓拍`" loading="lazy" @error="emit('imageError', item.id)">
+        <img v-if="item.image_path && !imageFailed" :src="api.eventThumbnail(item.image_path)" :alt="`${deviceLabel(item)} · ${eventTitle(item)}现场抓拍`" loading="lazy" @error="emit('imageError', item.id)">
         <span v-else class="event-preview-empty">
           <ImageOff v-if="imageFailed" aria-hidden="true" />
           <ShieldAlert v-else-if="isAlarm(item)" aria-hidden="true" />
@@ -51,7 +51,7 @@ const emit = defineEmits<{ open: [id: number]; select: [id: number, checked: boo
         <span class="event-preview-separator" aria-hidden="true">/</span>
         <span class="event-preview-channel" :title="channelLabel(item)">{{ channelLabel(item) }}</span>
       </div>
-      <time class="event-preview-timestamp">{{ formatDate(item.started_at || item.created_at) }}</time>
+      <time class="event-preview-timestamp">{{ formatDate(item.started_at || item.created_at) }}<template v-if="(item.occurrence_count || 1) > 1"> · 连续 {{ item.occurrence_count }} 次</template></time>
     </div>
   </article>
 </template>

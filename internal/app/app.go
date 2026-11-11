@@ -82,8 +82,8 @@ func Run(bc *conf.Bootstrap) {
 	}
 
 	// 如果需要执行表迁移，递增此版本号和表更新说明
-	versionapi.DBVersion = "0.0.33"
-	versionapi.DBRemark = "event processing audit and device evidence policies"
+	versionapi.DBVersion = "0.0.34"
+	versionapi.DBRemark = "alarm semantic deduplication and continuous event aggregation"
 
 	handler, cleanUp, err := wireApp(ctx, bc, log)
 	if err != nil {

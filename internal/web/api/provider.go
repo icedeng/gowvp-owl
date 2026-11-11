@@ -178,7 +178,7 @@ func setupGBAlarmBridge(uc *Usecase) {
 		if key := strings.TrimSpace(in.DeliveryID); key != "" {
 			sourceKey = &key
 		}
-		if _, err := uc.EventAPI.eventCore.CreateEventAndNotify(ctx, &event.AddEventInput{
+		input := &event.AddEventInput{
 			DID:       in.InternalDeviceID,
 			CID:       in.InternalChannelID,
 			StartedAt: started,
@@ -188,7 +188,18 @@ func setupGBAlarmBridge(uc *Usecase) {
 			Zones:     string(zones),
 			Model:     "GB28181",
 			SourceKey: sourceKey,
-		}); err != nil {
+		}
+		if _, validTime := in.ParseTime(); validTime {
+			_, err = uc.EventAPI.eventCore.CreateAlarmAndNotify(ctx, input, event.AlarmIdentity{
+				DeviceCode: in.DeviceID, ChannelCode: in.ChannelID, Method: in.AlarmMethod, Type: in.AlarmType,
+				Priority: in.AlarmPriority, EventType: in.EventType, Description: in.AlarmDescription,
+				Longitude: in.Longitude, Latitude: in.Latitude,
+			})
+		} else {
+			// 无有效设备时间时只按既有投递键去重，避免把无关报警按接收时间误合并。
+			_, err = uc.EventAPI.eventCore.CreateEventAndNotify(ctx, input)
+		}
+		if err != nil {
 			slog.Warn("alarm: save event failed", "deviceID", in.DeviceID, "channelID", in.ChannelID, "err", err)
 			return err
 		}

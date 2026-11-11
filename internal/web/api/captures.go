@@ -121,6 +121,7 @@ func (a IPCAPI) getCapture(c *gin.Context, _ *struct{}) (*capture.Record, error)
 // @Produce image/jpeg
 // @Param capture_id path string true "抓拍 ID"
 // @Param download query bool false "下载文件"
+// @Param thumbnail query bool false "读取缩略图；下载时仍返回原图"
 // @Success 200 {file} file
 // @Router /captures/{capture_id}/image [get]
 func (a IPCAPI) captureImage(c *gin.Context) {
@@ -133,6 +134,13 @@ func (a IPCAPI) captureImage(c *gin.Context) {
 	if err != nil {
 		c.AbortWithStatus(400)
 		return
+	}
+	if c.Query("thumbnail") == "true" && c.Query("download") != "true" {
+		path, err = a.captures.ThumbnailPath(c.Request.Context(), row.ID)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"msg": "缩略图暂不可用，可重试或下载原图"})
+			return
+		}
 	}
 	disposition := "inline"
 	if c.Query("download") == "true" {

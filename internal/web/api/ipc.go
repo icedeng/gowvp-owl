@@ -32,6 +32,7 @@ import (
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/pkg/gbs"
 	"github.com/gowvp/owl/pkg/gbs/annexg/gormstore"
+	"github.com/gowvp/owl/pkg/thumbnail"
 	"github.com/gowvp/owl/pkg/zlm"
 	"github.com/ixugo/goddd/pkg/hook"
 	"github.com/ixugo/goddd/pkg/reason"
@@ -78,6 +79,9 @@ func writeCover(dataDir, channelID string, body []byte) error {
 		return err
 	}
 	cleanup = false
+	if _, err := thumbnail.Ensure(context.Background(), readCoverPath(dataDir, channelID)); err != nil {
+		slog.Warn("generate cover thumbnail", "channel_id", channelID, "err", err)
+	}
 	return nil
 }
 
@@ -88,7 +92,7 @@ func removeCovers(dataDir string, channelIDs []string) error {
 		if channelID == "" {
 			continue
 		}
-		if err := os.Remove(readCoverPath(dataDir, channelID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := thumbnail.Remove(readCoverPath(dataDir, channelID)); err != nil {
 			errs = append(errs, fmt.Errorf("remove cover %s: %w", channelID, err))
 		}
 	}
@@ -3968,6 +3972,7 @@ func (a IPCAPI) deleteZone(c *gin.Context, _ *struct{}) (gin.H, error) {
 // @Tags Channel
 // @Produce jpeg
 // @Param id path string true "通道ID"
+// @Param thumbnail query bool false "读取缩略图"
 // @Success 200 {file} file "JPEG 图片"
 // @Failure 404 {object} SwaggerErrorResponse
 // @Router /channels/{id}/snapshot [get]
@@ -3977,6 +3982,8 @@ func (a IPCAPI) getSnapshot(c *gin.Context) {
 		web.Fail(c, err)
 		return
 	}
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
 	if a.captures != nil {
 		row, err := a.captures.Latest(c.Request.Context(), channelID)
 		if err == nil {
@@ -3985,7 +3992,13 @@ func (a IPCAPI) getSnapshot(c *gin.Context) {
 				web.Fail(c, captureError(err))
 				return
 			}
-			c.Header("Cache-Control", "private, no-store")
+			if c.Query("thumbnail") == "true" {
+				path, err = a.captures.ThumbnailPath(c.Request.Context(), row.ID)
+				if err != nil {
+					c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"msg": "缩略图暂不可用"})
+					return
+				}
+			}
 			c.File(path)
 			return
 		}
@@ -3993,6 +4006,15 @@ func (a IPCAPI) getSnapshot(c *gin.Context) {
 			web.Fail(c, captureError(err))
 			return
 		}
+	}
+	if c.Query("thumbnail") == "true" {
+		path, err := thumbnail.Ensure(c.Request.Context(), readCoverPath(a.uc.Conf.ConfigDir, channelID))
+		if err != nil {
+			web.Fail(c, reason.ErrNotFound.SetMsg("缩略图暂不可用"))
+			return
+		}
+		c.File(path)
+		return
 	}
 	body, err := readCover(a.uc.Conf.ConfigDir, channelID)
 	if err != nil {

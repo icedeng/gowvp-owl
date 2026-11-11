@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/gowvp/owl/internal/core/event"
 	"github.com/gowvp/owl/internal/core/ipc"
+	"github.com/gowvp/owl/pkg/thumbnail"
 	"github.com/ixugo/goddd/pkg/system"
 )
 
@@ -102,6 +104,9 @@ func (a IPCAPI) collectEventEvidence(ctx context.Context, e *event.Event, kind s
 		}
 		if err = os.Rename(target+".part", target); err != nil {
 			return "", err
+		}
+		if _, err = thumbnail.Ensure(ctx, target); err != nil {
+			slog.WarnContext(ctx, "generate event thumbnail", "event_id", e.ID, "err", err)
 		}
 		return filepath.ToSlash(relative), nil
 	}

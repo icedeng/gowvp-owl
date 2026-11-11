@@ -222,7 +222,7 @@ func TestEventWorkflowNameSearchPaginationAndUpgrade(t *testing.T) {
 	c := event.NewCore(store, nil)
 	w := event.NewWorkflow(db)
 	old, err := c.GetEvent(t.Context(), 1)
-	if err != nil || old.Status != "pending" || old.Revision != 1 || old.ImagePath != "old.jpg" || old.SourceKey == nil || *old.SourceKey != "old-key" {
+	if err != nil || old.Status != "pending" || old.Revision != 1 || old.OccurrenceCount != 1 || old.AggregationKey != nil || old.ImagePath != "old.jpg" || old.SourceKey == nil || *old.SourceKey != "old-key" {
 		t.Fatal(old, err)
 	}
 	db.Exec("CREATE TABLE devices (id text PRIMARY KEY, name text, device_id text, ext text, type text)")

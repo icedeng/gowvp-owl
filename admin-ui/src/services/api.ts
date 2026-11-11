@@ -110,6 +110,7 @@ export const api = {
   captures: (params?: ListParams) => http.get<ApiPage<CaptureRecord>>('/captures', { params }),
   capture: (id: string) => http.get<CaptureRecord>(`/captures/${encodeURIComponent(id)}`),
   captureImage: (id: string, download = false, version?: string) => withQuery(withToken(apiUrl(`/captures/${encodeURIComponent(id)}/image`)), { download: String(download), _v: version || '' }),
+  captureThumbnail: (id: string, version?: string) => withQuery(withToken(apiUrl(`/captures/${encodeURIComponent(id)}/image`)), { thumbnail: 'true', _v: version || '' }),
   renameCapture: (id: string, name: string) => http.put<CaptureRecord>(`/captures/${encodeURIComponent(id)}`, { name }),
   deleteCapture: (id: string) => http.delete(`/captures/${encodeURIComponent(id)}`),
   captureSchedule: (id: string) => http.get<CaptureSchedule>(`/channels/${encodeURIComponent(id)}/capture_schedule`),
@@ -122,6 +123,10 @@ export const api = {
   snapshotImage: (id: string, cacheBust?: number) => withQuery(
     withToken(apiUrl(`/channels/${encodeURIComponent(id)}/snapshot`)),
     cacheBust ? { t: cacheBust } : undefined,
+  ),
+  snapshotThumbnail: (id: string, cacheBust?: number) => withQuery(
+    withToken(apiUrl(`/channels/${encodeURIComponent(id)}/snapshot`)),
+    { thumbnail: 'true', ...(cacheBust ? { t: cacheBust } : {}) },
   ),
   ptz: (id: string, body: Record<string, unknown>) => http.post<{ msg: string }>(`/channels/${encodeURIComponent(id)}/ptz`, body),
   ptzProbe: (id: string, body: Record<string, unknown> = {}) => http.post<PTZProbeOutput>(`/channels/${encodeURIComponent(id)}/ptz_probe`, body),
@@ -151,6 +156,7 @@ export const api = {
   eventVideo: (id: number, download = false) => withToken(apiUrl(`/events/${id}/video${download ? '?download=1' : ''}`)),
   deleteEvent: (id: number | string) => http.delete<ApiEvent>(`/events/${id}`),
   eventImage: (path: string) => withToken(apiUrl(`/events/image/${path.replace(/^\/+/, '')}`)),
+  eventThumbnail: (path: string) => withQuery(withToken(apiUrl(`/events/image/${path.replace(/^\/+/, '')}`)), { thumbnail: 'true' }),
 
   recordings: (params?: ListParams) => http.get<ApiPage<ApiRecording>>('/recordings', { params }),
   recording: (id: number | string) => http.get<ApiRecording>(`/recordings/${id}`),

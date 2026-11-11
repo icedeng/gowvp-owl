@@ -167,6 +167,21 @@ func (w *Workflow) Actions(ctx context.Context, id int64) ([]Action, error) {
 	return out, err
 }
 
+func (w *Workflow) AlarmReports(ctx context.Context, id int64, page, size int) ([]AlarmReport, int64, error) {
+	page = max(1, page)
+	if size < 1 || size > 100 {
+		size = 20
+	}
+	var total int64
+	query := w.db.WithContext(ctx).Model(&AlarmReport{}).Where("event_id = ?", id)
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	items := make([]AlarmReport, 0, size)
+	err := query.Order("reported_at DESC, report_key").Offset((page - 1) * size).Limit(size).Find(&items).Error
+	return items, total, err
+}
+
 // FillNames 在一次批量查询中补齐设备与通道，不逐条发起资源接口请求。
 func (w *Workflow) FillNames(ctx context.Context, items []*Event) error {
 	if len(items) == 0 {

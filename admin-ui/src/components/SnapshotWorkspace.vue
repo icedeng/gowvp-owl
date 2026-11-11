@@ -22,6 +22,7 @@ const pending = ref<CaptureRecord | null>(null)
 const submitting = ref(false)
 const selected = ref<CaptureRecord | null>(null)
 const previewError = ref(false)
+const previewOriginal = ref(false)
 const brokenImages = reactive(new Set<string>())
 const editing = ref<CaptureRecord | null>(null)
 const newName = ref('')
@@ -73,6 +74,7 @@ const pageNumbers = computed<(number | 'ellipsis')[]>(() => {
 const busy = computed(() => submitting.value || Boolean(pending.value))
 const stateNames: Record<CaptureRecord['state'], string> = { queued: '等待执行', running: '抓拍中', succeeded: '已保存', failed: '失败', deleting: '删除中' }
 const imageUrl = (row: CaptureRecord, download = false) => api.captureImage(row.id, download, row.updated_at)
+const thumbnailUrl = (row: CaptureRecord) => api.captureThumbnail(row.id, row.updated_at)
 
 async function load() {
   const current = sequence
@@ -291,7 +293,7 @@ async function refresh() {
   if (pending.value || planEnabled.value || rows.value.some(row => row.state === 'queued' || row.state === 'running' || row.state === 'deleting')) schedulePoll()
 }
 
-watch(selected, () => { previewError.value = false })
+watch(selected, () => { previewError.value = false; previewOriginal.value = false })
 
 watch(() => props.channelId, () => {
   sequence += 1
@@ -356,7 +358,7 @@ onBeforeUnmount(() => { sequence += 1; clearTimeout(pollTimer) })
       <div class="capture-grid" :aria-busy="loading">
         <article v-for="row in rows" :key="row.id" class="capture-item">
           <button v-if="row.state === 'succeeded'" class="capture-thumbnail" type="button" :aria-label="`查看 ${row.name}`" @click="selected = row">
-            <img v-if="!brokenImages.has(row.id)" :src="imageUrl(row)" :alt="row.name" loading="lazy" @error="brokenImages.add(row.id)" />
+            <img v-if="!brokenImages.has(row.id)" :src="thumbnailUrl(row)" :alt="row.name" loading="lazy" decoding="async" @error="brokenImages.add(row.id)" />
             <span v-else>图片加载失败，点击重试预览</span>
           </button>
           <div v-else class="capture-thumbnail capture-state" :class="{ 'capture-error': row.state === 'failed' }"><LoaderCircle v-if="row.state === 'queued' || row.state === 'running'" class="animate-spin" /><span>{{ stateNames[row.state] }}</span></div>
@@ -390,8 +392,8 @@ onBeforeUnmount(() => { sequence += 1; clearTimeout(pollTimer) })
 
     <ModalDialog :open="Boolean(selected)" :title="selected?.name || '抓拍图片'" :description="selected ? formatDate(selected.captured_at) : ''" size="wide" scroll-body @close="selected = null">
       <p v-if="previewError" class="warning-box" role="alert">图片读取失败，请刷新记录确认文件是否存在。</p>
-      <img v-if="selected && !previewError" class="capture-full-image" :src="imageUrl(selected)" :alt="selected.name" @error="previewError = true" />
-      <template #footer><a v-if="selected" class="btn btn-primary" :href="imageUrl(selected, true)"><Download />下载原图</a></template>
+      <img v-if="selected && !previewError" class="capture-full-image" :src="previewOriginal ? imageUrl(selected) : thumbnailUrl(selected)" :alt="selected.name" decoding="async" @error="previewError = true" />
+      <template #footer><template v-if="selected"><button v-if="!previewOriginal" class="btn" type="button" @click="previewOriginal = true; previewError = false">查看原图</button><a class="btn btn-primary" :href="imageUrl(selected, true)"><Download />下载原图</a></template></template>
     </ModalDialog>
     <ModalDialog :open="Boolean(editing)" title="修改图片名称" description="名称会同时更新到图片文件，保留 .jpg 扩展名。" @close="!mutating && (editing = null)">
       <form id="capture-rename" class="capture-modal-form" @submit.prevent="rename"><label class="form-group"><span class="form-label">图片名称</span><input v-model="newName" class="input plain w-full" maxlength="180" required :disabled="mutating" /></label><p v-if="mutationError" class="warning-box" role="alert">{{ mutationError }}</p></form>

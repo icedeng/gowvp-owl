@@ -504,7 +504,7 @@ paths:
 
     get:
       summary: 获取图像
-      description: 获取图像（所有协议）
+      description: 获取图像（所有协议）；thumbnail=true 返回保存的缩略图，历史图片按需补生成。不传参数时仍返回原图。
       tags:
         - 通道管理
       parameters:
@@ -514,6 +514,12 @@ paths:
           description: 通道 ID
           schema:
             type: string
+        - name: thumbnail
+          in: query
+          description: 返回缩略图
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: JPEG 图片

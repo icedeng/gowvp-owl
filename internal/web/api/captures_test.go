@@ -22,6 +22,7 @@ import (
 	"github.com/gowvp/owl/internal/core/capture"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/ipc/store/ipcdb"
+	"github.com/gowvp/owl/pkg/thumbnail"
 	"github.com/ixugo/goddd/domain/uniqueid"
 	"github.com/ixugo/goddd/pkg/web"
 	"gorm.io/gorm"
@@ -176,7 +177,7 @@ func TestCaptureAsyncAPIAuthenticationImageRenameDeleteAndPoster(t *testing.T) {
 	r.POST("/channels/:id/captures", auth, web.WrapH(a.createCapture))
 	r.GET("/channels/:id/snapshot", auth, a.getSnapshot)
 	// 原图接口与元数据都必须鉴权。
-	for _, path := range []string{"/captures", "/captures/missing/image"} {
+	for _, path := range []string{"/captures", "/captures/missing/image", "/captures/missing/image?thumbnail=true", "/channels/rtsp_capture/snapshot?thumbnail=true"} {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		if w.Code != 401 {
@@ -211,7 +212,7 @@ func TestCaptureAsyncAPIAuthenticationImageRenameDeleteAndPoster(t *testing.T) {
 	}
 	db.Model(&capture.Record{}).Where("id = ?", row.ID).Update("state", "running")
 	var body bytes.Buffer
-	_ = jpeg.Encode(&body, image.NewRGBA(image.Rect(0, 0, 64, 48)), nil)
+	_ = jpeg.Encode(&body, image.NewRGBA(image.Rect(0, 0, 1280, 960)), nil)
 	saved, err := a.captures.Complete(t.Context(), row.ID, body.Bytes(), "ffmpeg")
 	if err != nil {
 		t.Fatal(err)
@@ -219,6 +220,30 @@ func TestCaptureAsyncAPIAuthenticationImageRenameDeleteAndPoster(t *testing.T) {
 	w = request("GET", "/captures/"+row.ID+"/image?download=true", "")
 	if w.Code != 200 || !strings.HasPrefix(w.Header().Get("Content-Type"), "image/jpeg") || !strings.Contains(w.Header().Get("Content-Disposition"), "attachment") || w.Body.Len() == 0 {
 		t.Fatal("图片无法下载", w.Code, w.Header())
+	}
+	if !bytes.Equal(w.Body.Bytes(), body.Bytes()) {
+		t.Fatal("下载没有保留原图")
+	}
+	originalPath, _ := a.captures.Path(saved)
+	if err := os.Remove(thumbnail.Path(originalPath)); err != nil {
+		t.Fatal(err)
+	}
+	w = request("GET", "/captures/"+row.ID+"/image?thumbnail=true", "")
+	preview, err := jpeg.Decode(bytes.NewReader(w.Body.Bytes()))
+	if w.Code != 200 || err != nil || preview.Bounds().Size() != image.Pt(640, 480) {
+		t.Fatal("历史图片没有补生成缩略图", w.Code, err)
+	}
+	if _, err := os.Stat(thumbnail.Path(originalPath)); err != nil {
+		t.Fatal("补生成的缩略图未保存", err)
+	}
+	w = request("GET", "/captures/"+row.ID+"/image?thumbnail=true&download=true", "")
+	if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), body.Bytes()) {
+		t.Fatal("下载受到缩略图参数影响", w.Code)
+	}
+	w = request("GET", "/channels/rtsp_capture/snapshot?thumbnail=true", "")
+	preview, err = jpeg.Decode(bytes.NewReader(w.Body.Bytes()))
+	if w.Code != 200 || err != nil || preview.Bounds().Size() != image.Pt(640, 480) {
+		t.Fatal("播放器封面没有读取缩略图", w.Code, err)
 	}
 	w = request("GET", "/channels/rtsp_capture/snapshot", "")
 	if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), request("GET", "/captures/"+row.ID+"/image", "").Body.Bytes()) {

@@ -267,6 +267,7 @@ export interface EventEvidence {
  finished_at?: string
 }
 export interface ApiEvent {
+ occurrence_count?: number
  status: EventStatus
  revision: number
  device_name?: string

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/gowvp/owl/pkg/thumbnail"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -84,6 +85,9 @@ func TestPermanentFilesNamingRenameDeleteAndLateUpload(t *testing.T) {
 	}
 	path, _ := s.Path(row)
 	otherPath, _ := s.Path(other)
+	if _, err := os.Stat(thumbnail.Path(path)); err != nil {
+		t.Fatal("抓拍没有生成缩略图", err)
+	}
 	if path == otherPath {
 		t.Fatal("两次抓拍覆盖同一路径")
 	}
@@ -111,11 +115,20 @@ func TestPermanentFilesNamingRenameDeleteAndLateUpload(t *testing.T) {
 	if _, err := os.Stat(newPath); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(thumbnail.Path(path)); !os.IsNotExist(err) {
+		t.Fatal("旧缩略图仍存在", err)
+	}
+	if _, err := os.Stat(thumbnail.Path(newPath)); err != nil {
+		t.Fatal("缩略图没有同步改名", err)
+	}
 	if err := s.Delete(t.Context(), row.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(newPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("图片文件没有删除")
+	}
+	if _, err := os.Stat(thumbnail.Path(newPath)); !os.IsNotExist(err) {
+		t.Fatal("缩略图没有删除", err)
 	}
 	if _, err := s.Get(t.Context(), row.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatal("记录没有删除")
@@ -171,6 +184,12 @@ func TestRenameDatabaseFailureRollsBackFileAndCompleteFailureCleansFile(t *testi
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal("重命名失败未恢复文件", err)
+	}
+	if _, err := os.Stat(thumbnail.Path(path)); err != nil {
+		t.Fatal("重命名失败未恢复缩略图", err)
+	}
+	if _, err := os.Stat(thumbnail.Path(filepath.Join(filepath.Dir(path), "new.jpg"))); !os.IsNotExist(err) {
+		t.Fatal("回滚后遗留新名称缩略图", err)
 	}
 	_ = s.db.Callback().Update().Remove("reject")
 	pending := running(t, s, "second")

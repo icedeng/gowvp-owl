@@ -99,6 +99,44 @@ paths:
                     format: int64
                     description: 总数
 
+  /events/{id}/reports:
+    get:
+      tags: [events]
+      summary: 分页查询聚合事件的有效报警明细
+      description: 同一报警的 MESSAGE/NOTIFY 和重传只保留一份明细；历史未聚合事件返回空列表。复用事件管理鉴权。
+      operationId: eventReports
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: integer, format: int64}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+      responses:
+        "200":
+          description: 按报警时间倒序返回有效上报
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: {type: integer, format: int64}
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        event_id: {type: integer, format: int64}
+                        reported_at: {type: string, format: date-time}
+                        received_at: {type: string, format: date-time}
+                        payload: {type: string, description: 原始报警字段的JSON字符串}
+        "401": {description: 未登录}
+        "404": {description: 事件不存在或已过期}
+
   /events/{id}:
     get:
       tags:
@@ -179,6 +217,8 @@ paths:
       operationId: getEventImage
       description: |
         根据事件的 image_path 字段获取快照图片。
+        传入 thumbnail=true 返回最长边不超过640像素的 JPEG 缩略图；默认返回原图。
+        历史图片首次请求缩略图时生成并保存，后续复用。
         路径格式为: {cid}/{filename}.jpg
       parameters:
         - name: path
@@ -187,6 +227,10 @@ paths:
           description: 图片相对路径（如 ch4w2cz/20260106143003_123456.jpg）
           schema:
             type: string
+        - name: thumbnail
+          in: query
+          description: 是否返回缩略图；原图内容不变
+          schema: {type: boolean, default: false}
       responses:
         "200":
           description: 成功返回图片
@@ -312,6 +356,7 @@ components:
       properties:
         status: {type: string, enum: [pending, processing, resolved, ignored], default: pending}
         revision: {type: integer, minimum: 1}
+        occurrence_count: {type: integer, minimum: 1, default: 1, description: 聚合后的有效报警次数，双路重复不计入}
         device_name: {type: string, description: 当前设备名称，设备移除后为空}
         device_code: {type: string, description: 当前设备编码}
         channel_name: {type: string, description: 当前通道名称}
@@ -346,7 +391,7 @@ components:
         ended_at:
           type: integer
           format: int64
-          description: 事件结束时间（毫秒时间戳）
+          description: 事件结束时间；聚合国标报警为末次有效上报时间（毫秒时间戳），不表示设备已恢复
         label:
           type: string
           description: 检测标签（如 person, car）

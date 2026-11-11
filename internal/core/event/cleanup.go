@@ -90,21 +90,16 @@ func (c Core) cleanupExpiredEvents(days int) {
 		}
 
 		// 先删除本地图片文件
-		eventsDir := filepath.Join(system.Getwd(), "configs", "events")
 		for imagePath := range imagePaths {
-			fullPath := filepath.Join(eventsDir, imagePath)
-			if err := os.Remove(fullPath); err != nil {
-				if !os.IsNotExist(err) {
-					slog.Warn("failed to delete event image", "path", fullPath, "err", err)
-				}
-			} else {
-				totalFilesDeleted++
-			}
+			totalFilesDeleted += removeEventMedia(imagePath)
 		}
 
 		// 批量删除数据库记录，使用 WHERE IN 一次性删除
 		var deletedRows int64
 		err = c.store.Event().Session(ctx, func(tx *gorm.DB) error {
+			if err := tx.Where("event_id IN ?", eventIDs).Delete(&AlarmReport{}).Error; err != nil {
+				return err
+			}
 			if c.workflow != nil {
 				if err := tx.Where("event_id IN ?", eventIDs).Delete(&Action{}).Error; err != nil {
 					return err

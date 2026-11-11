@@ -82,6 +82,23 @@ func (a EventAPI) eventActions(c *gin.Context, in *eventIDInput) (gin.H, error) 
 	items, err := w.Actions(c.Request.Context(), in.ID)
 	return gin.H{"items": items}, err
 }
+
+type eventReportsInput struct {
+	eventIDInput
+	web.PagerFilter
+}
+
+func (a EventAPI) eventReports(c *gin.Context, in *eventReportsInput) (gin.H, error) {
+	w, err := a.eventWorkflow()
+	if err != nil {
+		return nil, err
+	}
+	if _, err = a.eventCore.GetEvent(c.Request.Context(), in.ID); err != nil {
+		return nil, err
+	}
+	items, total, err := w.AlarmReports(c.Request.Context(), in.ID, in.Page, in.Size)
+	return gin.H{"items": items, "total": total}, err
+}
 func (a EventAPI) getEventVideo(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {

@@ -564,7 +564,7 @@ async function load() {
     if (sequence !== loadSequence) return;
     if (!data?.id) throw new Error("通道不存在或响应格式错误");
     channel.value = data;
-    snapshotUrl.value = api.snapshotImage(data.id, Date.now());
+    snapshotUrl.value = api.snapshotThumbnail(data.id, Date.now());
     selectedMediaServerId.value = data.config?.media_server_id?.trim() || "local";
     voiceForm.mediaServerId = selectedMediaServerId.value;
     aiEnabled.value = Boolean(data.ext?.enabled_ai);
@@ -686,10 +686,10 @@ async function refreshSnapshot() {
 }
 
 function captureSaved(row: CaptureRecord) {
-  if (row.channel_id === channel.value?.id) snapshotUrl.value = api.captureImage(row.id, false, row.updated_at);
+  if (row.channel_id === channel.value?.id) snapshotUrl.value = api.captureThumbnail(row.id, row.updated_at);
 }
 function refreshCaptureCover() {
-  if (channel.value) snapshotUrl.value = api.snapshotImage(channel.value.id, Date.now());
+  if (channel.value) snapshotUrl.value = api.snapshotThumbnail(channel.value.id, Date.now());
 }
 
 async function runGBQuery() {

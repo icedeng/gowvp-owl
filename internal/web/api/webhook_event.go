@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/core/event"
+	"github.com/gowvp/owl/pkg/thumbnail"
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/system"
 	"github.com/ixugo/goddd/pkg/web"
@@ -240,6 +242,9 @@ func saveEventSnapshot(cid string, t orm.Time, snapshotB64 string) (string, erro
 
 	if err := os.WriteFile(fullPath, data, 0o644); err != nil {
 		return "", fmt.Errorf("write file: %w", err)
+	}
+	if _, err := thumbnail.Ensure(context.Background(), fullPath); err != nil {
+		slog.Warn("generate webhook event thumbnail", "err", err)
 	}
 
 	slog.Info("event snapshot saved", "path", fullPath, "size", len(data))

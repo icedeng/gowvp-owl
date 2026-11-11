@@ -335,10 +335,10 @@ async function snapshot() {
   await captureWorkspace.value?.capture();
 }
 function captureSaved(row: CaptureRecord) {
-  snapshots.value[row.channel_id] = api.captureImage(row.id, false, row.updated_at);
+  snapshots.value[row.channel_id] = api.captureThumbnail(row.id, row.updated_at);
 }
 function refreshCaptureCover() {
-  if (captureChannel.value) snapshots.value[captureChannel.value.id] = api.snapshotImage(captureChannel.value.id, Date.now());
+  if (captureChannel.value) snapshots.value[captureChannel.value.id] = api.snapshotThumbnail(captureChannel.value.id, Date.now());
 }
 
 function showWallTools() {
@@ -676,7 +676,7 @@ onBeforeUnmount(() => {
               :key="channel.id"
               wall
               :result="playResults[channel.id]"
-              :poster="snapshots[channel.id] || api.snapshotImage(channel.id)"
+              :poster="snapshots[channel.id] || api.snapshotThumbnail(channel.id)"
               :muted="muted"
               :autoplay="Boolean(playResults[channel.id])"
               :loading="previewLoadingId === channel.id"

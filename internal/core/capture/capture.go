@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/jpeg"
 	_ "image/png"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/gowvp/owl/pkg/thumbnail"
 	"gorm.io/gorm"
 )
 
@@ -159,6 +161,24 @@ func (s *Service) Path(row *Record) (string, error) {
 	return filepath.Join(s.root, row.ID, row.Name), nil
 }
 
+// ThumbnailPath 与重命名、删除互斥，历史图片在首次预览时生成缩略图。
+func (s *Service) ThumbnailPath(ctx context.Context, id string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row, err := s.Get(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if row.State != "succeeded" {
+		return "", ErrBusy
+	}
+	path, err := s.Path(row)
+	if err != nil {
+		return "", err
+	}
+	return thumbnail.Ensure(ctx, path)
+}
+
 func ValidateName(name string) error {
 	if !utf8.ValidString(name) || len(name) > 180 || strings.TrimSpace(name) != name || strings.TrimSuffix(strings.ToLower(name), ".jpg") == "" || !strings.HasSuffix(strings.ToLower(name), ".jpg") {
 		return fmt.Errorf("图片名称须为不超过 180 字节的 JPG 文件名")
@@ -222,9 +242,13 @@ func (s *Service) Complete(ctx context.Context, id string, body []byte, method s
 	if err := os.Rename(file.Name(), path); err != nil {
 		return nil, err
 	}
+	if _, err := thumbnail.Ensure(ctx, path); err != nil {
+		// 缩略图失败不丢弃已取得的现场原图，预览请求可重新生成。
+		slog.WarnContext(ctx, "generate capture thumbnail", "capture_id", id, "err", err)
+	}
 	result := s.db.WithContext(ctx).Model(&Record{}).Where("id = ? AND state = ?", id, "running").Updates(map[string]any{"name": row.Name, "captured_at": now, "state": "succeeded", "method": method, "error": "", "request_url": ""})
 	if result.Error != nil || result.RowsAffected != 1 {
-		_ = os.Remove(path)
+		_ = thumbnail.Remove(path)
 		return nil, errors.Join(result.Error, fmt.Errorf("保存抓拍记录失败"))
 	}
 	return s.Get(ctx, id)
@@ -255,11 +279,11 @@ func (s *Service) Rename(ctx context.Context, id, name string) (*Record, error) 
 	if oldPath == newPath {
 		return row, nil
 	}
-	if err := os.Rename(oldPath, newPath); err != nil {
+	if err := thumbnail.Rename(oldPath, newPath); err != nil {
 		return nil, err
 	}
 	if err := s.db.WithContext(ctx).Model(&Record{}).Where("id = ?", id).Update("name", name).Error; err != nil {
-		return nil, errors.Join(err, os.Rename(newPath, oldPath))
+		return nil, errors.Join(err, thumbnail.Rename(newPath, oldPath))
 	}
 	return s.Get(ctx, id)
 }

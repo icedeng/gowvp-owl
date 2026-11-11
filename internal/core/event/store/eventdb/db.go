@@ -29,7 +29,7 @@ func (d DB) AutoMigrate(ok bool) DB {
 		return d
 	}
 	if err := d.db.AutoMigrate(
-		new(event.Event), new(event.Policy), new(event.Action), new(event.EvidenceTask),
+		new(event.Event), new(event.Policy), new(event.Action), new(event.EvidenceTask), new(event.AlarmReport),
 	); err != nil {
 		panic(err)
 	}

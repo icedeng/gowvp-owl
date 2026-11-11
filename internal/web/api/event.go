@@ -12,6 +12,7 @@ import (
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/internal/core/event"
 	"github.com/gowvp/owl/internal/core/event/store/eventdb"
+	"github.com/gowvp/owl/pkg/thumbnail"
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/reason"
 	"github.com/ixugo/goddd/pkg/system"
@@ -69,6 +70,7 @@ func RegisterEvent(g gin.IRouter, api EventAPI, handler ...gin.HandlerFunc) {
 		group.GET("", web.WrapH(api.listEvents))
 		group.GET("/:id", web.WrapH(api.getEvent))
 		group.GET("/:id/actions", web.WrapH(api.eventActions))
+		group.GET("/:id/reports", web.WrapH(api.eventReports))
 		group.GET("/:id/video", api.getEventVideo)
 		group.POST("/process", web.WrapH(api.processEvents))
 		group.PUT("/:id", web.WrapH(api.updateEvent))
@@ -147,6 +149,15 @@ func (a EventAPI) getEventImage(c *gin.Context) {
 		return
 	}
 	absPath = evaluatedPath
+	if c.Query("thumbnail") == "true" {
+		absPath, err = thumbnail.Ensure(c.Request.Context(), absPath)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"msg": "缩略图暂不可用，可重试或查看原图"})
+			return
+		}
+	}
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
 
 	body, err := os.ReadFile(absPath)
 	if err != nil {

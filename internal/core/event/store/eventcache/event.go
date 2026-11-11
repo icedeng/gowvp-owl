@@ -70,6 +70,20 @@ func (c *Event) CreateIdempotent(ctx context.Context, model *event.Event) (bool,
 	return true, nil
 }
 
+func (c *Event) CreateAlarm(ctx context.Context, model *event.Event, occurrence string) (bool, error) {
+	store, ok := c.store.Event().(interface {
+		CreateAlarm(context.Context, *event.Event, string) (bool, error)
+	})
+	if !ok {
+		return false, fmt.Errorf("报警存储不支持原子聚合")
+	}
+	created, err := store.CreateAlarm(ctx, model, occurrence)
+	if err == nil {
+		c.event.Set(ctx, c.cacheKey(model.CacheKey()), model)
+	}
+	return created, err
+}
+
 // Update implements event.EventStorer.
 func (c *Event) Update(ctx context.Context, model *event.Event, changeFn func(*event.Event), opts ...orm.QueryOption) error {
 	if err := c.store.Event().Update(ctx, model, changeFn, opts...); err != nil {
