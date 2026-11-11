@@ -1,418 +1,175 @@
+**English** | [简体中文](./README_CN.md)
 
-**English** | [中文](./README_CN.md)
+# GoWVP Owl · Video Integration and Open Platform
 
-<p align="center">
+A video surveillance platform built on [gowvp/owl](https://github.com/gowvp/owl), with continued development for GB/T 28181 device integration, live monitoring, recordings, snapshots, and third-party business applications.
 
- |<img src="./docs/logo.png" alt="GoWVP Logo" width="550"/>|<img src="./docs/logo2.png" alt="GoWVP Logo" width="550"/>|
-|-|-|
-</p>
+This fork uses AI-assisted development for ongoing code analysis, feature development, bug fixes, testing, and documentation. Maintainers lead requirements and key decisions; releases still require code checks and validation with actual devices and business workflows.
 
-<p align="center">
-    <a href="https://github.com/gowvp/owl/releases"><img src="https://img.shields.io/github/v/release/ixugo/goddd?include_prereleases" alt="Version"/></a>
-</p>
-
-# Out-of-the-Box Video Surveillance Platform
-
-GoWVP is an open-source GB28181 solution implemented in Go, a network video platform based on the GB28181-2022 standard that also supports 2016/2011 versions, with ONVIF/RTMP/RTSP protocol support.
-
-## Live Demo
-
-+ [Online Demo Platform :)](http://gowvp.golang.space:15123/)
-
-![](./docs/demo/play.gif)
-
-|![](./docs/phone/login.webp)|![](./docs/phone/desktop.webp)|![](./docs/phone/gb28181.webp)|![](./docs/phone/discover.webp)|
-|-|-|-|-|
-
-## Use Cases
-
-+ Browser-based camera video playback without plugins
-+ Support for GB28181-compliant devices (IP cameras, platforms, NVRs, etc.)
-+ Support for non-GB28181 devices (RTSP, RTMP, streaming devices, etc.) - maximize your existing equipment
-+ Cross-network video preview
-+ Deployment via Docker, Docker Compose, or Kubernetes
-
-## Open Source Libraries
-
-Thanks to @panjjo for the open-source library [panjjo/gosip](https://github.com/panjjo/gosip). GoWVP's SIP signaling is based on this library. Due to underlying encapsulation requirements, it's not a direct dependency but rather included in the pkg package.
-
-Two streaming media servers are supported:
-
-+ @夏楚 [ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit)
-
-+ **lalmax-pro** - For Go streaming media needs, contact email xx@golang.space
-  - No environment requirements, no static library installation needed, cross-platform compilation support
-  - Custom feature development available
-  - G711 (G711A/G711U) to AAC transcoding support
-
-Project framework based on @ixugo's [goddd](https://github.com/ixugo/goddd)
-
-For commercial licensing, please contact WeChat: **golangxx**. Unauthorized modifications must open-source both frontend and backend source code under the GPL license.
-
-## FAQ
-
-> Where are the frontend resources? How to load the web interface?
-
-[Click to download www.zip package](https://github.com/gowvp/gb28181_web/releases/latest)
-
-Download (packaged) frontend resources and place them in the project root directory, named `www` to load properly.
-
-> Any learning materials about the code?
-
-[GB/T28181 Open Source Diary[1]: Complete Practice from 0 to Implementing GB28181 Protocol](https://juejin.cn/post/7456722441395568651)
-
-[GB/T28181 Open Source Diary[2]: Setting Up Server, Solving CORS, API Integration](https://juejin.cn/post/7456796962120417314)
-
-[GB/T28181 Open Source Diary[3]: Building Monitoring Dashboard with React Components](https://juejin.cn/post/7457228085826764834)
-
-[GB/T28181 Open Source Diary[4]: Using ESLint for Development](https://juejin.cn/post/7461539078111789108)
-
-[GB/T28181 Open Source Diary[5]: Completing Forms with react-hook-form](https://juejin.cn/post/7461899974198181922)
-
-[GB/T28181 Open Source Diary[6]: Quick Integration of jessibuca.js Player in React](https://juejin.cn/post/7462229773982351410)
-
-[GB/T28181 Open Source Diary[7]: Implementing RTMP Authentication and Playback](https://juejin.cn/post/7463504223177261119)
-
-[GB/T28181 Open Source Diary[8]: Quick Guide to GB28181 Development](https://juejin.cn/post/7468626309699338294)
-
-> Any usage documentation?
-
-**RTMP**
-
-[RTMP Push/Pull Stream Rules](https://juejin.cn/post/7463124448540934194)
-
-[How to Use OBS RTMP Push Stream to GB/T28181 Platform](https://juejin.cn/post/7463350947100786739)
-
-[Hikvision Camera RTMP Push Stream to Open Source GB/T28181 Platform](https://juejin.cn/post/7468191617020313652)
-
-[Dahua Camera RTMP Push Stream to Open Source GB/T28181 Platform](https://juejin.cn/spost/7468194672773021731)
-
-**GB/T28181**
-
-[7 Ways to Register GB28181 Devices](https://juejin.cn/post/7465274924899532838)
-
-> Black screen when playing
-
-Check "Quick Desktop" - "ZLM settings button (top right)" - "GB28181 stream receiving default address"
-Ensure this address is accessible by the surveillance device.
-
-Check "Quick Desktop" - "ZLM settings button (top right)" - "Hook IP"
-Can ZLM access GoWVP? For Docker combined version, use 127.0.0.1. For separate deployment, use explicit IP address.
-
-> Channel list shows fewer channels than actual count
-
-By design. More than 4 channels should be viewed in the management page, or click "View More" on the right.
-
-> Using nginx reverse proxy, returned playback addresses don't work or snapshots don't load
-
-Configure the following parameters in reverse proxy (replace domain with your actual one):
-
-proxy_set_header X-Forwarded-Host $host;
-
-proxy_set_header X-Forwarded-Prefix "https://gowvp.com";
-
-proxy_set_header Upgrade $http_upgrade;
-
-proxy_set_header Connection "upgrade";
-
-> How to use other databases?
-
-In the `configs/config.toml` configuration file, modify `database.dsn`
-
-[Recommended] SQLite should be a local disk path, default is `configs/data.db`
-
-[Recommended] PostgreSQL format: `postgres://<user>:<password>@127.0.0.1:5432/gb28181?sslmode=disable`
-
-MySQL format: `mysql://<user>:<password>@127.0.0.1:3306/gb28181?sslmode=disable`
-
-PostgreSQL and MySQL format pattern:
-`<db_type>://<username>:<password>@<ip>:<port>/<db_name>?sslmode=disable`
-
-> How to disable AI?
-
-AI detection is enabled by default, detecting 5 frames per second.
-
-You can disable AI detection by setting `disabledAI = true` in `configs/config.toml`
-
-## Third-Party Authentication
-
-GoWVP supports forwarding authentication requests to a third-party service, ideal for environments with an existing unified authentication system (SSO, OAuth2, corporate account systems, etc.).
-
-**Sequence Diagram**
-
-![](./docs/auth.webp)
-
-**Use Cases**
-
-+ Your organization has a unified login system and you want GoWVP to reuse existing sessions without requiring users to log in again
-+ Enterprise intranet environments that need to integrate with LDAP, CAS, OAuth2, or other authentication providers
-+ API gateway handles authentication and you want to pass the verification result through to GoWVP
-
-**Configuration**
-
-Set `AuthURL` to your third-party authentication service address in `configs/config.toml`:
-
-```toml
-[Server.HTTP]
-  AuthURL = "https://your-auth-server.com/api/verify"
-```
-
-**How It Works**
-
-Once `AuthURL` is configured, all requests are verified through the third-party authentication service. GoWVP forwards the original request headers and body as a POST to the specified URL. A `200` response means authentication passes; any other status code means failure, and the response body is returned directly to the client.
-
-> Note: The third-party auth service must respond within 10 seconds, otherwise the request is considered timed out.
-
-## Documentation
-
-GoWVP [Online API Documentation](https://apifox.com/apidoc/shared-7b67c918-5f72-4f64-b71d-0593d7427b93)
-
-ZLM Documentation [github.com/ZLMediaKit/ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit)
-
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-<h1>You've made it this far!</h1>
-<h1>Give us a ⭐ star!</h1>
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-
-## Docker
-
-### Video Guide
-
-[How to Build or Run the Project](https://www.bilibili.com/video/BV1QLQeYHEXb)
-
-[How to Deploy with Docker Compose](https://www.bilibili.com/video/BV112QYY3EZX)
-
-[Docker Hub](https://hub.docker.com/r/gospace/gowvp)
-
-**GoWVP & ZLMediaKit Combined Image (Recommended)**
-
-docker-compose.yml
-
-```yml
-services:
-  gowvp:
-    # If Docker Hub image is unavailable, try:
-    # registry.cn-shanghai.aliyuncs.com/ixugo/homenvr:latest
-    image: gospace/gowvp:latest
-    restart: unless-stopped
-    # For Linux, uncomment the line below and comment out all ports
-    # network_mode: host
-    ports:
-      # gb28181
-      - 15123:15123 # HTTP: Web UI + ONVIF SOAP server
-      - 3702:3702/udp # ONVIF WS-Discovery (能够被其它内网 onvif 发现本平台)
-      - 15060:15060 # GB28181 SIP TCP port
-      - 15060:15060/udp # GB28181 SIP UDP port
-      # zlm
-      - 1935:1935 # rtmp
-      - 554:554 # rtsp
-      # - 8080:80 # http
-      # - 8443:443 # https
-      # - 10000:10000
-      - 20000-20100:20000-20100 # GB28181 stream receiving ports
-      - 20000-20100:20000-20100/udp # GB28181 stream receiving UDP ports
-    volumes:
-      # Log directory is configs/logs
-      - ./data:/opt/media/bin/configs
-```
-
-
-## Quick Start
-
-If you're a Go developer familiar with Docker, you can download the source code and run locally.
-
-**Prerequisites**
-
-+ Golang
-+ Docker & Docker Compose
-+ Make
-
-**Steps**
-
-1. Clone this repository
-2. Modify `WebHookIP` in `configs/config.toml` to your LAN IP
-3. Run `make build/linux && docker compose up -d`
-4. A `zlm.conf` folder is auto-created. Get the API secret from `config.ini` and fill it in `configs/config.toml` under `Secret`
-5. Run `docker compose restart`
-6. Access `http://localhost:15123` in your browser
-
-## How to Contribute?
-
-1. Fork this project
-2. Set your editor's run/debug output directory to the project root
-3. Make changes, submit a PR with description of modifications
+This repository maintains its own Vue 3 admin UI, protocol adaptations, media node management, and application integration platform. Use this repository's code and documentation as the reference for features, configuration, and delivery. The upstream demo, frontend archive, and public images do not represent this fork. See [VERSION](./VERSION) for the release version and [release records](./deploy/releases/) for changes and deployment evidence.
 
 ## Features
 
-- [x] Out-of-the-box with responsive web management
-- [x] Multiple protocol output: FLV, WS-FLV, HLS, WebRTC, RTSP, RTMP
-- [x] LAN/Internet/Multi-layer NAT/Special network environment deployment
-- [x] SQLite database for quick deployment
-- [x] PostgreSQL/MySQL database support
-- [x] Auto offline/reconnect on service restart
-- [x] GB/T 28181
-  - [x] Device registration with 7 connection methods
-  - [x] UDP and TCP signaling transport modes
-  - [x] Device time synchronization
-  - [x] PTZ control support
-  - [x] Information queries support
-    - [x] Device catalog query
-    - [x] Device info query
-    - [x] Device basic config query (e.g., timeout 3s × 3 retries = ~9+x seconds for offline detection)
-  - [x] Live streaming from devices
-  - [x] UDP and TCP passive stream transport modes
-  - [x] On-demand streaming to save bandwidth (auto-stop after 30s without viewers)
-  - [x] H264 and H265 video codec support
-  - [x] g711a/g711u/aac audio codec support
-  - [x] Snapshots
-  - [x] CORS support
-- [x] ONVIF device access and playback (client)
-- [x] ONVIF virtual device / server (expose channels to Home Assistant, etc.)
-- [x] RTMP push streaming support
-- [x] RTSP pull streaming support
-- [x] AI algorithm analysis and alerting support
-- [x] Cloud Recording playback (owl)
-- [ ] ONVIF PTZ control support
-- [x] Chinese and English language support
+| Module | Implemented capabilities |
+| --- | --- |
+| Live monitoring | Overview dashboard, resource tree, multiple video panes, channel details, main/substream selection, playback URL copying, and player settings |
+| Device integration | GB/T 28181, ONVIF client and virtual device server, RTSP pulling, RTMP publishing, device/channel management, and heartbeat/registration history |
+| GB/T 28181 | Registration authentication, version negotiation, catalog and information queries, live streaming, device recording search/playback/download, PTZ, voice broadcast and intercom, platform cascading, and protocol diagnostics |
+| Platform recordings | Manual recording per channel, date search, calendar and continuous playback, downloads, retention policies, and disk usage cleanup |
+| Snapshots | Device uploads or FFmpeg frame extraction, background tasks, schedules, image preview/download/rename/delete, global history, and capture settings |
+| Media nodes | ZLMediaKit / Lalmax node creation, editing, enable/disable/delete, runtime inspection, channel binding, and per-node callback isolation |
+| Third-party applications | Application management, independent AK/SK credentials, API scopes, device grants, source restrictions and quotas, live playback, device/platform recordings, snapshots, PTZ, and event subscriptions |
+| Operations and security | Account settings, encrypted login compatible with HTTP/HTTPS, login protection, monitoring, playback credential checks, and signed upgrades/rollback with a companion host service |
+| AI and events | Optional AI service integration, analysis tasks, event queries, images, and webhook delivery; requires a separately deployed analysis service |
 
-**OWL PRO**
+Protocol profiles cover `1.0=2011`, `1.1=the 2011 amendment (2014)`, `2.0=2016`, and `3.0=2022`. Features follow each profile's capabilities. Optional SIP-TLS, certificate authentication, and Annex G / O functionality require additional configuration. Implementation and automated checks do not establish interoperability with every vendor, standard requirement, or network. See the [completion audit](./docs/testing/gb28181-completion-audit.md) and [interoperability runbook](./docs/testing/gb28181-interoperability-runbook.md).
 
-- [x] 分屏预览
-- [x] 分屏卡存录像回放(摄像头内置录像)
-- [x] 主子码流
-- [x] 自研 owl 播放器，兼容不同环境的 H265 流播放(仅支持 FLV 协议)
+Media outputs include HTTP-FLV, WS-FLV, HLS, WebRTC, RTSP, and RTMP. Availability, codec decoding, and browser compatibility depend on the media driver, source encoding, and player. Multiple media nodes do not provide automatic load balancing or failover. The admin UI is primarily in Chinese.
 
-## ONVIF Virtual Device (Server)
+## Architecture
 
-GoWVP can act as an **ONVIF Network Video Transmitter** so integrators (e.g. Home Assistant) can add it like a camera and pull RTSP URLs for platform channels.
-
-### Ports and firewall (LAN)
-
-| Purpose | Protocol | Port | Open in firewall? |
-| --- | --- | --- | --- |
-| Web UI + ONVIF SOAP | TCP | `Server.HTTP.Port` (default **15123**) | Only if HA/NVR is on another subnet; same LAN usually needs no extra rule |
-| RTSP playback after `GetStreamUri` | TCP | ZLM RTSP (default **554**, see `docker-compose` mapping) | Same as above when the client pulls stream from ZLM |
-| ONVIF WS-Discovery (server advertisement) | UDP | **3702** (multicast `239.255.255.250`) | Map `3702:3702/udp` in Docker; LAN usually needs no extra rule |
-
-ONVIF SOAP endpoints (same HTTP port as the web UI):
-
-- `POST http://<host>:15123/onvif/device_service`
-- `POST http://<host>:15123/onvif/media_service`
-
-Authentication uses `Server.Username` / `Server.Password` in `configs/config.toml` (WS-Security `PasswordDigest` or `PasswordText`). There is no default production password; configure `OWL_ADMIN_USERNAME` and `OWL_ADMIN_PASSWORD` before startup.
-
-**Home Assistant (manual add):**
-
-- Host: `http://<lan-ip>:15123/onvif/device_service`
-- Username / password: values from `config.toml` `Server.Username` / `Server.Password`
-
-**Auto-discovery:** After startup, GoWVP answers WS-Discovery Probe on **UDP 3702**. Set `Media.IP` (or `Sip.Host`) in `configs/config.toml` to your LAN IP so `XAddrs` is reachable from Home Assistant.
-
-**Not the same as** `GET /onvif/discover`: that API lets GoWVP **scan the LAN for external ONVIF cameras** (client role).
-
-## Webhook Alert Push & Receive
-
-GoWVP supports pushing alert events to external systems via HTTP Webhook, and receiving pushes from other GoWVP instances for **master-slave cascading** deployments.
-
-### Endpoint
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/webhook/events` | Unified event receiver, compatible with both Python AI and gowvp-to-gowvp forwarding |
-
-### Configuration (`configs/config.toml`)
-
-```toml
-[Server.Webhook]
-  # Target URL array; embed the secret as a query parameter
-  Targets = [
-    "http://192.168.1.100:15123/webhook/events?secret=your-recv-secret",
-  ]
-  # Max retries, 0 = built-in default of 3
-  MaxRetry = 3
-  # Channel buffer size per target, 0 = built-in default of 64
-  BufferSize = 64
-  # Secret for validating incoming webhook requests (auto-generated on first launch)
-  RecvSecret = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+```text
+Cameras / NVRs / downstream platforms -- SIP, RTP/RTCP --+
+RTSP / RTMP / ONVIF devices ---------------------------+
+                                                      |
+Browsers -------- Admin UI / API ---- GoWVP Owl ---- Media nodes
+Application backends -- Signed API ------|                  |
+Third-party players -- Ticketed URLs ---|                  |
+                                        |                  |
+                                    PostgreSQL      Shared recordings
 ```
 
-### Authentication
+- Backend: Go, Gin, and GORM. Frontend: Vue 3, TypeScript, Vite, Pinia, and ECharts.
+- Frontend source lives in `admin-ui/`. Release assets are included at `/app/www` in the application image; Owl serves `/web/` and the API on the same origin.
+- The recommended separate-service deployment uses Owl + ZLMediaKit + PostgreSQL. ZLM uses host networking, Owl connects through a bridge network, and both containers use the same absolute recording path.
+- SQLite and MySQL are also supported. Changing the database connection string does not migrate existing data. See the [PostgreSQL guide](./deploy/postgresql.md) for migration tools and data handling.
 
-`/webhook/events` accepts two authentication methods (either one suffices):
+## Deploying a New Environment
 
-| Source | Method | Notes |
-|--------|--------|-------|
-| Python AI | `Authorization: Basic <InternalSecret>` header | Random UUID generated at startup, not persisted |
-| Other gowvp | URL query `?secret=<RecvSecret>` | Configured in `RecvSecret`, auto-generated on first launch |
+These commands are for a **new Linux Docker environment**. For existing installations, read the [deployment and upgrade guide](./deploy/v1/README.md), back up data, and review version differences and database migrations first. Dedicated servers use their own runtime configuration.
 
-### Master-Slave Cascading
+The build host needs Git, Go (see `go.mod`; currently 1.26), Node.js (22 LTS recommended), pnpm (currently pinned to 11.11.0 in `admin-ui/package.json`), OpenSSL, Docker Engine, and Docker Compose. Linux amd64 / arm64 artifacts are supported; cross-platform image builds require platform support. The initial ZLM build also downloads dependencies and compiles native code.
 
-**Master node**: Receives AI detection events and pushes alerts to slave nodes.
+```bash
+git clone https://github.com/icedeng/gowvp-owl.git
+cd gowvp-owl
 
-```toml
-# Master node config.toml
-[Server.Webhook]
-  Targets = ["http://<slave-ip>:15123/webhook/events?secret=<slave-RecvSecret>"]
+# First check out the intended release branch or tag and review VERSION/release records.
+# Replace this IP with a host address reachable by devices, upstream platforms, and players.
+./deploy/v1/deploy.sh init 192.168.1.100
+
+# Review .env and config.toml as described below before proceeding.
+./deploy/v1/deploy.sh release
+./deploy/v1/deploy.sh status
 ```
 
-**Slave node**: Receives pushes and stores events directly (device/channel existence is not validated).
+`init` generates `deploy/v1/.env` with independent random passwords/secrets and refuses to overwrite an existing file. `release` builds the backend, frontend, and local images, then starts the services; it does not push images to a registry. Use `build` to build only, or `up` to start existing images. See the [deployment guide](./deploy/v1/README.md) for all commands.
 
-```toml
-# Slave node config.toml (RecvSecret is auto-generated on first launch)
-[Server.Webhook]
-  RecvSecret = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+Review these settings before deployment:
+
+| Location | Required review |
+| --- | --- |
+| `[Sip]` in `deploy/v1/data/configs/config.toml` | `Host`, 20-digit platform `ID`, 10-digit `Domain`, and device registration policy |
+| `deploy/v1/.env` | `OWL_MEDIA_SDP_IP`, HTTP port, administrator credentials, database connection, and independent secrets |
+| SIP registration password | `OWL_SIP_PASSWORD` starts empty; set it and configure devices consistently when Digest password validation is required |
+| Media nodes | API address reachable by Owl, callback address reachable by the node, device-reachable media address, and shared API secret |
+| Storage and networking | Disk capacity, bind mounts, port conflicts, and routes from devices/players to the advertised media address |
+
+After startup, open `http://<host>:15123/web/`; health information is at `/health`. Adjust the port for your deployment. There is no universal login password. Initially use the credentials in `.env`; after changing them in the UI, `admin-credentials.toml` takes precedence over initial environment values and must be backed up.
+
+### Common Ports
+
+These ports follow the `deploy/v1` configuration. Keep device settings, advertised addresses, and firewall rules consistent when changing them.
+
+| Port | Purpose |
+| --- | --- |
+| `15123/tcp` | Admin UI, API, WebSocket, media HTTP proxy, and ONVIF SOAP |
+| `15060/tcp+udp` | GB/T 28181 SIP signaling |
+| `15061/tcp` | SIP-TLS; requires certificates and explicit enablement |
+| `3702/udp` | ONVIF WS-Discovery; container multicast discovery depends on the network |
+| `8080/tcp` | ZLM HTTP/API |
+| `554/tcp`, `1935/tcp` | RTSP, RTMP |
+| `30000/tcp+udp` | WebRTC |
+| `30001–50000/tcp+udp` | Dynamic GB/T 28181 RTP/RTCP ports |
+| `50200–50300/tcp` | Optional Annex O raw TCP download/cascade relay |
+
+PostgreSQL uses `5432` inside the Compose network without publishing a host port. The deployment builds local images; upstream `gospace/gowvp:latest` and other upstream images do not include this fork's custom features. See the [server deployment plan](./deploy/server-192.168.6.20.md) for differences between the generic template and a dedicated environment.
+
+## Third-Party Playback and Business Integration
+
+Third-party applications can play platform video without an administrator login session.
+
+| Integration | Use case and authorization boundary |
+| --- | --- |
+| Shared playback URLs: `/proxy/sms/…` | URLs carry a playback token bound to a media node and stream. External players can use them directly; HLS manifests and child resources retain credentials. Cross-stream/node access and management API forwarding are blocked. Possession grants playback access to that stream, not application-level resource authorization |
+| Application APIs: `/openapi/v1/` + `/openmedia/v1/` | An application backend signs requests with AK/SK and obtains short-lived playback tickets subject to scopes, device grants, source restrictions, and quotas. Use this for independent application permissions, revocation, auditing, and callbacks |
+
+The integration platform provides device/channel lookup by code, live sessions, device recording catalogs and playback, platform recordings, snapshot tasks, PTZ, events, and subscriptions. Keep AK/SK credentials on the application backend; give players media URLs only.
+
+The integration platform is disabled by default. Run its dedicated migration against the existing database, configure an independent keyring, Audience, and Public URL, then enable it. It currently supports a single application instance; adding replicas cannot safely share its workers. Application-level isolation also requires controlling network access to legacy APIs, direct media ports, and internal webhooks as documented.
+
+- [Deployment, application authorization, and business APIs](./docs/open-platform/README.md)
+- [Signing protocol](./docs/open-platform/signing-v1.md) · [OpenAPI contract](./docs/open-platform/openapi.yaml)
+- Public developer documentation on your instance: `/web/#/open-platform/docs`. Reading requires no administrator login; API authentication still applies.
+- Management API documentation on your instance: `/swagger/index.html`. Use the current code and generated documentation as the reference.
+
+Ordinary management routes can use `[Server.HTTP].AuthURL` for external authentication. This is separate from AK/SK integration; application administration and version upgrades still require an administrator JWT.
+
+## Recordings, Snapshots, and Operations
+
+- **Recordings:** The generic deployment allows manual recording without automatically recording every channel. Recording continues until explicitly stopped, even after closing the page. Without recording or another keepalive consumer, streams stop after the configured no-viewer delay, which defaults to 180 seconds.
+- **Cleanup:** Recording retention and disk usage checks apply to the filesystem containing recordings. Other applications on a shared disk may trigger cleanup; this is not a hard per-directory quota. Cleanup stops when a failed batch makes no progress and retries in a later cycle.
+- **Snapshots:** Successful images and schedules persist. Snapshot history does not expire under recording retention rules; manage capacity and back up the database together with `cover/captures`. See the [snapshot guide](./docs/channel-captures.md).
+- **AI:** `deploy/v1` does not include an AI service and explicitly disables it in the template. Deploy and authenticate an analysis service separately before enabling analysis.
+- **Upgrades:** `VERSION` defines the release version. Web-based signed upgrades require a host agent, signing keys, and companion configuration, and support compatible releases without database migrations. See the [signed upgrade guide](./deploy/192.168.6.20/UPGRADE.md).
+- **HTTP:** Encrypted login and clipboard copying support HTTP admin pages. RSA login does not replace HTTPS protection for sessions and business data. The integration platform requires HTTPS by default; HTTP must be explicitly enabled.
+- **Backups:** Retain consistent database backups, configuration, administrator credentials, the application keyring, and required media files. Images alone cannot restore business data. Keep real `.env` files, keys, and databases out of the source repository.
+
+## Development and Repository Layout
+
+The frontend no longer requires an upstream `www.zip` download. Connect the local development server to an existing backend:
+
+```bash
+pnpm --dir admin-ui install --frozen-lockfile
+
+# Replace with your backend. The development proxy strips the /api prefix.
+VITE_DEV_API_TARGET=http://127.0.0.1:15123 pnpm --dir admin-ui dev
 ```
 
-### Forward Payload Format (gowvp → gowvp)
+Open the local URL printed by Vite. To develop the backend separately, run `go run ./main.go -conf ./configs` after injecting credentials/secrets into the **process environment** using the [.env example](./.env.example) and configuring a working media service and database. `go run` does not automatically load `.env`. Build production frontend assets with `VITE_API_BASE_URL=/ pnpm --dir admin-ui build` to keep the development-only `/api` prefix out of release assets.
 
-```json
-{
-  "did": "device-id",
-  "cid": "channel-id",
-  "started_at": "2024-01-01T10:00:00Z",
-  "ended_at": "2024-01-01T10:00:01Z",
-  "label": "person",
-  "score": 0.95,
-  "zones": "{\"x_min\":0,\"y_min\":0,\"x_max\":100,\"y_max\":100}",
-  "image_base64": "<base64-encoded JPEG image>",
-  "model": "yolov8"
-}
+```text
+admin-ui/             Vue admin UI, player integration, public developer documentation
+internal/             Application wiring, configuration, business logic, and APIs
+pkg/gbs/              GB/T 28181 SIP, SDP, XML, transactions, and cascading
+pkg/zlm/, pkg/lalmax/  Media service adapters
+plugin/               Monitoring and common management endpoints
+tools/                Migration, documentation generation, signing, and upgrade tools
+deploy/               Deployment templates, server configuration, and release records
+docs/                 Feature guides, API contracts, protocol audits, and field testing
 ```
 
-> `image_base64`: The master node reads the local image file and encodes it as base64 for transmission. The slave node decodes and saves it locally, resolving cross-node file path issues.
-> If the image cannot be read, `image_base64` is omitted; the event is still saved without an image.
+Run checks relevant to the changed code. The frontend `build` includes type checking and integration documentation consistency checks. After changing the integration contract, run `go run ./tools/openplatform-docs` to regenerate resources. Device interoperability, playback decoding, and public-network routing still require environment-specific validation.
 
-### Retry Strategy
+## Documentation
 
-On failure, the push is retried with **exponential backoff ± 25% jitter**:
+Most detailed guides are currently in Chinese.
 
-| Attempt | Base Delay |
-|---------|------------|
-| 1st | ~1s |
-| 2nd | ~2s |
-| 3rd | ~4s (max 10s) |
+| Topic | Guide |
+| --- | --- |
+| Building and first deployment | [Generic deployment](./deploy/v1/README.md) |
+| Existing server operations | [Runtime guide](./deploy/192.168.6.20/README.md) · [Deployment plan](./deploy/server-192.168.6.20.md) |
+| Databases and migration | [PostgreSQL and device history](./deploy/postgresql.md) |
+| Media nodes | [Management and boundaries](./docs/media-node-management.md) · [API](./docs/api/media-nodes.md) |
+| Snapshots and schedules | [Channel snapshots](./docs/channel-captures.md) |
+| Third-party integration | [Application platform](./docs/open-platform/README.md) · [PTZ API](./docs/api/ptz.md) |
+| GB/T 28181 compatibility and validation | [Completion audit](./docs/testing/gb28181-completion-audit.md) · [Device matrix](./docs/testing/gb28181-device-matrix.md) · [Release checks](./docs/testing/gb28181-release-validation.md) |
+| Protocol extensions | [Annex G implementation](./docs/GB28181-annex-g-implementation.md) · [Annex O design](./docs/adr/gb28181-2014-direct-tcp-download.md) |
+| Upstream adoption | [Assessment and implementation record](./docs/upstream-adoption-review-2026-11-10.md) |
+| Public-network ingress planning | [WSS gateway proposal](./docs/国标公网接入网关-WSS方案.md); planned/in-progress work, with delivery scope confirmed by subsequent release records |
 
-HTTP 4xx responses (except 429/408) are treated as permanent failures and not retried. Each retry failure is logged as `warn`; exhausted retries are logged as `error`.
+## Upstream Credits and License
 
-## Acknowledgments
+Based on [gowvp/owl](https://github.com/gowvp/owl), retaining the original project's attribution and copyright notices. Thanks to [ixugo](https://github.com/ixugo), [panjjo/gosip](https://github.com/panjjo/gosip), [goddd](https://github.com/ixugo/goddd), [ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit), [Lalmax](https://github.com/q191201771/lalmax), and other open-source contributors.
 
-Thanks to our sponsors (in no particular order):
-
-[@joestarzxh](https://github.com/joestarzxh)
-[@oldweipro](https://github.com/oldweipro)
-[@beixiaocai](https://github.com/beixiaocai)
-[@chencanfggz](https://github.com/chencanfggz)
-[@zhangxuan1340](https://github.com/zhangxuan1340)
-
-## License
-
-This project is licensed under the **[GNU General Public License v3.0 (GPL-3.0)](https://www.gnu.org/licenses/gpl-3.0.html)**.
-
-- **You are free to use, modify, and distribute** the code of this project, subject to the following conditions:
-- **Open Source Requirement**: Any derivative works based on this project (including modified code or software integrating this project) **must also be open-sourced under GPL-3.0**.
-- **Retain License & Copyright Notice**: Derivative works must include the original project's `LICENSE` file and copyright notices.
-- **Document Modifications**: If you modify the code, you must indicate the changes in the files.
-
-⚠ **Note**: If using this project for commercial closed-source software or SaaS services, you must comply with GPL-3.0's copyleft provisions (i.e., related code must be open-sourced).
-
-For the complete license text, see the [LICENSE](./LICENSE) file.
+Upstream fixes are reviewed and adapted individually to the current implementation, with decisions recorded in repository documentation. This repository is licensed under [GNU GPL v3.0](./LICENSE). Modifications and distribution must comply with the license and retain copyright notices. Players, media servers, and other third-party components remain subject to their own licenses and authorization terms.

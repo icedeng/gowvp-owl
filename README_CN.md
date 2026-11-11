@@ -1,443 +1,173 @@
-[English](./README.md) | **中文**
+[English](./README.md) | **简体中文**
 
-<p align="center">
+# GoWVP Owl · 视频接入与开放平台
 
-|<img src="./docs/logo.png" alt="GoWVP Logo" width="550"/>|<img src="./docs/logo2.png" alt="GoWVP Logo" width="550"/>|
-|-|-|
+基于 [gowvp/owl](https://github.com/gowvp/owl) 持续开发的视频监控平台，面向国标设备接入、视频值守、录像与抓拍管理，以及第三方业务系统集成。
 
+本分支采用人机协作方式，借助 AI 持续开展代码分析、功能开发、缺陷修复、测试与文档维护。需求与关键决策由维护者主导，发布前仍需代码检查及实际设备、业务场景验收。
 
-</p>
+本仓库已维护独立的 Vue 3 管理端、国标协议适配、媒体节点管理和三方应用开放平台。功能、配置与交付以本仓库代码和文档为准；上游演示站、前端压缩包及公共镜像不代表本项目。版本号见 [VERSION](./VERSION)，变更与部署证据见[发布记录](./deploy/releases/)。
 
-<p align="center">
-    <a href="https://github.com/gowvp/owl/releases"><img src="https://img.shields.io/github/v/release/ixugo/goddd?include_prereleases" alt="Version"/></a>
-</p>
+## 当前能力
 
-# GB28181 视频监控平台 开箱即用
+| 模块 | 已实现内容 |
+| --- | --- |
+| 视频值守 | 运行总览、资源树与多画面实时预览、通道详情、主子码流选择、播放地址复制与播放器设置 |
+| 设备接入 | GB/T 28181、ONVIF 设备接入与虚拟设备服务、RTSP 拉流、RTMP 推流；设备与通道管理、心跳及注册历史 |
+| 国标业务 | 注册鉴权与版本协商、目录和信息查询、实时点播、设备录像检索/回放/下载、云台控制、语音广播与对讲、上下级平台级联及协议诊断 |
+| 平台录像 | 按通道手动启停录像、日期检索、日历与连续回放、文件下载、保留期限与磁盘占用清理 |
+| 抓拍 | 设备上传或 FFmpeg 取帧、后台任务、定时计划、图片预览/下载/重命名/删除，以及全平台抓拍记录与参数设置 |
+| 媒体节点 | ZLMediaKit / Lalmax 节点新增、编辑、启停、删除、运行状态查询及通道绑定；回调按节点隔离 |
+| 第三方集成 | 应用管理、独立 AK/SK、接口 Scope、设备授权、来源与配额、实时播放、两类录像、抓拍、云台及事件订阅 |
+| 运维与安全 | 账号安全、HTTP/HTTPS 加密登录兼容、登录防护、系统监控、媒体播放凭据校验，以及配套宿主服务的签名升级与回滚 |
+| AI 与事件 | 可选 AI 服务对接、分析任务、事件查询、图片与 Webhook 推送；需另外部署分析服务 |
 
-基于 GB28181-2022 标准实现的网络视频平台，同时支持 2016/2011 版本，支持 ONVIF/RTMP/RTSP 等协议，支持 yolo 检测告警。
+国标协议档案覆盖 `1.0=2011`、`1.1=2011 修改补充文件（2014）`、`2.0=2016`、`3.0=2022`。不同版本按能力启用，SIP-TLS、证书认证、附录 G / O 等可选能力需要额外配置。代码实现和自动化检查不等于所有厂商、标准条款或网络环境都已完成真机验收，详见[完成审计](./docs/testing/gb28181-completion-audit.md)和[互通手册](./docs/testing/gb28181-interoperability-runbook.md)。
 
-## 在线演示平台
+媒体输出包括 HTTP-FLV、WS-FLV、HLS、WebRTC、RTSP 和 RTMP，实际可用协议、音视频解码及浏览器兼容性取决于媒体驱动、源编码和播放器。多节点管理不包含自动负载均衡或故障切换。当前管理端以中文为主。
 
-+ [在线演示平台 :) ](http://gowvp.golang.space:15123/)
+## 运行结构
 
-![](./docs/demo/play.gif)
-
-
-
-|![](./docs/phone/login.webp)|![](./docs/phone/desktop.webp)|![](./docs/phone/gb28181.webp)|![](./docs/phone/discover.webp)|
-|-|-|-|-|
-
-
-
-## 应用场景：
-+ 支持浏览器无插件播放摄像头视频。
-+ 支持国标设备(摄像机、平台、NVR等)设备接入
-+ 支持非国标(rtsp, rtmp，直播设备等等)设备接入，充分利旧。
-+ 支持跨网视频预览。
-+ 支持 Docker, Docker Compose, Kubernetes 部署
-
-
-## 开源库
-
-感谢 @panjjo 大佬的开源库 [panjjo/gosip](https://github.com/panjjo/gosip)，GoWVP 的 sip 信令基于此库，出于底层封装需要，并非直接依赖该项目，而是源代码放到了 pkg 包中。
-
-流媒体服务支持三种
-
-+ @夏楚 [ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit)
-
-+ lalmax 已支持 zlm 接口，[lalmax](https://github.com/q191201771/lalmax)
-
-+ **[lalmax-pro/streamsvr](./docs/streamsvr_product_intro_zh.md) 有 golang 企业级流媒体的需求请联系微信 [joestar2006](https://github.com/joestarzxh)(备注留言gowvp)**
-  - 对环境没有要求，不需要安装任何静态库，支持跨平台编译
-  - 支持特色功能定制
-  - 支持 G711(G711A/G711U) 转 AAC
-  - 支持 AAC 转 opus 音频转码
-
-项目框架基于 @ixugo [goddd](https://github.com/ixugo/goddd)
-
-商用授权请联系微信 **golangxx**，申请备注 "owl"，非授权改动请按照 GPL 协议开源前后端源代码。
-
-## QA
-
-> 怎么没有前端资源? 如何加载网页呢?
-
-[点击前往下载 www.zip 压缩包](https://github.com/gowvp/gb28181_web/releases/latest)
-
-前端资源下载(打包)后放到项目根目录，命名为 `www` 即可正常加载。
-
-> 有没有代码相关的学习资料?
-
-[GB/T28181 开源日记[1]：从 0 到实现 GB28181 协议的完整实践](https://juejin.cn/post/7456722441395568651)
-
-[GB/T28181 开源日记[2]：搭建服务端，解决跨域，接口联调](https://juejin.cn/post/7456796962120417314)
-
-[GB/T28181 开源日记[3]：使用 React 组件构建监控数据面板](https://juejin.cn/post/7457228085826764834)
-
-[GB/T28181 开源日记[4]：使用 ESlint 辅助开发](https://juejin.cn/post/7461539078111789108)
-
-[GB/T28181 开源日记[5]：使用 react-hook-form 完成表单](https://juejin.cn/post/7461899974198181922)
-
-[GB/T28181 开源日记[6]：React 快速接入 jessibuca.js 播放器](https://juejin.cn/post/7462229773982351410)
-
-[GB/T28181 开源日记[7]：实现 RTMP 鉴权与播放](https://juejin.cn/post/7463504223177261119)
-
-[GB/T28181 开源日记[8]：国标开发速知速会](https://juejin.cn/post/7468626309699338294)
-
-> 有没有使用资料?
-
-**RTMP**
-
-[RTMP 推拉流规则](https://juejin.cn/post/7463124448540934194)
-
-[如何使用 OBS RTMP 推流到 GB/T28181平台](https://juejin.cn/post/7463350947100786739)
-
-[海康摄像机 RTMP 推流到开源 GB/T28181 平台](https://juejin.cn/post/7468191617020313652)
-
-[大华摄像机 RTMP 推流到开源 GB/T28181 平台](https://juejin.cn/spost/7468194672773021731)
-
-**GB/T28181**
-
-[GB28181 七种注册姿势](https://juejin.cn/post/7465274924899532838)
-
-> 播放黑屏
-
-查看「快捷桌面」 - 「zlm 右上角设置按钮」 - 「国标收流默认地址」
-此地址是否能被监控设备访问到
-
-查看「快捷桌面」 - 「zlm 右上角设置按钮」 - 「Hook IP」
-zlm 能否访问到 gowvp?? docker 合并版本填写 127.0.0.1 即可，分离部署则要明确的 IP 地址
-
-> 列表项里的通道实际有 n 个，但仅显示部分
-
-设计如此，超过 4 个要在管理页查看，或者点击右侧的 "查看更多"
-
-> 使用了 nginx 反向代理，返回的播放地址无法播放或不加载快照
-
-在反向代理那里配置以下参数，其中域名根据实际的填写
-
-proxy_set_header X-Forwarded-Host $host;
-
-proxy_set_header X-Forwarded-Prefix "https://gowvp.com";
-
-proxy_set_header Upgrade $http_upgrade;
-
-proxy_set_header Connection "upgrade";
-
-> 如何使用其它数据库?
-
-在 configs/config.toml 配置文件中，修改 database.dsn
-
-[推荐] sqlite 应该为本地磁盘路径，建议默认  configs/data.db
-
-[推荐] postgres 参考格式 `postgres://<user>:<password>@127.0.0.1:5432/gb28181?sslmode=disable`
-
-mysql 参考格式 `mysql://<user>:<password>@127.0.0.1:3306/gb28181?sslmode=disable`
-
-postgres 和 mysql 的格式即:
-`<db_type>://<username>:<password>@<ip>:<port>/<db_name>?sslmode=disable`
-
-> 如何关闭 AI?
-
-可以在 `configs/config.toml` 中修改 `disabledAI = true` 全局关闭 ai 检测
-
-目前 v1.3.0 版本是 1 秒检测 1 帧，需要播放视频在右上角手动开启.
-
-开启分析后，每路流占用约 200MB 内存 2 核
-
-注意：开启 AI 分析后，即使没有人观看，系统也会自动保持视频流不关闭以确保 AI 持续分析。
-
-> 为什么开启 AI 分析后，即是没人观看，流也不会自动停止
-
-ai 分析会拉取一道流，程序会以为有人观看
-
-> 国标设备在线，通道离线?
-
-属于 ipc 的问题，请检查 ipc 后台注册的 平台 sip_id 和 域是否与 gowvp/owl 一致。
-
-> 如何自定义模型?
-
-将自己的模型存放在 configs 目录下，改名为 `owl.onnx` 或 `owl.tflite`
-
-目前对 onnx 支持最友好
-
-> 播放黑屏，日志提示 zlm 连接不上?
-
-程序会自动识别是否容器中，才会主动启动 zlm，支持 docker/containerd/podman 等，如果确实没有拉起来，尝试在 compose 文件设置环境变量 NVR_STREAM=ZLM，重启容器试试。
-
-播放黑屏也可能是 IP 配置有误，容器内 zlm 与 owl 联系用默认 127.0.0.1 即可，收流 IP 必须填写局域网 IP。
-
-> NVR 播放黑屏? 老旧摄像头播放黑屏?
-
-进入「监控」-「管理」，找到对应的设备，选择「编辑」-「下一步」，将收流模式修改为 **UDP**
-
-等待 1 分钟后，重新点击通道播放看看。
-
-> 摄像机注册上了，但是拿不到通道?
-
-1. 进入「监控」-「接入信息」页面
-2. 登录摄像机后台，检查 "server id" 是否与 「接入信息」页面的一致，不一致则修改为一致，重新注册即可
-
-
-## 第三方鉴权
-
-支持将鉴权请求转发到第三方服务，适用于已有统一认证体系的场景（如 SSO、OAuth2、企业内部账号系统等）。
-
-**时序图**
-
-![](./docs/auth.webp)
-
-**使用场景**
-
-+ 已有统一登录系统，希望 owl 复用现有会话，无需再次登录
-+ 企业内网环境，需要对接 LDAP、CAS、OAuth2 等认证源
-+ API 网关层已做鉴权，希望将校验结果透传到 owl
-
-**配置方式**
-
-在 `configs/config.toml` 中设置 `AuthURL` 为你的第三方鉴权服务地址：
-
-```toml
-[Server.HTTP]
-  AuthURL = "https://your-auth-server.com/api/verify"
+```text
+摄像机 / NVR / 下级平台 ── SIP、RTP/RTCP ──┐
+RTSP / RTMP / ONVIF 设备 ────────────────────┤
+                                           ▼
+浏览器 ── 管理页面 / API ── GoWVP Owl ── ZLMediaKit / Lalmax
+第三方业务后端 ── 签名 API ──┤                  │
+第三方播放器 ── 带票据播放地址 ┘                  │
+                           │                  │
+                       PostgreSQL       共享录像目录
 ```
 
-**工作原理**
+- 后端使用 Go、Gin、GORM，管理端使用 Vue 3、TypeScript、Vite、Pinia 和 ECharts。
+- 前端源码位于 `admin-ui/`，发布产物进入应用镜像 `/app/www`，由 Owl 提供 `/web/` 页面及同源 API。
+- 推荐的独立编排为 Owl + ZLMediaKit + PostgreSQL。ZLM 使用宿主机网络，Owl 通过桥接网络访问它，录像目录在两个容器中使用一致的绝对路径。
+- 数据层也支持 SQLite、MySQL；现有数据不会因修改数据库连接串自动迁移。迁移工具和数据保留说明见 [PostgreSQL 文档](./deploy/postgresql.md)。
 
-配置 `AuthURL` 后，所有请求将通过第三方鉴权服务验证权限。GoWVP 会以 POST 方式将原始请求的 Header 和 Body 透传到该地址，第三方服务返回 `200` 表示鉴权通过，其它状态码则鉴权失败，响应内容直接返回给客户端。
+## 新环境部署
 
-> 注意：第三方鉴权服务需要在 10 秒内响应，否则视为超时失败。
+以下命令用于**新的 Linux Docker 环境**。已有部署应先阅读[升级与数据说明](./deploy/v1/README.md)，完成备份、版本差异和数据库迁移核对。专用服务器使用自己的运行编排，不直接套用首次部署命令。
 
-## 文档
+构建机需要 Git、Go（版本要求见 `go.mod`，当前为 1.26）、Node.js（建议 22 LTS）、pnpm（按 `admin-ui/package.json` 当前锁定为 11.11.0）、OpenSSL、Docker Engine 和 Docker Compose。支持生成 Linux amd64 / arm64 产物，跨架构镜像构建需要对应平台支持；首次 ZLM 构建还需要下载依赖并编译。
 
-GoWVP [在线接口文档](https://apifox.com/apidoc/shared-7b67c918-5f72-4f64-b71d-0593d7427b93)
+```bash
+git clone https://github.com/icedeng/gowvp-owl.git
+cd gowvp-owl
 
-ZLM使用文档 [github.com/ZLMediaKit/ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit)
+# 先切换到要部署的发布分支或标签，并核对 VERSION 与发布记录。
+# 替换成摄像机、上级平台和播放端可访问的宿主机地址。
+./deploy/v1/deploy.sh init 192.168.1.100
 
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-<h1>看到这里啦，恭喜你发现新项目</h1>
-<h1>点个 star 不迷路</h1>
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-
-
-## Docker
-
-### 视频指南
-
-[如何构建或运行项目](https://www.bilibili.com/video/BV1QLQeYHEXb)
-
-[如何用 docker compose 部署项目](https://www.bilibili.com/video/BV112QYY3EZX)
-
-[docker hub](https://hub.docker.com/r/gospace/gowvp)
-
-** gowvp & zlmediakit 融合镜像(推荐)**
-
-docker-compose.yml
-```yml
-services:
-  gowvp:
-    # 如果拉不到 docker hub 镜像，也可以尝试
-    # registry.cn-shanghai.aliyuncs.com/ixugo/homenvr:latest
-    image: gospace/gowvp:latest
-    restart: unless-stopped
-    # network_mode 和 ports 二选一
-    # network_mode: host
-    ports:
-      # gb28181
-      - 15123:15123 # HTTP：Web 管理 + ONVIF SOAP 服务端
-      - 3702:3702/udp # ONVIF WS-Discovery 组播发现
-      - 15060:15060 # gb28181 sip tcp 端口
-      - 15060:15060/udp # gb28181 sip udp 端口
-      # zlm
-      - 1935:1935 # rtmp
-      - 554:554 # rtsp
-      # - 8080:80 # http
-      # - 8443:443 # https
-      # - 10000:10000 # rtp 单端口收流
-      - 20000-20100:20000-20100 # gb28181 收流端口
-      - 20000-20100:20000-20100/udp # gb28181 收流端口udp
-    volumes:
-      # 日志目录是 configs/logs
-      - ./data:/opt/media/bin/configs
-      # 录像
-      - ./recordings:/opt/media/bin/configs/recordings
+# 按下文核对 .env 和 config.toml 后再执行。
+./deploy/v1/deploy.sh release
+./deploy/v1/deploy.sh status
 ```
 
-另外，gowvp 和 zlm 可以分开部署，在配置文件配置一下连接地址和端口
+`init` 生成 `deploy/v1/.env` 和独立随机密码/密钥，已有环境文件时拒绝覆盖。`release` 编译前后端、构建本地镜像并启动服务，不推送镜像仓库。仅构建使用 `build`，仅启动已有镜像使用 `up`；完整命令见[部署说明](./deploy/v1/README.md)。
 
+发布前至少核对：
 
-## 快速开始
+| 配置位置 | 必查内容 |
+| --- | --- |
+| `deploy/v1/data/configs/config.toml` 的 `[Sip]` | `Host`、20 位平台 `ID`、10 位 `Domain`，以及设备注册策略 |
+| `deploy/v1/.env` | `OWL_MEDIA_SDP_IP`、管理端口、管理员凭据、数据库连接及独立密钥 |
+| SIP 注册密码 | `OWL_SIP_PASSWORD` 初始化为空；需要 Digest 密码验证时，设置后同步配置设备 |
+| 媒体节点 | 平台访问节点的 API 地址、节点回调平台的地址、设备可达的收流地址及 API 共享密钥 |
+| 存储与网络 | 数据盘容量、目录挂载、端口占用和设备/播放器到媒体地址的路由 |
 
-如果你是 Go 语言开发者并熟悉 docker，可以下载源代码，本地编程运行。
+启动后访问 `http://<宿主机地址>:15123/web/`，健康信息为 `/health`。端口按实际环境配置。没有固定通用登录密码，首次使用 `.env` 中的管理员凭据；网页改密后，`admin-credentials.toml` 优先于初始环境变量，须随配置备份。
 
-**前置条件**
+### 常用端口
 
-+ Golang
-+ Docker & Docker Compose
-+ Make
+下表对应 `deploy/v1` 编排；变更端口时要同步设备、宣告地址和防火墙配置。
 
-**操作流程**
+| 端口 | 用途 |
+| --- | --- |
+| `15123/tcp` | 管理页面、API、WebSocket、媒体 HTTP 代理及 ONVIF SOAP |
+| `15060/tcp+udp` | 国标 SIP 信令 |
+| `15061/tcp` | SIP-TLS，需配置证书并启用 |
+| `3702/udp` | ONVIF WS-Discovery，容器组播发现受网络环境限制 |
+| `8080/tcp` | ZLM HTTP/API |
+| `554/tcp`、`1935/tcp` | RTSP、RTMP |
+| `30000/tcp+udp` | WebRTC |
+| `30001–50000/tcp+udp` | 国标 RTP/RTCP 动态端口池 |
+| `50200–50300/tcp` | 按需启用的附录 O 裸 TCP 下载/级联中继 |
 
-+ 1. 克隆本项目
-+ 2. 修改 configs/config.toml 中 `WebHookIP` 为你的局域网 IP
-+ 3. 执行 `make build/linux && docker compose up -d`
-+ 4. 自动创建了 zlm.conf 文件夹，获取 config.ini 的 api 秘钥，填写到 `configs/config.toml` 的 `Secret`
-+ 5. 执行 `docker compose restart`
-+ 6. 浏览器访问 `http://localhost:15123`
+PostgreSQL 在 Compose 内部使用 `5432`，不映射宿主机端口。通用编排使用本地构建镜像；上游 `gospace/gowvp:latest` 及其他上游镜像不包含本仓库的定制功能。专用环境与通用模板的差异见[服务器部署方案](./deploy/server-192.168.6.20.md)。
 
+## 第三方视频与业务接入
 
-##  如何参与开发?
+本平台的视频可以提供给第三方应用播放，不要求播放器持有管理员登录态。
 
-1. fork 本项目
-2. 编辑器 run/debug 设置配置输出目录为项目根目录
-3. 修改，提交 PR，说明修改内容
+| 接入方式 | 使用场景与权限边界 |
+| --- | --- |
+| 播放地址分享 `/proxy/sms/…` | 链接携带绑定媒体节点与流的播放 token，第三方播放器可以直接使用；HLS 清单及子资源保持凭据传递，禁止跨流、跨节点和管理接口透传。持有链接即持有对应播放权限，不能用它代替应用级资源授权 |
+| 应用开放平台 `/openapi/v1/` + `/openmedia/v1/` | 第三方业务后端用 AK/SK 签名调用，按 Scope、设备、来源和配额授权，再为播放器申请短期媒体票据；适用于需要独立应用权限、撤销、审计和回调的集成 |
 
-## 功能特性
+开放平台提供设备/通道编码查询、实时播放会话、设备录像目录与回放、平台落盘录像、抓拍任务、云台控制、事件与订阅。AK/SK 保存在第三方业务后端，播放器只拿媒体地址。
 
-**OWL**
+开放平台默认关闭，需要先在现有数据库上执行专用迁移，再配置独立密钥环、Audience、Public URL 并启用。当前只支持单实例运行；不能直接通过增加应用副本共享 worker。需要应用级访问隔离时，还须按接入文档控制旧 API、媒体直连端口和内部 Webhook 的网络入口。
 
-- [x] 开箱即用，支持响应式 web 管理
-- [x] 支持输出 FLV、WS-FLV、HLS、WebRTC、RTSP、RTMP 等多种协议流地址
-- [x] 支持局域网/互联网/多层 NAT/特殊网络环境部署
-- [x] 支持 SQLite 数据库快速部署
-- [x] 支持 PostgreSQL/MySQL 数据库
-- [x] 服务重启自动离线/自动尝试连接
-- [x] GB/T28181
-  - [x] 设备注册，支持 7 种接入方式
-  - [x] 支持 UDP 和 TCP 两种国标信令传输模式
-  - [x] 设备校时
-  - [x] 支持 PTZ 云台控制
-  - [x] 支持信息查询
-    - [x] 设备目录查询
-    - [x] 设备信息查询
-    - [x] 设备基础配置查询(例如设备侧填写超时 3 秒，次数 3 次，则 9+x 秒左右收不到心跳认为离线，x 是检测间隔周期)
-  - [x] 设备实时直播
-  - [x] 支持 UDP 和 TCP 被动两种国标流传输模式
-  - [x] 按需拉流，节省流量 (30秒无人观看自动停止)
-  - [x] 视频支持播放 H264 和 H265
-  - [x] 音频支持 g711a/g711u/aac
-  - [x] 快照
-  - [x] 支持跨域
-- [x] 支持 onvif 接入与播放（客户端，发现外部摄像机）
-- [x] 支持 onvif 虚拟设备/服务端（向 Home Assistant 等暴露平台通道）
-- [x] 支持 rtmp 推流
-- [x] 支持 rtsp 拉流
-- [x] 支持 ai 算法分析与告警
-- [x] 平台录像回放(由 owl 录制在服务器磁盘)
-- [ ] 支持 ONVIF PTZ 云台控制
-- [x] 支持中文和 English
-- [x] SIP IP 限流，国外攻击特征系统防护，防止云服务被境外 sip 攻击
+- [部署、应用授权与业务说明](./docs/open-platform/README.md)
+- [签名协议](./docs/open-platform/signing-v1.md) · [OpenAPI 契约](./docs/open-platform/openapi.yaml)
+- 本机公开开发文档：`/web/#/open-platform/docs`，无需管理员登录；业务接口仍分别鉴权。
+- 本机管理 API 文档：`/swagger/index.html`；以当前代码与生成文档为准。
 
-**OWL PRO**
+普通管理接口可通过 `[Server.HTTP].AuthURL` 对接外部认证；该机制与开放平台的 AK/SK 是不同入口，开放平台管理和版本升级等接口仍要求管理员 JWT。
 
-- [x] 分屏预览
-- [x] 分屏卡存录像回放(摄像头内置录像)
-- [x] 主子码流
-- [x] 自研 owl 播放器，兼容不同环境的 H265 流播放(仅支持 FLV 协议)
+## 录像、抓拍与运维约定
 
-## ONVIF 虚拟设备（服务端）
+- **录像**：通用部署默认允许手动录像，但不自动为全部通道录像。手动开启后持续录制，关闭页面不会停止；没有录像等保活业务时，无人观看按配置延时断流，默认 180 秒。
+- **清理**：录像按保留天数和所在文件系统的磁盘使用率清理。共享磁盘上其他业务的占用也可能触发清理，不能把它当作项目目录硬配额；失败批次无进展时退出并留待后续重试。
+- **抓拍**：成功图片和定时计划持久保存；抓拍历史不随录像过期策略自动清理，须管理容量。数据库与 `cover/captures` 图片目录一起备份，详见[抓拍说明](./docs/channel-captures.md)。
+- **AI**：`deploy/v1` 未编排 AI 服务，模板显式禁用。需要分析时另行部署服务并配置认证，不能仅打开开关就视为可用。
+- **升级**：版本号由 `VERSION` 管理。网页签名升级依赖宿主机升级代理、签名密钥和配套编排，只适用于兼容且无需数据库迁移的发布，详见[签名升级说明](./deploy/192.168.6.20/UPGRADE.md)。
+- **HTTP**：管理端保留 HTTP 下的加密登录及复制兼容。RSA 登录不替代 HTTPS 对会话和业务数据的保护；开放平台默认要求 HTTPS，HTTP 需显式启用。
+- **备份**：保留数据库一致性备份、主配置、管理员凭据、开放平台密钥环及所需媒体文件；仅保存镜像不能恢复业务数据。真实 `.env`、密钥和数据库不进入源码仓库。
 
-GoWVP 可作为 **ONVIF 网络视频发送设备（NVT）**，供 Home Assistant 等系统按 ONVIF 摄像机方式接入，并通过 `GetStreamUri` 获取平台通道对应的 RTSP 地址。
+## 开发与目录
 
-### 端口与防火墙（局域网）
+前端不再依赖单独下载上游 `www.zip`。本地开发可连接已有后端：
 
-| 用途 | 协议 | 端口 | 是否要开端口 |
-| --- | --- | --- | --- |
-| Web 管理 + ONVIF SOAP | TCP | `Server.HTTP.Port`（默认 **15123**） | 仅当 HA/NVR 与 GoWVP 跨网段访问时需要；同网段一般不用单独放行 |
-| `GetStreamUri` 返回的 RTSP 拉流 | TCP | ZLM RTSP（默认 **554**，见 `docker-compose` 映射） | 客户端从 ZLM 拉流时，跨网段需能访问该端口 |
-| ONVIF WS-Discovery（本机对外广播） | UDP | **3702**（组播 `239.255.255.250`） | Docker 需映射 `3702:3702/udp`；同网段一般无需单独防火 |
+```bash
+pnpm --dir admin-ui install --frozen-lockfile
 
-ONVIF SOAP 路径（与 Web 共用 HTTP 端口）：
-
-- `POST http://<主机>:15123/onvif/device_service`
-- `POST http://<host>:15123/onvif/media_service`
-
-鉴权使用 `configs/config.toml` 中的 `Server.Username` / `Server.Password`（WS-Security）。正式环境没有默认密码，请在启动前配置 `OWL_ADMIN_USERNAME` 和 `OWL_ADMIN_PASSWORD`。
-
-**Home Assistant 手动添加示例：**
-
-- 主机：`http://<局域网IP>:15123/onvif/device_service`
-- 用户名 / 密码：与 `config.toml` 中 `Server.Username`、`Server.Password` 一致
-
-**自动发现：** 启动后在本机 **UDP 3702** 应答 WS-Discovery Probe，HA 可搜索到设备；`configs/config.toml` 中 `Media.IP`（或 `Sip.Host`）会写入 `XAddrs`，宜填局域网 IP。
-
-**说明：** `GET /onvif/discover` 是 GoWVP **扫描局域网内其它 ONVIF 摄像机**（客户端能力），与上述服务端组播发现不是同一功能。
-
-## Webhook 告警事件推送与接收
-
-GoWVP 支持将告警事件通过 HTTP Webhook 推送到外部系统，也支持接收来自其他 GoWVP 实例的告警推送，实现**主从级联**部署。
-
-### 路由
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/webhook/events` | 统一事件接收入口，兼容 Python AI 和 gowvp 间转发两种来源 |
-
-### 配置（`configs/config.toml`）
-
-```toml
-[Server.Webhook]
-  # 推送目标 URL 数组，secret 直接内嵌于 URL query 参数
-  Targets = [
-    "http://192.168.1.100:15123/webhook/events?secret=your-recv-secret",
-  ]
-  # 最大重试次数，0 = 使用内置默认值 3
-  MaxRetry = 3
-  # 每个目标的 channel 缓冲队列大小，0 = 内置默认 64
-  BufferSize = 64
-  # 本节点接收 webhook 时校验的密钥（首次启动自动生成并持久化）
-  RecvSecret = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+# 替换为自己的后端；开发代理将 /api 前缀移除后转发。
+VITE_DEV_API_TARGET=http://127.0.0.1:15123 pnpm --dir admin-ui dev
 ```
 
-### 推送 payload 格式（gowvp → gowvp）
+浏览器访问 Vite 输出的本地地址。后端独立开发可执行 `go run ./main.go -conf ./configs`，启动前按 [.env 示例](./.env.example) 将凭据和密钥注入**进程环境**，并配置可用的媒体服务和数据库；`go run` 不自动读取 `.env`。生产前端构建使用 `VITE_API_BASE_URL=/ pnpm --dir admin-ui build`，避免把开发用 `/api` 前缀打入生产包。
 
-```json
-{
-  "did": "device-id",
-  "cid": "channel-id",
-  "started_at": "2024-01-01T10:00:00Z",
-  "ended_at": "2024-01-01T10:00:01Z",
-  "label": "person",
-  "score": 0.95,
-  "zones": "{\"x_min\":0,\"y_min\":0,\"x_max\":100,\"y_max\":100}",
-  "image_base64": "<base64 编码的 JPEG 图片>",
-  "model": "yolov8"
-}
+```text
+admin-ui/              Vue 管理端、播放器集成与公开接入文档页面
+internal/              应用装配、配置、设备/媒体/录像/抓拍/开放平台业务及 API
+pkg/gbs/               国标 SIP、SDP、XML、事务与级联实现
+pkg/zlm/、pkg/lalmax/   媒体服务适配
+plugin/                监控与公共管理接口
+tools/                 数据迁移、文档生成、签名发布包和升级代理
+deploy/                通用编排、专用服务器配置与历史发布记录
+docs/                  功能说明、接口契约、协议审计与联调文档
 ```
 
-> `image_base64`：主节点读取本地图片后 base64 编码随 payload 发送，副节点解码后落盘存储，解决跨节点文件路径失效问题。
-> 若图片读取失败，`image_base64` 字段为空，副节点不存图片但事件数据仍会入库。
+修改业务时按影响范围运行相关检查。前端 `build` 包含类型检查与开放文档一致性检查；开放平台契约变更后使用 `go run ./tools/openplatform-docs` 同步生成资源。真实设备接入、解码播放和公网路由仍需按现场条件验收。
 
-### 重试策略
+## 文档导航
 
-推送失败时自动重试，采用**指数退避 + ±25% jitter**：
+| 主题 | 文档 |
+| --- | --- |
+| 构建与首次部署 | [通用部署](./deploy/v1/README.md) |
+| 现有服务器运维 | [专用运行说明](./deploy/192.168.6.20/README.md) · [部署方案](./deploy/server-192.168.6.20.md) |
+| 数据库与迁移 | [PostgreSQL 与设备历史](./deploy/postgresql.md) |
+| 媒体节点 | [管理与操作边界](./docs/media-node-management.md) · [接口](./docs/api/media-nodes.md) |
+| 抓拍与计划 | [通道抓拍](./docs/channel-captures.md) |
+| 三方接入 | [开放平台](./docs/open-platform/README.md) · [云台接口](./docs/api/ptz.md) |
+| 国标兼容与验收 | [完成审计](./docs/testing/gb28181-completion-audit.md) · [设备矩阵](./docs/testing/gb28181-device-matrix.md) · [发布检查](./docs/testing/gb28181-release-validation.md) |
+| 协议扩展 | [附录 G 实现](./docs/GB28181-annex-g-implementation.md) · [附录 O 设计](./docs/adr/gb28181-2014-direct-tcp-download.md) |
+| 上游更新取舍 | [上游吸纳评估与实施记录](./docs/upstream-adoption-review-2026-11-10.md) |
+| 公网接入规划 | [WSS 网关方案](./docs/国标公网接入网关-WSS方案.md)，方案与在研内容，以后续发布记录确认交付范围 |
 
-| 重试次 | 基础延迟 |
-|--------|----------|
-| 第 1 次 | ~1s |
-| 第 2 次 | ~2s |
-| 第 3 次 | ~4s（上限 10s）|
+## 上游来源与许可证
 
-HTTP 4xx（除 429/408）视为永久失败，不再重试。每次重试失败记录 warn 日志，耗尽重试次数记录 error 日志。
+本项目基于 [gowvp/owl](https://github.com/gowvp/owl) 开发，保留原项目来源与版权声明。感谢 [ixugo](https://github.com/ixugo)、[panjjo/gosip](https://github.com/panjjo/gosip)、[goddd](https://github.com/ixugo/goddd)、[ZLMediaKit](https://github.com/ZLMediaKit/ZLMediaKit)、[Lalmax](https://github.com/q191201771/lalmax) 及相关开源贡献者。
 
-## 感谢
-
-感谢赞助，排名不分先后。
-
-[@joestarzxh](https://github.com/joestarzxh)
-[@oldweipro](https://github.com/oldweipro)
-[@beixiaocai](https://github.com/beixiaocai)
-[@chencanfggz](https://github.com/chencanfggz)
-[@zhangxuan1340](https://github.com/zhangxuan1340)
-
-
-## 许可证
-
-本项目采用 **[GNU 通用公共许可证 v3.0 (GPL-3.0)](https://www.gnu.org/licenses/gpl-3.0.html)** 授权。
-  - **您可以自由使用、修改和分发本项目的代码**，但必须遵循以下条件：
-  - **开源要求**：任何基于本项目的衍生作品（包括修改后的代码或集成本项目的软件）**必须同样以 GPL-3.0 协议开源**。
-  - **保留协议与版权声明**：在衍生作品中需包含原项目的 `LICENSE` 文件及原始版权声明。
-  - **明确修改说明**：若您修改了代码，需在文件中注明变更内容。
-
-⚠ **注意**：若将本项目用于商业闭源软件或 SaaS 服务，需遵守 GPL-3.0 的传染性条款（即相关代码必须开源）。
-
-完整许可证文本请见 [LICENSE](./LICENSE) 文件。
+上游修复按当前实现逐项评估和适配，相关决策记录在仓库文档中。本仓库采用 [GNU GPL v3.0](./LICENSE)；修改和分发须遵守许可证并保留版权声明。播放器、媒体服务及其他第三方组件还须遵守各自许可证与授权条款。
