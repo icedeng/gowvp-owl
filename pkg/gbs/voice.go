@@ -429,8 +429,29 @@ func (g *GB28181API) startTalk(ctx context.Context, ch *Channel, in *VoiceInput)
 	if err != nil {
 		return fmt.Errorf("invalid GB28181 SSRC %q: %w", receiveSSRC, err)
 	}
+	localMode, err := g.externalLocalMode(requestCtx, in.Channel.DeviceID, in.StreamMode, "talk")
+	if err != nil {
+		return err
+	}
+	stream.mediaServer = in.SMS
+	if p := g.externalMediaPort(); p != nil {
+		external, e := p.CheckNewBusiness(requestCtx, in.Channel.DeviceID, in.StreamMode, "talk")
+		if e != nil {
+			return e
+		}
+		if external {
+			sendSSRC, release, e := g.reserveSSRC(0)
+			if e != nil {
+				return e
+			}
+			session.SSRC = sendSSRC
+			session.ssrcRelease = release
+			stream.externalSendSSRC = &session.SSRC
+			stream.externalDirection = "duplex"
+		}
+	}
 	resp, err := openRTPServerContext(requestCtx, g.sms, in.SMS, zlm.OpenRTPServerRequest{
-		TCPMode: in.StreamMode, StreamID: in.Channel.ID,
+		TCPMode: localMode, StreamID: in.Channel.ID,
 		SSRC:    receiveSSRCValue,
 		TCPRTCP: shouldEnableTCPRTCP(g.getDeviceGBProtocolVersion(in.Channel.DeviceID), in.StreamMode != 0),
 	})
@@ -440,6 +461,9 @@ func (g *GB28181API) startTalk(ctx context.Context, ch *Channel, in *VoiceInput)
 	session.mu.Lock()
 	session.receiverOpened = true
 	session.mu.Unlock()
+	if err = g.prepareExternalReceive(requestCtx, stream, in.StreamMode, "talk", shouldEnableTCPRTCP(g.getDeviceGBProtocolVersion(in.Channel.DeviceID), in.StreamMode != 0), resp); err != nil {
+		return err
+	}
 	if err = g.sipInviteVoice(requestCtx, ch, in, resp.Port, receiveSSRC, stream); err != nil {
 		return operation.ErrorOr(err)
 	}
@@ -477,6 +501,11 @@ func (g *GB28181API) startTalk(ctx context.Context, ch *Channel, in *VoiceInput)
 }
 
 func (g *GB28181API) startBroadcast(ctx context.Context, ch *Channel, in *VoiceInput) (err error) {
+	if p := g.externalMediaPort(); p != nil {
+		if _, err = p.CheckNewBusiness(ctx, in.Channel.DeviceID, 0, "broadcast"); err != nil {
+			return err
+		}
+	}
 	operation, releaseOperation := g.trackPendingDeviceRequest(ctx, in.Channel.DeviceID, in.Channel.ChannelID)
 	defer releaseOperation()
 	requestCtx := operation.Context(ctx)
@@ -870,7 +899,13 @@ func (g *GB28181API) startTalkRTPForMediaServer(streamID, mediaServerID string) 
 		session.mu.Unlock()
 		return stopped
 	}
-	ssrc, releaseSSRC, err := g.reserveSSRC(0)
+	session.mu.Lock()
+	ssrc, releaseSSRC := session.SSRC, session.ssrcRelease
+	session.mu.Unlock()
+	var err error
+	if ssrc == "" {
+		ssrc, releaseSSRC, err = g.reserveSSRC(0)
+	}
 	if err != nil {
 		session.complete(err)
 		if finishStart("", false) {
@@ -967,6 +1002,17 @@ func (g *GB28181API) stopTalkSession(session *talkSession, cause error) (result 
 				session.receiverOpened = false
 				session.mu.Unlock()
 			}
+		}
+	}
+	if stream != nil && stream.externalMedia != nil {
+		result = errors.Join(result, stream.externalMedia.Close(cleanupCtx))
+		if f, ok := stream.externalMedia.(interface {
+			FinishCleanup(context.Context, bool, bool) error
+		}); ok {
+			session.mu.Lock()
+			mediaDone := !session.rtpStarted && !session.receiverOpened
+			session.mu.Unlock()
+			result = errors.Join(result, f.FinishCleanup(cleanupCtx, dialogDone, mediaDone))
 		}
 	}
 	if result != nil {
@@ -1083,6 +1129,17 @@ func (g *GB28181API) stopBroadcastSession(session *broadcastSession, sendBYE boo
 					stream.releaseSSRCReservation()
 				}
 			}
+		}
+	}
+	if session.Stream != nil && session.Stream.externalMedia != nil {
+		result = errors.Join(result, session.Stream.externalMedia.Close(cleanupCtx))
+		session.mu.Lock()
+		dialogClosed, mediaClosed := session.dialogDone, !session.rtpStarted
+		session.mu.Unlock()
+		if f, ok := session.Stream.externalMedia.(interface {
+			FinishCleanup(context.Context, bool, bool) error
+		}); ok {
+			result = errors.Join(result, f.FinishCleanup(cleanupCtx, dialogClosed, mediaClosed))
 		}
 	}
 	if result != nil {
@@ -1359,7 +1416,8 @@ func (g *GB28181API) sipInviteVoice(ctx context.Context, ch *Channel, in *VoiceI
 	if cfg == nil {
 		return fmt.Errorf("SIP configuration is unavailable")
 	}
-	ipAddress, err := GetIP(in.SMS.GetSDPIP())
+	ipstr, port := g.mediaSDPEndpoint(stream, in.SMS.GetSDPIP(), port)
+	ipAddress, err := GetIP(ipstr)
 	if err != nil {
 		return err
 	}
@@ -1386,7 +1444,7 @@ func (g *GB28181API) sipInviteVoice(ctx context.Context, ch *Channel, in *VoiceI
 	if callID, ok := resp.CallID(); ok {
 		stream.CallID = normalizeCallID(callID)
 	}
-	return g.ackAndConnectActiveRTP(ctx, tx, resp, in.SMS, stream.StreamID, in.StreamMode, "audio", ssrc, g.getDeviceGBProtocolVersion(in.Channel.DeviceID), "8", "0", "9")
+	return g.ackAndConnectExternalRTP(ctx, tx, resp, in.SMS, stream.StreamID, stream, in.StreamMode, "audio", ssrc, g.getDeviceGBProtocolVersion(in.Channel.DeviceID), "8", "0", "9")
 }
 
 func buildVoiceSDP(channelID, ipAddress string, port int, streamMode int8, ssrc string) ([]byte, error) {

@@ -45,7 +45,7 @@ __pycache__/
 *.onnx
 *.remember/
 *.mp4
-owl
+/owl
 .DS_Store
 .pnpm-store/
 /.playwright-cli/
@@ -55,3 +55,8 @@ owl
 .cursor/memory/
 .cursor/scopes/
 graphify-out/
+# 公网接入网关本地证书及运行状态
+/extensions/accessgateway/deploy/gateway/tls/
+/extensions/accessgateway/deploy/gateway/state/
+/extensions/accessgateway/deploy/gateway/gateway.toml
+/extensions/accessgateway/.local/

@@ -56,7 +56,7 @@ func (g *GB28181API) QuerySnapshot(deviceID, targetID, coverKey string) (*Snapsh
 }
 
 // QuerySnapshotContext 下发抓拍并允许调用方取消 SIP 及业务应答等待。
-func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetID, coverKey string) (*SnapshotState, error) {
+func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetID, coverKey string) (out *SnapshotState, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -114,10 +114,27 @@ func (g *GB28181API) QuerySnapshotContext(ctx context.Context, deviceID, targetI
 		}
 		return nil, stateErr
 	}
+	uploadURL := g.buildSnapshotUploadURL(deviceID, coverKey, sessionID)
+	transfer, prepareErr := g.prepareExternalTransfer(ctx, ExternalTransferSpec{DeviceID: deviceID, ChannelID: targetID, TaskID: sessionID, CoverKey: coverKey, Kind: "snapshot_upload"})
+	if transfer != nil {
+		defer func() {
+			if resultErr != nil {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = transfer.Close(cleanupCtx)
+			}
+		}()
+	}
+	if prepareErr != nil {
+		return nil, g.persistSnapshotOutcomeError(deviceID, sessionID, "failed", prepareErr)
+	}
+	if transfer != nil {
+		uploadURL = transfer.PublicURL()
+	}
 	body := NewDeviceConfig(targetID).SetSN(sn).SetSnapShotConfig(&SnapShot{
 		SnapNum:   1,
 		Interval:  1,
-		UploadURL: g.buildSnapshotUploadURL(deviceID, coverKey, sessionID),
+		UploadURL: uploadURL,
 		SessionID: sessionID,
 	}).Marshal()
 

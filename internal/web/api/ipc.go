@@ -940,8 +940,23 @@ func (a IPCAPI) gbSnapshotUpload(c *gin.Context) {
 // @Failure 400 {object} SwaggerErrorResponse
 // @Router /devices [get]
 func (a IPCAPI) findDevice(c *gin.Context, in *ipc.FindDeviceInput) (any, error) {
-	items, total, err := a.ipc.FindDevice(c.Request.Context(), in)
+	ctx := c.Request.Context()
+	if a.uc != nil && a.uc.AccessGatewayHost != nil {
+		var err error
+		ctx, err = a.uc.AccessGatewayHost.DeviceListContext(ctx, c.Query("gateway_id"))
+		if err != nil {
+			return nil, err
+		}
+	}
+	items, total, err := a.ipc.FindDevice(ctx, in)
 	fillDeviceRecordMode(items)
+	if err == nil && a.uc != nil && a.uc.AccessGatewayHost != nil {
+		views, e := a.uc.AccessGatewayHost.DeviceViews(ctx, items)
+		if e != nil {
+			return nil, e
+		}
+		return gin.H{"items": views, "total": total}, nil
+	}
 	return gin.H{"items": items, "total": total}, err
 }
 
@@ -964,6 +979,13 @@ func (a IPCAPI) getDevice(c *gin.Context, _ *struct{}) (any, error) {
 		return nil, err
 	}
 	fillDeviceRecordMode([]*ipc.Device{dev})
+	if a.uc != nil && a.uc.AccessGatewayHost != nil {
+		views, e := a.uc.AccessGatewayHost.DeviceViews(c.Request.Context(), []*ipc.Device{dev})
+		if e != nil {
+			return nil, e
+		}
+		return views[0], nil
+	}
 	return dev, nil
 }
 

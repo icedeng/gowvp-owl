@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import GatewaySelector from "../features/access-gateway/components/GatewaySelector.vue";
+import MigrationPanel from "../features/access-gateway/components/MigrationPanel.vue";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import {
@@ -429,6 +431,7 @@ function editableUpstream(
 ): EditableUpstream {
   return {
     name: item.name || "",
+    access_gateway_id: item.access_gateway_id || "",
     enabled: item.enabled ?? true,
     server_id: item.server_id || "",
     domain: item.domain || "",
@@ -506,6 +509,7 @@ function upstreamPayload(item: EditableUpstream): SipUpstream {
   }
   return {
     name: item.name.trim(),
+    access_gateway_id: item.access_gateway_id?.trim() || undefined,
     enabled: item.enabled,
     server_id: item.server_id.trim(),
     domain: item.domain?.trim(),
@@ -1095,6 +1099,8 @@ onUnmounted(() => {
             <label class="form-group"><span class="form-label">上级地址</span><input v-model.trim="item.host" class="input plain w-full mono" :required="item.enabled" /></label>
             <label class="form-group"><span class="form-label">上级端口</span><input v-model.number="item.port" class="input plain w-full" type="number" min="0" max="65535" placeholder="0 表示 UDP/TCP 5060、TLS 5061" :required="item.enabled" /></label>
             <label class="form-group"><span class="form-label">信令传输</span><select v-model="item.transport" class="input plain w-full"><option value="udp">UDP</option><option value="tcp">TCP</option><option value="tls">TLS</option></select></label>
+            <div class="form-group"><span class="form-label">平台接入入口</span><GatewaySelector v-model="item.access_gateway_id" label="平台接入入口" /><span class="form-help">公网网关支持 UDP/TCP；更换已有入口须先在接入网关中创建平台迁移计划。</span></div>
+            <div v-if="statusFor(item.name)?.subject_id && statusFor(item.name)?.binding_revision" class="form-group full"><span class="form-label">已认证平台入口迁移</span><MigrationPanel :source="statusFor(item.name)?.ingress_gateway_id || null" :subjects="[{type:'platform',id:statusFor(item.name)!.subject_id!,binding_revision:statusFor(item.name)!.binding_revision!}]" label="创建平台迁移计划" /></div>
             <label class="form-group"><span class="form-label">上级 SIP 域</span><input v-model.trim="item.domain" class="input plain w-full mono" placeholder="默认取上级 ID 前 10 位" /></label>
             <template v-if="item.transport === 'tls'">
               <label class="form-group"><span class="form-label">TLS CA 文件</span><input v-model.trim="item.tls_ca" class="input plain w-full mono" placeholder="留空使用系统 CA" /></label>

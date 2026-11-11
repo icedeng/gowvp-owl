@@ -1,0 +1,8 @@
+# 增量：合入现有 config.toml，禁止覆盖已有 SIP/数据库/媒体节点配置。
+[AccessGateway]
+Enabled = true
+PlatformID = "owl-a"
+CredentialDir = "access-gateway/credentials"
+MaxConnections = 32
+MaxMediaSessions = 1024
+MaxTransferSessions = 128

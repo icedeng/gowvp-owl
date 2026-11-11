@@ -2,8 +2,11 @@ package gbs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log/slog"
 	"net"
@@ -73,7 +76,9 @@ type directTCPRelayResult struct {
 // directTCPRelay 在下级设备 TCP 服务端与上级平台 TCP 客户端之间流式转发原始 PS。
 // 每条中继只允许一个已注册上级连接，且与设备直连下载共享并发额度。
 type directTCPRelay struct {
-	mu sync.Mutex
+	externalSource, externalUpstream ExternalTransferLease
+	digest                           hash.Hash
+	mu                               sync.Mutex
 
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -135,25 +140,30 @@ func (g *GB28181API) prepareCascadeDirectTCPRelay(
 	if err := validateDirectTCPAddress(offer.Address, registeredIP, opts); err != nil {
 		return nil, "", 0, err
 	}
-	listenIP := net.ParseIP(strings.TrimSpace(policy.RelayListenIP))
-	if listenIP == nil || listenIP.IsMulticast() {
-		return nil, "", 0, fmt.Errorf("invalid direct TCP relay listen IP")
-	}
-	advertiseIP := strings.TrimSpace(policy.RelayAdvertiseIP)
-	if advertiseIP == "" && g.boot != nil {
-		advertiseIP = strings.TrimSpace(g.boot.Media.SDPIP)
-	}
-	advertise, err := GetIP(advertiseIP)
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("resolve direct TCP relay advertise IP: %w", err)
-	}
-	parsedAdvertise := net.ParseIP(advertise)
-	if parsedAdvertise == nil || parsedAdvertise.IsUnspecified() || parsedAdvertise.IsMulticast() {
-		return nil, "", 0, fmt.Errorf("invalid direct TCP relay advertise IP")
-	}
-	listener, err := listenDirectTCPRelay(listenIP, policy.RelayPortStart, policy.RelayPortEnd)
-	if err != nil {
-		return nil, "", 0, err
+	var listener *net.TCPListener
+	var advertise string
+	// 网关上级使用 B 的受控任务端点，A 不申请监听或要求公网通告地址。
+	if platform.gatewayID == "" {
+		listenIP := net.ParseIP(strings.TrimSpace(policy.RelayListenIP))
+		if listenIP == nil || listenIP.IsMulticast() {
+			return nil, "", 0, fmt.Errorf("invalid direct TCP relay listen IP")
+		}
+		advertiseIP := strings.TrimSpace(policy.RelayAdvertiseIP)
+		if advertiseIP == "" && g.boot != nil {
+			advertiseIP = strings.TrimSpace(g.boot.Media.SDPIP)
+		}
+		advertise, err = GetIP(advertiseIP)
+		if err != nil {
+			return nil, "", 0, fmt.Errorf("resolve direct TCP relay advertise IP: %w", err)
+		}
+		parsedAdvertise := net.ParseIP(advertise)
+		if parsedAdvertise == nil || parsedAdvertise.IsUnspecified() || parsedAdvertise.IsMulticast() {
+			return nil, "", 0, fmt.Errorf("invalid direct TCP relay advertise IP")
+		}
+		listener, err = listenDirectTCPRelay(listenIP, policy.RelayPortStart, policy.RelayPortEnd)
+		if err != nil {
+			return nil, "", 0, err
+		}
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -168,7 +178,10 @@ func (g *GB28181API) prepareCascadeDirectTCPRelay(
 	}
 	go relay.finishOnContextDone()
 	failed = false
-	return relay, parsedAdvertise.String(), listener.Addr().(*net.TCPAddr).Port, nil
+	if listener == nil {
+		return relay, "", 0, nil
+	}
+	return relay, advertise, listener.Addr().(*net.TCPAddr).Port, nil
 }
 
 func listenDirectTCPRelay(ip net.IP, start, end int) (*net.TCPListener, error) {
@@ -243,18 +256,40 @@ func (r *directTCPRelay) run() {
 	r.setUpstreamConn(upstream)
 
 	dialer := net.Dialer{Timeout: r.opts.DialTimeout}
-	source, err := dialer.DialContext(r.ctx, "tcp", r.deviceAddress)
+	var source net.Conn
+	if r.externalSource != nil {
+		source, err = r.externalSource.Connect(r.ctx, r.deviceAddress)
+	} else {
+		source, err = dialer.DialContext(r.ctx, "tcp", r.deviceAddress)
+	}
 	if err != nil {
 		result.Reason, result.Err = directTCPRelayReason(r.ctx, "connect_device_failed", err)
 		r.finish(result)
 		return
 	}
 	r.setSourceConn(source)
+	r.digest = sha256.New()
 	result.Received, result.Reason, result.Err = r.copy(source, upstream)
+	if result.Err == nil {
+		hash := hex.EncodeToString(r.digest.Sum(nil))
+		if r.externalSource != nil {
+			result.Err = r.externalSource.Commit(r.ctx, result.Received, hash)
+		}
+		if result.Err == nil && r.externalUpstream != nil {
+			_ = upstream.Close()
+			result.Err = r.externalUpstream.Commit(r.ctx, result.Received, hash)
+		}
+		if result.Err != nil {
+			result.Reason = "gateway_commit_failed"
+		}
+	}
 	r.finish(result)
 }
 
 func (r *directTCPRelay) acceptUpstream() (net.Conn, error) {
+	if r != nil && r.externalUpstream != nil {
+		return r.externalUpstream.Connect(r.ctx, "")
+	}
 	if r == nil || r.listener == nil {
 		return nil, fmt.Errorf("direct TCP relay listener is unavailable")
 	}
@@ -315,6 +350,9 @@ func (r *directTCPRelay) copy(source, destination net.Conn) (int64, string, erro
 					return received, "write_upstream_failed", io.ErrShortWrite
 				}
 				written += count
+			}
+			if r.digest != nil {
+				_, _ = r.digest.Write(buffer[:n])
 			}
 			received = next
 		}
@@ -433,12 +471,18 @@ func (r *directTCPRelay) Close() {
 	if r.cancel != nil {
 		r.cancel()
 	}
+	externalUpstream := r.externalUpstream
 	listener := r.listener
 	source := r.sourceConn
 	upstream := r.upstreamConn
 	release := r.release
 	r.release = nil
 	r.mu.Unlock()
+	if externalUpstream != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = externalUpstream.Close(ctx)
+		cancel()
+	}
 	if listener != nil {
 		_ = listener.Close()
 	}

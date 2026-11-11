@@ -35,6 +35,13 @@ func (d *Device) Delete(ctx context.Context, dev *ipc.Device, opts ...orm.QueryO
 	if err := d.Storer.Device().Session(
 		ctx,
 		func(tx *gorm.DB) error {
+			if guard, ok := d.ingressGuard.(interface {
+				DeleteIngress(context.Context, *gorm.DB, *ipc.Device) error
+			}); ok {
+				if err := guard.DeleteIngress(ctx, tx, dev); err != nil {
+					return err
+				}
+			}
 			db := tx.Clauses(clause.Returning{})
 			for _, fn := range opts {
 				db = fn(db)

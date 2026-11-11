@@ -1,0 +1,35 @@
+[Unit]
+Description=Owl GB28181 public access gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=owl-gateway
+Group=owl-gateway
+ExecStart=/usr/local/bin/owl-gateway -config /etc/owl-gateway/gateway.toml
+WorkingDirectory=/var/lib/owl-gateway
+StateDirectory=owl-gateway
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=40
+NoNewPrivileges=true
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/owl-gateway
+LimitNOFILE=65536
+TasksMax=256
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

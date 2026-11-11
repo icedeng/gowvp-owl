@@ -43,9 +43,11 @@ func (e *Engine) ConnectRTPServerContext(ctx context.Context, in ConnectRTPServe
 }
 
 type OpenRTPServerResponse struct {
-	Code int    `json:"code"`
-	Msg  string `json:"msg"`
-	Port int    `json:"port"` // 接收端口，方便获取随机端口号
+	TCPRTCP  *bool  `json:"tcp_rtcp"`
+	Code     int    `json:"code"`
+	Msg      string `json:"msg"`
+	Port     int    `json:"port"`      // 接收端口，方便获取随机端口号
+	RTCPPort int    `json:"rtcp_port"` // 驱动返回的实际端点；缺省时扩展拒绝 UDP RTCP，不猜测相邻端口
 }
 
 // StartSendRTPTalkRequest 复用接收设备 RTP 的链路反向发送对讲音频。
@@ -142,23 +144,26 @@ func (e *Engine) CloseRTPServerContext(ctx context.Context, in CloseRTPServerReq
 // StartSendRTPRequest 描述 ZLMediaKit 主动发送 RTP 的参数。
 // Type=1 表示 PS 负载；OnlyAudio=true 时仅将音频轨道封装进 PS。
 type StartSendRTPRequest struct {
-	Vhost     string `json:"vhost"`
-	App       string `json:"app"`
-	Stream    string `json:"stream"`
-	SSRC      string `json:"ssrc"`
-	DstURL    string `json:"dst_url"`
-	DstPort   int    `json:"dst_port"`
-	IsUDP     bool   `json:"is_udp"`
-	Type      int    `json:"type"`
-	PT        int    `json:"pt"`
-	OnlyAudio bool   `json:"only_audio"`
-	TCPRTCP   bool   `json:"tcp_rtcp,omitempty"` // TCP 发送时在同一 RFC 4571 连接中复用 RTP/RTCP
+	Vhost          string `json:"vhost"`
+	App            string `json:"app"`
+	Stream         string `json:"stream"`
+	SSRC           string `json:"ssrc"`
+	DstURL         string `json:"dst_url"`
+	DstPort        int    `json:"dst_port"`
+	IsUDP          bool   `json:"is_udp"`
+	Type           int    `json:"type"`
+	PT             int    `json:"pt"`
+	OnlyAudio      bool   `json:"only_audio"`
+	UDPRTCPTimeout bool   `json:"udp_rtcp_timeout,omitempty"`
+	TCPRTCP        bool   `json:"tcp_rtcp,omitempty"` // TCP 发送时在同一 RFC 4571 连接中复用 RTP/RTCP
 }
 
 type StartSendRTPResponse struct {
-	Code      int    `json:"code"`
-	Msg       string `json:"msg"`
-	LocalPort int    `json:"local_port"`
+	Code          int    `json:"code"`
+	Msg           string `json:"msg"`
+	LocalPort     int    `json:"local_port"`
+	LocalRTCPPort int    `json:"local_rtcp_port"`
+	TCPRTCP       *bool  `json:"tcp_rtcp"`
 }
 
 // StartSendRTP 从已有媒体流向指定地址发送 RTP。

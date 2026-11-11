@@ -253,8 +253,14 @@ func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
 		return operation.ErrorOr(fmt.Errorf("invalid GB28181 SSRC %q: %w", ssrc, err))
 	}
 
+	localMode, err := g.externalLocalMode(requestCtx, in.Channel.DeviceID, in.StreamMode, strings.ToLower(in.Mode))
+	if err != nil {
+		g.compareAndDeleteChannelStream(key, stream)
+		stream.releaseSSRCReservation()
+		return err
+	}
 	resp, err := openRTPServerContext(requestCtx, g.sms, in.SMS, zlm.OpenRTPServerRequest{
-		TCPMode:  in.StreamMode,
+		TCPMode:  localMode,
 		StreamID: streamID,
 		SSRC:     ssrcValue,
 		TCPRTCP:  shouldEnableTCPRTCP(g.getDeviceGBProtocolVersion(in.Channel.DeviceID), in.StreamMode != 0),
@@ -263,6 +269,10 @@ func (g *GB28181API) StartHistory(ctx context.Context, in *HistoryInput) error {
 		g.compareAndDeleteChannelStream(key, stream)
 		stream.releaseSSRCReservation()
 		return err
+	}
+
+	if err := g.prepareExternalReceive(requestCtx, stream, in.StreamMode, strings.ToLower(in.Mode), shouldEnableTCPRTCP(g.getDeviceGBProtocolVersion(in.Channel.DeviceID), in.StreamMode != 0), resp); err != nil {
+		return errors.Join(err, g.cleanupFailedMediaStart(key, stream, "gateway_prepare_failed"))
 	}
 
 	if err := g.sipInviteHistory(requestCtx, ch, in, resp.Port, ssrc, stream); err != nil {
@@ -756,7 +766,14 @@ func (g *GB28181API) startDirectTCPHistory(ctx context.Context, ch *Channel, in 
 	}
 	managerCtx := context.WithoutCancel(requestCtx)
 	if !operation.Deliver(func() {
+		var dial func(context.Context, string) (net.Conn, error)
+		var commit func(context.Context, int64, string) error
+		if stream.externalTransfer != nil {
+			dial = stream.externalTransfer.Connect
+			commit = stream.externalTransfer.Commit
+		}
 		err = g.directDownloads.Start(managerCtx, DirectTCPDownloadRequest{
+			Dial: dial, Commit: commit,
 			SessionID:           stream.DirectSessionID,
 			DeviceID:            in.Channel.DeviceID,
 			ChannelID:           in.Channel.ChannelID,
@@ -888,7 +905,18 @@ func (g *GB28181API) sipInviteDirectTCPHistory(ctx context.Context, ch *Channel,
 	if cfg == nil {
 		return directTCPDownloadOffer{}, fmt.Errorf("SIP configuration is unavailable")
 	}
-	ip4str, err := GetIP(g.boot.Media.SDPIP)
+	transfer, err := g.prepareExternalTransfer(ctx, ExternalTransferSpec{DeviceID: in.Channel.DeviceID, ChannelID: in.Channel.ChannelID, Kind: "raw_download", MaxBytes: 0})
+	if transfer != nil {
+		stream.externalTransfer = transfer
+	}
+	if err != nil {
+		return directTCPDownloadOffer{}, err
+	}
+	ipstr := g.boot.Media.SDPIP
+	if transfer != nil {
+		ipstr, port = transfer.AdvertisedEndpoint()
+	}
+	ip4str, err := GetIP(ipstr)
 	if err != nil {
 		return directTCPDownloadOffer{}, err
 	}
@@ -1017,7 +1045,8 @@ func (g *GB28181API) sipInviteHistory(ctx context.Context, ch *Channel, in *Hist
 	if cfg == nil {
 		return fmt.Errorf("SIP configuration is unavailable")
 	}
-	ip4str, err := GetIP(in.SMS.GetSDPIP())
+	ipstr, port := g.mediaSDPEndpoint(stream, in.SMS.GetSDPIP(), port)
+	ip4str, err := GetIP(ipstr)
 	if err != nil {
 		return err
 	}
@@ -1074,7 +1103,7 @@ func (g *GB28181API) sipInviteHistory(ctx context.Context, ch *Channel, in *Hist
 	if callID, ok := resp.CallID(); ok {
 		stream.CallID = normalizeCallID(callID)
 	}
-	if err := g.ackAndConnectActiveRTP(ctx, tx, resp, in.SMS, stream.StreamID, in.StreamMode, "video", ssrc, version, gbVideoPayloadFormats(version, h265Disabled)...); err != nil {
+	if err := g.ackAndConnectExternalRTP(ctx, tx, resp, in.SMS, stream.StreamID, stream, in.StreamMode, "video", ssrc, version, gbVideoPayloadFormats(version, h265Disabled)...); err != nil {
 		byeErr := g.sendInviteResponseBYE(g.mediaPersistenceContext(), ch, resp)
 		g.rememberMediaDialogCleanupResult(stream, resp, byeErr)
 		return errors.Join(err, byeErr)

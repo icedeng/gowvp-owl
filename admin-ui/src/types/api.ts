@@ -51,6 +51,7 @@ export interface StreamConfig {
 }
 
 export interface ApiDevice {
+  ingress?: import("../features/access-gateway/components/IngressBadge.vue").IngressSummary
   id: string
   type?: string
   device_id?: string
@@ -453,6 +454,7 @@ export interface SipAlarmReceiver {
 }
 
 export interface SipUpstream {
+ access_gateway_id?: string
   name: string
   enabled: boolean
   server_id: string
@@ -506,6 +508,9 @@ export interface SipUpstream {
 }
 
 export interface CascadePlatformStatus {
+  subject_id?: string
+  ingress_gateway_id?: string
+  binding_revision?: string
   name: string
   server_id: string
   address: string

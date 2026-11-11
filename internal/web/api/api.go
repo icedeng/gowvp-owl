@@ -59,6 +59,7 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 			web.IgnorePrefix("/static/recordings"),   // 录像文件
 		),
 		web.LoggerWithBody(web.DefaultBodyLimit,
+			web.IgnorePrefix("/access_gateways"), web.IgnorePrefix("/access_gateway_migrations"),
 			web.IgnorePrefix("/app/upgrade"),
 			web.IgnoreBool(uc.Conf.Debug),
 			web.IgnoreMethod(http.MethodOptions),
@@ -77,12 +78,14 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 			"Origin", "Authorization", "Referer", "User-Agent",
 			"Accept-Encoding",
 			"Cache-Control", "Pragma", "X-Requested-With",
+			"If-Match", "Idempotency-Key",
 			"Sec-Fetch-Mode", "Sec-Fetch-Site", "Sec-Fetch-Dest",
 			"Sec-Ch-Ua", "Sec-Ch-Ua-Mobile", "Sec-Ch-Ua-Platform",
 			"Dnt", "X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host",
 			"X-Real-IP", "X-Request-ID", "X-Request-Start", "X-Request-Time",
 		},
 		AllowCredentials: true,
+		ExposeHeaders:    []string{"ETag"},
 		MaxAge:           12 * time.Hour,
 		AllowOriginFunc: func(_ string) bool {
 			return true
@@ -149,7 +152,7 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 	statapi.Register(r)
 	registerZLMWebhookAPI(r, uc.WebHookAPI)
 	registerGB28181(r, uc.GB28181API, auth)
- registerCaptures(r, uc.GB28181API, auth)
+	registerCaptures(r, uc.GB28181API, auth)
 	uc.ConfigAPI.uc = uc
 	registerConfig(r, uc.ConfigAPI, auth)
 	registerSms(r, uc.SMSAPI, auth)

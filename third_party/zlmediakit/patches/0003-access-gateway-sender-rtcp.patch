@@ -1,0 +1,42 @@
+diff --git a/src/Common/MediaSource.h b/src/Common/MediaSource.h
+--- a/src/Common/MediaSource.h
++++ b/src/Common/MediaSource.h
+@@ -148,6 +148,8 @@
+         // udp发送时，是否开启rr rtcp接收超时判断  [AUTO-TRANSLATED:784982bd]
+         // When sending udp, whether to enable rr rtcp receive timeout judgment
+         bool udp_rtcp_timeout = false;
++        // 由发送器回填实际 RTCP 端点，避免 API 推算端口。
++        std::shared_ptr<uint16_t> actual_rtcp_port = std::make_shared<uint16_t>(0);
+         // TCP 发送时按 RFC 4571 在同一连接中复用 RTP/RTCP。默认关闭以兼容旧设备。
+         bool tcp_rtcp = false;
+         // passive被动、tcp主动模式超时时间  [AUTO-TRANSLATED:8886d475]
+diff --git a/src/Rtp/RtpSender.cpp b/src/Rtp/RtpSender.cpp
+--- a/src/Rtp/RtpSender.cpp
++++ b/src/Rtp/RtpSender.cpp
+@@ -301,6 +301,7 @@
+             }
+         } else if (_args.udp_rtcp_timeout) {
+             createRtcpSocket();
++            if (_args.actual_rtcp_port) { *_args.actual_rtcp_port = _socket_rtcp ? _socket_rtcp->get_local_port() : 0; }
+         }
+         // 连接建立成功事件  [AUTO-TRANSLATED:ac279c86]
+         // Connection established successfully event
+diff --git a/server/WebApi.cpp b/server/WebApi.cpp
+--- a/server/WebApi.cpp
++++ b/server/WebApi.cpp
+@@ -1674,12 +1674,14 @@
+         args.enable_origin_recv_limit = allArgs["enable_origin_recv_limit"];
+         src->getOwnerPoller()->async([=]() mutable {
+             try {
+-                src->startSendRtp(args, [val, headerOut, invoker](uint16_t local_port, const SockException &ex) mutable {
++                src->startSendRtp(args, [val, headerOut, invoker, args](uint16_t local_port, const SockException &ex) mutable {
+                     if (ex) {
+                         val["code"] = API::OtherFailed;
+                         val["msg"] = ex.what();
+                     }
+                     val["local_port"] = local_port;
++                    val["local_rtcp_port"] = args.actual_rtcp_port ? *args.actual_rtcp_port : 0;
++                    val["tcp_rtcp"] = args.tcp_rtcp;
+                     invoker(200, headerOut, val.toStyledString());
+                 });
+             } catch (std::exception &ex) {

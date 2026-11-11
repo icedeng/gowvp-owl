@@ -27,9 +27,15 @@ RUN git init ZLMediaKit && \
     git submodule update --init --recursive --depth 1
 
 COPY third_party/zlmediakit/patches/0001-gb28181-tcp-rtcp-rfc4571.patch /tmp/zlm-tcp-rtcp.patch
+COPY third_party/zlmediakit/patches/0002-access-gateway-rtcp-endpoint.patch /tmp/zlm-rtcp-endpoint.patch
+COPY third_party/zlmediakit/patches/0003-access-gateway-sender-rtcp.patch /tmp/zlm-sender-rtcp.patch
 WORKDIR /opt/media/ZLMediaKit
 RUN git apply --check /tmp/zlm-tcp-rtcp.patch && \
-    git apply /tmp/zlm-tcp-rtcp.patch
+    git apply /tmp/zlm-tcp-rtcp.patch && \
+    git apply --check /tmp/zlm-rtcp-endpoint.patch && \
+    git apply /tmp/zlm-rtcp-endpoint.patch && \
+    git apply --check /tmp/zlm-sender-rtcp.patch && \
+    git apply /tmp/zlm-sender-rtcp.patch
 
 WORKDIR /opt/media/ZLMediaKit/3rdpart
 RUN wget -q https://github.com/cisco/libsrtp/archive/v2.3.0.tar.gz -O libsrtp-2.3.0.tar.gz && \

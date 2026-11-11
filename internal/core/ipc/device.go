@@ -76,7 +76,7 @@ func (c Core) FindDevice(ctx context.Context, in *FindDeviceInput) ([]*Device, i
 		query.Where("is_online = ?", isOnline)
 	}
 
-	total, err := c.store.Device().List(ctx, &items, in, query.Encode()...)
+	total, err := c.store.Device().List(ctx, &items, in, deviceListOptions(ctx, query.Encode())...)
 	if err != nil {
 		return nil, 0, reason.ErrDB.Withf(`Find err[%s]`, err.Error())
 	}

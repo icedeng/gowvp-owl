@@ -46,6 +46,8 @@ type DirectTCPDownloadOptions struct {
 
 // DirectTCPDownloadRequest 描述一个由设备作为 TCP 服务端的文件下载任务。
 type DirectTCPDownloadRequest struct {
+	Dial                func(context.Context, string) (net.Conn, error)
+	Commit              func(context.Context, int64, string) error
 	SessionID           string
 	DeviceID            string
 	ChannelID           string
@@ -573,7 +575,13 @@ func (m *DirectTCPDownloadManager) run(session *directTCPDownloadSession) {
 	req := session.request
 	opts := session.opts
 	dialer := net.Dialer{Timeout: opts.DialTimeout}
-	conn, err := dialer.DialContext(session.ctx, "tcp", req.Address)
+	var conn net.Conn
+	var err error
+	if req.Dial != nil {
+		conn, err = req.Dial(session.ctx, req.Address)
+	} else {
+		conn, err = dialer.DialContext(session.ctx, "tcp", req.Address)
+	}
 	if err != nil {
 		status, reason := directTCPStatusFailed, "connect_failed"
 		if errors.Is(session.ctx.Err(), context.Canceled) {
@@ -664,6 +672,12 @@ func (m *DirectTCPDownloadManager) run(session *directTCPDownloadSession) {
 		return
 	}
 	keep = true
+	if req.Commit != nil {
+		if err := req.Commit(session.ctx, received, digest); err != nil {
+			m.finish(session, directTCPStatusFailed, "gateway_commit_failed", name, digest, false, err)
+			return
+		}
+	}
 	m.updateProgress(req.SessionID, directTCPStatusCompleted, received)
 	m.finish(session, directTCPStatusCompleted, reason, name, digest, verified, nil)
 }

@@ -6,6 +6,7 @@ import (
 
 func DefaultConfig() Bootstrap {
 	return Bootstrap{
+		AccessGateway: AccessGateway{Enabled: false, CredentialDir: "access-gateway/credentials", MaxConnections: 32, MaxMediaSessions: 1024, MaxTransferSessions: 128},
 		Server: Server{
 			Username: "admin",
 			HTTP: ServerHTTP{

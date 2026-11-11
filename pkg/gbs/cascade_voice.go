@@ -19,19 +19,20 @@ import (
 )
 
 type cascadeVoiceSourceSession struct {
-	worker      *cascadeWorker
-	server      *sms.MediaServer
-	streamID    string
-	ssrc        string
-	ssrcRelease func()
-	sourceID    string
-	callID      string
-	response    *sip.Response
-	broadcast   *broadcastSession
-	opened      bool
-	upstreamEnd bool
-	identity    *monitorUserIdentity
-	done        chan struct{}
+	externalMedia ExternalMediaLease
+	worker        *cascadeWorker
+	server        *sms.MediaServer
+	streamID      string
+	ssrc          string
+	ssrcRelease   func()
+	sourceID      string
+	callID        string
+	response      *sip.Response
+	broadcast     *broadcastSession
+	opened        bool
+	upstreamEnd   bool
+	identity      *monitorUserIdentity
+	done          chan struct{}
 
 	mu         sync.Mutex
 	stopping   bool
@@ -230,7 +231,31 @@ func (g *GB28181API) startCascadeVoiceSource(ctx context.Context, worker *cascad
 	if opened == nil || opened.Port <= 0 || opened.Port > 65535 {
 		return nil, fmt.Errorf("media server returned invalid cascade Broadcast RTP port")
 	}
-	offer, err := buildCascadeVoiceReceiveSDP(worker.platform.localID, server, worker.protocolVersion(), opened.Port, ssrc)
+	offerServer, offerPort := server, opened.Port
+	if worker.platform.gatewayID != "" {
+		p := g.externalMediaPort()
+		if p == nil {
+			return nil, fmt.Errorf("级联语音网关未就绪")
+		}
+		source.externalMedia, err = p.PrepareReceive(ctx, ExternalReceiveSpec{SubjectType: "platform", SubjectID: worker.platform.subjectID, GatewayID: worker.platform.gatewayID, ChannelID: request.SourceID, StreamID: streamID, Purpose: "broadcast", SSRC: ssrc, WireMode: 0, MediaServer: server, Port: opened.Port, RTCPPort: opened.RTCPPort})
+		if err != nil {
+			return nil, err
+		}
+		if source.externalMedia == nil {
+			return nil, fmt.Errorf("级联语音未创建网关媒体租约")
+		}
+		ip, port := source.externalMedia.AdvertisedEndpoint()
+		copyServer := *server
+		copyServer.SDPIP = ip
+		offerServer, offerPort = &copyServer, port
+	}
+	offer, err := buildCascadeVoiceReceiveSDP(worker.platform.localID, offerServer, worker.protocolVersion(), offerPort, ssrc)
+	if source.externalMedia != nil {
+		if lease, ok := source.externalMedia.(interface{ PublicRTCP() (string, int) }); ok {
+			ip, port := lease.PublicRTCP()
+			offer = appendRTCPAttribute(offer, ip, port)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -510,6 +535,17 @@ func (g *GB28181API) stopCascadeVoiceSource(source *cascadeVoiceSourceSession, s
 				source.opened = false
 				source.mu.Unlock()
 			}
+		}
+	}
+	if source.externalMedia != nil {
+		result = errors.Join(result, source.externalMedia.Close(cleanupCtx))
+		source.mu.Lock()
+		dialogClosed, mediaClosed := source.dialogDone, !source.opened
+		source.mu.Unlock()
+		if f, ok := source.externalMedia.(interface {
+			FinishCleanup(context.Context, bool, bool) error
+		}); ok {
+			result = errors.Join(result, f.FinishCleanup(cleanupCtx, dialogClosed, mediaClosed))
 		}
 	}
 	if result != nil {

@@ -234,10 +234,16 @@ func (g *GB28181API) playNoLock(ctx context.Context, ch *Channel, in *PlayInput)
 		return operation.ErrorOr(fmt.Errorf("invalid GB28181 SSRC %q: %w", ssrc, err))
 	}
 	log.Debug("1. 开启RTP服务器等待接收视频流", "ssrc", ssrc)
+	localMode, err := g.externalLocalMode(requestCtx, in.Channel.DeviceID, in.StreamMode, "live")
+	if err != nil {
+		g.compareAndDeleteChannelStream(key, stream)
+		stream.releaseSSRCReservation()
+		return err
+	}
 	tcpRTCP := shouldEnableTCPRTCP(g.getDeviceGBProtocolVersion(in.Channel.DeviceID), in.StreamMode != 0)
 	// 开启RTP服务器等待接收视频流
 	resp, err := openRTPServerContext(requestCtx, g.sms, in.SMS, zlm.OpenRTPServerRequest{
-		TCPMode:  in.StreamMode,
+		TCPMode:  localMode,
 		StreamID: streamID,
 		SSRC:     ssrcValue,
 		TCPRTCP:  tcpRTCP,
@@ -268,7 +274,7 @@ func (g *GB28181API) playNoLock(ctx context.Context, ch *Channel, in *PlayInput)
 			}
 			// 重新打开 RTP 服务器
 			resp, err = openRTPServerContext(requestCtx, g.sms, in.SMS, zlm.OpenRTPServerRequest{
-				TCPMode:  in.StreamMode,
+				TCPMode:  localMode,
 				StreamID: streamID,
 				SSRC:     ssrcValue,
 				TCPRTCP:  tcpRTCP,
@@ -285,6 +291,10 @@ func (g *GB28181API) playNoLock(ctx context.Context, ch *Channel, in *PlayInput)
 			stream.releaseSSRCReservation()
 			return operation.ErrorOr(err)
 		}
+	}
+
+	if err := g.prepareExternalReceive(requestCtx, stream, in.StreamMode, "live", shouldEnableTCPRTCP(g.getDeviceGBProtocolVersion(in.Channel.DeviceID), in.StreamMode != 0), resp); err != nil {
+		return errors.Join(err, g.cleanupFailedMediaStart(key, stream, "gateway_prepare_failed"))
 	}
 
 	log.Debug("2. 发送SDP请求", "port", resp.Port)
@@ -372,7 +382,7 @@ func (g *GB28181API) sipPlayPush2(ctx context.Context, ch *Channel, in *PlayInpu
 		return fmt.Errorf("SIP configuration is unavailable")
 	}
 	// 获取配置值
-	ipstr := in.SMS.GetSDPIP()
+	ipstr, port := g.mediaSDPEndpoint(stream, in.SMS.GetSDPIP(), port)
 	ip4str, err := GetIP(ipstr)
 	if err != nil {
 		slog.Error("域名解析失败", "域名", ipstr, "错误", err)
@@ -439,7 +449,7 @@ func (g *GB28181API) sipPlayPush2(ctx context.Context, ch *Channel, in *PlayInpu
 		mediaType = "audio"
 		offeredFormats = []string{"8"}
 	}
-	if err := g.ackAndConnectActiveRTP(ctx, tx, resp, in.SMS, stream.StreamID, in.StreamMode, mediaType, ssrc, version, offeredFormats...); err != nil {
+	if err := g.ackAndConnectExternalRTP(ctx, tx, resp, in.SMS, stream.StreamID, stream, in.StreamMode, mediaType, ssrc, version, offeredFormats...); err != nil {
 		byeErr := g.sendInviteResponseBYE(g.mediaPersistenceContext(), ch, resp)
 		g.rememberMediaDialogCleanupResult(stream, resp, byeErr)
 		return errors.Join(err, byeErr)

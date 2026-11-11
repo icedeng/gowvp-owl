@@ -178,6 +178,7 @@ type contextWriteToConnection interface {
 }
 
 type responseTransactionBinding struct {
+	routingScope    string
 	protocolName    string
 	protocolVersion string
 	transport       string
@@ -283,6 +284,11 @@ func writeConnectionContext(ctx context.Context, conn Connection, payload []byte
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
+	}
+	if writer, ok := conn.(interface {
+		WriteToContext(context.Context, []byte, net.Addr) (int, error)
+	}); ok {
+		return writer.WriteToContext(ctx, payload, destination)
 	}
 	if writer, ok := conn.(contextWriteToConnection); ok {
 		return writer.writeToContext(ctx, payload, destination)
@@ -491,6 +497,9 @@ func (tx *Transaction) rebindServerRequestForRequest(request *Request) bool {
 
 func sameServerRetransmissionPeer(original, incoming Connection, originalDestination, incomingSource net.Addr) bool {
 	if original == nil || incoming == nil {
+		return false
+	}
+	if RoutingScope(original) != RoutingScope(incoming) {
 		return false
 	}
 	originalTransport := SignalingTransport(original)
@@ -975,6 +984,7 @@ func (tx *Transaction) bindResponse(request *Request) {
 		fromTag = dialogHeaderParam(from.Params, "tag")
 	}
 	binding := &responseTransactionBinding{
+		routingScope: RoutingScope(request.GetConnection()),
 		protocolName: strings.TrimSpace(via.ProtocolName), protocolVersion: strings.TrimSpace(via.ProtocolVersion),
 		transport: strings.TrimSpace(via.Transport), sentBy: strings.TrimSpace(via.SentBy()),
 		branch: branch, fromTag: fromTag, remoteEndpoint: sipEndpointKey(request.Destination()),
@@ -1006,7 +1016,7 @@ func (tx *Transaction) acceptsResponse(response *Response) bool {
 		fromTag = dialogHeaderParam(from.Params, "tag")
 	}
 	_, branch, branchCount := sipViaParam(via, "branch")
-	return strings.EqualFold(binding.protocolName, strings.TrimSpace(via.ProtocolName)) &&
+	return binding.routingScope == RoutingScope(response.GetConnection()) && strings.EqualFold(binding.protocolName, strings.TrimSpace(via.ProtocolName)) &&
 		strings.EqualFold(binding.protocolVersion, strings.TrimSpace(via.ProtocolVersion)) &&
 		strings.EqualFold(binding.transport, strings.TrimSpace(via.Transport)) &&
 		strings.EqualFold(binding.sentBy, strings.TrimSpace(via.SentBy())) &&
@@ -1541,6 +1551,9 @@ func getTXBaseKey(msg Message) (key string) {
 		key = callid.String()
 		if cseq, exists := msg.CSeq(); exists && cseq != nil {
 			key = strconv.Itoa(len(key)) + ":" + key + ":" + strconv.FormatUint(uint64(cseq.SeqNo), 10) + ":" + strings.ToUpper(strings.TrimSpace(cseq.MethodName))
+		}
+		if scope := RoutingScope(msg.GetConnection()); scope != "" {
+			return "external:" + transactionKeyPart(scope) + transactionKeyPart(key)
 		}
 		return key
 	}

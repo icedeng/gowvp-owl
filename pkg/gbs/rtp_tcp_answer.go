@@ -169,6 +169,10 @@ func validateRTPAnswer(body []byte, mediaType string, streamMode int8, expectedS
 }
 
 func (g *GB28181API) ackAndConnectActiveRTP(ctx context.Context, tx *sip.Transaction, resp *sip.Response, mediaServer *sms.MediaServer, streamID string, streamMode int8, mediaType, expectedSSRC string, version GBProtocolVersion, offeredFormats ...string) error {
+	return g.ackAndConnectExternalRTP(ctx, tx, resp, mediaServer, streamID, nil, streamMode, mediaType, expectedSSRC, version, offeredFormats...)
+}
+
+func (g *GB28181API) ackAndConnectExternalRTP(ctx context.Context, tx *sip.Transaction, resp *sip.Response, mediaServer *sms.MediaServer, streamID string, stream *Streams, streamMode int8, mediaType, expectedSSRC string, version GBProtocolVersion, offeredFormats ...string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -191,6 +195,9 @@ func (g *GB28181API) ackAndConnectActiveRTP(ctx context.Context, tx *sip.Transac
 	}
 	if streamMode != 2 {
 		return nil
+	}
+	if stream != nil && stream.externalMedia != nil {
+		return stream.externalMedia.ConnectRemote(ctx, endpoint.IP.String(), endpoint.Port)
 	}
 	connector, legacy := g.sms.(rtpMediaConnector)
 	contextConnector, contextAware := g.sms.(rtpMediaConnectorContext)

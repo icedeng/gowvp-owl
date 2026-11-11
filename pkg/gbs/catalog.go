@@ -1522,19 +1522,37 @@ func (s *Server) wrapRequestContextInternal(ctx context.Context, t Targeter, met
 		return nil, fmt.Errorf("SIP request target address is unavailable")
 	}
 
+	fromAddress := s.fromAddress.Clone()
+	if external, ok := conn.(sip.ExternalRoutingConnection); ok {
+		address := external.AdvertisedAddr()
+		if address == nil {
+			return nil, fmt.Errorf("external SIP advertise address is unavailable")
+		}
+		host, port, e := net.SplitHostPort(address.String())
+		if e != nil {
+			return nil, e
+		}
+		number, e := strconv.Atoi(port)
+		if e != nil {
+			return nil, e
+		}
+		fromAddress.URI.SetHost(host)
+		p := sip.Port(number)
+		fromAddress.URI.FPort = &p
+	}
 	var viaPort *sip.Port
-	if s.fromAddress.URI != nil && s.fromAddress.URI.FPort != nil {
-		port := *s.fromAddress.URI.FPort
+	if fromAddress.URI != nil && fromAddress.URI.FPort != nil {
+		port := *fromAddress.URI.FPort
 		viaPort = &port
 	}
 	hb := sip.NewHeaderBuilder().
 		SetTo(to).
-		SetFrom(&s.fromAddress).
+		SetFrom(fromAddress).
 		SetContentType(contentType).
 		SetMethod(method).
-		SetContact(&s.fromAddress).
+		SetContact(fromAddress).
 		AddVia(&sip.ViaHop{
-			Host: strings.TrimSpace(s.fromAddress.URI.Host()), Port: viaPort, Transport: sip.SignalingTransport(conn),
+			Host: strings.TrimSpace(fromAddress.URI.Host()), Port: viaPort, Transport: sip.SignalingTransport(conn),
 			Params: sip.NewParams().Add("branch", sip.String{Str: sip.GenerateBranch()}).Add("rport", nil),
 		})
 
@@ -1572,6 +1590,17 @@ func (s *Server) wrapRequestContextInternal(ctx context.Context, t Targeter, met
 		reliableTarget, err := cascadeTCPDestination(req.Destination())
 		if err != nil {
 			return nil, fmt.Errorf("resolve oversized device SIP/TCP target: %w", err)
+		}
+		if external, ok := conn.(sip.ExternalRoutingConnection); ok {
+			reliable, e := external.OpenSignalingTransport(ctx, "tcp", reliableTarget)
+			if e != nil {
+				return nil, e
+			}
+			req.SetConnection(reliable)
+			req.SetDestination(reliableTarget)
+			applyCascadeRequestNextHopTransport(req, "tcp")
+			applyCascadeRequestTransport(req, "tcp")
+			return s.RequestWithSecurityContextOwnedConnection(ctx, req, security)
 		}
 		dial := s.dialDeviceTCP
 		if dial == nil {

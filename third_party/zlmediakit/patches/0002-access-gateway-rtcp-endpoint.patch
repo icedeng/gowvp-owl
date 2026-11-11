@@ -1,0 +1,63 @@
+diff --git a/src/Rtp/RtpServer.h b/src/Rtp/RtpServer.h
+--- a/src/Rtp/RtpServer.h
++++ b/src/Rtp/RtpServer.h
+@@ -80,6 +80,7 @@
+      * [AUTO-TRANSLATED:beed15d6]
+      */
+     uint16_t getPort();
++    uint16_t getRtcpPort() const;
+ 
+     /**
+      * 设置RtpProcess onDetach事件回调
+@@ -107,6 +108,7 @@
+ 
+ protected:
+     toolkit::Socket::Ptr _rtp_socket;
++    toolkit::Socket::Ptr _rtcp_socket;
+     toolkit::UdpServer::Ptr _udp_server;
+     toolkit::TcpServer::Ptr _tcp_server;
+     std::shared_ptr<uint32_t> _ssrc;
+diff --git a/src/Rtp/RtpServer.cpp b/src/Rtp/RtpServer.cpp
+--- a/src/Rtp/RtpServer.cpp
++++ b/src/Rtp/RtpServer.cpp
+@@ -170,7 +170,7 @@
+     if (!tuple.stream.empty() && !multiplex) {
+         // 指定了流id，那么一个端口一个流(不管是否包含多个ssrc的多个流，绑定rtp源后，会筛选掉ip端口不匹配的流)  [AUTO-TRANSLATED:3aeb611e]
+         // If a stream ID is specified, then one port is one stream (regardless of whether it contains multiple streams with multiple SSRCs, after binding the RTP source, streams that do not match the IP port will be filtered out)
+-        helper = std::make_shared<RtcpHelper>(std::move(rtcp_socket), tuple);
++        helper = std::make_shared<RtcpHelper>(rtcp_socket, tuple);
+         helper->startRtcp();
+         helper->setRtpServerInfo(local_port, tcp_mode, re_use_port, ssrc, only_track);
+         bool bind_peer_addr = false;
+@@ -238,6 +238,7 @@
+     _tcp_server = tcp_server;
+     _udp_server = udp_server;
+     _rtp_socket = rtp_socket;
++    _rtcp_socket = helper ? rtcp_socket : nullptr;
+     _rtcp_helper = helper;
+     _tcp_mode = tcp_mode;
+ }
+@@ -246,6 +247,10 @@
+     if (_rtcp_helper) {
+         _rtcp_helper->setOnDetach(std::move(cb));
+     }
++}
++
++uint16_t RtpServer::getRtcpPort() const {
++    return _rtcp_socket ? _rtcp_socket->get_local_port() : 0;
+ }
+ 
+ uint16_t RtpServer::getPort() {
+diff --git a/server/WebApi.cpp b/server/WebApi.cpp
+--- a/server/WebApi.cpp
++++ b/server/WebApi.cpp
+@@ -1502,6 +1502,9 @@
+         // 回复json  [AUTO-TRANSLATED:0c443c6a]
+         // Reply json
+         val["port"] = port;
++        auto receiver = s_rtp_server.find(tuple.shortUrl());
++        val["rtcp_port"] = receiver ? receiver->getRtcpPort() : 0;
++        val["tcp_rtcp"] = allArgs["tcp_rtcp"].as<bool>();
+     });
+ 
+     api_regist("/index/api/openRtpServerMultiplex", [](API_ARGS_MAP) {

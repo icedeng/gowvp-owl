@@ -1,0 +1,30 @@
+services:
+  owl-gateway:
+    image: ${OWL_GATEWAY_IMAGE:?请设置固定版本或摘要镜像}
+    restart: unless-stopped
+    command: ["-config", "/etc/owl-gateway/gateway.toml"]
+    ports:
+      - "443:443/tcp"
+      - "15060:15060/udp"
+      - "15060:15060/tcp"
+      - "30000-30199:30000-30199/udp"
+      - "30000-30199:30000-30199/tcp"
+      - "8443:8443/tcp"
+    volumes:
+      - ./gateway.toml:/etc/owl-gateway/gateway.toml:ro
+      - ./tls:/etc/owl-gateway/tls:ro
+      - ./state:/var/lib/owl-gateway
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:mode=1777,size=32m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # 容器网络命名空间内允许普通账号监听 443；不修改宿主网络/防火墙。
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

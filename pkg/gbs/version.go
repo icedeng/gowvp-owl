@@ -490,6 +490,11 @@ func ValidateRTPStreamMode(streamMode int8) error {
 }
 
 func (g *GB28181API) requireMediaTransport(deviceID string, streamMode int8, feature string) error {
+	if p := g.externalMediaPort(); p != nil {
+		if _, err := p.CheckNewBusiness(g.serviceContext(), deviceID, streamMode, feature); err != nil {
+			return err
+		}
+	}
 	if err := ValidateRTPStreamMode(streamMode); err != nil {
 		return err
 	}

@@ -702,7 +702,13 @@ func registerNonceSourceIP(ctx *sip.Context) string {
 	if ctx == nil {
 		return ""
 	}
-	return parseAddressIP(addrString(ctx.Source))
+	address := parseAddressIP(addrString(ctx.Source))
+	if ctx.Request != nil {
+		if scope := sip.RoutingScope(ctx.Request.GetConnection()); scope != "" {
+			return strconv.Itoa(len(scope)) + ":" + scope + ":" + address
+		}
+	}
+	return address
 }
 
 func (g *GB28181API) validateRegisterAuthorization(ctx *sip.Context, header sip.Header, username, password string) error {
@@ -838,6 +844,14 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	defer unlockRegister()
 	requestKey := registerResultKey(ctx)
 	respondOK := func(date string) error {
+		if notifier, ok := ctx.Request.GetConnection().(ipc.RegistrationCommitNotifier); ok {
+			notifyCtx, cancel := context.WithTimeout(g.serviceContext(), 5*time.Second)
+			err := notifier.RegistrationCommitted(notifyCtx, ctx.DeviceID, expires)
+			cancel()
+			if err != nil {
+				return err
+			}
+		}
 		resp := g.newRegisterSuccessResponse(ctx, expires, date)
 		if err := ctx.Tx.Respond(resp); err != nil {
 			ctx.Log.Error("respond REGISTER success", "err", err)
@@ -850,7 +864,11 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		g.metrics.registerSuccess.Add(1)
 		return nil
 	}
-	if cached, ok := g.loadRegisterResult(requestKey, time.Now()); ok {
+	canReplay := true
+	if scoped, ok := g.svr.memoryStorer.(interface{ SupportsIngressTransactions() bool }); ok && scoped.SupportsIngressTransactions() {
+		canReplay = false
+	}
+	if cached, ok := g.loadRegisterResult(requestKey, time.Now()); ok && canReplay {
 		_ = respondOK(cached.Date)
 		return
 	}
@@ -975,7 +993,7 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 			replayDate      string
 			replayConfirmed bool
 		)
-		if err := g.logout(ctx.DeviceID, func(b *ipc.Device) error {
+		if err := g.setDeviceOfflineContext(ipc.WithRegistrationIngress(g.serviceContext(), ctx.Request.GetConnection(), 0), ctx.DeviceID, true, func(b *ipc.Device) error {
 			replay, confirmed, err := applyRegisterBindingSequence(&b.Ext, ctx.Request, requestFingerprint, responseDate)
 			if err != nil {
 				return err
@@ -1042,7 +1060,7 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 		b.Transport = requestSignalingTransport(ctx)
 		applyGBProtocolVersion(&b.Ext, ctx.XGBVer)
 		return nil
-	}); err != nil {
+	}, isNewDev); err != nil {
 		g.respondRegisterStateError(ctx, "设备注册状态持久化失败", err)
 		return
 	}
@@ -1144,6 +1162,8 @@ func registerResultKey(ctx *sip.Context) [sha256.Size]byte {
 	hash := sha256.New()
 	if ctx != nil && ctx.Request != nil {
 		_, _ = hash.Write([]byte(ctx.Request.String()))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(sip.RoutingScope(ctx.Request.GetConnection())))
 	}
 	_, _ = hash.Write([]byte{0})
 	if ctx != nil && ctx.Source != nil {
@@ -1347,10 +1367,14 @@ func validateRegisterContact(ctx *sip.Context) error {
 	return nil
 }
 
-func (g *GB28181API) login(ctx *sip.Context, version GBProtocolVersion, disabledCapabilities []string, fn func(d *ipc.Device) error) error {
+func (g *GB28181API) login(ctx *sip.Context, version GBProtocolVersion, disabledCapabilities []string, fn func(d *ipc.Device) error, newDevice ...bool) error {
 	slog.Info("status change 设备上线", "device_id", ctx.DeviceID)
 	var committed ipc.Device
-	return g.svr.changeMemory(g.serviceContext(), ctx.DeviceID, func(device *ipc.Device) error {
+	expires, err := parseRegisterExpires(ctx)
+	if err != nil {
+		return err
+	}
+	return g.svr.changeMemory(ipc.WithRegistrationIngress(g.serviceContext(), ctx.Request.GetConnection(), expires, newDevice...), ctx.DeviceID, func(device *ipc.Device) error {
 		if fn != nil {
 			if err := fn(device); err != nil {
 				return err
@@ -1399,6 +1423,17 @@ func (g *GB28181API) respondRegister(ctx *sip.Context, status int, reason string
 }
 
 func (g *GB28181API) respondRegisterStateError(ctx *sip.Context, logMessage string, err error) {
+	var ingressError interface{ SIPStatusCode() int }
+	if errors.As(err, &ingressError) {
+		status := ingressError.SIPStatusCode()
+		g.metrics.registerFailures.Add(1)
+		response := g.newRegisterResponse(ctx, status, "registration ingress is not authorized")
+		if status == http.StatusServiceUnavailable {
+			response.AppendHeader(&sip.GenericHeader{HeaderName: "Retry-After", Contents: "5"})
+		}
+		_ = ctx.Tx.Respond(response)
+		return
+	}
 	if errors.Is(err, errRegisterCSeqOutOfOrder) {
 		ctx.Log.Warn(logMessage, "err", err)
 		g.metrics.registerFailures.Add(1)
@@ -1427,8 +1462,12 @@ func (g *GB28181API) logout(deviceID string, changeFn func(*ipc.Device) error) e
 
 // setDeviceOffline 区分注册失效和临时心跳离线，后者保留绑定供后续心跳恢复。
 func (g *GB28181API) setDeviceOffline(deviceID string, closeRegistration bool, changeFn func(*ipc.Device) error) error {
+	return g.setDeviceOfflineContext(g.serviceContext(), deviceID, closeRegistration, changeFn)
+}
+
+func (g *GB28181API) setDeviceOfflineContext(operationCtx context.Context, deviceID string, closeRegistration bool, changeFn func(*ipc.Device) error) error {
 	var committed ipc.Device
-	err := g.svr.changeMemory(g.serviceContext(), deviceID, func(device *ipc.Device) error {
+	err := g.svr.changeMemory(operationCtx, deviceID, func(device *ipc.Device) error {
 		if changeFn != nil {
 			if err := changeFn(device); err != nil {
 				return err

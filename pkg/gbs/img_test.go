@@ -410,3 +410,26 @@ func TestQuerySnapshotRemovesPendingSessionWhenRequestWasNotSent(t *testing.T) {
 		t.Fatalf("unsent snapshot request retained %d pending sessions", count)
 	}
 }
+
+func TestFailedExternalSnapshotTransferPreservesCommittedImages(t *testing.T) {
+	for _, test := range []struct {
+		status   string
+		received int
+		want     string
+	}{
+		{"accepted", 0, "failed"}, {"uploading", 1, "partial_failed"}, {"uploading", 2, "uploading"}, {"completed", 1, "completed"}, {"cancelled", 0, "cancelled"},
+	} {
+		t.Run(fmt.Sprintf("%s-%d", test.status, test.received), func(t *testing.T) {
+			api := &GB28181API{}
+			task := "snapshot-transfer-failure-00000001"
+			api.storeSnapshotState(SnapshotState{DeviceID: gb10DeviceID, ChannelID: gb10DeviceID, SessionID: task, Status: test.status, ExpectedCount: 2, ReceivedCount: test.received})
+			if err := api.failSnapshotTransfer(t.Context(), gb10DeviceID, task); err != nil {
+				t.Fatal(err)
+			}
+			state, found := api.SnapshotState(gb10DeviceID, task)
+			if !found || state.Status != test.want || state.ReceivedCount != test.received {
+				t.Fatalf("unexpected task: %+v", state)
+			}
+		})
+	}
+}

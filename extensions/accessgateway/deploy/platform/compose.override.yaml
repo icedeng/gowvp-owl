@@ -1,0 +1,6 @@
+# 与原 docker-compose.yml 合并；镜像由原 A/ZLM 发布流程构建，需包含本仓三个 ZLM 补丁。
+services:
+  gowvp:
+    image: ${OWL_PLATFORM_IMAGE:?请设置包含网关模块和 ZLM 补丁的固定版本镜像}
+    volumes:
+      - ./data/access-gateway/credentials:/opt/media/bin/configs/access-gateway/credentials

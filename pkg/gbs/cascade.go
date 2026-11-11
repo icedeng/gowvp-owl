@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
@@ -36,6 +37,9 @@ var errCascadeWorkerStopping = errors.New("cascade worker is stopping")
 
 // CascadePlatformStatus 是本平台向上级平台注册的运行状态快照。
 type CascadePlatformStatus struct {
+	SubjectID         string    `json:"subject_id,omitempty"`
+	IngressGatewayID  string    `json:"ingress_gateway_id,omitempty"`
+	BindingRevision   string    `json:"binding_revision,omitempty"`
 	Name              string    `json:"name"`
 	ServerID          string    `json:"server_id"`
 	Address           string    `json:"address"`
@@ -50,6 +54,8 @@ type CascadePlatformStatus struct {
 }
 
 type cascadePlatform struct {
+	gatewayID               string
+	subjectID               string
 	name                    string
 	serverID                string
 	remoteDomain            string
@@ -109,6 +115,9 @@ func normalizeCascadePlatform(in conf.SIPUpstream, local conf.SIP, fallbackHost 
 	transport := strings.ToLower(strings.TrimSpace(in.Transport))
 	if transport == "" {
 		transport = "udp"
+	}
+	if strings.TrimSpace(in.AccessGatewayID) != "" && transport != "udp" && transport != "tcp" {
+		return cascadePlatform{}, fmt.Errorf("网关级联仅支持 UDP/TCP 信令")
 	}
 	port := in.Port
 	if port == 0 {
@@ -294,6 +303,7 @@ func normalizeCascadePlatform(in conf.SIPUpstream, local conf.SIP, fallbackHost 
 	}
 	return cascadePlatform{
 		name: name, serverID: serverID, remoteDomain: remoteDomain, remote: remote, transport: transport,
+		gatewayID: strings.TrimSpace(in.AccessGatewayID), subjectID: uuid.NewSHA1(uuid.NameSpaceOID, []byte("owl:upstream:"+strings.TrimSpace(in.Name))).String(),
 		localID: localID, localDomain: localDomain, localHost: localHost, localPort: local.Port, localTLSPort: localTLSPort, localTLSEnabled: local.EnableTLS,
 		password: in.Password, signalDigestSeed: in.SignalDigestSeed,
 		version: version, expires: expires, keepaliveInterval: keepalive, alarmDispatchEnabled: in.AlarmDispatchEnabled,
@@ -352,16 +362,17 @@ type cascadeWorker struct {
 	operationsCtx    context.Context
 	cancelOperations context.CancelFunc
 
-	mu        sync.RWMutex
-	stopping  bool
-	status    CascadePlatformStatus
-	callID    sip.CallID
-	fromTag   string
-	cseq      uint32
-	effective GBProtocolVersion
-	accepted  int
-	targetURI *sip.URI
-	target    net.Addr
+	mu                      sync.RWMutex
+	stopping                bool
+	status                  CascadePlatformStatus
+	callID                  sip.CallID
+	fromTag                 string
+	cseq                    uint32
+	effective               GBProtocolVersion
+	externalRegisteredScope string
+	accepted                int
+	targetURI               *sip.URI
+	target                  net.Addr
 
 	connMu    sync.Mutex
 	tcpConn   sip.Connection
@@ -768,6 +779,11 @@ func (w *cascadeWorker) register(ctx context.Context, expires int) error {
 		return fmt.Errorf("cascade REGISTER certificate authentication required but upstream returned success without Asymmetric challenge")
 	}
 	accepted, err := validateCascadeRegisterSuccess(response, request, effective, requestedExpires)
+	if err == nil {
+		if port, ok := w.server.externalPlatformPort().(ExternalPlatformBindingPort); ok {
+			err = port.CommitPlatformRegistration(ctx, w.externalPlatformSpec(true), request.GetConnection(), accepted)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -775,6 +791,9 @@ func (w *cascadeWorker) register(ctx context.Context, expires int) error {
 	w.mu.Lock()
 	w.effective = effective
 	w.accepted = accepted
+	if w.platform.gatewayID != "" {
+		w.externalRegisteredScope = sip.RoutingScope(request.GetConnection())
+	}
 	w.targetURI = targetURI.Clone()
 	w.target = cloneCascadeAddr(target)
 	state := &w.status
@@ -1768,6 +1787,14 @@ func (w *cascadeWorker) prepareRequestConnection(ctx context.Context, request *s
 	if w == nil || w.server == nil || w.server.Server == nil || request == nil {
 		return fmt.Errorf("SIP server is unavailable")
 	}
+	register := strings.EqualFold(request.Method(), sip.MethodRegister)
+	spec := w.externalPlatformSpec(register)
+	spec.Cleanup = request.IsAck() || strings.EqualFold(request.Method(), sip.MethodBYE) || strings.EqualFold(request.Method(), sip.MethodCancel)
+	if port, ok := w.server.externalPlatformPort().(ExternalPlatformBindingPort); ok {
+		if err := port.AuthorizePlatform(ctx, spec); err != nil {
+			return err
+		}
+	}
 	remote := request.Destination()
 	if remote == nil {
 		_, remote = w.remoteTarget()
@@ -1787,6 +1814,38 @@ func (w *cascadeWorker) prepareRequestConnection(ctx context.Context, request *s
 		transport = "tcp"
 		request.SetDestination(remote)
 		applyCascadeRequestNextHopTransport(request, transport)
+	}
+	if w.platform.gatewayID != "" {
+		if transport == "tls" {
+			return fmt.Errorf("网关级联仅支持设备侧 UDP/TCP 信令")
+		}
+		port := w.server.externalPlatformPort()
+		if port == nil {
+			return fmt.Errorf("网关级联适配尚未就绪")
+		}
+		spec.Transport = transport
+		conn, err := port.OpenPlatform(ctx, spec)
+		if err != nil {
+			return err
+		}
+		request.SetConnection(conn)
+		request.SetSource(conn.LocalAddr())
+		applyCascadeRequestTransport(request, transport)
+		advertised := conn.LocalAddr()
+		if routed, ok := conn.(interface{ AdvertisedAddr() net.Addr }); ok {
+			advertised = routed.AdvertisedAddr()
+		}
+		host, rawPort, _ := net.SplitHostPort(advertised.String())
+		n, _ := strconv.Atoi(rawPort)
+		if via, ok := request.ViaHop(); ok {
+			via.Host = host
+			via.Port = sip.NewPort(n)
+		}
+		if contact, ok := request.Contact(); ok && contact.Address != nil {
+			contact.Address.SetHost(host)
+			contact.Address.FPort = sip.NewPort(n)
+		}
+		return nil
 	}
 	if transport == "tls" && !w.platform.localTLSEnabled {
 		return fmt.Errorf("cascade SIP/TLS requires the local SIP-TLS listener")
@@ -2055,6 +2114,7 @@ func (m *CascadeManager) Statuses() []CascadePlatformStatus {
 	now := time.Now()
 	for _, worker := range items {
 		state := worker.snapshot()
+		state.SubjectID = worker.platform.subjectID
 		if state.Registered && !cascadeRegistrationActive(state, now) {
 			state.Registered = false
 			state.State = "expired"
@@ -2155,6 +2215,17 @@ func (m *CascadeManager) matchRegistered(serverID string, source net.Addr, conne
 	for _, worker := range m.items {
 		if worker.platform.serverID != serverID || !worker.remoteAddressMatches(source) {
 			continue
+		}
+		if worker.platform.gatewayID != "" {
+			if len(connections) == 0 {
+				return nil, false
+			}
+			routed, ok := connections[0].(interface{ GatewayID() string })
+			if !ok || routed.GatewayID() != worker.platform.gatewayID {
+				return nil, false
+			}
+		} else if len(connections) > 0 && sip.IsExternal(connections[0]) {
+			return nil, false
 		}
 		if cascadeTransportForAddr(worker.remoteDestination()) == "tls" {
 			var connection sip.Connection

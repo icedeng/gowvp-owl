@@ -52,9 +52,10 @@ type Server struct {
 	route conc.Map[string, []HandlerFunc]
 
 	// 全局中间件链，通过 Use() 注册，在所有路由 handler 之前执行
-	middlewares []HandlerFunc
-	securityMu  sync.RWMutex
-	security    RequestSecurityResolver
+	middlewares  []HandlerFunc
+	securityMu   sync.RWMutex
+	security     RequestSecurityResolver
+	ingressGuard func(*Request) error
 
 	port *Port
 	host string
@@ -179,7 +180,7 @@ func (s *Server) mustTX(msg *Request) *Transaction {
 	tx := s.txs.getTX(key)
 
 	if tx == nil {
-		if msg.conn.Network() == "udp" {
+		if msg.conn.Network() == "udp" && !IsExternal(msg.conn) {
 			tx = s.txs.newTX(key, s.udpConn)
 		} else {
 			tx = s.txs.newTX(key, msg.conn)
@@ -193,7 +194,7 @@ func (s *Server) mustTX(msg *Request) *Transaction {
 
 func (s *Server) mustServerTX(msg *Request) *Transaction {
 	conn := msg.conn
-	if conn != nil && conn.Network() == "udp" {
+	if conn != nil && conn.Network() == "udp" && !IsExternal(conn) {
 		conn = s.udpConn
 	}
 	return s.txs.newServerTX(getServerTXKey(msg), conn)
@@ -820,6 +821,25 @@ func (s *Server) handlerRequest(msg *Request) {
 		_ = tx.Respond(response)
 		return
 	}
+	if guard := s.requestIngressGuard(); guard != nil {
+		if err := guard(msg); err != nil {
+			if !msg.IsAck() {
+				tx := NewTransaction(RandString(16), msg.GetConnection())
+				status := http.StatusForbidden
+				var ingressError interface{ SIPStatusCode() int }
+				if errors.As(err, &ingressError) && ingressError.SIPStatusCode() == http.StatusServiceUnavailable {
+					status = http.StatusServiceUnavailable
+				}
+				response := newInboundResponseFromRequest(msg, status, "registration ingress is not authorized", nil)
+				if status == http.StatusServiceUnavailable {
+					response.AppendHeader(&GenericHeader{HeaderName: "Retry-After", Contents: "5"})
+				}
+				_ = tx.Respond(response)
+				tx.Close()
+			}
+			return
+		}
+	}
 	tx := s.mustServerTX(msg)
 	if !tx.beginServerRequest() {
 		// 若原 handler 仍在处理，允许同源 TCP/TLS 重连接管后续响应；
@@ -843,6 +863,14 @@ func (s *Server) handlerRequest(msg *Request) {
 		if err := verifyInboundMessage(security, msg); err != nil {
 			slog.Warn("reject SIP request with invalid security proof", "method", msg.Method(), "err", err)
 			_ = tx.Respond(newInboundResponseFromRequest(msg, http.StatusForbidden, "invalid request security", nil))
+			return
+		}
+	}
+	if authorizer, ok := msg.GetConnection().(interface{ AuthorizeInbound(*Request) error }); ok {
+		if err := authorizer.AuthorizeInbound(msg); err != nil {
+			if !msg.IsAck() {
+				_ = tx.Respond(newInboundResponseFromRequest(msg, http.StatusForbidden, "external ingress binding is unavailable", nil))
+			}
 			return
 		}
 	}

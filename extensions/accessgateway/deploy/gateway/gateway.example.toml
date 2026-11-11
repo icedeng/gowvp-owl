@@ -1,0 +1,25 @@
+# 复制后替换公网 IP、平台身份、证书。文档示例地址不能直接用于生产。
+gateway_id = "b1"
+listen = ":443"
+public_ip = "203.0.113.10"
+allowed_public_ips = ["203.0.113.10"]
+sip_listen = ":15060"
+media_bind_ip = "0.0.0.0"
+media_port_range = "30000-30199"
+tls_cert_file = "/etc/owl-gateway/tls/server.crt"
+tls_key_file = "/etc/owl-gateway/tls/server.key"
+client_ca_file = "/etc/owl-gateway/tls/client-ca.crt"
+state_dir = "/var/lib/owl-gateway"
+max_sip_flows = 4096
+sip_packets_per_second = 100
+max_transfer_records = 10000
+# 不使用设备 HTTPS 任务时，同时删除下面两项并将 max_transfer_sessions 改为 0。
+task_listen = ":8443"
+task_public_base_url = "https://gateway.example.com:8443"
+[platform]
+id = "owl-a"
+client_certificate_cn = "owl-a"
+max_media_sessions = 64
+max_transfer_sessions = 8
+max_to_a_bps = 100000000
+max_to_device_bps = 100000000

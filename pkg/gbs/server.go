@@ -63,9 +63,10 @@ type deviceChannelMemoryLoader interface {
 
 type Server struct {
 	*sip.Server
-	gb           *GB28181API
-	mediaService cascadeMediaServerResolver
-	cascade      *CascadeManager
+	externalMedia externalMediaState
+	gb            *GB28181API
+	mediaService  cascadeMediaServerResolver
+	cascade       *CascadeManager
 
 	fromAddress   sip.Address
 	memoryStorer  MemoryStorer
@@ -522,7 +523,21 @@ func (s *Server) CascadeStatuses() []CascadePlatformStatus {
 	if s == nil || s.cascade == nil {
 		return []CascadePlatformStatus{}
 	}
-	return s.cascade.Statuses()
+	statuses := s.cascade.Statuses()
+	if port, ok := s.externalPlatformPort().(interface {
+		PlatformIngress(context.Context, string) (string, string, error)
+	}); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		for i := range statuses {
+			gateway, revision, err := port.PlatformIngress(ctx, statuses[i].SubjectID)
+			if err == nil {
+				statuses[i].IngressGatewayID = gateway
+				statuses[i].BindingRevision = revision
+			}
+		}
+	}
+	return statuses
 }
 
 // ValidateCascadeConfig 在写入配置前校验所有已启用的上级平台参数。

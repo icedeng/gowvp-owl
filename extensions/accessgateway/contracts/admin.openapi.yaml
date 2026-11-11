@@ -1,0 +1,2371 @@
+"openapi": "3.0.3"
+"info":
+  "title": "Owl 公网接入网关管理 API"
+  "version": "1.0.0"
+  "description": "对应 platform/httpapi、core 和 service 的管理契约。所有调用必须使用现有平台管理员 Bearer JWT；不接受播放票据、query token 或私钥读取。JSON 严格拒绝未知/重复/缺失字段，标为可选的字段除外。十进制版本和字节计数使用非负 int64 字符串；null 表示未知，不能转为0。全部查询只访问 A 的存储/运行快照，浏览器不访问 B。"
+"servers":
+  -
+    "url": "/"
+    "description": "Owl 现有 API 前缀；以宿主路由配置为准。"
+"security":
+  -
+    "adminBearer": []
+"paths":
+  "/access_gateways":
+    "get":
+      "operationId": "查询网关批量快照"
+      "summary": "查询网关批量快照"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/PageGatewayView"
+      "parameters":
+        -
+          "in": "query"
+          "name": "page"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "default": 1
+        -
+          "in": "query"
+          "name": "size"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "maximum": 100
+            "default": 20
+        -
+          "in": "query"
+          "name": "q"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "group"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "admin_state"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "connection_state"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "health_state"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "sort"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "order"
+          "schema":
+            "type": "string"
+    "post":
+      "operationId": "新增网关"
+      "summary": "新增网关"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/GatewayView"
+        "202":
+          "description": "操作已接受；查询 operation_id 获取真实进度，禁止据此宣称已完成。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+      "parameters":
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+        -
+          "$ref": "#/components/parameters/IfMatchOptional"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/CreateRequest"
+  "/access_gateways/connection-test":
+    "post":
+      "operationId": "草稿只读诊断"
+      "summary": "草稿只读诊断"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/DiagnosticResult"
+      "parameters":
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+        -
+          "$ref": "#/components/parameters/IfMatchRequired"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/DraftTestRequest"
+  "/access_gateways/{id}":
+    "get":
+      "operationId": "网关详情"
+      "summary": "网关详情"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/GatewayView"
+          "headers":
+            "ETag":
+              "description": "后续修改使用该强版本值提交 If-Match。"
+              "schema":
+                "type": "string"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+    "put":
+      "operationId": "更新期望配置"
+      "summary": "更新期望配置"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/GatewayView"
+        "202":
+          "description": "操作已接受；查询 operation_id 获取真实进度，禁止据此宣称已完成。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+        -
+          "$ref": "#/components/parameters/IfMatchRequired"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/UpdateRequest"
+    "delete":
+      "operationId": "删除无引用网关"
+      "summary": "删除无引用网关"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Deleted"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+        -
+          "$ref": "#/components/parameters/IfMatchRequired"
+  "/access_gateways/{id}/test":
+    "post":
+      "operationId": "已保存网关诊断"
+      "summary": "已保存网关诊断"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/DiagnosticResult"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+        -
+          "$ref": "#/components/parameters/IfMatchOptional"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/Empty"
+  "/access_gateways/{id}/state":
+    "put":
+      "operationId": "启用排空停用"
+      "summary": "启用排空停用"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "202":
+          "description": "操作已接受；查询 operation_id 获取真实进度，禁止据此宣称已完成。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+        -
+          "$ref": "#/components/parameters/IfMatchRequired"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/StateRequest"
+  "/access_gateways/{id}/reconnect":
+    "post":
+      "operationId": "单网关重连"
+      "summary": "单网关重连"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "202":
+          "description": "操作已接受；查询 operation_id 获取真实进度，禁止据此宣称已完成。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+        -
+          "$ref": "#/components/parameters/IfMatchOptional"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/ReasonRequest"
+  "/access_gateways/{id}/devices":
+    "get":
+      "operationId": "查询devices"
+      "summary": "查询devices"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/PageDeviceIngressView"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "in": "query"
+          "name": "page"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "default": 1
+        -
+          "in": "query"
+          "name": "size"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "maximum": 100
+            "default": 20
+        -
+          "in": "query"
+          "name": "q"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "online"
+          "schema":
+            "type": "boolean"
+  "/access_gateways/{id}/platforms":
+    "get":
+      "operationId": "查询platforms"
+      "summary": "查询platforms"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/PagePlatformView"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "in": "query"
+          "name": "page"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "default": 1
+        -
+          "in": "query"
+          "name": "size"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "maximum": 100
+            "default": 20
+        -
+          "in": "query"
+          "name": "q"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "state"
+          "schema":
+            "type": "string"
+  "/access_gateways/{id}/sessions":
+    "get":
+      "operationId": "查询sessions"
+      "summary": "查询sessions"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/PageSessionView"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "in": "query"
+          "name": "page"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "default": 1
+        -
+          "in": "query"
+          "name": "size"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "maximum": 100
+            "default": 20
+        -
+          "in": "query"
+          "name": "purpose"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "state"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "subject_id"
+          "schema":
+            "type": "string"
+  "/access_gateways/{id}/events":
+    "get":
+      "operationId": "查询events"
+      "summary": "查询events"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/PageEventView"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "in": "query"
+          "name": "page"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "default": 1
+        -
+          "in": "query"
+          "name": "size"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "maximum": 100
+            "default": 20
+        -
+          "in": "query"
+          "name": "start"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "end"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "type"
+          "schema":
+            "type": "string"
+        -
+          "in": "query"
+          "name": "subject_id"
+          "schema":
+            "type": "string"
+  "/access_gateways/{id}/sessions/{session}/stop":
+    "post":
+      "operationId": "定向停止会话"
+      "summary": "定向停止会话"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Closed"
+        "202":
+          "description": "操作已接受；查询 operation_id 获取真实进度，禁止据此宣称已完成。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "in": "path"
+          "name": "session"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+        -
+          "$ref": "#/components/parameters/IfMatchOptional"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/ReasonRequest"
+  "/access_gateways/{id}/metrics":
+    "get":
+      "operationId": "指标历史趋势"
+      "summary": "指标历史趋势"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/MetricSeries"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "in": "query"
+          "name": "page"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "default": 1
+        -
+          "in": "query"
+          "name": "size"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "maximum": 100
+            "default": 20
+        -
+          "in": "query"
+          "name": "start"
+          "schema":
+            "type": "string"
+            "format": "date-time"
+        -
+          "in": "query"
+          "name": "end"
+          "schema":
+            "type": "string"
+            "format": "date-time"
+        -
+          "in": "query"
+          "name": "step_seconds"
+          "schema":
+            "type": "integer"
+            "enum":
+              - 60
+              - 300
+            "default": 60
+  "/access_gateways/{id}/operations/{operation}":
+    "get":
+      "operationId": "查询操作结果"
+      "summary": "查询操作结果"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "in": "path"
+          "name": "operation"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+  "/access_gateways/{id}/credentials":
+    "post":
+      "operationId": "导入客户端凭据"
+      "summary": "导入客户端凭据"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Certificate"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+        -
+          "$ref": "#/components/parameters/IfMatchOptional"
+      "requestBody":
+        "required": true
+        "content":
+          "multipart/form-data":
+            "schema":
+              "type": "object"
+              "additionalProperties": false
+              "properties":
+                "ca_pem":
+                  "type": "string"
+                  "format": "binary"
+                  "description": "单文件最多512 KiB；总请求最多2 MiB。私钥仅上传，不提供下载。"
+                "client_cert_pem":
+                  "type": "string"
+                  "format": "binary"
+                  "description": "单文件最多512 KiB；总请求最多2 MiB。私钥仅上传，不提供下载。"
+                "client_key_pem":
+                  "type": "string"
+                  "format": "binary"
+                  "description": "单文件最多512 KiB；总请求最多2 MiB。私钥仅上传，不提供下载。"
+              "required":
+                - "ca_pem"
+                - "client_cert_pem"
+                - "client_key_pem"
+  "/access_gateways/{id}/certificate-rotation":
+    "post":
+      "operationId": "受控轮换客户端凭据"
+      "summary": "受控轮换客户端凭据"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/GatewayView"
+        "202":
+          "description": "操作已接受；查询 operation_id 获取真实进度，禁止据此宣称已完成。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+        -
+          "$ref": "#/components/parameters/IfMatchRequired"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/RotationRequest"
+  "/access_gateways/{id}/deployment-template":
+    "get":
+      "operationId": "脱敏部署模板"
+      "summary": "脱敏部署模板"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/DeploymentTemplate"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "in": "query"
+          "name": "page"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "default": 1
+        -
+          "in": "query"
+          "name": "size"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "maximum": 100
+            "default": 20
+        -
+          "in": "query"
+          "name": "format"
+          "schema":
+            "type": "string"
+            "enum":
+              - "toml"
+              - "compose"
+            "default": "toml"
+  "/access_gateway_migrations":
+    "post":
+      "operationId": "创建受限迁移计划"
+      "summary": "创建受限迁移计划"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "202":
+          "description": "操作已接受；查询 operation_id 获取真实进度，禁止据此宣称已完成。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+      "parameters":
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+        -
+          "$ref": "#/components/parameters/IfMatchOptional"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/MigrationRequest"
+  "/access_gateway_migrations/{id}":
+    "get":
+      "operationId": "迁移对象进度"
+      "summary": "迁移对象进度"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "200":
+          "description": "已完成，或同幂等键重放原结果。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Migration"
+          "headers":
+            "ETag":
+              "description": "后续修改使用该强版本值提交 If-Match。"
+              "schema":
+                "type": "string"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "in": "query"
+          "name": "page"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "default": 1
+        -
+          "in": "query"
+          "name": "size"
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "maximum": 100
+            "default": 20
+  "/access_gateway_migrations/{id}/cancel":
+    "post":
+      "operationId": "取消尚未提交的迁移"
+      "summary": "取消尚未提交的迁移"
+      "tags":
+        - "接入网关"
+      "responses":
+        "default":
+          "$ref": "#/components/responses/Failure"
+        "202":
+          "description": "操作已接受；查询 operation_id 获取真实进度，禁止据此宣称已完成。"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+      "parameters":
+        -
+          "in": "path"
+          "name": "id"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "网关使用稳定 ID；会话、操作和计划使用对应内部 UUID。"
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+        -
+          "$ref": "#/components/parameters/IfMatchRequired"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/ReasonRequest"
+"components":
+  "securitySchemes":
+    "adminBearer":
+      "type": "http"
+      "scheme": "bearer"
+      "bearerFormat": "JWT"
+  "parameters":
+    "IdempotencyKey":
+      "in": "header"
+      "name": "Idempotency-Key"
+      "required": true
+      "schema":
+        "type": "string"
+        "format": "uuid"
+      "description": "同一操作者/路由/对象下重复键重放原结果；同键异参409。"
+    "IfMatchRequired":
+      "in": "header"
+      "name": "If-Match"
+      "required": true
+      "schema":
+        "type": "string"
+        "pattern": "^\"(0|[1-9][0-9]*)\"$"
+      "description": "使用资源 revision 的强 ETag，如 \"3\"；缺失400，过期409。"
+    "IfMatchOptional":
+      "in": "header"
+      "name": "If-Match"
+      "required": false
+      "schema":
+        "type": "string"
+        "pattern": "^\"(0|[1-9][0-9]*)\"$"
+  "responses":
+    "Failure":
+      "description": "400 输入错误；401 非管理员；404 不存在；409 revision/绑定/状态/幂等冲突；413 大小限制；429 额度；503 模块未启用/网关或依赖不可用。错误包含定位 trace_id；不回显凭据。"
+      "content":
+        "application/json":
+          "schema":
+            "$ref": "#/components/schemas/HTTPError"
+  "schemas":
+    "Certificate":
+      "additionalProperties": false
+      "properties":
+        "ca_fingerprint":
+          "type": "string"
+        "fingerprint":
+          "type": "string"
+        "id":
+          "type": "string"
+        "not_after":
+          "format": "date-time"
+          "type": "string"
+        "not_before":
+          "format": "date-time"
+          "type": "string"
+        "status":
+          "type": "string"
+      "required":
+        - "id"
+        - "fingerprint"
+        - "ca_fingerprint"
+        - "not_before"
+        - "not_after"
+        - "status"
+      "type": "object"
+    "CleanupSteps":
+      "additionalProperties": false
+      "properties":
+        "bridge_closed":
+          "type": "boolean"
+        "business_invalidated":
+          "type": "boolean"
+        "committed":
+          "type": "boolean"
+        "dialog_closed":
+          "type": "boolean"
+        "dialog_unavailable":
+          "type": "boolean"
+        "media_closed":
+          "type": "boolean"
+        "remote_closed":
+          "type": "boolean"
+        "transfer_committed":
+          "type": "boolean"
+      "required":
+        - "transfer_committed"
+        - "business_invalidated"
+        - "dialog_closed"
+        - "dialog_unavailable"
+        - "remote_closed"
+        - "bridge_closed"
+        - "media_closed"
+        - "committed"
+      "type": "object"
+    "Counts":
+      "additionalProperties": false
+      "properties":
+        "active_sources":
+          "format": "int64"
+          "type": "integer"
+        "channel_online":
+          "format": "int64"
+          "type": "integer"
+        "channel_total":
+          "format": "int64"
+          "type": "integer"
+        "cleanup_pending":
+          "format": "int64"
+          "type": "integer"
+        "device_offline":
+          "format": "int64"
+          "type": "integer"
+        "device_online":
+          "format": "int64"
+          "type": "integer"
+        "device_total":
+          "format": "int64"
+          "type": "integer"
+        "download_sessions":
+          "format": "int64"
+          "type": "integer"
+        "live_sessions":
+          "format": "int64"
+          "type": "integer"
+        "platform_bindings":
+          "format": "int64"
+          "type": "integer"
+        "playback_sessions":
+          "format": "int64"
+          "type": "integer"
+        "transfer_sessions":
+          "format": "int64"
+          "type": "integer"
+        "voice_sessions":
+          "format": "int64"
+          "type": "integer"
+      "required":
+        - "device_total"
+        - "device_online"
+        - "device_offline"
+        - "channel_total"
+        - "channel_online"
+        - "platform_bindings"
+        - "active_sources"
+        - "live_sessions"
+        - "playback_sessions"
+        - "download_sessions"
+        - "voice_sessions"
+        - "transfer_sessions"
+        - "cleanup_pending"
+      "type": "object"
+    "CreateRequest":
+      "additionalProperties": false
+      "properties":
+        "config":
+          "$ref": "#/components/schemas/DesiredConfig"
+        "enable":
+          "type": "boolean"
+        "id":
+          "type": "string"
+      "required":
+        - "id"
+        - "config"
+      "type": "object"
+    "DeploymentTemplate":
+      "additionalProperties": false
+      "properties":
+        "content":
+          "type": "string"
+        "format":
+          "type": "string"
+        "warnings":
+          "items":
+            "type": "string"
+          "type": "array"
+      "required":
+        - "format"
+        - "content"
+        - "warnings"
+      "type": "object"
+    "DesiredConfig":
+      "additionalProperties": false
+      "properties":
+        "credential_id":
+          "nullable": true
+          "type": "string"
+        "default_media_server_id":
+          "nullable": true
+          "type": "string"
+        "description":
+          "type": "string"
+          "maxLength": 500
+        "group":
+          "type": "string"
+          "maxLength": 64
+        "heartbeat_interval_ms":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 5000
+          "maximum": 60000
+        "heartbeat_timeout_ms":
+          "format": "int64"
+          "type": "integer"
+        "lease_ttl_ms":
+          "format": "int64"
+          "type": "integer"
+          "maximum": 300000
+        "max_media_sessions":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 1
+          "maximum": 10000
+        "max_to_a_bps":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "max_to_device_bps":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "max_transfer_sessions":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 0
+          "maximum": 1000
+        "media_connect_timeout_ms":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 1000
+          "maximum": 60000
+        "media_first_packet_timeout_ms":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 1000
+          "maximum": 60000
+        "media_port_end":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 1
+          "maximum": 65535
+        "media_port_start":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 1
+          "maximum": 65535
+        "name":
+          "type": "string"
+          "minLength": 1
+          "maxLength": 80
+        "platform_id":
+          "type": "string"
+        "proxy_ref":
+          "nullable": true
+          "description": "预留受控代理引用；当前实现须为null，非空明确返回CAPABILITY_UNSUPPORTED。"
+          "type": "string"
+        "public_ip":
+          "type": "string"
+        "required_capabilities":
+          "items":
+            "type": "string"
+          "type": "array"
+          "uniqueItems": true
+        "sip_port":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 1
+          "maximum": 65535
+        "source_cidrs":
+          "items":
+            "type": "string"
+          "type": "array"
+          "maxItems": 128
+          "uniqueItems": true
+        "task_public_base_url":
+          "nullable": true
+          "type": "string"
+        "url":
+          "type": "string"
+          "maxLength": 512
+          "description": "仅允许 wss://host[:port]/gateway/v1/control，不接受用户信息、query 或 fragment；域名/IP须通过公网策略。"
+      "required":
+        - "public_ip"
+        - "sip_port"
+        - "media_port_start"
+        - "media_port_end"
+        - "task_public_base_url"
+        - "max_media_sessions"
+        - "max_transfer_sessions"
+        - "max_to_a_bps"
+        - "max_to_device_bps"
+        - "heartbeat_interval_ms"
+        - "heartbeat_timeout_ms"
+        - "lease_ttl_ms"
+        - "media_connect_timeout_ms"
+        - "media_first_packet_timeout_ms"
+        - "source_cidrs"
+        - "name"
+        - "group"
+        - "description"
+        - "url"
+        - "platform_id"
+        - "credential_id"
+        - "default_media_server_id"
+        - "required_capabilities"
+        - "proxy_ref"
+      "type": "object"
+    "DeviceIngressView":
+      "additionalProperties": false
+      "properties":
+        "binding_revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "channel_online":
+          "format": "int64"
+          "type": "integer"
+        "channel_total":
+          "format": "int64"
+          "type": "integer"
+        "device_code":
+          "type": "string"
+        "device_id":
+          "type": "string"
+        "gateway_id":
+          "nullable": true
+          "type": "string"
+        "ingress_type":
+          "type": "string"
+        "keepalive_at":
+          "nullable": true
+          "format": "date-time"
+          "type": "string"
+        "name":
+          "type": "string"
+        "online":
+          "type": "boolean"
+        "registered_at":
+          "nullable": true
+          "format": "date-time"
+          "type": "string"
+      "required":
+        - "device_id"
+        - "device_code"
+        - "name"
+        - "ingress_type"
+        - "gateway_id"
+        - "binding_revision"
+        - "online"
+        - "channel_total"
+        - "channel_online"
+        - "registered_at"
+        - "keepalive_at"
+      "type": "object"
+    "DiagnosticCheck":
+      "additionalProperties": false
+      "properties":
+        "duration_ms":
+          "format": "int64"
+          "type": "integer"
+        "msg":
+          "type": "string"
+        "name":
+          "type": "string"
+        "reason":
+          "type": "string"
+        "status":
+          "type": "string"
+      "required":
+        - "name"
+        - "status"
+        - "reason"
+        - "msg"
+        - "duration_ms"
+      "type": "object"
+    "DiagnosticResult":
+      "additionalProperties": false
+      "properties":
+        "can_enable":
+          "type": "boolean"
+        "capabilities":
+          "items":
+            "type": "string"
+          "type": "array"
+        "checked_at":
+          "format": "date-time"
+          "type": "string"
+        "checks":
+          "items":
+            "$ref": "#/components/schemas/DiagnosticCheck"
+          "type": "array"
+        "config_revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "gateway_id":
+          "type": "string"
+        "media_path_verified":
+          "type": "boolean"
+      "required":
+        - "checked_at"
+        - "checks"
+        - "gateway_id"
+        - "config_revision"
+        - "capabilities"
+        - "can_enable"
+        - "media_path_verified"
+      "type": "object"
+    "DraftTestRequest":
+      "additionalProperties": false
+      "properties":
+        "draft_id":
+          "type": "string"
+      "required":
+        - "draft_id"
+      "type": "object"
+    "EffectiveConfig":
+      "additionalProperties": false
+      "properties":
+        "heartbeat_interval_ms":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 5000
+          "maximum": 60000
+        "heartbeat_timeout_ms":
+          "format": "int64"
+          "type": "integer"
+        "lease_ttl_ms":
+          "format": "int64"
+          "type": "integer"
+          "maximum": 300000
+        "max_media_sessions":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 1
+          "maximum": 10000
+        "max_to_a_bps":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "max_to_device_bps":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "max_transfer_sessions":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 0
+          "maximum": 1000
+        "media_connect_timeout_ms":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 1000
+          "maximum": 60000
+        "media_first_packet_timeout_ms":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 1000
+          "maximum": 60000
+        "media_port_end":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 1
+          "maximum": 65535
+        "media_port_start":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 1
+          "maximum": 65535
+        "public_ip":
+          "type": "string"
+        "sip_port":
+          "format": "int64"
+          "type": "integer"
+          "minimum": 1
+          "maximum": 65535
+        "source_cidrs":
+          "items":
+            "type": "string"
+          "type": "array"
+          "maxItems": 128
+          "uniqueItems": true
+        "task_public_base_url":
+          "nullable": true
+          "type": "string"
+      "required":
+        - "public_ip"
+        - "sip_port"
+        - "media_port_start"
+        - "media_port_end"
+        - "task_public_base_url"
+        - "max_media_sessions"
+        - "max_transfer_sessions"
+        - "max_to_a_bps"
+        - "max_to_device_bps"
+        - "heartbeat_interval_ms"
+        - "heartbeat_timeout_ms"
+        - "lease_ttl_ms"
+        - "media_connect_timeout_ms"
+        - "media_first_packet_timeout_ms"
+        - "source_cidrs"
+      "type": "object"
+    "Endpoint":
+      "additionalProperties": false
+      "properties":
+        "ip":
+          "type": "string"
+        "port":
+          "format": "int64"
+          "type": "integer"
+      "required":
+        - "ip"
+        - "port"
+      "type": "object"
+    "Endpoints":
+      "additionalProperties": false
+      "properties":
+        "rtcp":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/Endpoint"
+          "nullable": true
+          "type": "object"
+        "rtp":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/Endpoint"
+          "nullable": true
+          "type": "object"
+      "required":
+        - "rtp"
+        - "rtcp"
+      "type": "object"
+    "Error":
+      "additionalProperties": false
+      "properties":
+        "code":
+          "type": "string"
+        "details":
+          "additionalProperties": {}
+          "type": "object"
+        "message":
+          "type": "string"
+        "retry_after_ms":
+          "format": "int64"
+          "type": "integer"
+        "retryable":
+          "type": "boolean"
+      "required":
+        - "code"
+        - "message"
+        - "retryable"
+        - "retry_after_ms"
+        - "details"
+      "type": "object"
+    "EventView":
+      "additionalProperties": false
+      "properties":
+        "actor":
+          "type": "string"
+        "details": {}
+        "event_id":
+          "type": "string"
+        "occurred_at":
+          "format": "date-time"
+          "type": "string"
+        "reason":
+          "type": "string"
+        "subject_id":
+          "nullable": true
+          "type": "string"
+        "subject_type":
+          "nullable": true
+          "type": "string"
+        "trace_id":
+          "type": "string"
+        "type":
+          "type": "string"
+      "required":
+        - "event_id"
+        - "type"
+        - "occurred_at"
+        - "actor"
+        - "subject_type"
+        - "subject_id"
+        - "reason"
+        - "trace_id"
+        - "details"
+      "type": "object"
+    "GatewayView":
+      "additionalProperties": false
+      "properties":
+        "admin_state":
+          "type": "string"
+          "enum":
+            - "draft"
+            - "enabled"
+            - "draining"
+            - "disabled"
+        "applied_config":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/EffectiveConfig"
+          "nullable": true
+          "type": "object"
+        "applied_revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "capabilities":
+          "items":
+            "type": "string"
+          "type": "array"
+        "certificate":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/Certificate"
+          "nullable": true
+          "type": "object"
+        "config_revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "connected_at":
+          "nullable": true
+          "format": "date-time"
+          "type": "string"
+        "connection_state":
+          "type": "string"
+          "enum":
+            - "disconnected"
+            - "connecting"
+            - "authenticating"
+            - "connected"
+            - "reconnecting"
+        "counts":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/Counts"
+          "nullable": true
+          "type": "object"
+        "counts_error":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/Error"
+          "nullable": true
+          "type": "object"
+        "description":
+          "type": "string"
+        "desired_config":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/DesiredConfig"
+          "nullable": true
+          "type": "object"
+        "group":
+          "type": "string"
+        "health_state":
+          "type": "string"
+          "enum":
+            - "unknown"
+            - "ready"
+            - "degraded"
+            - "unavailable"
+        "id":
+          "type": "string"
+        "last_error":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/Error"
+          "nullable": true
+          "type": "object"
+        "last_seen_at":
+          "nullable": true
+          "format": "date-time"
+          "type": "string"
+        "metrics":
+          "$ref": "#/components/schemas/Metrics"
+        "metrics_stale":
+          "type": "boolean"
+        "name":
+          "type": "string"
+        "pending_operation_id":
+          "nullable": true
+          "type": "string"
+        "received_at":
+          "nullable": true
+          "format": "date-time"
+          "type": "string"
+        "revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "sampled_at":
+          "format": "date-time"
+          "type": "string"
+        "snapshot_id":
+          "type": "string"
+        "stale":
+          "type": "boolean"
+      "required":
+        - "id"
+        - "name"
+        - "group"
+        - "description"
+        - "revision"
+        - "config_revision"
+        - "applied_revision"
+        - "admin_state"
+        - "connection_state"
+        - "health_state"
+        - "pending_operation_id"
+        - "last_seen_at"
+        - "connected_at"
+        - "last_error"
+        - "capabilities"
+        - "certificate"
+        - "counts"
+        - "counts_error"
+        - "metrics"
+        - "metrics_stale"
+        - "snapshot_id"
+        - "sampled_at"
+        - "received_at"
+        - "stale"
+      "type": "object"
+    "MetricPoint":
+      "additionalProperties": false
+      "properties":
+        "sampled_at":
+          "format": "date-time"
+          "type": "string"
+        "valid":
+          "type": "boolean"
+        "values": {}
+      "required":
+        - "sampled_at"
+        - "valid"
+        - "values"
+      "type": "object"
+    "MetricSeries":
+      "additionalProperties": false
+      "properties":
+        "points":
+          "items":
+            "$ref": "#/components/schemas/MetricPoint"
+          "type": "array"
+        "stale":
+          "type": "boolean"
+        "step_seconds":
+          "format": "int64"
+          "type": "integer"
+      "required":
+        - "points"
+        - "step_seconds"
+        - "stale"
+      "type": "object"
+    "Metrics":
+      "additionalProperties": false
+      "properties":
+        "cpu_percent":
+          "nullable": true
+          "type": "number"
+        "device_rx_bytes":
+          "nullable": true
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "device_tx_bytes":
+          "nullable": true
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "port_total":
+          "nullable": true
+          "format": "int64"
+          "type": "integer"
+        "port_used":
+          "nullable": true
+          "format": "int64"
+          "type": "integer"
+        "queue_bytes":
+          "nullable": true
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "rss_bytes":
+          "nullable": true
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "rtt_ms":
+          "nullable": true
+          "type": "number"
+        "to_a_bps":
+          "nullable": true
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "to_device_bps":
+          "nullable": true
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "wss_rx_bytes":
+          "nullable": true
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "wss_tx_bytes":
+          "nullable": true
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+      "required":
+        - "device_rx_bytes"
+        - "device_tx_bytes"
+        - "queue_bytes"
+        - "to_a_bps"
+        - "to_device_bps"
+        - "wss_rx_bytes"
+        - "wss_tx_bytes"
+        - "rtt_ms"
+        - "port_total"
+        - "port_used"
+        - "cpu_percent"
+        - "rss_bytes"
+      "type": "object"
+    "MigrationRequest":
+      "additionalProperties": false
+      "properties":
+        "expires_at":
+          "format": "date-time"
+          "type": "string"
+        "source_gateway_id":
+          "nullable": true
+          "type": "string"
+        "subjects":
+          "items":
+            "$ref": "#/components/schemas/Subject"
+          "type": "array"
+          "minItems": 1
+          "maxItems": 500
+        "target_gateway_id":
+          "nullable": true
+          "type": "string"
+      "required":
+        - "source_gateway_id"
+        - "target_gateway_id"
+        - "subjects"
+        - "expires_at"
+      "type": "object"
+    "Operation":
+      "additionalProperties": false
+      "properties":
+        "created_at":
+          "format": "date-time"
+          "type": "string"
+        "deadline_at":
+          "nullable": true
+          "format": "date-time"
+          "type": "string"
+        "error":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/Error"
+          "nullable": true
+          "type": "object"
+        "gateway_id":
+          "nullable": true
+          "type": "string"
+        "operation_id":
+          "type": "string"
+        "progress":
+          "$ref": "#/components/schemas/Progress"
+        "result": {}
+        "revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "status":
+          "type": "string"
+        "step":
+          "type": "string"
+        "type":
+          "type": "string"
+        "updated_at":
+          "format": "date-time"
+          "type": "string"
+      "required":
+        - "operation_id"
+        - "gateway_id"
+        - "type"
+        - "status"
+        - "step"
+        - "progress"
+        - "revision"
+        - "created_at"
+        - "updated_at"
+        - "deadline_at"
+        - "result"
+        - "error"
+      "type": "object"
+    "PageDeviceIngressView":
+      "additionalProperties": false
+      "properties":
+        "items":
+          "items":
+            "$ref": "#/components/schemas/DeviceIngressView"
+          "type": "array"
+        "page":
+          "format": "int64"
+          "type": "integer"
+        "sampled_at":
+          "format": "date-time"
+          "type": "string"
+        "size":
+          "format": "int64"
+          "type": "integer"
+        "snapshot_id":
+          "type": "string"
+        "stale":
+          "type": "boolean"
+        "total":
+          "format": "int64"
+          "type": "integer"
+      "required":
+        - "items"
+        - "total"
+        - "page"
+        - "size"
+        - "snapshot_id"
+        - "sampled_at"
+        - "stale"
+      "type": "object"
+    "PageGatewayView":
+      "additionalProperties": false
+      "properties":
+        "items":
+          "items":
+            "$ref": "#/components/schemas/GatewayView"
+          "type": "array"
+        "page":
+          "format": "int64"
+          "type": "integer"
+        "sampled_at":
+          "format": "date-time"
+          "type": "string"
+        "size":
+          "format": "int64"
+          "type": "integer"
+        "snapshot_id":
+          "type": "string"
+        "stale":
+          "type": "boolean"
+        "total":
+          "format": "int64"
+          "type": "integer"
+      "required":
+        - "items"
+        - "total"
+        - "page"
+        - "size"
+        - "snapshot_id"
+        - "sampled_at"
+        - "stale"
+      "type": "object"
+    "PageEventView":
+      "additionalProperties": false
+      "properties":
+        "items":
+          "items":
+            "$ref": "#/components/schemas/EventView"
+          "type": "array"
+        "page":
+          "format": "int64"
+          "type": "integer"
+        "sampled_at":
+          "format": "date-time"
+          "type": "string"
+        "size":
+          "format": "int64"
+          "type": "integer"
+        "snapshot_id":
+          "type": "string"
+        "stale":
+          "type": "boolean"
+        "total":
+          "format": "int64"
+          "type": "integer"
+      "required":
+        - "items"
+        - "total"
+        - "page"
+        - "size"
+        - "snapshot_id"
+        - "sampled_at"
+        - "stale"
+      "type": "object"
+    "PagePlatformView":
+      "additionalProperties": false
+      "properties":
+        "items":
+          "items":
+            "$ref": "#/components/schemas/PlatformView"
+          "type": "array"
+        "page":
+          "format": "int64"
+          "type": "integer"
+        "sampled_at":
+          "format": "date-time"
+          "type": "string"
+        "size":
+          "format": "int64"
+          "type": "integer"
+        "snapshot_id":
+          "type": "string"
+        "stale":
+          "type": "boolean"
+        "total":
+          "format": "int64"
+          "type": "integer"
+      "required":
+        - "items"
+        - "total"
+        - "page"
+        - "size"
+        - "snapshot_id"
+        - "sampled_at"
+        - "stale"
+      "type": "object"
+    "PageSessionView":
+      "additionalProperties": false
+      "properties":
+        "items":
+          "items":
+            "$ref": "#/components/schemas/SessionView"
+          "type": "array"
+        "page":
+          "format": "int64"
+          "type": "integer"
+        "sampled_at":
+          "format": "date-time"
+          "type": "string"
+        "size":
+          "format": "int64"
+          "type": "integer"
+        "snapshot_id":
+          "type": "string"
+        "stale":
+          "type": "boolean"
+        "total":
+          "format": "int64"
+          "type": "integer"
+      "required":
+        - "items"
+        - "total"
+        - "page"
+        - "size"
+        - "snapshot_id"
+        - "sampled_at"
+        - "stale"
+      "type": "object"
+    "PlatformView":
+      "additionalProperties": false
+      "properties":
+        "authenticated_at":
+          "format": "date-time"
+          "type": "string"
+        "binding_revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "id":
+          "type": "string"
+        "ingress_type":
+          "type": "string"
+        "online":
+          "type": "boolean"
+        "role":
+          "type": "string"
+          "enum":
+            - "upstream"
+            - "downstream"
+        "state":
+          "type": "string"
+          "enum":
+            - "online"
+            - "offline"
+        "subject_id":
+          "type": "string"
+        "subject_type":
+          "type": "string"
+      "required":
+        - "state"
+        - "online"
+        - "id"
+        - "subject_type"
+        - "subject_id"
+        - "role"
+        - "ingress_type"
+        - "binding_revision"
+        - "authenticated_at"
+      "type": "object"
+    "Progress":
+      "additionalProperties": false
+      "properties":
+        "completed":
+          "format": "int64"
+          "type": "integer"
+        "total":
+          "format": "int64"
+          "type": "integer"
+      "required":
+        - "completed"
+        - "total"
+      "type": "object"
+    "ReasonRequest":
+      "additionalProperties": false
+      "properties":
+        "reason":
+          "type": "string"
+      "required":
+        - "reason"
+      "type": "object"
+    "RotationRequest":
+      "additionalProperties": false
+      "properties":
+        "drain_timeout_ms":
+          "format": "int64"
+          "type": "integer"
+        "new_credential_id":
+          "type": "string"
+      "required":
+        - "new_credential_id"
+      "type": "object"
+    "SessionTraffic":
+      "additionalProperties": false
+      "properties":
+        "queue_bytes":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "rx_bps":
+          "nullable": true
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "rx_bytes":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "sampled_at":
+          "format": "date-time"
+          "type": "string"
+        "tx_bps":
+          "nullable": true
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "tx_bytes":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+      "required":
+        - "sampled_at"
+        - "rx_bytes"
+        - "tx_bytes"
+        - "rx_bps"
+        - "tx_bps"
+        - "queue_bytes"
+      "type": "object"
+    "SessionView":
+      "additionalProperties": false
+      "properties":
+        "binding_revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "channel_id":
+          "nullable": true
+          "type": "string"
+        "cleanup_steps":
+          "$ref": "#/components/schemas/CleanupSteps"
+        "closed_at":
+          "nullable": true
+          "format": "date-time"
+          "type": "string"
+        "config_revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "connection_epoch":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "created_at":
+          "format": "date-time"
+          "type": "string"
+        "direction":
+          "type": "string"
+        "error":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/Error"
+          "nullable": true
+          "type": "object"
+        "expires_at":
+          "nullable": true
+          "format": "date-time"
+          "type": "string"
+        "generation":
+          "type": "string"
+        "id":
+          "type": "string"
+        "local_endpoint":
+          "$ref": "#/components/schemas/Endpoints"
+        "local_mode":
+          "type": "string"
+        "media_server_id":
+          "nullable": true
+          "type": "string"
+        "public_endpoint":
+          "$ref": "#/components/schemas/Endpoints"
+        "purpose":
+          "type": "string"
+        "remote_id":
+          "type": "string"
+        "resource_type":
+          "type": "string"
+        "rx_bytes":
+          "nullable": true
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "send_ssrc":
+          "nullable": true
+          "type": "string"
+        "ssrc":
+          "nullable": true
+          "type": "string"
+        "state":
+          "type": "string"
+        "stream_id":
+          "nullable": true
+          "type": "string"
+        "subject_id":
+          "type": "string"
+        "subject_type":
+          "type": "string"
+        "traffic":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/SessionTraffic"
+          "nullable": true
+          "type": "object"
+        "tx_bytes":
+          "nullable": true
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "wire_mode":
+          "type": "string"
+      "required":
+        - "media_server_id"
+        - "stream_id"
+        - "traffic"
+        - "id"
+        - "resource_type"
+        - "remote_id"
+        - "generation"
+        - "connection_epoch"
+        - "subject_type"
+        - "subject_id"
+        - "channel_id"
+        - "binding_revision"
+        - "config_revision"
+        - "purpose"
+        - "state"
+        - "wire_mode"
+        - "local_mode"
+        - "direction"
+        - "ssrc"
+        - "send_ssrc"
+        - "public_endpoint"
+        - "local_endpoint"
+        - "created_at"
+        - "expires_at"
+        - "closed_at"
+        - "cleanup_steps"
+        - "error"
+        - "rx_bytes"
+        - "tx_bytes"
+      "type": "object"
+    "StateRequest":
+      "additionalProperties": false
+      "properties":
+        "drain_timeout_ms":
+          "format": "int64"
+          "type": "integer"
+        "force":
+          "type": "boolean"
+        "state":
+          "type": "string"
+          "enum":
+            - "enabled"
+            - "draining"
+            - "disabled"
+      "required":
+        - "state"
+      "type": "object"
+    "Subject":
+      "additionalProperties": false
+      "properties":
+        "binding_revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "id":
+          "type": "string"
+        "type":
+          "type": "string"
+          "enum":
+            - "device"
+            - "platform"
+      "required":
+        - "type"
+        - "id"
+        - "binding_revision"
+      "type": "object"
+    "UpdateRequest":
+      "additionalProperties": false
+      "properties":
+        "config":
+          "$ref": "#/components/schemas/DesiredConfig"
+      "required":
+        - "config"
+      "type": "object"
+    "HTTPError":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "msg":
+          "type": "string"
+        "reason":
+          "type": "string"
+        "trace_id":
+          "type": "string"
+        "details":
+          "type": "object"
+          "additionalProperties": true
+      "required":
+        - "msg"
+        - "reason"
+        - "trace_id"
+        - "details"
+    "MigrationItem":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "id":
+          "type": "string"
+        "subject_type":
+          "type": "string"
+          "enum":
+            - "device"
+            - "platform"
+        "subject_id":
+          "type": "string"
+        "binding_revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "state":
+          "type": "string"
+        "error":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/Error"
+          "nullable": true
+          "type": "object"
+        "revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+      "required":
+        - "id"
+        - "subject_type"
+        - "subject_id"
+        - "binding_revision"
+        - "state"
+        - "error"
+        - "revision"
+    "Migration":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "id":
+          "type": "string"
+        "source":
+          "type": "string"
+          "nullable": true
+        "target":
+          "type": "string"
+          "nullable": true
+        "state":
+          "type": "string"
+        "revision":
+          "description": "非负 int64 十进制字符串，最大 9223372036854775807"
+          "pattern": "^(0|[1-9][0-9]*)$"
+          "type": "string"
+        "operation_id":
+          "type": "string"
+        "expires_at":
+          "type": "string"
+          "format": "date-time"
+        "counts":
+          "type": "object"
+          "additionalProperties":
+            "type": "integer"
+        "items":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/MigrationItem"
+        "page":
+          "type": "integer"
+        "size":
+          "type": "integer"
+      "required":
+        - "id"
+        - "source"
+        - "target"
+        - "state"
+        - "revision"
+        - "operation_id"
+        - "expires_at"
+        - "counts"
+        - "items"
+        - "page"
+        - "size"
+    "Empty":
+      "type": "object"
+      "additionalProperties": false
+      "properties": {}
+    "Deleted":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "id":
+          "type": "string"
+        "deleted":
+          "type": "boolean"
+      "required":
+        - "id"
+        - "deleted"
+    "Closed":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "id":
+          "type": "string"
+        "closed":
+          "type": "boolean"
+      "required":
+        - "id"
+        - "closed"

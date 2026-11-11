@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import GatewaySummary from "../features/access-gateway/components/GatewaySummary.vue";
 import { computed, defineAsyncComponent, onMounted, ref } from "vue";
 import {
   Activity,
@@ -367,6 +368,7 @@ onMounted(load);
 
 <template>
   <main class="page-content overview-page">
+    <GatewaySummary />
     <header class="page-head">
       <div>
         <h1 class="page-title">运行总览</h1>

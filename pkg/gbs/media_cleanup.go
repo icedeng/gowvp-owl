@@ -124,7 +124,25 @@ func (g *GB28181API) cleanupMediaStreamContext(ctx context.Context, key string, 
 		}
 		cleanupErr = errors.Join(cleanupErr, err)
 	}
-	complete := stream.dialogStopped && stream.rtpClosed
+	bridgeClosed := true
+	if stream.externalMedia != nil {
+		err := stream.externalMedia.Close(ctx)
+		bridgeClosed = err == nil
+		cleanupErr = errors.Join(cleanupErr, err)
+	}
+	if stream.externalTransfer != nil && stream.dialogStopped && stream.rtpClosed {
+		err := stream.externalTransfer.Close(ctx)
+		cleanupErr = errors.Join(cleanupErr, err)
+		bridgeClosed = bridgeClosed && err == nil
+	}
+	if finalizer, ok := stream.externalMedia.(interface {
+		FinishCleanup(context.Context, bool, bool) error
+	}); ok {
+		err := finalizer.FinishCleanup(ctx, stream.dialogStopped, stream.rtpClosed)
+		cleanupErr = errors.Join(cleanupErr, err)
+		bridgeClosed = bridgeClosed && err == nil
+	}
+	complete := stream.dialogStopped && stream.rtpClosed && bridgeClosed
 	stream.cleanupMu.Unlock()
 
 	if complete && g.streams != nil {

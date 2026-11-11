@@ -19,11 +19,21 @@ type Bootstrap struct {
 	// AISecret 进程内随机 UUID，用于 Python AI 回调鉴权，重启后失效，不写配置文件
 	AISecret string `toml:"-" json:"-"`
 
-	Server Server // 服务器
-	Data   Data   // 数据
-	Log    Log    // 日志
-	Sip    SIP
-	Media  Media // 媒体
+	Server        Server // 服务器
+	Data          Data   // 数据
+	Log           Log    // 日志
+	Sip           SIP
+	Media         Media         // 媒体
+	AccessGateway AccessGateway `comment:"国标公网接入网关 WSS 模块，网关配置由数据库管理"`
+}
+
+type AccessGateway struct {
+	Enabled             bool   `comment:"是否启用公网接入网关模块，默认关闭"`
+	PlatformID          string `comment:"本 A 实例的平台身份，必须与 B 的授权平台一致"`
+	CredentialDir       string `comment:"网关客户端凭据目录，0700，仅运行账号可读写"`
+	MaxConnections      int    `comment:"A 可连接的网关总数"`
+	MaxMediaSessions    int    `comment:"A 的网关媒体源总额度"`
+	MaxTransferSessions int    `comment:"A 的网关文件任务总额度"`
 }
 
 type Server struct {
@@ -336,6 +346,7 @@ func ValidateRegisterCertificateAuthConfig(config SIPRegisterCertificateAuth) er
 
 // SIPUpstream 描述一个上级 GB/T 28181 平台的注册参数。
 type SIPUpstream struct {
+	AccessGatewayID         string                             `json:"access_gateway_id,omitempty" comment:"公网接入网关稳定 ID；空值保留直连"`
 	Name                    string                             `json:"name" comment:"上级平台配置名称，必须唯一"`
 	Enabled                 bool                               `json:"enabled" comment:"是否启用级联注册"`
 	ServerID                string                             `json:"server_id" comment:"上级平台 20 位国标编码"`

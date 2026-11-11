@@ -10,7 +10,7 @@ const el = shallowRef<HTMLDivElement>()
 let chart: echarts.ECharts | undefined
 let motionPreference: MediaQueryList | undefined
 let reduceMotion = false
-const props = withDefaults(defineProps<{ values?: number[]; labels?: string[]; ariaLabel?: string }>(), {
+const props = withDefaults(defineProps<{ values?: (number | null)[]; labels?: string[]; ariaLabel?: string }>(), {
   values: () => [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   labels: () => ['03','05','07','09','11','13','15','17','19','21','23','01'],
   ariaLabel: '趋势图',

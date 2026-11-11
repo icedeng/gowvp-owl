@@ -268,3 +268,11 @@ docker/build/zlm_tar/arm64:
 # docker load -i /home/app/<dir>/gowvp-amd64.tar
 # docker load -i /home/app/<dir>/gowvp-arm64.tar
 # docker run --rm -it gowvp:amd64   # 或 gowvp:arm64
+
+# 公网接入网关独立构建；A 继续使用原有构建和发布目标。
+.PHONY: build/access-gateway check/access-gateway-boundaries
+build/access-gateway:
+	@bash extensions/accessgateway/scripts/build-gateway.sh
+
+check/access-gateway-boundaries:
+	@bash extensions/accessgateway/scripts/check-boundaries.sh

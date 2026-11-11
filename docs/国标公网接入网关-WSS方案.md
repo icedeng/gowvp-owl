@@ -1,8 +1,8 @@
 # 国标公网接入网关 WSS 方案
 
-状态：开发设计基线 v1，尚未实施。日期：2026-11-10。本版以多公网接入网关和 A 端统一配置管理为正式交付要求，传输、持久化、界面、统计和运维一起交付。
+状态：WSS v1 开发已实现；A 端于 2026-11-11 更新到 10.144.0.20 并启用模块，B 端公网接入和真实设备验收待执行。见 [A 端发布记录](../deploy/releases/v2.0.8-wss-gateway1.md)和[开发交付记录](../extensions/accessgateway/docs/development.md)。
 
-阅读顺序：第 1—14 节定义架构、功能和交付边界；第 15—18 节固定开发契约、数据约束、业务时序和异常处理；第 19 节固定功能目录、依赖方向和原项目集成边界。实现中以详细章节的具体约定为准；修改跨端契约须同步更新本文和相关实现，不能由某一端静默变更。本文件定义的是待开发功能，字段和接口不表示当前程序已经支持。
+阅读顺序：第 1—14 节定义架构、功能和交付边界；第 15—18 节固定开发契约、数据约束、业务时序和异常处理；第 19 节固定功能目录、依赖方向和原项目集成边界。实现中以详细章节的具体约定为准；修改跨端契约须同步更新本文和相关实现，不能由某一端静默变更。本文保留完整功能和开发契约；实现入口为 `extensions/accessgateway/`，管理接口见 [OpenAPI](../extensions/accessgateway/contracts/admin.openapi.yaml)。源码和自动检查通过不代表公网部署或厂商互通已验收。
 
 ## 1. 目标与架构决策
 
@@ -252,7 +252,7 @@ SDP 的 `c=`、相关 `o=` 地址及 `m=video` 端口由统一端点解析器生
 
 ## 8. WSS 协议概览
 
-使用标准 RFC6455 WebSocket over TLS，初期使用 HTTP/1.1 Upgrade，子协议 `owl-gateway.v1`。禁用 WebSocket 压缩。以下路径、字段和错误码是待实现的内部协议，不是当前已有 API。
+使用标准 RFC6455 WebSocket over TLS，初期使用 HTTP/1.1 Upgrade，子协议 `owl-gateway.v1`。禁用 WebSocket 压缩。以下路径、字段和错误码对应 `extensions/accessgateway/protocol/` 的共享内部协议。
 
 | 路径 | 用途 | 连接身份 |
 | --- | --- | --- |
@@ -390,7 +390,7 @@ WSS 的加密范围是 A↔B；设备↔B 仍取决于设备实际使用的 SIP/
 
 ## 11. A 端统一配置、管理界面与数据契约
 
-本节为正式交付内容。A 的网关配置以数据库为运行时唯一来源，管理端调用 A 后端完成测试和连接，浏览器不直连 B，也不持有平台私钥。下述路由、字段、表名均为待实施契约，不是当前版本已有功能。
+本节为正式交付内容。A 的网关配置以数据库为运行时唯一来源，管理端调用 A 后端完成测试和连接，浏览器不直连 B，也不持有平台私钥。下述路由、字段与表名对应已实现的管理契约；模块默认关闭，需按部署手册启用。
 
 ### 11.1 网关管理器
 
@@ -567,12 +567,13 @@ A 的原有配置文件仅保留网关模块总开关、平台身份、凭据存
 
 ### 11.10 B 配置与多网关接入示例
 
-B 的本地配置用于首次部署、身份认证与可调整边界。以下 TOML 是待实现配置草案，不可直接用于当前版本启动：
+B 的本地配置用于首次部署、身份认证与可调整边界。以下为配置结构示例，部署时使用[完整配置模板](../extensions/accessgateway/deploy/gateway/gateway.example.toml)，替换身份、地址与证书：
 
 ```toml
 gateway_id = "gateway-b1"
 listen = ":443"
 public_ip = "203.0.113.10" # 文档示例地址，部署时替换
+allowed_public_ips = ["203.0.113.10"]
 sip_listen = ":15060"
 media_port_range = "30000-30199"
 tls_cert_file = "/etc/owl-gateway/tls/gateway-b1.crt"
@@ -584,6 +585,9 @@ state_dir = "/var/lib/owl-gateway"
 id = "platform-a"
 client_certificate_cn = "platform-a"
 max_media_sessions = 64
+max_transfer_sessions = 0 # 此精简示例未配置任务 HTTPS；完整模板支持任务入口
+max_to_a_bps = 100000000
+max_to_device_bps = 100000000
 ```
 
 A 管理页面分别新增：
@@ -739,11 +743,14 @@ JSON 限 UTF-8，拒绝重复字段、未知字段、错误类型及超限消息
 | `Binding` | `subject_type:device/platform,subject_id:string,flow_id:UUID,binding_revision:decimal-string,expires_in_ms:int`；subject_id 为 A 内部主键 |
 | `MediaSpec` | `subject_type,subject_id,channel_id:string或null,purpose:live/playback/download/talk/broadcast/cascade,direction,wire_mode:udp/tcp_passive/tcp_active,ssrc:string或null,send_ssrc:string或null,flow_id,config_revision,source_ips:string[],rtcp:disabled/udp_separate/tcp_mux` |
 | `Lease` | `session_id:UUID,state,public_rtp:Endpoint或null,public_rtcp:Endpoint或null,lease_ttl_ms:int,attach_ttl_ms:int,config_revision,wire_mode,direction` |
-| `TransferSpec` | `task_id:UUID,subject_id:string,kind:snapshot_upload/upgrade_download/raw_download,direction,max_bytes:decimal-string,ttl_ms:int,content_type:string,expected_sha256:string或null`；raw_download增加wire_mode/source_ips；upgrade_download增加content_length/sha256/range_offset/range_length（十进制长度，hash为hex） |
+| `TransferSpec` | `task_id:UUID,subject_type:device/platform（可选，省略按device）,subject_id:string,kind:snapshot_upload/upgrade_download/raw_download,direction,max_bytes:decimal-string,ttl_ms:int,content_type:string,expected_sha256:string或null`；raw_download增加wire_mode/source_ips；upgrade_download增加content_length/sha256/range_offset/range_length（十进制长度，hash为hex） |
 | `ResourceRef` | `resource_type:media/transfer/flow,id:UUID,generation:UUID,connection_epoch:decimal-string`，只用于精确清理旧资源 |
+| `ResourceTraffic` | `ref:ResourceRef,rx_bytes/tx_bytes/queue_bytes:decimal-string`；设备侧实际负载字节和待发队列，仅采样本次分片已续租、同代次且不重复的资源 |
 | `ResourceRecord` | `ref:ResourceRef,operation_id:UUID或null,subject_type,subject_id,binding_revision,config_revision,state,remaining_ttl_ms:int,bytes_received/bytes_sent:decimal-string,local_eof/remote_eof:bool`，用于恢复对账，不含附着票据 |
 
 MediaSpec 的 SSRC 是 10 位十进制国标值并按现有规则校验；ssrc用于device_to_a，send_ssrc用于a_to_device，无对应方向时null，duplex同时声明。语音/多媒体腿分别申请独立租约；同一TCP连接复用双向音频时用一个duplex租约保存两个方向的SSRC，不混为同一个值。RTCP 与 RTP 通过租约的同一会话关联，允许的 RTCP 报告者 SSRC 按 SDP/会话角色校验，不能简单要求所有 RTCP 头的 SSRC 都等于视频源 SSRC。
+
+`configured_platform=true` 仅用于 A 已保存并通过权限与迁移检查的上级平台配置，目标为公网字面 IP、subject_type=platform；普通设备或下级平台的 TCP 升级继续核验已认证绑定，不能据此连接任意目标。TransferSpec 的平台主体同时覆盖下级平台任务和上级级联裸 TCP 发送，方向/目的由已认证绑定及 A 业务路径限定。
 
 能力名固定为 `sip_udp/sip_tcp/rtp_udp/rtp_tcp_passive/rtp_tcp_active/rtcp_udp/rtcp_tcp_mux/playback/rtp_download/raw_tcp_download/voice_duplex/broadcast/cascade/https_transfer`。B 声明可中继的能力，A 与真实媒体驱动、协议版本及设备能力取交集；不能仅因 B 支持 TCP 就宣告设备支持裸 TCP 下载或语音。
 
@@ -754,12 +761,12 @@ MediaSpec 的 SSRC 是 10 位十进制国标值并按现有规则校验；ssrc�
 | 请求 → 响应 / 方向 | 请求 payload | 成功响应 payload |
 | --- | --- | --- |
 | `hello → hello.ack` / A→B | `client_instance_id:UUID,supported_versions:int[],required_capabilities:string[],last_applied_revision:decimal-string` | `selected_version:int,capabilities:string[],config:GatewayEffectiveConfig,config_revision,heartbeat_interval_ms,heartbeat_timeout_ms,lease_ttl_ms,cooldown_remaining_ms:int` |
-| `heartbeat → heartbeat.ack` / A→B | `heartbeat_seq:decimal-string,renew_session_ids:UUID[],renew_transfer_ids:UUID[]` | `heartbeat_seq,renewed_session_ids,renewed_transfer_ids,rejected_ids:UUID[],drain_state:string`；续租仅限当前代次，不能靠存在一条控制连接续所有资源 |
-| `sip.flow.open → sip.flow.open.result` / A→B | `operation_id,subject_type,subject_id,target:Endpoint,transport:udp/tcp,binding_revision` | `route:Route`；设备仅TCP升级，平台允许UDP/TCP，限已授权配置的目标 |
+| `heartbeat → heartbeat.ack` / A→B | `heartbeat_seq:decimal-string,renew_session_ids:UUID[],renew_transfer_ids:UUID[],part_index/part_count:int（可选分片）` | `heartbeat_seq,renewed_session_ids,renewed_transfer_ids,rejected_ids:UUID[],drain_state:string,part_index/part_count:int（分片时回显）,traffic:ResourceTraffic[]（可选）`；续租仅限当前代次，不能靠存在一条控制连接续所有资源 |
+| `sip.flow.open → sip.flow.open.result` / A→B | `operation_id,subject_type,subject_id,target:Endpoint,transport:udp/tcp,binding_revision,configured_platform:bool（可选）` | `route:Route`；设备仅TCP升级，平台允许UDP/TCP，限已授权配置的目标 |
 | `sip.flow.close → sip.flow.close.result` / A→B | `operation_id,flow_id,reason:string` | `flow_id,closed:bool` |
 | `sip.binding.update → sip.binding.update.result` / A→B | `operation_id,action:bind/refresh/unbind,binding:Binding` | `subject_id,binding_revision,applied:bool` |
 | `media.open → media.open.result` / A→B | `operation_id,spec:MediaSpec` | `lease:Lease`；不直接包含可重复使用的附着票据 |
-| `media.connect → media.connect.result` / A→B | `operation_id,session_id,target:Endpoint` | `session_id,connected:bool`；只用于 tcp_active，目标经 A/B 双重校验 |
+| `media.connect → media.connect.result` / A→B | `operation_id,session_id,target:Endpoint,rtcp_target:Endpoint（可选）` | `session_id,connected:bool`；用于 tcp_active 建连，或为 udp 发送腿固定经校验的目标；udp_separate 发送腿须显式给出 rtcp_target，TCP 禁止该字段；目标经 A/B 双重校验 |
 | `attachment.issue → attachment.issue.result` / A→B | `operation_id,resource_type:media/transfer,resource_id:UUID` | `ticket:string,expires_in_ms:int`；只给当前代次尚未附着的资源，绑定此平台证书指纹 |
 | `media.close → media.close.result` / A→B | `operation_id,session_id,reason:string` | `session_id,closed:bool,cleanup_pending:bool` |
 | `resources.list → resources.list.result` / A→B | `resource_type:all/media/transfer/flow,cursor:string或null,size:int` | `items:ResourceRecord[],next_cursor:string或null`；size 1—200，仅返回本平台资源 |
@@ -882,7 +889,7 @@ B对终态transfer保留24小时的有界结果记录并落盘，内容只含平
 | `media_connect_timeout_ms/media_first_packet_timeout_ms` | int，默认 10000/30000，1000—60000 |
 | `source_cidrs` | string[]，最多 128；非空仅允许这些媒体源，空表示使用经认证设备的注册源 IP；不等于允许任意地址 |
 | `required_capabilities` | 第 15.2 节能力名数组，不重复；B/媒体节点不满足则禁止相关启用或操作 |
-| `proxy_ref` | string或null，服务端受控出站代理引用，浏览器不得提交含账号口令的任意代理 URL |
+| `proxy_ref` | string或null，预留服务端受控出站代理引用；当前实现须为null，非空明确拒绝，不隐式使用环境代理；浏览器不得提交含账号口令的任意代理 URL |
 
 `GatewayEffectiveConfig` 为可发给 B 的子集：`public_ip/sip_port/media_port_start/media_port_end/task_public_base_url/max_media_sessions/max_transfer_sessions/max_to_a_bps/max_to_device_bps/heartbeat_interval_ms/heartbeat_timeout_ms/lease_ttl_ms/media_connect_timeout_ms/media_first_packet_timeout_ms/source_cidrs`。不传 A 媒体节点地址、CA 私钥、出站代理或数据库配置。B 本地上限与该对象取交集并在 prepare 阶段校验，不能静默裁剪为不同配置。
 
@@ -922,6 +929,8 @@ B对终态transfer保留24小时的有界结果记录并落盘，内容只含平
 
 路径 `/:id/...` 在本表都位于 `/access_gateways`。迁移的 source/target 只支持已登记网关；direct↔gateway 切换使用同一迁移服务的内部入口策略，UI 需提供 direct 特殊选项并在 API 中以 null 网关 ID 表示 direct，不能创建一个假的网关记录。subject 仍使用内部主键和绑定版本。
 
+SessionView 的 `traffic` 为可空采样对象：`sampled_at,rx_bytes,tx_bytes,rx_bps,tx_bps,queue_bytes`；rx/tx 是 B 设备侧已校验的接收/发送负载，码率由连续且未过期的样本差分计算，缺失返回 null。心跳分片每15秒更新活动资源采样，关闭/清理仅改变生命周期，不覆盖最后采样；旧 generation/epoch 不能写入新会话。
+
 DiagnosticResult 为 `{checked_at,checks:[{name,status:passed/failed/skipped,reason,msg,duration_ms}],gateway_id,config_revision,capabilities,can_enable:bool,media_path_verified:bool}`。步骤限 DNS/TCP/TLS/mTLS/identity/protocol/config/capabilities；无真实设备回流证据时 media_path_verified=false。
 
 ```json
@@ -953,9 +962,9 @@ DiagnosticResult 为 `{checked_at,checks:[{name,status:passed/failed/skipped,rea
 | --- | --- | --- |
 | access_gateways | stable_id varchar64；name80/group64/description500；admin_state24；revision/config_revision/applied_revision int64；desired/applied_config JSON；credential_id UUID nullable；endpoint_active_key char64 nullable；owner_id UUID nullable、owner_epoch int64默认0、owner_expires_at nullable；pending_operation_id UUID nullable；deleted_at/last_seen_at/last_error JSON nullable | UNIQUE stable_id（包括逻辑删除）；UNIQUE endpoint_active_key；INDEX(admin_state,deleted_at)、INDEX(group,deleted_at) |
 | access_gateway_credentials | gateway_id；ca/cert/key_file_ref opaque string；证书与CA SHA256指纹char64；not_before/not_after；state staged/active/retiring/retired；revision | INDEX(gateway_id,state)；文件引用只由服务器生成；一个有效 config 仅引用一组凭据 |
-| access_gateway_bindings | subject_id为设备内部主键；ingress_type direct/gateway；gateway_id nullable；binding_revision int64；authenticated_at；last_generation UUID nullable；last_connection_epoch int64 nullable | UNIQUE subject_id；INDEX(gateway_id,subject_id)；direct 时 gateway_id=null；gateway 时引用有效网关 |
+| access_gateway_bindings | subject_id为设备内部主键；ingress_type direct/gateway；gateway_id nullable；binding_revision int64；authenticated_at；registered_until nullable（有效注册到期，注销立即到期）；last_generation UUID nullable；last_connection_epoch int64 nullable | UNIQUE subject_id；INDEX(gateway_id,subject_id)；direct 时 gateway_id=null；gateway 时引用有效网关 |
 | access_gateway_platform_bindings | subject_id为现有平台稳定内部身份；其余同设备绑定，另存平台角色 upstream/downstream | UNIQUE subject_id；INDEX(gateway_id,subject_id) |
-| access_gateway_sessions | gateway_id、resource_type media/transfer、remote_id UUID、generation UUID、connection_epoch/owner_epoch int64；subject_type/id、channel_id nullable、binding_revision/config_revision int64；purpose、wire_mode/local_mode、ssrc/send_ssrc nullable；media_server_id/stream_id nullable、原节点身份快照；public/local_endpoint JSON；state；cleanup_steps JSON；last_renewed_at、expires_at、closed_at nullable；error JSON nullable | UNIQUE(gateway_id,generation,connection_epoch,resource_type,remote_id)；INDEX(gateway_id,state)、INDEX(subject_type,subject_id,state)、INDEX(state,expires_at) |
+| access_gateway_sessions | gateway_id、resource_type media/transfer、remote_id UUID、generation UUID、connection_epoch/owner_epoch int64；subject_type/id、channel_id nullable、binding_revision/config_revision int64；purpose、wire_mode/local_mode、ssrc/send_ssrc nullable；media_server_id/stream_id nullable、原节点身份快照；public/local_endpoint JSON；state；cleanup_steps JSON；last_renewed_at、expires_at、closed_at nullable；traffic JSON nullable（采样时间、设备侧rx/tx累计字节与码率、queue_bytes）；error JSON nullable | UNIQUE(gateway_id,generation,connection_epoch,resource_type,remote_id)；INDEX(gateway_id,state)、INDEX(subject_type,subject_id,state)、INDEX(state,expires_at) |
 | access_gateway_ssrc_reservations | ssrc char10为主键；session_id UUID；state reserved/quarantined；reserved_at、quarantine_until nullable | UNIQUE ssrc；INDEX(state,quarantine_until)；未确认清理不得删除；与既有全局SSRC分配器共同校验，direct新会话也不得碰撞隔离值 |
 | access_gateway_operations | gateway_id nullable（多网关迁移另用subject关联）；type、status、step；expected_revision、operation_key_hash char64、request_hash char64；request_snapshot/result/error JSON；deadline_at nullable；revision | UNIQUE operation_key_hash；INDEX(gateway_id,status)、INDEX(status,updated_at) |
 | access_gateway_metrics | gateway_id；granularity_seconds int；bucket_at；sample_count/valid_count int；counters/gauges JSON；last_generation；last_sample_seq int64 | UNIQUE(gateway_id,granularity_seconds,bucket_at)；INDEX(bucket_at) |
@@ -1049,6 +1058,8 @@ UDP接收腿的本地socket既转设备→ZLM的RTP/RTCP，也接收ZLM回送至
 
 TCP复用模式中，整条RFC4571字节流双向转送。按协议校验复用帧和允许的RTP/RTCP类型；收到EOF执行写半关闭，不因一个方向暂时无包中止另一方向。
 
+UDP 发送腿在设备 SDP 应答通过原业务来源校验后调用 `media.connect` 固定目标。B 同时校验租约方向、来源策略和显式 RTCP 目标，已经固定的目标不能被后续报文或不同参数覆盖；`device_to_a` 租约仍仅从已验证设备报文学习回程目标。
+
 对于单向A→设备媒体，A创建仅在内网可达的本地接收器，ZLM的startSendRtp目标设为该接收器，而不是公网设备地址。适配器将本地流经WSS送B，B按照租约从已分配的设备侧socket发出，保持协商的源端点。控制/停止命令独立优先处理，不能被大量发流阻塞。
 
 ### 17.5 语音对讲与广播
@@ -1084,7 +1095,7 @@ TCP复用模式中，整条RFC4571字节流双向转送。按协议校验复用�
 
 ### 17.8 级联适配与设备入口迁移
 
-级联平台是独立subject_type=platform，不复用摄像机注册记录。A作为下级向上级注册时，B必须支持受控sip.flow.open的UDP发送形式（transport=udp或tcp），并把响应/后续请求关联到同一平台flow；平台目标由A已经保存的上级配置授权，不能任意发包。SIP REGISTER由A生成并通过B发送，身份与摘要沿用既有平台配置。
+级联平台使用独立 subject_type=platform 和平台绑定表，role=upstream/downstream；下级系统编码类型200沿用宿主已有国标档案和目录业务，但不写设备绑定表、不计摄像机/NVR数量，其通道仍计入通道总数。A作为下级向上级注册时，B必须支持受控sip.flow.open的UDP发送形式（transport=udp或tcp），并把响应/后续请求关联到同一平台flow；平台目标由A已经保存的上级配置授权，不能任意发包。SIP REGISTER由A生成并通过B发送，身份与摘要沿用既有平台配置。
 
 A作为上级接收下级平台注册时，按B监听归属交给A的既有平台认证；平台绑定成功后共享目录、点播、对话和媒体各腿分别选其入口。不能因为一个上级经B1，就强制其点播的所有下级设备也走B1：上级腿走B1、下级设备腿可能为B2或direct，由A的真实媒体节点桥接。
 
@@ -1213,7 +1224,7 @@ B本地权限边界固定包括TLS监听、SIP监听/公网通告映射、媒体
 
 ### 19.2 总体目录树
 
-以下是实施目标；注释“现有”的目录保持原职责。此阶段只规划，不创建空目录、占位源码或新的依赖文件。
+以下是目录组织基线；注释“现有”的目录保持原职责。对应实现已落入功能目录；实际文件可能按职责合并，导航见[模块说明](../extensions/accessgateway/README.md)，不创建空占位目录或源码。
 
 ```text
 owl/

@@ -351,6 +351,8 @@ func (g *GB28181API) sipCancelGeneric(ctx *sip.Context) {
 }
 
 type broadcastSDPOffer struct {
+	RTCPIP   string
+	RTCPPort int
 	RemoteIP net.IP
 	Port     int
 	Payload  int
@@ -400,7 +402,11 @@ func parseBroadcastSDPOffer(body []byte, version GBProtocolVersion) (*broadcastS
 		if err != nil {
 			return nil, err
 		}
-		return &broadcastSDPOffer{RemoteIP: remoteIP, Port: media.Description.Port, Payload: payload, Mapping: mapping, RTPType: rtpType}, nil
+		rtcpIP, rtcpPort, rtcpErr := negotiatedUDPRTCP(message, media, remoteIP.String(), media.Description.Port)
+		if rtcpErr != nil {
+			return nil, rtcpErr
+		}
+		return &broadcastSDPOffer{RTCPIP: rtcpIP, RTCPPort: rtcpPort, RemoteIP: remoteIP, Port: media.Description.Port, Payload: payload, Mapping: mapping, RTPType: rtpType}, nil
 	}
 	return nil, fmt.Errorf("Broadcast INVITE does not contain a usable audio media description")
 }
@@ -501,17 +507,43 @@ func (g *GB28181API) sipInviteBroadcast(ctx *sip.Context, callID string, session
 		fail(http.StatusInternalServerError, err)
 		return
 	}
+	dstIP, dstPort := offer.RemoteIP.String(), offer.Port
+	var external ExternalSendLease
+	if p := g.externalMediaPort(); p != nil {
+		lease, prepareErr := p.PrepareReceive(g.serviceContext(), ExternalReceiveSpec{SendVHost: session.SourceVHost, SendApp: session.SourceApp, SendStream: session.SourceStream, Sending: true, DeviceID: session.DeviceID, ChannelID: session.ChannelID, StreamID: session.Stream.StreamID, Purpose: "broadcast", SSRC: ssrc, WireMode: 0, MediaServer: session.SMS})
+		if lease != nil {
+			session.Stream.externalMedia = lease
+		}
+		if prepareErr != nil {
+			fail(503, prepareErr)
+			return
+		}
+		if lease != nil {
+			var ok bool
+			external, ok = lease.(ExternalSendLease)
+			if !ok {
+				fail(503, fmt.Errorf("网关发送驱动不可用"))
+				return
+			}
+			if err = external.ConnectDestination(g.serviceContext(), offer.RemoteIP.String(), offer.Port, offer.RTCPIP, offer.RTCPPort); err != nil {
+				fail(488, err)
+				return
+			}
+			dstIP, dstPort = external.LocalSendEndpoint()
+		}
+	}
 	started, err := startSendRTPContext(g.serviceContext(), g.sms, session.SMS, zlm.StartSendRTPRequest{
-		Vhost:     session.SourceVHost,
-		App:       session.SourceApp,
-		Stream:    session.SourceStream,
-		SSRC:      ssrc,
-		DstURL:    offer.RemoteIP.String(),
-		DstPort:   offer.Port,
-		IsUDP:     true,
-		Type:      offer.RTPType,
-		PT:        offer.Payload,
-		OnlyAudio: true,
+		Vhost:          session.SourceVHost,
+		App:            session.SourceApp,
+		Stream:         session.SourceStream,
+		SSRC:           ssrc,
+		DstURL:         dstIP,
+		DstPort:        dstPort,
+		UDPRTCPTimeout: external != nil,
+		IsUDP:          true,
+		Type:           offer.RTPType,
+		PT:             offer.Payload,
+		OnlyAudio:      true,
 	})
 	if err != nil {
 		fail(500, fmt.Errorf("start Broadcast RTP: %w", err))
@@ -529,6 +561,12 @@ func (g *GB28181API) sipInviteBroadcast(ctx *sip.Context, callID string, session
 		return
 	}
 
+	if external != nil {
+		if err = external.SetLocalSender(g.serviceContext(), started.LocalPort, started.LocalRTCPPort); err != nil {
+			fail(503, err)
+			return
+		}
+	}
 	answer, err := buildBroadcastSDPAnswer(session, started.LocalPort, offer.Payload, offer.Mapping, ssrc)
 	if err != nil {
 		fail(500, err)
@@ -593,7 +631,11 @@ func (g *GB28181API) sipInviteBroadcast(ctx *sip.Context, callID string, session
 }
 
 func buildBroadcastSDPAnswer(session *broadcastSession, port, payload int, mapping, ssrc string) ([]byte, error) {
-	ip4str, err := GetIP(session.SMS.GetSDPIP())
+	advertiseIP := session.SMS.GetSDPIP()
+	if session.Stream != nil && session.Stream.externalMedia != nil {
+		advertiseIP, port = session.Stream.externalMedia.AdvertisedEndpoint()
+	}
+	ip4str, err := GetIP(advertiseIP)
 	if err != nil {
 		return nil, err
 	}
@@ -604,6 +646,20 @@ func buildBroadcastSDPAnswer(session *broadcastSession, port, payload int, mappi
 	audio := sdp.Media{Description: sdp.MediaDescription{
 		Type: "audio", Port: port, Formats: []string{strconv.Itoa(payload)}, Protocol: "RTP/AVP",
 	}}
+	var external ExternalMediaLease
+	if session.Stream != nil {
+		external = session.Stream.externalMedia
+	}
+	if lease, ok := external.(ExternalSendLease); ok {
+		rtcpIP, rtcpPort := lease.PublicRTCP()
+		if rtcpPort > 0 {
+			family := "IP4"
+			if net.ParseIP(rtcpIP).To4() == nil {
+				family = "IP6"
+			}
+			audio.AddAttribute("rtcp", fmt.Sprintf("%d IN %s %s", rtcpPort, family, rtcpIP))
+		}
+	}
 	audio.AddAttribute("sendonly")
 	audio.AddAttribute("rtpmap", strconv.Itoa(payload), mapping)
 	message := &sdp.Message{

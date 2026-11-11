@@ -29,6 +29,7 @@ import {
   X,
 } from "@lucide/vue";
 import CommandPalette from "../components/CommandPalette.vue";
+import { accessGatewayNavigation } from "../features/access-gateway/navigation";
 import brandMark from "../assets/brand-mark.svg";
 import { useUiStore } from "../stores/ui";
 import { useSessionStore } from "../stores/session";
@@ -83,6 +84,7 @@ const nav: { label: string; collapsible?: boolean; items: NavItem[] }[] = [
     label: "平台运维",
     collapsible: true,
     items: [
+      ...accessGatewayNavigation,
       { name: "media-servers", label: "媒体节点", icon: Server },
       { name: "open-platform", label: "开放平台", icon: KeyRound },
       { name: "system-status", label: "系统状态", icon: Activity },
@@ -102,6 +104,7 @@ const pageGroup = computed(() => String(route.meta.group || "工作台"));
 function active(name: string) {
   return (
     route.name === name ||
+    (route.name === "access-gateway-detail" && name === "access-gateways") ||
     (route.name === "device-detail" && name === "devices") ||
     (route.name === "transport-device-detail" && name === "transport-devices") ||
     (route.name === "channel-detail" && name === "devices") ||

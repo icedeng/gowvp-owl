@@ -27,6 +27,8 @@ const (
 )
 
 type cascadeVideoOffer struct {
+	RTCPIP          string
+	RTCPPort        int
 	Version         GBProtocolVersion
 	RemoteIP        net.IP
 	Port            int
@@ -82,6 +84,7 @@ type cascadeMediaSession struct {
 	app                  string
 	stream               string
 	directRelay          *directTCPRelay
+	externalMedia        ExternalSendLease
 	identityCtx          context.Context
 	cancel               context.CancelFunc
 	mediaStatusMu        sync.Mutex
@@ -280,7 +283,15 @@ func parseCascadeVideoOffer(body []byte, version GBProtocolVersion, platform cas
 				return nil, fmt.Errorf("downloadspeed is not supported by protocol %s", version)
 			}
 		}
-		return &cascadeVideoOffer{
+		rtcpIP, rtcpPort := "", 0
+		if isUDP {
+			var rtcpErr error
+			rtcpIP, rtcpPort, rtcpErr = negotiatedUDPRTCP(message, media, remoteIP.String(), media.Description.Port)
+			if rtcpErr != nil {
+				return nil, rtcpErr
+			}
+		}
+		return &cascadeVideoOffer{RTCPIP: rtcpIP, RTCPPort: rtcpPort,
 			Version:  version,
 			RemoteIP: remoteIP, Port: media.Description.Port, Payload: payload, Protocol: protocol,
 			SSRC: ssrc, IsUDP: isUDP, Mode: mode, URI: uri, HistorySourceID: historySourceID, RecordType: recordType,
@@ -538,6 +549,23 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 			fail(http.StatusServiceUnavailable, relayErr)
 			return
 		}
+		relay.externalSource = source.stream.externalTransfer
+		if worker.platform.gatewayID != "" {
+			transfer, prepareErr := g.prepareExternalTransfer(sessionCtx, ExternalTransferSpec{SubjectType: "platform", SubjectID: worker.platform.subjectID, GatewayID: worker.platform.gatewayID, Kind: "raw_download", Direction: "a_to_device", WireMode: "tcp_passive", MaxBytes: relay.opts.MaxFileSize})
+			if prepareErr != nil || transfer == nil {
+				relay.Close()
+				if prepareErr == nil {
+					prepareErr = fmt.Errorf("级联裸 TCP 网关租约未就绪")
+				}
+				fail(503, prepareErr)
+				return
+			}
+			relay.externalUpstream = transfer
+			if relay.listener != nil {
+				_ = relay.listener.Close()
+			}
+			advertiseIP, relayPort = transfer.AdvertisedEndpoint()
+		}
 		if !g.attachCascadeDirectTCPRelay(session, relay) {
 			return
 		}
@@ -560,7 +588,18 @@ func (g *GB28181API) sipInviteCascade(ctx *sip.Context, callID string, worker *c
 			fail(http.StatusBadGateway, fmt.Errorf("media server returned invalid cascade RTP port"))
 			return
 		}
-		answer, err = buildCascadeSDPAnswer(worker.platform.localID, mediaServer, offer, started.LocalPort, mediaDescription)
+		answerServer, answerPort := mediaServer, started.LocalPort
+		if session.externalMedia != nil {
+			ip, port := session.externalMedia.AdvertisedEndpoint()
+			copyServer := *mediaServer
+			copyServer.SDPIP = ip
+			answerServer, answerPort = &copyServer, port
+		}
+		answer, err = buildCascadeSDPAnswer(worker.platform.localID, answerServer, offer, answerPort, mediaDescription)
+		if err == nil && session.externalMedia != nil && offer.IsUDP {
+			rtcpIP, rtcpPort := session.externalMedia.PublicRTCP()
+			answer = appendRTCPAttribute(answer, rtcpIP, rtcpPort)
+		}
 	}
 	if err != nil {
 		fail(http.StatusInternalServerError, err)
@@ -689,7 +728,45 @@ func (g *GB28181API) startCascadeSessionRTP(
 	session.startBusy = true
 	session.stopMu.Unlock()
 
-	response, err := g.startCascadeRTP(ctx, version, mediaServer, offer, request)
+	var prepareErr error
+	if session.worker != nil && session.worker.platform.gatewayID != "" {
+		p := g.externalMediaPort()
+		if p == nil {
+			prepareErr = fmt.Errorf("级联网关媒体驱动未就绪")
+		} else {
+			mode := int8(0)
+			if !offer.IsUDP {
+				mode = 2
+			}
+			lease, e := p.PrepareReceive(ctx, ExternalReceiveSpec{Sending: true, SubjectType: "platform", SubjectID: session.worker.platform.subjectID, GatewayID: session.worker.platform.gatewayID, ChannelID: session.sourceChannelID(), StreamID: session.stream, Purpose: "cascade", SSRC: session.ssrc, WireMode: mode, TCPRTCP: request.TCPRTCP, MediaServer: mediaServer, SendVHost: session.vhost, SendApp: session.app, SendStream: session.stream, SourceIPs: []string{offer.RemoteIP.String()}})
+			prepareErr = e
+			if lease != nil {
+				var ok bool
+				session.externalMedia, ok = lease.(ExternalSendLease)
+				if !ok {
+					prepareErr = fmt.Errorf("级联发送驱动不可用")
+				}
+			}
+			if prepareErr == nil && session.externalMedia != nil {
+				prepareErr = session.externalMedia.ConnectDestination(ctx, offer.RemoteIP.String(), offer.Port, offer.RTCPIP, offer.RTCPPort)
+				request.DstURL, request.DstPort = session.externalMedia.LocalSendEndpoint()
+				request.UDPRTCPTimeout = offer.IsUDP
+			}
+		}
+	}
+	var response *zlm.StartSendRTPResponse
+	err := prepareErr
+	if err == nil {
+		response, err = g.startCascadeRTP(ctx, version, mediaServer, offer, request)
+	}
+	if err == nil && session.externalMedia != nil {
+		if !offer.IsUDP && request.TCPRTCP && (response.TCPRTCP == nil || !*response.TCPRTCP) {
+			err = fmt.Errorf("媒体节点未确认 TCP RTCP 发送补丁")
+		} else {
+			err = session.externalMedia.SetLocalSender(ctx, response.LocalPort, response.LocalRTCPPort)
+		}
+	}
+
 	session.stopMu.Lock()
 	session.startBusy = false
 	stopped := session.stopRequested
@@ -1278,6 +1355,12 @@ func (g *GB28181API) stopCascadeMediaSession(session *cascadeMediaSession, sendU
 		})
 		session.upstreamDetached = true
 	}
+	if session.externalMedia != nil {
+		if err := session.externalMedia.Close(cleanupCtx); err != nil {
+			slog.WarnContext(cleanupCtx, "close cascade gateway media", "err", err)
+			return
+		}
+	}
 	if !session.rtpStopped {
 		if session.directRelay != nil {
 			session.directRelay.Close()
@@ -1298,6 +1381,15 @@ func (g *GB28181API) stopCascadeMediaSession(session *cascadeMediaSession, sendU
 			return
 		} else {
 			session.rtpStopped = true
+		}
+	}
+	if session.externalMedia != nil {
+		if f, ok := session.externalMedia.(interface {
+			FinishCleanup(context.Context, bool, bool) error
+		}); ok {
+			if err := f.FinishCleanup(cleanupCtx, !session.upstreamBYERequested || session.upstreamDetached, session.rtpStopped); err != nil {
+				return
+			}
 		}
 	}
 	if session.rtpStopped && session.ssrcRelease != nil {

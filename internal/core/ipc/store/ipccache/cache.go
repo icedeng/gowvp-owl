@@ -24,8 +24,14 @@ var (
 type Cache struct {
 	ipc.Storer
 
-	devices *conc.Map[string, *gbs.Device]
+	devices      *conc.Map[string, *gbs.Device]
+	ingressGuard ipc.IngressGuard
 }
+
+// SetIngressGuard 由启动装配在设备恢复之前调用。
+func (c *Cache) SetIngressGuard(guard ipc.IngressGuard) { c.ingressGuard = guard }
+
+func (c *Cache) SupportsIngressTransactions() bool { return c.ingressGuard != nil }
 
 func (c *Cache) DeviceHistory() *ipc.DeviceHistoryStore {
 	return c.Storer.DeviceHistory()
@@ -91,6 +97,23 @@ func (c *Cache) LoadDeviceToMemoryContext(ctx context.Context, conn sip.Connecti
 		// 媒体会话不跨进程恢复；无论 UDP/TCP/TLS，启动时都不能保留旧进程的播放中标记。
 		if err := c.Storer.Channel().BatchEdit(ctx, "is_playing", false, orm.Where("device_id = ?", d.GetGB28181DeviceID())); err != nil {
 			return fmt.Errorf("clear restored GB28181 channel playing state for %s: %w", d.GetGB28181DeviceID(), err)
+		}
+		if c.ingressGuard != nil {
+			allowed, err := c.ingressGuard.CanRestoreDirect(ctx, d.ID)
+			if err != nil {
+				return fmt.Errorf("check restored device ingress: %w", err)
+			}
+			if !allowed {
+				if err := c.ChangeContext(ctx, d.GetGB28181DeviceID(), func(dev *ipc.Device) error {
+					dev.IsOnline = false
+					closed := true
+					dev.Ext.GBRegistrationClosed = &closed
+					return nil
+				}, nil); err != nil {
+					return err
+				}
+				continue
+			}
 		}
 		if transport := strings.ToLower(d.Transport); transport == "tcp" || transport == "tls" {
 			// 通知相关设备/通道离线
@@ -173,6 +196,11 @@ func (c *Cache) ChangeContext(ctx context.Context, deviceID string, changeFn fun
 				db := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("device_id = ?", deviceID)
 				if err := db.First(&dev).Error; err != nil {
 					return err
+				}
+				if ingress, ok := ipc.RegistrationIngressFrom(ctx); ok && c.ingressGuard != nil {
+					if err := c.ingressGuard.CommitRegistration(ctx, tx, &dev, ingress); err != nil {
+						return err
+					}
 				}
 				if err := changeFn(&dev); err != nil {
 					return err

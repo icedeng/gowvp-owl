@@ -73,7 +73,7 @@ func newDeviceUpgradeConfig(in *UpgradeInput, sessionID string) *deviceUpgradeCo
 }
 
 // Upgrade 执行设备软件升级（GB/T 28181-2022 9.13，A.2.3.1.12）。
-func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOutput, error) {
+func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (out *UpgradeOutput, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -120,6 +120,24 @@ func (g *GB28181API) Upgrade(ctx context.Context, in *UpgradeInput) (*UpgradeOut
 	defer releaseOperation()
 	sn, waitKey, pending := g.reservePendingDeviceControl(in.DeviceID, in.ChannelID, operation)
 	defer g.pendingDeviceControl.CompareAndDelete(waitKey, pending)
+	transfer, prepareErr := g.prepareExternalTransfer(ctx, ExternalTransferSpec{DeviceID: in.DeviceID, ChannelID: in.ChannelID, TaskID: sessionID, Kind: "upgrade_download", SourceURL: in.FileURL})
+	if transfer != nil {
+		defer func() {
+			if resultErr != nil {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = transfer.Close(cleanupCtx)
+			}
+		}()
+	}
+	if prepareErr != nil {
+		return nil, prepareErr
+	}
+	if transfer != nil {
+		copy := *in
+		copy.FileURL = transfer.PublicURL()
+		in = &copy
+	}
 	req := deviceControlA23Request{
 		CmdType: ptzCmdTypeDeviceControl, SN: sn, DeviceID: in.ChannelID,
 		DeviceUpgrade: newDeviceUpgradeConfig(in, sessionID),

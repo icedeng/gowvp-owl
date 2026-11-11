@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import GatewaySelector from "../features/access-gateway/components/GatewaySelector.vue";
+import IngressBadge from "../features/access-gateway/components/IngressBadge.vue";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import {
   Clock3,
@@ -33,6 +35,7 @@ type StatisticKind = "heartbeat" | "register";
 const ui = useUiStore();
 const query = ref("");
 const status = ref("all");
+const gatewayID = ref("");
 const version = ref("all");
 const addOpen = ref(false);
 const accessOpen = ref(false);
@@ -74,7 +77,7 @@ const pageCount = computed(() =>
   Math.max(1, Math.ceil(total.value / PAGE_SIZE))
 );
 const pagedRows = computed(() => rows.value);
-const hasFilters = computed(() => Boolean(query.value || status.value !== "all" || version.value !== "all"));
+const hasFilters = computed(() => Boolean(gatewayID.value || query.value || status.value !== "all" || version.value !== "all"));
 const statisticTitle = computed(() =>
   statisticKind.value === "heartbeat" ? "心跳记录" : "注册记录"
 );
@@ -82,6 +85,7 @@ const statisticTitle = computed(() =>
 function resetFilters() {
   query.value = "";
   status.value = "all";
+  gatewayID.value = "";
   version.value = "all";
   currentPage.value = 1;
 }
@@ -212,6 +216,7 @@ async function load(refreshSummary = false) {
     if (supportsServerFilters.value && version.value === "all") {
       const response = await api.devices({
         page: currentPage.value,
+        gateway_id: gatewayID.value || undefined,
         size: PAGE_SIZE,
         type: "GB28181",
         key: query.value.trim() || undefined,
@@ -223,7 +228,7 @@ async function load(refreshSummary = false) {
       total.value = Number(response.data?.total ?? rows.value.length);
     } else {
       if (!legacyRows.value.length || refreshSummary || version.value !== "all") {
-        const data = await collectPages(api.devices, { type: "GB28181" });
+        const data = await collectPages(api.devices, { type: "GB28181", gateway_id: gatewayID.value || undefined });
         if (sequence !== loadSequence) return;
         legacyRows.value = data.items.filter(isGbDevice);
         deviceTotal.value = legacyRows.value.length;
@@ -307,7 +312,7 @@ async function addDevice() {
 
 onMounted(() => load(true));
 onBeforeUnmount(() => window.clearTimeout(searchTimer));
-watch([query, status, version], () => {
+watch([query, status, version, gatewayID], () => {
   currentPage.value = 1;
   window.clearTimeout(searchTimer);
   searchTimer = window.setTimeout(() => void load(), 280);
@@ -370,6 +375,7 @@ watch([query, status, version], () => {
             placeholder="搜索名称、设备编号或地址"
           />
         </label>
+        <GatewaySelector v-model="gatewayID" allow-all direct-value="direct" />
         <select v-model="status" class="select" aria-label="按在线状态筛选">
           <option value="all">全部状态</option>
           <option value="online">在线</option>
@@ -429,6 +435,7 @@ watch([query, status, version], () => {
               </td>
               <td data-label="通道数">{{ device.channels || device.children?.length || 0 }} 路</td>
               <td data-label="接入链路">
+                <IngressBadge :ingress="device.ingress" />
                 <span class="stacked-value">
                   <strong class="mono">{{ deviceAddress(device) }}</strong>
                   <small>{{ streamMode(device) }}</small>

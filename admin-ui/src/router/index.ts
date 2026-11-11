@@ -1,3 +1,4 @@
+import { accessGatewayRoutes } from '../features/access-gateway/routes'
 import { nextTick } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 
@@ -15,6 +16,7 @@ const router = createRouter({
       path: '/',
       component: () => import('../layouts/AppShell.vue'),
       children: [
+        ...accessGatewayRoutes,
         { path: '', redirect: '/overview' },
         { path: 'overview', name: 'overview', component: () => import('../views/OverviewView.vue'), meta: { title: '运行总览', group: '工作台' } },
         { path: 'live', name: 'live', component: () => import('../views/LiveView.vue'), meta: { title: '实时监控', group: '视频值守' } },

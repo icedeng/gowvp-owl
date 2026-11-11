@@ -27,6 +27,9 @@ type Streams struct {
 	// dialogCleanupDeferred 表示级联已转发 MediaStatus，需等待最后一个上级 BYE 后再结束下级对话。
 	dialogCleanupDeferred bool
 	rtpClosed             bool
+	externalMedia         ExternalMediaLease
+	externalSendSSRC      *string
+	externalDirection     string
 	// cleanupRequested 允许活动判断在外部清理阻塞时无锁读取终止态。
 	cleanupRequested atomic.Bool
 	// 0  直播 1 历史
@@ -65,10 +68,11 @@ type Streams struct {
 	LastMediaAt time.Time `json:"last_media_at" gorm:"-"`
 	EndReason   string    `json:"end_reason" gorm:"-"`
 	// DirectTCP 标识 2014 附录 O 裸 TCP 下载会话，不能按 RTP 流处理。
-	DirectTCP       bool   `json:"direct_tcp" gorm:"-"`
-	DirectSessionID string `json:"direct_session_id,omitempty" gorm:"-"`
-	FileSize        int64  `json:"file_size,omitempty" gorm:"-"`
-	FileSizeKnown   bool   `json:"file_size_known" gorm:"-"`
+	externalTransfer ExternalTransferLease
+	DirectTCP        bool   `json:"direct_tcp" gorm:"-"`
+	DirectSessionID  string `json:"direct_session_id,omitempty" gorm:"-"`
+	FileSize         int64  `json:"file_size,omitempty" gorm:"-"`
+	FileSizeKnown    bool   `json:"file_size_known" gorm:"-"`
 
 	// ---
 	S, E        time.Time        `json:"-" gorm:"-"`
@@ -277,7 +281,25 @@ func (g *GB28181API) reserveSSRC(streamType int) (string, func(), error) {
 	if cfg == nil {
 		return "", nil, fmt.Errorf("GB28181 SIP configuration is unavailable")
 	}
-	return processSSRCAllocator.reserve(cfg.GetDomain(), streamType)
+	for attempt := 0; attempt < gbSSRCSuffixCount; attempt++ {
+		ssrc, release, err := processSSRCAllocator.reserve(cfg.GetDomain(), streamType)
+		if err != nil {
+			return "", nil, err
+		}
+		if p := g.externalMediaPort(); p != nil {
+			allowed, e := p.SSRCAllowed(context.Background(), ssrc)
+			if e != nil {
+				release()
+				return "", nil, e
+			}
+			if !allowed {
+				release()
+				continue
+			}
+		}
+		return ssrc, release, nil
+	}
+	return "", nil, fmt.Errorf("GB28181 SSRC space quarantined")
 }
 
 // 定时检查未关闭的流

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import IngressBadge from "../features/access-gateway/components/IngressBadge.vue";
+import MigrationPanel from "../features/access-gateway/components/MigrationPanel.vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -921,6 +923,8 @@ onMounted(load);
                 <div class="card-head"><div><h3 class="card-title">设备档案</h3><p class="card-sub">注册、网络与协议基础信息</p></div><FileCog /></div>
                 <dl class="detail-definition-list">
                   <div><dt>设备编码</dt><dd class="mono">{{ device.device_id || device.id }}</dd></div>
+                  <div v-if="isGb"><dt>接入入口</dt><dd><IngressBadge :ingress="device.ingress" /></dd></div>
+                  <div v-if="isGb && device.ingress"><dt>入口迁移</dt><dd><MigrationPanel :source="device.ingress.gateway_id" :subjects="[{type:device.ingress.subject_type || 'device', id:device.id, binding_revision:device.ingress.binding_revision}]" /></dd></div>
                   <div><dt>厂商 / 型号</dt><dd>{{ [device.ext?.manufacturer, device.ext?.model].filter(Boolean).join(" / ") || "—" }}</dd></div>
                   <div><dt>注册地址</dt><dd class="mono">{{ deviceAddress }}</dd></div>
                   <div><dt>流传输模式</dt><dd>{{ streamMode }}</dd></div>

@@ -11,6 +11,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/wire"
+	agowl "github.com/gowvp/owl/extensions/accessgateway/integration/owl"
+	agplatform "github.com/gowvp/owl/extensions/accessgateway/platform"
 	"github.com/gowvp/owl/internal/adapter/gbadapter"
 	"github.com/gowvp/owl/internal/adapter/onvifadapter"
 	"github.com/gowvp/owl/internal/adapter/rtmpadapter"
@@ -48,7 +50,8 @@ var (
 		NewWebHookAPI,
 		NewUniqueID,
 		gbs.NewServerWithStoresContext,
-		NewIPCStore, NewGBAdapter,
+		NewIPCStoreWithGateway, NewGBAdapter,
+		NewAccessGatewayHost, NewAccessGatewayModule,
 		NewIPCCoreWithProtocols,
 		NewIPCAPI,
 		NewConfigAPI,
@@ -63,18 +66,20 @@ var (
 )
 
 type Usecase struct {
-	Conf       *conf.Bootstrap
-	DB         *gorm.DB
-	Version    versionapi.API
-	SMSAPI     SmsAPI
-	WebHookAPI WebHookAPI
-	UniqueID   uniqueid.Core
-	GB28181API IPCAPI
-	ConfigAPI  ConfigAPI
+	AccessGateway *agplatform.Module
+	Conf          *conf.Bootstrap
+	DB            *gorm.DB
+	Version       versionapi.API
+	SMSAPI        SmsAPI
+	WebHookAPI    WebHookAPI
+	UniqueID      uniqueid.Core
+	GB28181API    IPCAPI
+	ConfigAPI     ConfigAPI
 
-	SipServer    *gbs.Server
-	UserAPI      UserAPI
-	AIWebhookAPI AIWebhookAPI
+	AccessGatewayHost *agowl.Host
+	SipServer         *gbs.Server
+	UserAPI           UserAPI
+	AIWebhookAPI      AIWebhookAPI
 
 	EventAPI EventAPI
 
@@ -108,6 +113,10 @@ func NewHTTPHandler(uc *Usecase) http.Handler {
 	setupGBAlarmBridge(uc)
 	uc.Version.RecordVersion()
 	handler := setupOpenPlatform(g, uc)
+	if uc.AccessGateway != nil {
+		mountAccessGateway(g, uc)
+		handler = &accessGatewayHandler{Handler: handler, module: uc.AccessGateway}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); uc.GB28181API.captures.Run(ctx, uc.GB28181API.runCapture) }()

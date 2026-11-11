@@ -26,28 +26,38 @@ func wireApp(ctx context.Context, bc *conf.Bootstrap, log *slog.Logger) (http.Ha
 		return nil, nil, err
 	}
 	core := versionapi.NewVersionCore(db)
-	versionapiAPI := versionapi.New(core)
+	host := api.NewAccessGatewayHost(db)
+	storer, err := api.NewIPCStoreWithGateway(db, bc, core, host)
+	if err != nil {
+		return nil, nil, err
+	}
+	uniqueidCore := api.NewUniqueID(db)
+	adapter := api.NewGBAdapter(storer, uniqueidCore)
 	smsCore, cleanup, err := api.NewSMSCore(db, bc)
 	if err != nil {
 		return nil, nil, err
 	}
-	smsAPI := api.NewSmsAPI(smsCore)
-	storer := api.NewIPCStore(db, bc)
-	uniqueidCore := api.NewUniqueID(db)
-	adapter := api.NewGBAdapter(storer, uniqueidCore)
 	recordingStorer := api.NewRecordingStore(db)
 	server, cleanup2, err := gbs.NewServerWithStoresContext(ctx, bc, adapter, smsCore, db, recordingStorer)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
+	module, cleanup3, err := api.NewAccessGatewayModule(ctx, bc, db, server, host, smsCore)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	versionapiAPI := versionapi.New(core)
+	smsAPI := api.NewSmsAPI(smsCore)
 	ipcBundle := api.NewIPCCoreWithProtocols(storer, uniqueidCore, adapter, smsCore, server, bc)
 	smsProvider := api.NewSMSProviderAdapter(smsCore)
 	ipcProvider := api.NewIPCProviderAdapter(ipcBundle)
 	playProvider := api.NewPlayProviderAdapter(smsCore)
-	recordingCore, cleanup3 := api.NewRecordingCore(recordingStorer, bc, smsProvider, ipcProvider, playProvider)
-	dispatcher, cleanup4 := api.NewNotifier(bc)
-	eventCore, cleanup5 := api.NewEventCoreWithNotifier(bc, db, dispatcher)
+	recordingCore, cleanup4 := api.NewRecordingCore(recordingStorer, bc, smsProvider, ipcProvider, playProvider)
+	dispatcher, cleanup5 := api.NewNotifier(bc)
+	eventCore, cleanup6 := api.NewEventCoreWithNotifier(bc, db, dispatcher)
 	webHookAPI := api.NewWebHookAPI(smsCore, bc, server, ipcBundle, recordingCore, eventCore)
 	ipcapi := api.NewIPCAPI(ipcBundle, recordingCore)
 	configAPI := api.NewConfigAPI(db, bc)
@@ -58,23 +68,26 @@ func wireApp(ctx context.Context, bc *conf.Bootstrap, log *slog.Logger) (http.Ha
 	metadataCore := metadataapi.NewMetadataCore(db)
 	metadataAPI := metadataapi.NewMetadataAPI(metadataCore)
 	usecase := &api.Usecase{
-		Conf:         bc,
-		DB:           db,
-		Version:      versionapiAPI,
-		SMSAPI:       smsAPI,
-		WebHookAPI:   webHookAPI,
-		UniqueID:     uniqueidCore,
-		GB28181API:   ipcapi,
-		ConfigAPI:    configAPI,
-		SipServer:    server,
-		UserAPI:      userAPI,
-		AIWebhookAPI: aiWebhookAPI,
-		EventAPI:     eventAPI,
-		RecordingAPI: recordingAPI,
-		MetadataAPI:  metadataAPI,
+		AccessGateway:     module,
+		Conf:              bc,
+		DB:                db,
+		Version:           versionapiAPI,
+		SMSAPI:            smsAPI,
+		WebHookAPI:        webHookAPI,
+		UniqueID:          uniqueidCore,
+		GB28181API:        ipcapi,
+		ConfigAPI:         configAPI,
+		AccessGatewayHost: host,
+		SipServer:         server,
+		UserAPI:           userAPI,
+		AIWebhookAPI:      aiWebhookAPI,
+		EventAPI:          eventAPI,
+		RecordingAPI:      recordingAPI,
+		MetadataAPI:       metadataAPI,
 	}
 	handler := api.NewHTTPHandler(usecase)
 	return handler, func() {
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()
