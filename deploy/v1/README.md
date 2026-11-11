@@ -24,6 +24,8 @@
 
 已有 PostgreSQL 部署升级录像查询版本前，先在目标库执行 [并发建索引脚本](sql/20261104-recording-query-indexes.sql)，创建录像 `(cid, started_at DESC)` 和通道 `(did, created_at DESC)` 索引，检查两条索引均有效后再启动新版。执行方法及失败处理见 [PostgreSQL 说明](../postgresql.md#录像查询索引升级)；不要把该脚本放入事务。新建数据库由 AutoMigrate 创建对应索引。
 
+多 ZLM 部署的录像目录、共享挂载、节点归属与升级方法见 [多节点录像存储说明](../multi-zlm-recording.md)。新增的节点存储配置可在管理端“媒体节点”中维护；local 保持原目录兼容。
+
 ## 首次发布
 
 ```bash

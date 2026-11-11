@@ -2,6 +2,7 @@ package recording
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 
@@ -16,19 +17,19 @@ type mockSMS struct {
 	stoppedKeys  []string
 }
 
-func (m *mockSMS) StartRecord(app, stream, customPath string, maxSecond int) error {
+func (m *mockSMS) StartRecord(nodeID, vhost, app, stream, customPath string, maxSecond int) error {
 	m.startedCount.Add(1)
 	m.startedKeys = append(m.startedKeys, app+"/"+stream)
 	return nil
 }
 
-func (m *mockSMS) StopRecord(app, stream string) error {
+func (m *mockSMS) StopRecord(nodeID, vhost, app, stream string) error {
 	m.stoppedCount.Add(1)
 	m.stoppedKeys = append(m.stoppedKeys, app+"/"+stream)
 	return nil
 }
 
-func (m *mockSMS) ListRecordingStreams() (map[string]bool, error) {
+func (m *mockSMS) ListRecordingStreams(nodeID string) (map[string]bool, error) {
 	return m.streams, nil
 }
 
@@ -210,5 +211,46 @@ func TestSync_EmptyRecordMode(t *testing.T) {
 
 	if got := sms.startedCount.Load(); got != 0 {
 		t.Fatalf("空串不应开启录像, startRecord 调用次数: got %d, want 0", got)
+	}
+}
+
+type routedSMS struct {
+	mockSMS
+	lists         map[string]map[string]bool
+	starts, stops []string
+}
+
+func (m *routedSMS) ListRecordingStreams(id string) (map[string]bool, error) {
+	if id == "broken" {
+		return nil, fmt.Errorf("offline")
+	}
+	return m.lists[id], nil
+}
+func (m *routedSMS) StartRecord(id, vhost, app, stream, path string, seconds int) error {
+	m.starts = append(m.starts, id+":"+StreamKey(vhost, app, stream)+":"+path)
+	return nil
+}
+func (m *routedSMS) StopRecord(id, vhost, app, stream string) error {
+	m.stops = append(m.stops, id+":"+StreamKey(vhost, app, stream))
+	return nil
+}
+func (m *routedSMS) RecordingStorage(_ context.Context, id string) (NodeStorage, error) {
+	return NodeStorage{Root: "/nodes/" + id}, nil
+}
+
+func TestRecordingSyncIsolatesNodesAndFailures(t *testing.T) {
+	provider := &routedSMS{lists: map[string]map[string]bool{"local": {"rtp/same": false}, "edge": {"rtp/same": true}}}
+	channels := &mockIPC{channels: []ChannelInfo{
+		{ID: "a", App: "rtp", Stream: "same", RecordMode: "always"},
+		{ID: "b", MediaServerID: "edge", App: "rtp", Stream: "same", RecordMode: "none"},
+		{ID: "c", MediaServerID: "broken", App: "rtp", Stream: "same", RecordMode: "always"},
+	}}
+	c := NewCore(nil, WithConfig(&conf.ServerRecording{StorageDir: "/local"}), WithSMSProvider(provider), WithIPCProvider(channels))
+	c.syncRecordingTasks(t.Context())
+	if len(provider.starts) != 1 || provider.starts[0] != "local:rtp/same:/nodes/local" {
+		t.Fatal("录制启动未按节点隔离", provider.starts)
+	}
+	if len(provider.stops) != 1 || provider.stops[0] != "edge:rtp/same" {
+		t.Fatal("停止录制未按节点隔离", provider.stops)
 	}
 }

@@ -19,11 +19,11 @@ type Storer interface {
 
 // SMSProvider 流媒体服务提供者接口，解耦录制领域与 sms 领域
 type SMSProvider interface {
-	StartRecord(app, stream, customPath string, maxSecond int) error
-	StopRecord(app, stream string) error
+	StartRecord(nodeID, vhost, app, stream, customPath string, maxSecond int) error
+	StopRecord(nodeID, vhost, app, stream string) error
 	// ListRecordingStreams 批量获取所有在线流的录制状态
-	// 返回 map[app/stream]bool，true 表示正在录制 MP4
-	ListRecordingStreams() (map[string]bool, error)
+	// 返回 map[StreamKey(vhost,app,stream)]bool，true 表示正在录制 MP4
+	ListRecordingStreams(nodeID string) (map[string]bool, error)
 }
 
 // IPCProvider 通道信息提供者，解耦录制域与 ipc 域
@@ -34,6 +34,9 @@ type IPCProvider interface {
 
 // ChannelInfo 同步任务使用的通道信息摘要
 type ChannelInfo struct {
+	MediaServerID string
+	Vhost         string
+
 	ID         string // 通道唯一 ID
 	App        string // 应用名（如 rtp / live）
 	Stream     string // 流 ID
@@ -49,12 +52,13 @@ type PlayProvider interface {
 
 // Core business domain
 type Core struct {
-	store        Storer
-	conf         *conf.ServerRecording
-	smsProvider  SMSProvider
-	ipcProvider  IPCProvider
-	playProvider PlayProvider
-	syncInterval time.Duration // 0 表示使用默认值 syncDefaultInterval
+	store           Storer
+	conf            *conf.ServerRecording
+	smsProvider     SMSProvider
+	ipcProvider     IPCProvider
+	playProvider    PlayProvider
+	storageProvider StorageProvider
+	syncInterval    time.Duration // 0 表示使用默认值 syncDefaultInterval
 }
 
 type Option func(*Core)
@@ -63,6 +67,9 @@ type Option func(*Core)
 func WithSMSProvider(provider SMSProvider) Option {
 	return func(c *Core) {
 		c.smsProvider = provider
+		if storage, ok := provider.(StorageProvider); ok {
+			c.storageProvider = storage
+		}
 	}
 }
 
@@ -71,6 +78,10 @@ func WithConfig(conf *conf.ServerRecording) Option {
 	return func(c *Core) {
 		c.conf = conf
 	}
+}
+
+func WithStorageProvider(provider StorageProvider) Option {
+	return func(c *Core) { c.storageProvider = provider }
 }
 
 // WithIPCProvider 注入通道信息提供者，用于定时同步时查询应录制的通道

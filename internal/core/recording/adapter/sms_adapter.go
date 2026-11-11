@@ -1,6 +1,8 @@
 package adapter
 
 import (
+	"context"
+
 	"github.com/gowvp/owl/internal/core/recording"
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/pkg/zlm"
@@ -21,14 +23,14 @@ func NewSMSAdapter(smsCore sms.Core) recording.SMSProvider {
 }
 
 // StartRecord 启动录制
-func (a *SMSAdapter) StartRecord(app, stream, customPath string, maxSecond int) error {
-	ms, err := a.smsCore.GetDefaultMediaServer()
+func (a *SMSAdapter) StartRecord(nodeID, vhost, app, stream, customPath string, maxSecond int) error {
+	ms, err := a.smsCore.GetMediaServer(context.Background(), nodeID)
 	if err != nil {
 		return err
 	}
 	_, err = a.smsCore.StartRecord(ms, zlm.StartRecordRequest{
 		Type:       1, // MP4
-		Vhost:      "__defaultVhost__",
+		Vhost:      vhost,
 		App:        app,
 		Stream:     stream,
 		CustomPath: customPath,
@@ -38,14 +40,14 @@ func (a *SMSAdapter) StartRecord(app, stream, customPath string, maxSecond int) 
 }
 
 // StopRecord 停止录制
-func (a *SMSAdapter) StopRecord(app, stream string) error {
-	ms, err := a.smsCore.GetDefaultMediaServer()
+func (a *SMSAdapter) StopRecord(nodeID, vhost, app, stream string) error {
+	ms, err := a.smsCore.GetMediaServer(context.Background(), nodeID)
 	if err != nil {
 		return err
 	}
 	_, err = a.smsCore.StopRecord(ms, zlm.StopRecordRequest{
 		Type:   1, // MP4
-		Vhost:  "__defaultVhost__",
+		Vhost:  vhost,
 		App:    app,
 		Stream: stream,
 	})
@@ -54,9 +56,9 @@ func (a *SMSAdapter) StopRecord(app, stream string) error {
 
 // ListRecordingStreams 批量获取所有在线流的录制状态
 // 调用 ZLM getMediaList 一次获取全部流，提取 isRecordingMP4 状态
-// 返回 map key 格式为 "app/stream"
-func (a *SMSAdapter) ListRecordingStreams() (map[string]bool, error) {
-	ms, err := a.smsCore.GetDefaultMediaServer()
+// 默认 vhost 的 key 为 app/stream，其余 vhost 单独区分。
+func (a *SMSAdapter) ListRecordingStreams(nodeID string) (map[string]bool, error) {
+	ms, err := a.smsCore.GetMediaServer(context.Background(), nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +68,7 @@ func (a *SMSAdapter) ListRecordingStreams() (map[string]bool, error) {
 	}
 	result := make(map[string]bool, len(resp.Data))
 	for _, item := range resp.Data {
-		key := item.App + "/" + item.Stream
+		key := recording.StreamKey(item.Vhost, item.App, item.Stream)
 		if item.IsRecordingMP4 {
 			result[key] = true
 		} else if _, exists := result[key]; !exists {
@@ -74,4 +76,12 @@ func (a *SMSAdapter) ListRecordingStreams() (map[string]bool, error) {
 		}
 	}
 	return result, nil
+}
+
+func (a *SMSAdapter) RecordingStorage(ctx context.Context, id string) (recording.NodeStorage, error) {
+	ms, err := a.smsCore.GetMediaServer(ctx, id)
+	if err != nil {
+		return recording.NodeStorage{}, err
+	}
+	return recording.NodeStorage{Root: ms.RecordPath, Mount: ms.RecordMountPath}, nil
 }

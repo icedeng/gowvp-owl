@@ -48,7 +48,7 @@ func TestDiskCleanupStopsWithoutProgressAndPreservesRecords(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			c, store := newDiskCleanupTestCore(t)
 			if scenario != "empty" {
-				rec := Recording{Path: "test.mp4"}
+				rec := Recording{MediaServerID: LocalNode, Path: "test.mp4"}
 				switch scenario {
 				case "invalid_path":
 					rec.Path = "../outside.mp4"
@@ -101,6 +101,7 @@ func TestDiskCleanupContinuesOnlyWithProgressAndHighUsage(t *testing.T) {
 			c, store := newDiskCleanupTestCore(t)
 			items := make([]Recording, 1001)
 			for i := range items {
+				items[i].MediaServerID = LocalNode
 				items[i].Path = fmt.Sprintf("%d.mp4", i)
 			}
 			if !missing {
@@ -158,7 +159,7 @@ func TestExpiredRecordingCleanupStopsWithoutProgressAndCanRetry(t *testing.T) {
 			c.conf.RetainDays = 7
 			store.listLimit = 5 // 错误实现也能有界失败，不让回归检查自身无限循环。
 			originalDelete := store.db.Callback().Delete().Get("gorm:delete")
-			expired := Recording{Path: "expired.mp4", StartedAt: orm.Time{Time: time.Now().AddDate(0, 0, -10)}}
+			expired := Recording{MediaServerID: LocalNode, Path: "expired.mp4", StartedAt: orm.Time{Time: time.Now().AddDate(0, 0, -10)}}
 			switch scenario {
 			case "invalid_path":
 				expired.Path = "../outside.mp4"
@@ -185,7 +186,7 @@ func TestExpiredRecordingCleanupStopsWithoutProgressAndCanRetry(t *testing.T) {
 			if err := store.db.Create(&expired).Error; err != nil {
 				t.Fatal(err)
 			}
-			recent := Recording{Path: "recent.mp4", StartedAt: orm.Time{Time: time.Now()}}
+			recent := Recording{MediaServerID: LocalNode, Path: "recent.mp4", StartedAt: orm.Time{Time: time.Now()}}
 			if err := store.db.Create(&recent).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -225,7 +226,7 @@ func TestExpiredRecordingCleanupPartialFailureDoesNotBlockSuccessfulBatches(t *t
 	store.listLimit = 5
 	items := make([]Recording, 151)
 	for i := range items {
-		items[i] = Recording{Path: fmt.Sprintf("missing-%d.mp4", i), StartedAt: orm.Time{Time: time.Now().AddDate(0, 0, -10)}}
+		items[i] = Recording{MediaServerID: LocalNode, Path: fmt.Sprintf("missing-%d.mp4", i), StartedAt: orm.Time{Time: time.Now().AddDate(0, 0, -10)}}
 	}
 	items[0].Path = "../outside.mp4"
 	if err := store.db.CreateInBatches(&items, 100).Error; err != nil {
@@ -247,7 +248,7 @@ func TestExpiredRecordingCleanupPreservesPolicyAndContinuesWithProgress(t *testi
 	store.listLimit = 6
 	items := make([]Recording, 205)
 	for i := range items {
-		items[i] = Recording{Path: fmt.Sprintf("expired-%d.mp4", i), StartedAt: orm.Time{Time: time.Now().AddDate(0, 0, -10)}}
+		items[i] = Recording{MediaServerID: LocalNode, Path: fmt.Sprintf("expired-%d.mp4", i), StartedAt: orm.Time{Time: time.Now().AddDate(0, 0, -10)}}
 		if i%2 == 0 {
 			if err := os.WriteFile(filepath.Join(c.conf.StorageDir, items[i].Path), nil, 0600); err != nil {
 				t.Fatal(err)
@@ -257,7 +258,7 @@ func TestExpiredRecordingCleanupPreservesPolicyAndContinuesWithProgress(t *testi
 	if err := store.db.CreateInBatches(&items, 100).Error; err != nil {
 		t.Fatal(err)
 	}
-	recent := Recording{Path: "recent.mp4", StartedAt: orm.Time{Time: time.Now()}}
+	recent := Recording{MediaServerID: LocalNode, Path: "recent.mp4", StartedAt: orm.Time{Time: time.Now()}}
 	if err := store.db.Create(&recent).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -274,5 +275,81 @@ func TestExpiredRecordingCleanupPreservesPolicyAndContinuesWithProgress(t *testi
 	}
 	if body, err := os.ReadFile(filepath.Join(c.conf.StorageDir, recent.Path)); err != nil || string(body) != "keep" {
 		t.Fatal("recent recording file changed")
+	}
+}
+
+type cleanupNodeStorage map[string]NodeStorage
+
+func (nodes cleanupNodeStorage) RecordingStorage(_ context.Context, id string) (NodeStorage, error) {
+	return nodes[id], nil
+}
+
+func TestCleanupPreservesUnavailableNodeAndContinuesOtherNodes(t *testing.T) {
+	c, store := newDiskCleanupTestCore(t)
+	c.conf.RetainDays = 7
+	edge := t.TempDir()
+	c.storageProvider = cleanupNodeStorage{LocalNode: {Root: c.conf.StorageDir, Mount: c.conf.StorageDir}, "edge": {Root: "/edge", Mount: edge}}
+	old := orm.Time{Time: time.Now().AddDate(0, 0, -10)}
+	// 第一页全是不可用节点，不能阻断第二页本地清理。
+	records := make([]Recording, 101)
+	for i := range records {
+		records[i] = Recording{MediaServerID: "edge", StorageRoot: "/edge", Path: fmt.Sprintf("%d.mp4", i), StartedAt: old}
+	}
+	records[100].MediaServerID = LocalNode
+	records[100].StorageRoot = c.conf.StorageDir
+	if err := store.db.CreateInBatches(&records, 100).Error; err != nil {
+		t.Fatal(err)
+	}
+	c.cleanupExpiredRecordings()
+	var count int64
+	store.db.Model(&Recording{}).Count(&count)
+	if count != 100 {
+		t.Fatalf("失联节点索引被删除或阻断其它节点，剩余 %d", count)
+	}
+	// 恢复正确共享存储后，才允许确认缺失文件并清理。
+	if err := os.WriteFile(filepath.Join(edge, StorageMarker), []byte("edge"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c.cleanupExpiredRecordings()
+	store.db.Model(&Recording{}).Count(&count)
+	if count != 0 {
+		t.Fatalf("恢复挂载后未完成清理: %d", count)
+	}
+}
+
+func TestDiskCleanupUsesEachNodesOwnDiskUsage(t *testing.T) {
+	c, store := newDiskCleanupTestCore(t)
+	edge := t.TempDir()
+	c.storageProvider = cleanupNodeStorage{LocalNode: {Root: c.conf.StorageDir, Mount: c.conf.StorageDir}, "edge": {Root: "/edge", Mount: edge}}
+	if err := os.WriteFile(filepath.Join(edge, StorageMarker), []byte("edge"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(edge, "remote.mp4"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rec := Recording{MediaServerID: "edge", StorageRoot: "/edge", Path: "remote.mp4"}
+	if err := store.db.Create(&rec).Error; err != nil {
+		t.Fatal(err)
+	}
+	c.cleanupByDiskUsageUsing(func(path string) (float64, error) {
+		if path == edge {
+			return 10, nil
+		}
+		return 99, nil
+	})
+	if body, err := os.ReadFile(filepath.Join(edge, "remote.mp4")); err != nil || string(body) != "keep" {
+		t.Fatal("本地磁盘超标误删远端文件")
+	}
+	// 远端磁盘真正超标时在远端清理，即使本地根目录未配置也不能阻断。
+	c.conf.StorageDir = ""
+	c.storageProvider = cleanupNodeStorage{"edge": {Root: "/edge", Mount: edge}}
+	c.cleanupByDiskUsageUsing(func(path string) (float64, error) { return 99, nil })
+	if _, err := os.Stat(filepath.Join(edge, "remote.mp4")); !os.IsNotExist(err) {
+		t.Fatal("远端磁盘超标未清理")
+	}
+	var count int64
+	store.db.Model(&Recording{}).Count(&count)
+	if count != 0 {
+		t.Fatal("远端清理后索引未删除")
 	}
 }

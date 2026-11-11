@@ -22,23 +22,18 @@ func NewIPCAdapter(ipcCore ipc.Core) recording.IPCProvider {
 
 // ListOnlineChannels 查询所有在线通道，包含 RecordMode 供同步逻辑分类
 func (a *IPCAdapter) ListOnlineChannels(ctx context.Context) ([]recording.ChannelInfo, error) {
-	channels, _, err := a.ipcCore.ListChannels(ctx, &ipc.FindChannelInput{
-		PagerFilter: web.PagerFilter{Page: 1, Size: 9999},
-		IsOnline:    "true",
-	})
-	if err != nil {
-		return nil, err
-	}
 
-	result := make([]recording.ChannelInfo, 0, len(channels))
-	for _, ch := range channels {
-		result = append(result, recording.ChannelInfo{
-			ID:         ch.ID,
-			App:        ch.GetApp(),
-			Stream:     ch.GetStream(),
-			Type:       ch.GetType(),
-			RecordMode: ch.Ext.GetRecordMode(),
-		})
+	var result []recording.ChannelInfo
+	for page := 1; ; page++ {
+		channels, total, err := a.ipcCore.ListChannels(ctx, &ipc.FindChannelInput{PagerFilter: web.PagerFilter{Page: page, Size: 100}, IsOnline: "true"})
+		if err != nil {
+			return nil, err
+		}
+		for _, ch := range channels {
+			result = append(result, recording.ChannelInfo{ID: ch.ID, MediaServerID: ch.Config.MediaServerID, App: ch.GetApp(), Stream: ch.GetStream(), Type: ch.GetType(), RecordMode: ch.Ext.GetRecordMode()})
+		}
+		if len(channels) == 0 || int64(len(result)) >= total {
+			return result, nil
+		}
 	}
-	return result, nil
 }

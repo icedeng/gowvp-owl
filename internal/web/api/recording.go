@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +56,9 @@ func NewRecordingCore(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		if err := core.BackfillLocalRecordings(ctx); err != nil {
+			slog.WarnContext(ctx, "旧录像本地归属回填未完成", "err", err)
+		}
 		core.StartCleanupWorker(ctx)
 	}()
 	syncDone := core.StartRecordingSyncLoop(ctx)
@@ -90,7 +96,10 @@ func RegisterRecording(g gin.IRouter, api RecordingAPI, handler ...gin.HandlerFu
 		group.GET("/:id", web.WrapH(api.getRecording))
 		group.PUT("/:id", web.WrapH(api.updateRecording))
 		group.DELETE("/:id", web.WrapH(api.deleteRecording))
+		group.GET("/:id/file", api.recordingFile)
+		group.HEAD("/:id/file", api.recordingFile)
 		group.GET("/:id/download", api.downloadRecording)
+		group.HEAD("/:id/download", api.downloadRecording)
 	}
 
 	// 录像文件服务使用统一路径解析，拒绝目录穿越及指向根目录外的符号链接。
@@ -148,34 +157,44 @@ func (a RecordingAPI) getMonthlyStats(c *gin.Context, in *recording.MonthlyStats
 }
 
 // downloadRecording 下载录像文件
-func (a RecordingAPI) downloadRecording(c *gin.Context) {
-	recordingID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
+func (a RecordingAPI) downloadRecording(c *gin.Context) { a.serveRecordingByID(c, true) }
+func (a RecordingAPI) recordingFile(c *gin.Context)     { a.serveRecordingByID(c, false) }
+
+func (a RecordingAPI) serveRecordingByID(c *gin.Context, download bool) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "invalid recording id"})
 		return
 	}
-
-	rec, err := a.recordingCore.GetRecording(c.Request.Context(), recordingID)
+	rec, err := a.recordingCore.GetRecording(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 1, "msg": err.Error()})
+		c.JSON(http.StatusNotFound, gin.H{"code": 1, "msg": "recording not found"})
 		return
 	}
-
-	// 构建文件完整路径
-	filePath, err := a.recordingCore.ResolvePath(rec.Path)
+	file, err := a.recordingCore.ResolveRecordingPath(c.Request.Context(), rec)
 	if err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"code": 1, "msg": "invalid recording path"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		c.JSON(http.StatusNotFound, gin.H{"code": 1, "msg": "recording file not found"})
+	info, err := os.Stat(file)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, gin.H{"code": 1, "msg": "recording file not found"})
+		} else {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": 1, "msg": "recording storage unavailable"})
+		}
 		return
 	}
-
-	// 设置下载文件名
-	fileName := filepath.Base(filePath)
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", fileName))
-	c.File(filePath)
+	if !info.Mode().IsRegular() {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	if download {
+		c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filepath.Base(file)}))
+	}
+	c.Header("Cache-Control", "private, no-store")
+	// ServeFile/ServeContent 支持 Range、If-Range、HEAD；浏览器永远只访问平台鉴权地址。
+	c.File(file)
 }
 
 // channelPlaylist 生成 HLS m3u8 播放列表
@@ -192,18 +211,15 @@ func (a RecordingAPI) channelPlaylist(c *gin.Context) {
 	endMs, _ := strconv.ParseInt(c.Query("end_ms"), 10, 64)
 	token := c.Query("token")
 
-	if startMs <= 0 || endMs <= 0 {
+	if startMs <= 0 || endMs <= startMs {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": "start_ms and end_ms are required"})
 		return
 	}
 
 	// 获取时间范围内的录像列表（需要完整路径信息）
 	ctx := web.WithContext(c.Request)
-	recordings, _, err := a.recordingCore.ListRecordings(ctx, &recording.FindRecordingInput{
-		CID:         cid,
-		PagerFilter: web.PagerFilter{Page: 1, Size: 10000},
-		DateFilter:  web.DateFilter{StartMs: startMs, EndMs: endMs},
-	})
+
+	recordings, err := a.recordingCore.RecordingsInRange(ctx, cid, startMs, endMs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 1, "msg": err.Error()})
 		return
@@ -248,17 +264,11 @@ func (a RecordingAPI) generateM3U8WithToken(recordings []*recording.Recording, b
 	// 录像按时间升序排列
 	sortedRecs := make([]*recording.Recording, len(recordings))
 	copy(sortedRecs, recordings)
-	// 按开始时间升序排序
-	for i := 0; i < len(sortedRecs)-1; i++ {
-		for j := i + 1; j < len(sortedRecs); j++ {
-			if sortedRecs[i].StartedAt.After(sortedRecs[j].StartedAt.Time) {
-				sortedRecs[i], sortedRecs[j] = sortedRecs[j], sortedRecs[i]
-			}
-		}
-	}
+
+	sort.SliceStable(sortedRecs, func(i, j int) bool { return sortedRecs[i].StartedAt.Before(sortedRecs[j].StartedAt.Time) })
 
 	// 添加每个录像片段
-	// URL 格式: /static/recordings/{path}?token=xxx
+	// URL 格式: /recordings/{id}/file?token=xxx；每段独立解析所属存储节点。
 	// 使用相对路径（以 / 开头），让浏览器相对于当前域名访问
 	// 这样无论通过代理还是直接访问都能正常工作
 	// ZLM 录制的 fMP4 每个文件 DTS 都从 0 开始，必须在每个片段间添加 DISCONTINUITY
@@ -270,16 +280,9 @@ func (a RecordingAPI) generateM3U8WithToken(recordings []*recording.Recording, b
 			pl.SetDiscontinuity()
 		}
 
-		// 构建相对路径，去掉前导斜杠
-		relativePath := strings.TrimPrefix(rec.Path, "/")
-
-		// 使用相对路径（不带域名），让浏览器根据当前页面域名访问
-		// 这样开发时通过 Vite 代理、生产时通过后端都能正常访问
-		var uri string
+		uri := fmt.Sprintf("/recordings/%d/file", rec.ID)
 		if token != "" {
-			uri = fmt.Sprintf("/static/recordings/%s?token=%s", relativePath, token)
-		} else {
-			uri = fmt.Sprintf("/static/recordings/%s", relativePath)
+			uri += "?token=" + url.QueryEscape(token)
 		}
 		_ = pl.Append(uri, rec.Duration, "")
 	}

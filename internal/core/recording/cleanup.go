@@ -103,7 +103,7 @@ func (c Core) cleanupExpiredRecordings() {
 	ctx := context.Background()
 	cutoffTime := time.Now().AddDate(0, 0, -c.conf.RetainDays)
 
-	totalDeleted, filesDeleted, freedBytes, failedFiles := c.batchDeleteRecordings(ctx,
+	totalDeleted, filesDeleted, failedFiles, freedBytes := c.batchDeleteRecordings(ctx,
 		"expired",
 		orm.Where("started_at < ?", orm.Time{Time: cutoffTime}),
 	)
@@ -132,17 +132,47 @@ func (c Core) cleanupByDiskUsageUsing(diskUsage func(string) (float64, error)) b
 	if c.conf.DiskUsageThreshold <= 0 || c.conf.DiskUsageThreshold >= 100 {
 		return false
 	}
-
-	storageDir := c.conf.StorageDir
-	if storageDir == "" {
-		storageDir = "./recordings"
+	ctx := context.Background()
+	// 平台本地目录和每个已挂载节点独立检测；没有挂载或身份校验失败的节点不清理。
+	again := false
+	if local, err := c.StorageFor(ctx, LocalNode); err == nil {
+		again = c.cleanupDiskStorage(diskUsage, local.Mount, orm.Where("(media_server_id = 'local' AND (storage_root = ? OR storage_root = '')) OR media_server_id = ''", local.Root))
+	} else {
+		slog.Warn("跳过本地录像磁盘清理", "err", err)
 	}
-
-	absStorageDir := storageDir
-	if !filepath.IsAbs(absStorageDir) {
-		absStorageDir = filepath.Join(system.Getwd(), absStorageDir)
+	var nodes []struct {
+		MediaServerID string
+		StorageRoot   string
 	}
-	if _, err := os.Stat(absStorageDir); os.IsNotExist(err) {
+	err := c.store.Recording().Session(ctx, func(tx *gorm.DB) error {
+		return tx.Model(&Recording{}).Select("media_server_id, storage_root").Where("media_server_id NOT IN ?", []string{"", LocalNode}).Group("media_server_id, storage_root").Find(&nodes).Error
+	})
+	if err != nil {
+		slog.Warn("获取录像存储节点失败", "err", err)
+		return again
+	}
+	for _, node := range nodes {
+		probe := Recording{MediaServerID: node.MediaServerID, StorageRoot: node.StorageRoot, Path: ".storage-probe.mp4"}
+		if _, err := c.ResolveRecordingPath(ctx, &probe); err != nil {
+			slog.Warn("跳过不可用节点的磁盘清理", "node", node.MediaServerID, "err", err)
+			continue
+		}
+		storage, err := c.StorageFor(ctx, node.MediaServerID)
+		if err != nil {
+			continue
+		}
+		if c.cleanupDiskStorage(diskUsage, storage.Mount, orm.Where("media_server_id = ? AND storage_root = ?", node.MediaServerID, node.StorageRoot)) {
+			again = true
+		}
+	}
+	return again
+}
+
+func (c Core) cleanupDiskStorage(diskUsage func(string) (float64, error), absStorageDir string, conditions ...orm.QueryOption) bool {
+	if absStorageDir == "" {
+		return false
+	}
+	if info, err := os.Stat(absStorageDir); err != nil || !info.IsDir() {
 		return false
 	}
 
@@ -164,6 +194,7 @@ func (c Core) cleanupByDiskUsageUsing(diskUsage func(string) (float64, error)) b
 	batchSize := 50
 	maxBatches := 20
 	reachedMax := false
+	var failedIDs []int64
 
 	// 持续删除最旧录像，每批删完重新检查磁盘，直到达标或无录像可删
 	for batch := 0; batch < maxBatches; batch++ {
@@ -174,9 +205,11 @@ func (c Core) cleanupByDiskUsageUsing(diskUsage func(string) (float64, error)) b
 
 		var oldestRecordings []*Recording
 		pager := web.PagerFilter{Page: 1, Size: batchSize}
-		_, err := c.store.Recording().List(ctx, &oldestRecordings, &pager,
-			orm.OrderBy("started_at ASC"),
-		)
+		opts := append(append([]orm.QueryOption{}, conditions...), orm.OrderBy("started_at ASC, id ASC"))
+		if len(failedIDs) > 0 {
+			opts = append(opts, orm.Where("id NOT IN ?", failedIDs))
+		}
+		_, err := c.store.Recording().List(ctx, &oldestRecordings, &pager, opts...)
 		if err != nil || len(oldestRecordings) == 0 {
 			break
 		}
@@ -200,22 +233,25 @@ func (c Core) cleanupByDiskUsageUsing(diskUsage func(string) (float64, error)) b
 		var details []diskDeleteDetail
 
 		for _, rec := range oldestRecordings {
-			filePath, pathErr := c.ResolvePath(rec.Path)
+			filePath, pathErr := c.ResolveRecordingPath(ctx, rec)
 			if pathErr != nil {
 				batchFailed++
+				failedIDs = append(failedIDs, rec.ID)
 				details = append(details, diskDeleteDetail{rec.ID, rec.CID, rec.Path, rec.StartedAt.Format(time.DateTime), rec.Size, "invalid_path"})
-				slog.Warn("拒绝删除录像根目录外文件", "path", rec.Path, "err", pathErr)
+				slog.Warn("无法解析所属节点录像文件，保留记录", "path", rec.Path, "err", pathErr)
 				continue
 			}
-			if err := os.Remove(filePath); err != nil {
-				if os.IsNotExist(err) {
+			removed, removeErr := c.removeRecordingFile(ctx, rec)
+			if removeErr != nil || !removed {
+				if removeErr == nil {
 					deleteIDs = append(deleteIDs, rec.ID)
 					fileNames = append(fileNames, filepath.Base(filePath))
 					details = append(details, diskDeleteDetail{rec.ID, rec.CID, filePath, rec.StartedAt.Format(time.DateTime), rec.Size, "not_exist"})
 				} else {
 					batchFailed++
+					failedIDs = append(failedIDs, rec.ID)
 					details = append(details, diskDeleteDetail{rec.ID, rec.CID, filePath, rec.StartedAt.Format(time.DateTime), rec.Size, "failed"})
-					slog.Warn("文件删除失败，跳过", "path", filePath, "err", err)
+					slog.Warn("文件删除失败，跳过", "path", filePath, "err", removeErr)
 				}
 			} else {
 				batchFilesDeleted++
@@ -252,7 +288,7 @@ func (c Core) cleanupByDiskUsageUsing(diskUsage func(string) (float64, error)) b
 		totalFreed += batchFreed
 		failedCount += batchFailed
 		// 删除失败不算进展；缺失文件对应的记录成功清理也算进展。
-		if batchFilesDeleted == 0 && batchRecordsDeleted == 0 {
+		if batchFilesDeleted == 0 && batchRecordsDeleted == 0 && (batchFailed == 0 || len(oldestRecordings) < batchSize) {
 			break
 		}
 
@@ -270,7 +306,7 @@ func (c Core) cleanupByDiskUsageUsing(diskUsage func(string) (float64, error)) b
 	cleanupEmptyDirs(absStorageDir)
 
 	// 预标记已释放量的 2 倍，为下次清理预留缓冲，避免下次刚触发就立刻要删大量文件
-	c.markNextDeletionCandidates(ctx, totalFreed*2)
+	c.markNextDeletionCandidates(ctx, totalFreed*2, conditions...)
 
 	if deletedCount > 0 || failedCount > 0 {
 		slog.Info("磁盘清理完成",
@@ -296,7 +332,7 @@ func (c Core) cleanupByDiskUsageUsing(diskUsage func(string) (float64, error)) b
 
 // markNextDeletionCandidates 预标记即将被删除的录像
 // 标记最旧的、总大小约等于 targetSize 的录像为待删除状态
-func (c Core) markNextDeletionCandidates(ctx context.Context, targetSize int64) {
+func (c Core) markNextDeletionCandidates(ctx context.Context, targetSize int64, conditions ...orm.QueryOption) {
 	if targetSize <= 0 {
 		return
 	}
@@ -304,10 +340,8 @@ func (c Core) markNextDeletionCandidates(ctx context.Context, targetSize int64) 
 	// 查询未被标记的最旧录像
 	var candidates []*Recording
 	pager := web.PagerFilter{Page: 1, Size: 200}
-	_, err := c.store.Recording().List(ctx, &candidates, &pager,
-		orm.Where("delete_flag = ?", false),
-		orm.OrderBy("started_at ASC"),
-	)
+	opts := append(append([]orm.QueryOption{}, conditions...), orm.Where("delete_flag = ?", false), orm.OrderBy("started_at ASC"))
+	_, err := c.store.Recording().List(ctx, &candidates, &pager, opts...)
 	if err != nil || len(candidates) == 0 {
 		return
 	}
@@ -335,11 +369,13 @@ func (c Core) markNextDeletionCandidates(ctx context.Context, targetSize int64) 
 // 只有文件成功删除（或已不存在）才删数据库记录，避免孤儿文件
 func (c Core) batchDeleteRecordings(ctx context.Context, reason string, conditions ...orm.QueryOption) (totalDeleted, filesDeleted, failedFiles int, freedBytes int64) {
 	batchSize := 100
+	var cursor int64
 
 	for {
 		var recordings []*Recording
 		pager := web.PagerFilter{Page: 1, Size: batchSize}
-		_, err := c.store.Recording().List(ctx, &recordings, &pager, conditions...)
+		opts := append(append([]orm.QueryOption{}, conditions...), orm.Where("id > ?", cursor), orm.OrderBy("id ASC"))
+		_, err := c.store.Recording().List(ctx, &recordings, &pager, opts...)
 		if err != nil || len(recordings) == 0 {
 			break
 		}
@@ -361,22 +397,24 @@ func (c Core) batchDeleteRecordings(ctx context.Context, reason string, conditio
 		var details []deleteDetail
 
 		for _, rec := range recordings {
-			filePath, pathErr := c.ResolvePath(rec.Path)
+			cursor = rec.ID
+			filePath, pathErr := c.ResolveRecordingPath(ctx, rec)
 			if pathErr != nil {
 				batchFailed++
 				details = append(details, deleteDetail{rec.ID, rec.CID, rec.Path, rec.StartedAt.Format(time.DateTime), rec.Size, "invalid_path"})
-				slog.Warn("拒绝删除录像根目录外文件", "path", rec.Path, "err", pathErr)
+				slog.Warn("无法解析所属节点录像文件，保留记录", "path", rec.Path, "err", pathErr)
 				continue
 			}
-			if err := os.Remove(filePath); err != nil {
-				if os.IsNotExist(err) {
+			removed, removeErr := c.removeRecordingFile(ctx, rec)
+			if removeErr != nil || !removed {
+				if removeErr == nil {
 					deleteIDs = append(deleteIDs, rec.ID)
 					fileNames = append(fileNames, filepath.Base(filePath))
 					details = append(details, deleteDetail{rec.ID, rec.CID, filePath, rec.StartedAt.Format(time.DateTime), rec.Size, "not_exist"})
 				} else {
 					batchFailed++
 					details = append(details, deleteDetail{rec.ID, rec.CID, filePath, rec.StartedAt.Format(time.DateTime), rec.Size, "failed"})
-					slog.Warn("文件删除失败，跳过", "path", filePath, "err", err)
+					slog.Warn("文件删除失败，跳过", "path", filePath, "err", removeErr)
 				}
 			} else {
 				batchFilesDeleted++
@@ -415,9 +453,8 @@ func (c Core) batchDeleteRecordings(ctx context.Context, reason string, conditio
 		filesDeleted += batchFilesDeleted
 		failedFiles += batchFailed
 		freedBytes += batchFreed
-		// 首批失败记录仍会被再次查到；未实际移除记录时结束本轮，留待常规周期重试。
-		if deletedRows == 0 {
-			slog.Warn("过期录像清理无进展，结束本轮清理", "reason", reason, "failed_files", batchFailed)
+		// 游标跳过本轮失败记录，避免离线节点挡住后续可清理节点。
+		if ctx.Err() != nil || (deletedRows == 0 && len(recordings) < batchSize) {
 			break
 		}
 	}

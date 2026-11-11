@@ -152,7 +152,7 @@ func (h openHost) RecordingPath(ctx context.Context, id int64) (string, error) {
 	if e := h.uc.DB.WithContext(ctx).First(&row, "id = ? AND delete_flag = ?", id, false).Error; e != nil {
 		return "", e
 	}
-	return h.uc.RecordingAPI.recordingCore.ResolvePath(row.Path)
+	return h.uc.RecordingAPI.recordingCore.ResolveRecordingPath(ctx, &row)
 }
 func (h openHost) EventImagePath(ctx context.Context, id int64) (string, error) {
 	var row event.Event

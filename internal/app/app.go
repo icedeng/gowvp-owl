@@ -82,8 +82,8 @@ func Run(bc *conf.Bootstrap) {
 	}
 
 	// 如果需要执行表迁移，递增此版本号和表更新说明
-	versionapi.DBVersion = "0.0.30"
-	versionapi.DBRemark = "persistent media server disabled state"
+	versionapi.DBVersion = "0.0.32"
+	versionapi.DBRemark = "access gateway isolation and node-aware recording storage"
 
 	handler, cleanUp, err := wireApp(ctx, bc, log)
 	if err != nil {

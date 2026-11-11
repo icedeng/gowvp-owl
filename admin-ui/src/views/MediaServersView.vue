@@ -92,7 +92,7 @@ onMounted(async () => { await load(); editFromRoute(); });
     <MediaServerEditor :open="editorOpen" :node="editingNode" :default-hook="defaultHook" @close="closeEditor" @saved="saved" />
     <ModalDialog :open="!!confirmation" :title="confirmTitle" :description="confirmation?.node.id" @close="!mutating && (confirmation = null)">
       <div class="node-confirm">
-        <p v-if="confirmation?.action === 'delete'">将删除该节点的连接配置，不会删除媒体服务器上的录像或图片。节点仍有通道绑定时无法删除。</p>
+        <p v-if="confirmation?.action === 'delete'">将删除该节点的连接配置，不会删除媒体服务器上的录像或图片。节点仍有通道绑定或历史录像时无法删除。</p>
         <p v-else-if="confirmation?.action === 'disable'">停用后不再重连或承接新的媒体操作，保留通道绑定。请先停止该节点上的预览、回放、下载、语音和录像。</p>
         <p v-else>启用后将重新连接媒体服务，并同步平台运行所需的回调和收流参数。</p>
         <div v-if="actionError" class="warning-box" role="alert">{{ actionError }}</div>

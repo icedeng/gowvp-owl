@@ -87,11 +87,21 @@ func (c Core) syncRecordingTasks(ctx context.Context) {
 		return
 	}
 
-	recordingMap, err := c.smsProvider.ListRecordingStreams()
-	if err != nil {
-		slog.ErrorContext(ctx, "sync: 获取流录制状态失败", "err", err)
-		return
+	groups := make(map[string][]ChannelInfo)
+	for _, ch := range allChannels {
+		groups[ch.NodeID()] = append(groups[ch.NodeID()], ch)
 	}
+	for id, channels := range groups {
+		recordingMap, err := c.smsProvider.ListRecordingStreams(id)
+		if err != nil {
+			slog.WarnContext(ctx, "sync: 获取节点录制状态失败", "node", id, "err", err)
+			continue
+		}
+		c.syncNodeRecordingTasks(ctx, channels, recordingMap)
+	}
+}
+
+func (c Core) syncNodeRecordingTasks(ctx context.Context, allChannels []ChannelInfo, recordingMap map[string]bool) {
 
 	var needStart, needTrigger, needStop []ChannelInfo
 	var skipped int
@@ -102,7 +112,7 @@ func (c Core) syncRecordingTasks(ctx context.Context) {
 			continue
 		}
 
-		key := ch.App + "/" + ch.Stream
+		key := ch.StreamKey()
 		isRecording, streamExists := recordingMap[key]
 		// 仅显式开启的通道维持录制，未配置的通道不自动拉流。
 		shouldRecord := ch.RecordMode == "always" || ch.RecordMode == "ai"
@@ -123,7 +133,7 @@ func (c Core) syncRecordingTasks(ctx context.Context) {
 
 	var synced int
 	for _, ch := range needStart {
-		if err := c.StartRecording(ctx, ch.Type, ch.App, ch.Stream); err != nil {
+		if err := c.StartRecordingOnNode(ctx, ch); err != nil {
 			slog.WarnContext(ctx, "sync: startRecord 失败",
 				"channel", ch.ID, "app", ch.App, "stream", ch.Stream, "err", err)
 		} else {
@@ -133,7 +143,7 @@ func (c Core) syncRecordingTasks(ctx context.Context) {
 
 	var stopped int
 	for _, ch := range needStop {
-		if err := c.smsProvider.StopRecord(ch.App, ch.Stream); err != nil {
+		if err := c.StopRecordingOnNode(ctx, ch); err != nil {
 			slog.WarnContext(ctx, "sync: stopRecord 失败",
 				"channel", ch.ID, "app", ch.App, "stream", ch.Stream, "err", err)
 		} else {

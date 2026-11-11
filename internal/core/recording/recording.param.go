@@ -18,6 +18,11 @@ type EditRecordingInput struct {
 }
 
 type AddRecordingInput struct {
+	MediaServerID string `json:"-"`
+	Vhost         string `json:"-"`
+	StorageRoot   string `json:"-"`
+	FilePath      string `json:"-"`
+
 	CID       string   `json:"-"`          // 通道 ID（由 API 层填充）
 	App       string   `json:"app"`        // ZLM 应用名
 	Stream    string   `json:"stream"`     // ZLM 流 ID

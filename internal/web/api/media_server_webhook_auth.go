@@ -25,7 +25,7 @@ func (w WebHookAPI) mediaServerWebhookAuth() gin.HandlerFunc {
 			GetMediaServer(context.Context, string) (*sms.MediaServer, error)
 		}); ok {
 			node, err := reader.GetMediaServer(c.Request.Context(), id)
-			if err != nil || node.Disabled {
+			if err != nil || (node.Disabled && !strings.HasSuffix(c.Request.URL.Path, "/on_record_mp4")) {
 				c.AbortWithStatus(http.StatusUnauthorized)
 				return
 			}

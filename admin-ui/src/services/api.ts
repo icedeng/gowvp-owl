@@ -1,5 +1,4 @@
 import { http } from './http'
-import { recordingMediaPath } from '../utils/recordings'
 import type { PTZProbeOutput, PTZBatchProbeOutput } from '../types/api'
 import type {
   CaptureRecord, CaptureSchedule, CaptureSchedulePage, SnapshotConfig, ApiChannel, ApiDevice, ApiEvent, ApiMetrics, ApiPage, ApiRecording, ApiErrorBody, DeviceHistoryRecord, MediaInspectionResource, MediaInspectionResult,
@@ -153,8 +152,8 @@ export const api = {
   timeline: (params?: ListParams) => http.get<{ items?: TimelineRange[] }>('/recordings/timeline', { params }),
   monthly: (params?: ListParams) => http.get<MonthlyStats>('/recordings/monthly', { params }),
   downloadRecording: (id: number | string) => http.get<Blob>(`/recordings/${id}/download`, { responseType: 'blob', timeout: 0 }),
-  recordingMediaUrl: (path: string) => withToken(apiUrl(recordingMediaPath(path))),
-  checkRecordingMedia: (path: string) => http.get<ArrayBuffer>(recordingMediaPath(path), { headers: { Range: 'bytes=0-0' }, responseType: 'arraybuffer' }),
+  recordingMediaUrl: (id: number) => withToken(apiUrl(`/recordings/${id}/file`)),
+  checkRecordingMedia: (id: number) => http.get<ArrayBuffer>(`/recordings/${id}/file`, { headers: { Range: 'bytes=0-0' }, responseType: 'arraybuffer' }),
   recordingDownloadUrl: (id: number | string) => withToken(apiUrl(`/recordings/${id}/download`)),
   hlsPlaylist: (cid: string, startMs: number, endMs: number) => apiUrl(`/recordings/channels/${encodeURIComponent(cid)}/index.m3u8?start_ms=${startMs}&end_ms=${endMs}`),
 

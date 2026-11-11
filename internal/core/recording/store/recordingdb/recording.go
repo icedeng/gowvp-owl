@@ -7,6 +7,7 @@ import (
 	"github.com/gowvp/owl/internal/core/recording"
 	"github.com/ixugo/goddd/pkg/orm"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var _ recording.RecordingStorer = Recording{}
@@ -31,7 +32,22 @@ func (d Recording) Get(ctx context.Context, model *recording.Recording, opts ...
 
 // Create implements recording.RecordingStorer.
 func (d Recording) Create(ctx context.Context, model *recording.Recording) error {
-	return d.db.WithContext(ctx).Create(model).Error
+	if model.FileKey == nil {
+		return d.db.WithContext(ctx).Create(model).Error
+	}
+	result := d.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "file_key"}}, DoNothing: true}).Create(model)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		var existing recording.Recording
+		if err := d.db.WithContext(ctx).Where("file_key = ?", *model.FileKey).First(&existing).Error; err != nil {
+			return err
+		}
+		*model = existing
+		return nil
+	}
+	return nil
 }
 
 // Update implements recording.RecordingStorer.

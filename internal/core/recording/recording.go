@@ -2,6 +2,8 @@ package recording
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -70,6 +72,10 @@ func (c Core) CreateRecording(ctx context.Context, in *AddRecordingInput) (*Reco
 		slog.ErrorContext(ctx, "Copy", "err", err)
 	}
 
+	if out.MediaServerID != "" && out.FilePath != "" {
+		key := fmt.Sprintf("%x", sha256.Sum256([]byte(out.MediaServerID+"\x00"+normalizeVhost(out.Vhost)+"\x00"+out.FilePath+"\x00"+strconv.FormatInt(out.StartedAt.Unix(), 10))))
+		out.FileKey = &key
+	}
 	if err := c.store.Recording().Create(ctx, &out); err != nil {
 		return nil, reason.ErrDB.Withf(`Create err[%s]`, err.Error())
 	}
@@ -91,7 +97,14 @@ func (c Core) UpdateRecording(ctx context.Context, in *EditRecordingInput, id in
 
 // DeleteRecording Delete object
 func (c Core) DeleteRecording(ctx context.Context, id int64) (*Recording, error) {
-	var out Recording
+	rec, err := c.GetRecording(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := c.removeRecordingFile(ctx, rec); err != nil {
+		return nil, reason.ErrServer.WithMsg("录像文件删除失败，已保留记录: " + err.Error())
+	}
+	out := *rec
 	if err := c.store.Recording().Delete(ctx, &out, orm.Where("id=?", id)); err != nil {
 		return nil, reason.ErrDB.Withf(`Del id[%v] err[%s]`, id, err.Error())
 	}
@@ -214,4 +227,15 @@ func (c Core) GetMonthlyStats(ctx context.Context, in *MonthlyStatsInput) (*Mont
 		Days:     daysInMonth,
 		HasVideo: string(bitmap),
 	}, nil
+}
+
+func (c Core) RecordingsInRange(ctx context.Context, cid string, startMs, endMs int64) ([]*Recording, error) {
+	if cid == "" || startMs <= 0 || endMs <= startMs {
+		return nil, reason.ErrBadRequest.WithMsg("invalid recording time range")
+	}
+	var result []*Recording
+	err := c.store.Recording().Session(ctx, func(tx *gorm.DB) error {
+		return tx.Where("cid = ? AND started_at < ? AND ended_at > ?", cid, orm.Time{Time: time.UnixMilli(endMs)}, orm.Time{Time: time.UnixMilli(startMs)}).Order("started_at ASC, id ASC").Find(&result).Error
+	})
+	return result, err
 }

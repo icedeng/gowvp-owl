@@ -27,6 +27,7 @@ type MediaServer struct {
 	RecordAssistPort  int              `gorm:"column:record_assist_port;notNull;default:0" json:"record_assist_port"`
 	LastKeepaliveAt   orm.Time         `gorm:"column:last_keepalive_at;notNull;default:CURRENT_TIMESTAMP" json:"last_keepalive_at"`
 	RecordDay         int              `gorm:"column:record_day;notNull;default:0" json:"record_day"`
+	RecordMountPath   string           `gorm:"not null;default:''" json:"record_mount_path"`
 	RecordPath        string           `gorm:"column:record_path;notNull;default:''" json:"record_path"`
 	Type              string           `gorm:"column:type;notNull;default:''" json:"type"`
 	TranscodeSuffix   string           `gorm:"column:transcode_suffix;notNull;default:''" json:"transcode_suffix"`

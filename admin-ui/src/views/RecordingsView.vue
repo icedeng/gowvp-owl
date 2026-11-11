@@ -301,9 +301,9 @@ async function playRecord(record: ApiRecording, keepQueue = false) {
   playerLoading.value = true;
   try {
     // 直接播放支持 Range 的原始 MP4，避免 HLS 时间边界查询遗漏片段。
-    await api.checkRecordingMedia(record.path!);
+    await api.checkRecordingMedia(record.id);
     if (sequence === playerSequence) {
-      playerUrl.value = api.recordingMediaUrl(record.path!);
+      playerUrl.value = api.recordingMediaUrl(record.id);
       playerLoading.value = false;
     }
   } catch (cause) {
@@ -678,7 +678,7 @@ onBeforeUnmount(() => {
                           "未知通道"
                         }}</strong
                         ><small
-                          >REC-{{ record.id }} · {{ record.app || "—" }}/{{
+                          >REC-{{ record.id }} · 节点 {{ record.media_server_id || "归属待确认" }} · {{ record.app || "—" }}/{{
                             record.stream || "—"
                           }}</small
                         ></span

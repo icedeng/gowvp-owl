@@ -17,6 +17,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/gowvp/owl/internal/conf"
 	"github.com/gowvp/owl/internal/core/ipc"
+	"github.com/gowvp/owl/internal/core/recording"
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/internal/core/sms/store/smsdb"
 	"github.com/gowvp/owl/pkg/zlm"
@@ -62,7 +63,7 @@ func TestMediaServerManagementLifecycle(t *testing.T) {
 	sqlDB, _ := db.DB()
 	defer sqlDB.Close()
 	store := smsdb.NewDB(db).AutoMigrate(true)
-	if err := db.AutoMigrate(&ipc.Channel{}); err != nil {
+	if err := db.AutoMigrate(&ipc.Channel{}, &recording.Recording{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MediaServer().Create(t.Context(), &sms.MediaServer{ID: "local", IP: "192.0.2.1", Secret: "global-secret"}); err != nil {

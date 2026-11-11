@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"math"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -237,7 +235,7 @@ func (w WebHookAPI) onStreamChanged(c *gin.Context, in *onStreamChangedInput) (D
 
 		if !ch.Ext.IsNoneRecord() {
 			// 保持既有行为：always/ai 均在流注册时启动录制，none 不录制。
-			if err := w.recordingCore.StartRecording(ctx, channelType, app, stream); err != nil {
+			if err := w.recordingCore.StartRecordingOnNode(ctx, recording.ChannelInfo{MediaServerID: in.MediaServerID, Vhost: in.Vhost, Type: channelType, App: app, Stream: stream}); err != nil {
 				w.log.WarnContext(ctx, "启动录制失败", "stream", stream, "err", err)
 			}
 			w.log.InfoContext(ctx, "自动启动录制（always模式）", "stream", stream)
@@ -246,7 +244,7 @@ func (w WebHookAPI) onStreamChanged(c *gin.Context, in *onStreamChangedInput) (D
 	}
 
 	// 流注销时停止录制
-	if err := w.recordingCore.StopRecording(ctx, app, stream); err != nil {
+	if err := w.recordingCore.StopRecordingOnNode(ctx, recording.ChannelInfo{MediaServerID: in.MediaServerID, Vhost: in.Vhost, App: app, Stream: stream}); err != nil {
 		w.log.WarnContext(ctx, "停止录制失败", "stream", stream, "err", err)
 	}
 
@@ -436,23 +434,19 @@ func (w WebHookAPI) onRecordMP4(c *gin.Context, in *onRecordMP4Input) (DefaultOu
 	if in.FileSize < 0 || in.TimeLen < 0 || math.IsNaN(in.TimeLen) || math.IsInf(in.TimeLen, 0) || in.StartTime <= 0 {
 		return DefaultOutput{}, fmt.Errorf("invalid recording metadata")
 	}
-	fullPath, err := w.recordingCore.ResolvePath(in.FilePath)
+
+	// 来源节点由 middleware 独立密钥校验，不能信任请求体自行指定归属。
+	source := c.GetString("webhook_media_server_id")
+	if source == "" {
+		return DefaultOutput{}, fmt.Errorf("recording webhook source is not authenticated")
+	}
+	if locker, ok := w.smsCore.(interface{ LockMediaServerAssignment() func() }); ok {
+		unlock := locker.LockMediaServerAssignment()
+		defer unlock()
+	}
+	location, err := w.recordingCore.DescribeFile(ctx, source, in.Vhost, in.FilePath, in.FileSize)
 	if err != nil {
-		return DefaultOutput{}, fmt.Errorf("invalid recording path: %w", err)
-	}
-	if !strings.EqualFold(filepath.Ext(fullPath), ".mp4") {
-		return DefaultOutput{}, fmt.Errorf("invalid recording file type")
-	}
-	info, err := os.Stat(fullPath)
-	if err != nil || !info.Mode().IsRegular() {
-		return DefaultOutput{}, fmt.Errorf("recording file is unavailable")
-	}
-	if in.FileSize != info.Size() {
-		return DefaultOutput{}, fmt.Errorf("recording file size mismatch")
-	}
-	relativePath, err := w.recordingCore.RelativePath(fullPath)
-	if err != nil {
-		return DefaultOutput{}, fmt.Errorf("invalid recording path: %w", err)
+		return DefaultOutput{}, err
 	}
 
 	// 计算开始和结束时间
@@ -471,19 +465,13 @@ func (w WebHookAPI) onRecordMP4(c *gin.Context, in *onRecordMP4Input) (DefaultOu
 	}
 
 	// 入库
-	_, err = w.recordingCore.CreateRecording(ctx, &recording.AddRecordingInput{
-		CID:       cid,
-		App:       in.App,
-		Stream:    in.Stream,
-		StartedAt: orm.Time{Time: startTime},
-		EndedAt:   orm.Time{Time: endTime},
-		Duration:  in.TimeLen,
-		Path:      relativePath,
-		Size:      in.FileSize,
-	})
-	if err != nil {
-		w.log.ErrorContext(ctx, "录像入库失败", "err", err)
-		// 仍返回成功，避免 ZLM 重试
+
+	location.CID, location.App, location.Stream = cid, in.App, in.Stream
+	location.StartedAt, location.EndedAt = orm.Time{Time: startTime}, orm.Time{Time: endTime}
+	location.Duration = in.TimeLen
+	if _, err = w.recordingCore.CreateRecording(ctx, &location); err != nil {
+		w.log.ErrorContext(ctx, "录像入库失败", "node", source, "err", err)
+		return DefaultOutput{}, err
 	}
 
 	return newDefaultOutputOK(), nil

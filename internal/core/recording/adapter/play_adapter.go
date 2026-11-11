@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"github.com/gowvp/owl/internal/core/recording"
 	"github.com/gowvp/owl/internal/core/sms"
@@ -25,12 +26,15 @@ func NewPlayAdapter(smsCore sms.Core) recording.PlayProvider {
 // 构造 RTSP 本地回环地址，调 ZLM getSnap（expire=1 强制刷新，timeout=30s）
 // ZLM 收到 getSnap 请求后若流不存在会自动拉流 → 触发 on_publish webhook → 录制闭环
 func (a *PlayAdapter) TriggerStream(ctx context.Context, info recording.ChannelInfo) error {
-	ms, err := a.smsCore.GetDefaultMediaServer()
+	ms, err := a.smsCore.GetMediaServer(ctx, info.NodeID())
 	if err != nil {
 		return err
 	}
 
-	rtspURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s/%s", ms.Ports.RTSP, info.App, info.Stream)
+	rtspURL := fmt.Sprintf("rtsp://127.0.0.1:%d/%s/%s", ms.Ports.RTSP, url.PathEscape(info.App), url.PathEscape(info.Stream))
+	if info.Vhost != "" && info.Vhost != recording.DefaultVhost {
+		rtspURL += "?vhost=" + url.QueryEscape(info.Vhost)
+	}
 
 	_, err = a.smsCore.GetSnapshot(ms, sms.GetSnapRequest{
 		GetSnapRequest: zlm.GetSnapRequest{

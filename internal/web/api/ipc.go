@@ -4222,14 +4222,14 @@ func (a IPCAPI) setRecordMode(c *gin.Context, in *setRecordModeInput) (gin.H, er
 	// 根据录像模式控制 ZLM 录制：always/ai 在线时启动，none 停止。
 	if channel.Ext.IsNoneRecord() {
 		// none 模式：停止录制
-		if err := a.recordingCore.StopRecording(ctx, channel.GetApp(), channel.GetStream()); err != nil {
+		if err := a.recordingCore.StopRecordingOnNode(ctx, recording.ChannelInfo{MediaServerID: channel.Config.MediaServerID, App: channel.GetApp(), Stream: channel.GetStream()}); err != nil {
 			return nil, reason.ErrServer.WithMsg("录像策略已保存，停止录制失败: " + err.Error())
 		}
 	} else {
 		// always/ai 模式：如果流在线则启动录制
 		if channel.IsOnline {
 			if err := a.recordingCore.StartRequestedRecording(ctx, recording.ChannelInfo{
-				ID: channel.ID, App: channel.GetApp(), Stream: channel.GetStream(), Type: channel.GetType(),
+				ID: channel.ID, MediaServerID: channel.Config.MediaServerID, App: channel.GetApp(), Stream: channel.GetStream(), Type: channel.GetType(),
 			}); err != nil {
 				return nil, reason.ErrServer.WithMsg("录像策略已保存，启动录制失败: " + err.Error())
 			}

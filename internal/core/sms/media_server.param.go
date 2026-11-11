@@ -31,6 +31,9 @@ type FindMediaServerInput struct {
 
 // EditMediaServerInput 仅管理连接参数，不暴露 ZLM 的任意配置。
 type EditMediaServerInput struct {
+	RecordPath      *string `json:"record_path"` // nil 保留旧值；空字符串清除
+	RecordMountPath *string `json:"record_mount_path"`
+
 	IP           string `json:"ip"`
 	HookIP       string `json:"hook_ip"`
 	SDPIP        string `json:"sdp_ip"`

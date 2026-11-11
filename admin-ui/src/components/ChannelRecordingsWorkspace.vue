@@ -102,8 +102,8 @@ async function playCloud(record: ApiRecording) {
   void cloudPlayer.value?.destroy(); activeRecord.value = record; mediaUrl.value = ''; mediaError.value = ''; mediaLoading.value = true;
   try {
     if (!record.path) throw new Error('该录像没有可读取的文件路径，请刷新列表或选择其他录像。');
-    await api.checkRecordingMedia(record.path);
-    if (sequence === playerSequence) { mediaUrl.value = api.recordingMediaUrl(record.path); mediaLoading.value = false; }
+    await api.checkRecordingMedia(record.id);
+    if (sequence === playerSequence) { mediaUrl.value = api.recordingMediaUrl(record.id); mediaLoading.value = false; }
   } catch (cause) { if (sequence === playerSequence) { mediaError.value = errorMessage(cause, '录像文件无法读取，可能已清理。请刷新列表或选择其他录像。'); mediaLoading.value = false; } }
 }
 onBeforeUnmount(() => { cloudSequence += 1; remoteSequence += 1; closeCloudPlayer(); });
@@ -126,7 +126,7 @@ void loadCloud();
       <div v-if="cloudError" class="inline-resource-error" role="alert"><span>{{ cloudError }}</span><button class="btn btn-sm" @click="loadCloud">重试</button></div>
       <div v-else-if="cloudLoading" class="empty-state" role="status"><LoaderCircle class="animate-spin" />正在读取云端录像…</div>
       <div v-else-if="!cloudItems.length" class="empty-state"><Cloud /><strong>{{ cloudDate ? '当天没有云端录像' : '暂无云端录像' }}</strong><p>{{ cloudDate ? '可切换日期或查看全部日期。' : '开启云端录制后，完成的录像片段会显示在这里。设备存储中的录像请切换到「设备本地录像」。' }}</p></div>
-      <div v-else class="table-wrap"><table class="data-table channel-records-table"><thead><tr><th>开始时间</th><th>结束时间</th><th>时长</th><th>大小</th><th class="text-right">操作</th></tr></thead><tbody><tr v-for="record in cloudItems" :key="record.id"><td data-label="开始时间">{{ formatDate(record.started_at) }}</td><td data-label="结束时间">{{ formatDate(record.ended_at) }}</td><td data-label="时长">{{ record.duration ? durationLabel(0, Math.round(record.duration)) : '—' }}</td><td data-label="大小">{{ formatBytes(record.size) }}</td><td data-label="操作"><div class="row-actions"><button class="btn btn-sm" :disabled="record.delete_flag || !record.path" @click="playCloud(record)"><Play />播放</button><a class="device-row-action" :href="api.recordingDownloadUrl(record.id)" download :aria-label="`下载 ${formatDate(record.started_at)} 的云端录像`" title="下载录像"><Download /></a></div></td></tr></tbody></table></div>
+      <div v-else class="table-wrap"><table class="data-table channel-records-table"><thead><tr><th>开始时间</th><th>结束时间</th><th>时长</th><th>大小</th><th class="text-right">操作</th></tr></thead><tbody><tr v-for="record in cloudItems" :key="record.id"><td data-label="开始时间">{{ formatDate(record.started_at) }}<small class="section-note"> · 节点 {{ record.media_server_id || '归属待确认' }}</small></td><td data-label="结束时间">{{ formatDate(record.ended_at) }}</td><td data-label="时长">{{ record.duration ? durationLabel(0, Math.round(record.duration)) : '—' }}</td><td data-label="大小">{{ formatBytes(record.size) }}</td><td data-label="操作"><div class="row-actions"><button class="btn btn-sm" :disabled="record.delete_flag || !record.path" @click="playCloud(record)"><Play />播放</button><a class="device-row-action" :href="api.recordingDownloadUrl(record.id)" download :aria-label="`下载 ${formatDate(record.started_at)} 的云端录像`" title="下载录像"><Download /></a></div></td></tr></tbody></table></div>
       <div v-if="cloudTotal > pageSize" class="record-list-pagination"><span>第 {{ cloudPage }} / {{ Math.ceil(cloudTotal / pageSize) }} 页</span><button class="btn btn-sm" :disabled="cloudPage <= 1 || cloudLoading" @click="cloudPaging(-1)">上一页</button><button class="btn btn-sm" :disabled="cloudPage * pageSize >= cloudTotal || cloudLoading" @click="cloudPaging(1)">下一页</button></div>
     </div>
 

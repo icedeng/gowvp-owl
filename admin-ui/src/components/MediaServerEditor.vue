@@ -8,11 +8,11 @@ const props = defineProps<{ open: boolean; node: MediaServer | null; defaultHook
 const emit = defineEmits<{ close: []; saved: [node: MediaServer] }>();
 const saving = ref(false);
 const error = ref('');
-const form = reactive({ id: '', type: 'zlm', ip: '', http_port: 8080, hook_ip: '', sdp_ip: '', secret: '', rtpport_range: '30000-50000' });
+const form = reactive({ record_path: '', record_mount_path: '', id: '', type: 'zlm', ip: '', http_port: 8080, hook_ip: '', sdp_ip: '', secret: '', rtpport_range: '30000-50000' });
 watch(() => props.open, (open) => {
   if (!open) return;
   const node = props.node;
-  Object.assign(form, { id: node?.id || '', type: node?.type || 'zlm', ip: node?.ip || '', http_port: node?.ports?.http || 8080, hook_ip: node?.hook_ip || props.defaultHook, sdp_ip: node?.sdp_ip || '', secret: '', rtpport_range: node?.rtpport_range || '30000-50000' });
+  Object.assign(form, { record_path: node?.record_path || '', record_mount_path: node?.record_mount_path || '', id: node?.id || '', type: node?.type || 'zlm', ip: node?.ip || '', http_port: node?.ports?.http || 8080, hook_ip: node?.hook_ip || props.defaultHook, sdp_ip: node?.sdp_ip || '', secret: '', rtpport_range: node?.rtpport_range || '30000-50000' });
   error.value = '';
 });
 async function save() {
@@ -41,6 +41,8 @@ async function save() {
         <label class="form-group"><span class="form-label">SDP 收流地址</span><input v-model="form.sdp_ip" class="input" :disabled="saving" placeholder="留空使用 API 地址" /><small class="form-hint">摄像机可访问的媒体节点地址，跨网部署时请正确填写。</small></label>
         <label class="form-group"><span class="form-label">RTP 端口范围</span><input v-model="form.rtpport_range" class="input" required pattern="[0-9]+-[0-9]+" :disabled="saving" placeholder="30000-50000" /></label>
         <label class="form-group"><span class="form-label">API 密钥</span><input v-model="form.secret" class="input" type="password" autocomplete="new-password" :required="!node" :disabled="saving" :placeholder="node ? '留空保留当前密钥' : '填写媒体服务 API 密钥'" /></label>
+        <label class="form-group"><span class="form-label">ZLM 录像目录</span><input v-model="form.record_path" class="input" :disabled="saving" placeholder="例如 /opt/zlm/recordings" /><small class="form-hint">ZLM 内部的绝对路径。local 留空沿用平台录像目录；远端节点录制前须填写。有历史录像时不能更换。</small></label>
+        <label class="form-group"><span class="form-label">平台录像挂载目录</span><input v-model="form.record_mount_path" class="input" :disabled="saving" placeholder="例如 /mnt/edge-zlm-1/recordings" /><small class="form-hint">平台容器内可读写的同一存储目录。远端播放、下载、删除及自动清理需要共享挂载，根目录须有 .gowvp-recording-node 文件，内容为节点标识；local 留空沿用平台录像目录。</small></label>
       </div>
       <p class="form-hint">保存启用节点后会连接媒体服务，并同步平台运行所需的回调和收流参数；连接失败会保留为离线节点，可编辑后重试。正在使用的节点须先停止相关业务再修改。</p>
     </form>

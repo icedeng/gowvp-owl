@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -60,7 +61,24 @@ func validMediaHost(host string) bool {
 	return true
 }
 
+type MediaServerRecordingStorer interface {
+	MediaServerRecordingCount(context.Context, string) (int64, error)
+}
+
 func normalizeMediaServer(server *MediaServer) error {
+	for _, dir := range []*string{&server.RecordPath, &server.RecordMountPath} {
+		*dir = strings.TrimSpace(*dir)
+		if *dir != "" {
+			if !filepath.IsAbs(*dir) || filepath.Clean(*dir) == string(filepath.Separator) {
+				return reason.ErrBadRequest.WithMsg("录像目录须为绝对路径，不能是文件系统根目录")
+			}
+			*dir = filepath.Clean(*dir)
+		}
+	}
+	if server.RecordMountPath != "" && server.RecordPath == "" && server.ID != DefaultMediaServerID {
+		return reason.ErrBadRequest.WithMsg("请同时填写 ZLM 录像目录")
+	}
+
 	server.IP, server.HookIP, server.SDPIP = strings.TrimSpace(server.IP), strings.TrimSpace(server.HookIP), strings.TrimSpace(server.SDPIP)
 	server.Type = strings.ToLower(strings.TrimSpace(server.Type))
 	if server.Type == "" {
@@ -119,6 +137,12 @@ func (c Core) CreateMediaServer(ctx context.Context, in *AddMediaServerInput) (*
 	}
 	out := &MediaServer{ID: id, IP: in.IP, HookIP: in.HookIP, SDPIP: in.SDPIP, Type: in.Type, Secret: in.Secret, RTPPortRange: in.RTPPortRange}
 	out.Ports.HTTP = in.HTTPPort
+	if in.RecordPath != nil {
+		out.RecordPath = *in.RecordPath
+	}
+	if in.RecordMountPath != nil {
+		out.RecordMountPath = *in.RecordMountPath
+	}
 	if err := normalizeMediaServer(out); err != nil {
 		return nil, err
 	}
@@ -179,6 +203,12 @@ func (c Core) UpdateMediaServer(ctx context.Context, in *EditMediaServerInput, i
 	}
 	next := *current
 	next.IP, next.HookIP, next.SDPIP = in.IP, in.HookIP, in.SDPIP
+	if in.RecordPath != nil {
+		next.RecordPath = *in.RecordPath
+	}
+	if in.RecordMountPath != nil {
+		next.RecordMountPath = *in.RecordMountPath
+	}
 	if in.Type != "" {
 		next.Type = in.Type
 	}
@@ -200,8 +230,14 @@ func (c Core) UpdateMediaServer(ctx context.Context, in *EditMediaServerInput, i
 	if err := c.ensureUnused(ctx, current, false); err != nil {
 		return nil, err
 	}
+	if next.RecordPath != current.RecordPath {
+		if err := c.ensureNoRecordings(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	if err := c.storer.MediaServer().Update(ctx, &MediaServer{}, func(b *MediaServer) {
 		b.IP, b.HookIP, b.SDPIP, b.Type, b.Secret, b.Ports, b.RTPPortRange = next.IP, next.HookIP, next.SDPIP, next.Type, next.Secret, next.Ports, next.RTPPortRange
+		b.RecordPath, b.RecordMountPath = next.RecordPath, next.RecordMountPath
 		b.Status = false
 	}, orm.Where("id=?", id)); err != nil {
 		return nil, err
@@ -226,7 +262,10 @@ func (c Core) SetMediaServerDisabled(ctx context.Context, id string, disabled bo
 		}
 	}
 	c.connectionMu.Lock()
-	err = c.storer.MediaServer().Update(ctx, &MediaServer{}, func(b *MediaServer) { b.Disabled = disabled; b.Status = false }, orm.Where("id=?", id))
+	err = c.storer.MediaServer().Update(ctx, &MediaServer{}, func(b *MediaServer) {
+		b.Disabled = disabled
+		b.Status = false
+	}, orm.Where("id=?", id))
 	if err == nil {
 		c.cacheServers.Delete(id)
 	}
@@ -254,6 +293,9 @@ func (c Core) DeleteMediaServer(ctx context.Context, id string) (*MediaServer, e
 	if !current.Disabled {
 		return nil, reason.ErrBadRequest.WithMsg("请先停用节点再删除")
 	}
+	if err := c.ensureNoRecordings(ctx, id); err != nil {
+		return nil, err
+	}
 	if err := c.ensureUnused(ctx, current, true); err != nil {
 		return nil, err
 	}
@@ -264,4 +306,20 @@ func (c Core) DeleteMediaServer(ctx context.Context, id string) (*MediaServer, e
 	}
 	c.cacheServers.Delete(id)
 	return current, nil
+}
+
+// 存在历史录像时不能删除节点或更换存储身份；挂载点可调整以恢复同一存储的访问。
+func (c Core) ensureNoRecordings(ctx context.Context, id string) error {
+	store, ok := c.storer.MediaServer().(MediaServerRecordingStorer)
+	if !ok {
+		return reason.ErrServer.WithMsg("录像引用检查不可用")
+	}
+	count, err := store.MediaServerRecordingCount(ctx, id)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return reason.ErrBadRequest.WithMsg("节点仍有历史录像，不能删除节点或更换 ZLM 录像目录")
+	}
+	return nil
 }

@@ -36,6 +36,7 @@ type mediaServerDetail struct {
 	Status            bool                 `json:"status"`
 	LastKeepaliveAt   any                  `json:"last_keepalive_at"`
 	RTPPortRange      string               `json:"rtpport_range"`
+	RecordMountPath   string               `json:"record_mount_path"`
 	RecordPath        string               `json:"record_path"`
 	HookAliveInterval int                  `json:"hook_alive_interval"`
 }
@@ -49,7 +50,7 @@ func (a SmsAPI) mediaServerDetail(c *gin.Context, in *mediaServerIDInput) (any, 
 		Disabled: server.Disabled, ID: server.ID, Type: server.Type, IP: server.IP, HookIP: server.HookIP,
 		SDPIP: server.SDPIP, StreamIP: server.StreamIP, Ports: server.Ports,
 		Status: server.Status, LastKeepaliveAt: server.LastKeepaliveAt,
-		RTPPortRange: server.RTPPortRange, RecordPath: server.RecordPath, HookAliveInterval: server.HookAliveInterval,
+		RTPPortRange: server.RTPPortRange, RecordPath: server.RecordPath, RecordMountPath: server.RecordMountPath, HookAliveInterval: server.HookAliveInterval,
 	}, nil
 }
 

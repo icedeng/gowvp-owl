@@ -250,6 +250,10 @@ export interface ApiEvent {
 }
 
 export interface ApiRecording {
+  media_server_id?: string
+  vhost?: string
+  storage_root?: string
+  file_path?: string
   id: number
   cid?: string
   app?: string
@@ -305,6 +309,7 @@ export interface MediaServer {
   last_keepalive_at?: string
   ports?: MediaServerPorts
   rtpport_range?: string
+  record_mount_path?: string
   record_path?: string
   record_day?: number
   auto_config?: boolean

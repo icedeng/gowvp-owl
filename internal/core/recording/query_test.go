@@ -59,6 +59,10 @@ func TestRecordingQueries(t *testing.T) {
 				if len(got) != count+1 || got[0].ID != extra[3].ID {
 					t.Fatalf("时间轴截断或边界筛选错误: count=%d", len(got))
 				}
+				files, err := core.RecordingsInRange(t.Context(), "timeline", start.UnixMilli(), end.UnixMilli())
+				if err != nil || len(files) != count+1 || files[0].ID != extra[3].ID {
+					t.Fatalf("播放列表查询截断或边界错误: count=%d err=%v", len(files), err)
+				}
 				for i, want := range items {
 					row := got[i+1]
 					if row.ID != want.ID || row.StartMs != want.StartedAt.UnixMilli() || row.EndMs != want.EndedAt.UnixMilli() ||

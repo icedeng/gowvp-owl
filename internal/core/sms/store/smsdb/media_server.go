@@ -68,3 +68,15 @@ func (d MediaServer) MediaServerUsage(ctx context.Context, id string) (bound, ac
 	err = query.Where("is_playing = ?", true).Count(&active).Error
 	return
 }
+
+func (d MediaServer) MediaServerRecordingCount(ctx context.Context, id string) (int64, error) {
+	var count int64
+	query := d.db.WithContext(ctx).Table("recordings")
+	if id == sms.DefaultMediaServerID {
+		query = query.Where("media_server_id = ? OR media_server_id = ''", id)
+	} else {
+		query = query.Where("media_server_id = ?", id)
+	}
+	err := query.Count(&count).Error
+	return count, err
+}
