@@ -78,8 +78,9 @@ h4 { font-size: 13px; margin: 12px 0; }
 img, video { width: 100%; max-height: 300px; object-fit: contain; background: var(--panel-3); border-radius: var(--radius-sm); }
 .evidence-empty { display: flex; align-items: center; gap: 8px; min-height: 100px; color: var(--muted); background: var(--panel-2); padding: 16px; font-size: 12px; }
 .evidence-empty svg { width: 20px; flex-shrink: 0; }
-.process-fields { display: grid; grid-template-columns: 180px 1fr; gap: 16px; margin-bottom: 14px; }
-textarea.input { height: auto; padding: 10px; resize: vertical; min-height: 84px; }
+.process-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin-bottom: 14px; }
+.process-fields .select { max-width: 280px; }
+textarea.input { width: 100%; min-width: 0; height: auto; padding: 10px; resize: vertical; min-height: 84px; }
 .success-message { color: var(--green); }
 ol { list-style: none; padding: 0; margin: 0; }
 li { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13px; }

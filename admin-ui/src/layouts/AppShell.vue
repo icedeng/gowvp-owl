@@ -33,6 +33,7 @@ import { accessGatewayNavigation } from "../features/access-gateway/navigation";
 import brandMark from "../assets/brand-mark.svg";
 import { useUiStore } from "../stores/ui";
 import { useSessionStore } from "../stores/session";
+import { useEventNoticesStore } from "../stores/event-notices";
 import { api } from "../services/api";
 import type { HealthInfo } from "../types/api";
 import { formatUptime } from "../utils/format";
@@ -41,8 +42,10 @@ const route = useRoute();
 const router = useRouter();
 const ui = useUiStore();
 const session = useSessionStore();
+const eventNotices = useEventNoticesStore();
 const health = ref<HealthInfo>({});
-const eventCount = ref(0);
+const eventCount = computed(() => eventNotices.pendingCount);
+let eventNoticeTimer: number | undefined;
 const userMenuOpen = ref(false);
 const userMenu = ref<HTMLElement | null>(null);
 const userMenuTrigger = ref<HTMLButtonElement | null>(null);
@@ -50,6 +53,9 @@ const mobileMenuButton = ref<HTMLButtonElement | null>(null);
 const operationsOpen = ref(false);
 const eventBadge = computed(() =>
   eventCount.value > 99 ? "99+" : String(eventCount.value)
+);
+const eventNoticeLabel = computed(() =>
+  eventCount.value ? `${eventCount.value} 条待处理事件` : "暂无待处理事件"
 );
 const serviceConnected = computed(() => Boolean(health.value.version));
 type NavItem = {
@@ -194,19 +200,24 @@ async function logout() {
 onMounted(() => {
   window.addEventListener("keydown", onKeydown);
   document.addEventListener("pointerdown", onDocumentPointerDown);
-  const now = Date.now();
-  Promise.allSettled([
-    api.health(),
-    api.events({ page: 1, size: 1, start_ms: now - 24 * 3600000, end_ms: now }),
-  ])
-    .then(([healthResponse, eventResponse]) => {
-      if (healthResponse.status === "fulfilled") health.value = healthResponse.value.data || {};
-      if (eventResponse.status === "fulfilled") eventCount.value = eventResponse.value.data?.total || 0;
-    })
+  api.health().then(({ data }) => { health.value = data || {}; }).catch(() => {});
+  void eventNotices.refresh();
+  eventNoticeTimer = window.setInterval(() => {
+    if (!document.hidden) void eventNotices.refresh();
+  }, 30000);
+  window.addEventListener("focus", refreshEventNotices);
+  document.addEventListener("visibilitychange", refreshEventNotices);
 });
+function refreshEventNotices() {
+  if (!document.hidden) void eventNotices.refresh();
+}
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
   document.removeEventListener("pointerdown", onDocumentPointerDown);
+  window.clearInterval(eventNoticeTimer);
+  window.removeEventListener("focus", refreshEventNotices);
+  document.removeEventListener("visibilitychange", refreshEventNotices);
+  eventNotices.reset();
 });
 </script>
 
@@ -273,7 +284,8 @@ onBeforeUnmount(() => {
               <span
                 v-if="item.badge && eventCount"
                 class="nav-badge"
-                :aria-label="`过去 24 小时 ${eventCount} 条事件`"
+                :aria-label="eventNoticeLabel"
+                :title="eventNoticeLabel"
                 >{{ eventBadge }}</span
               >
             </RouterLink>
@@ -329,15 +341,16 @@ onBeforeUnmount(() => {
           >
         </RouterLink>
         <div class="top-actions">
-          <button
+          <RouterLink
             class="icon-btn notification-btn relative"
-            aria-label="通知"
-            @click="ui.toast(`过去 24 小时共 ${eventCount} 条事件`)"
+            :to="{ name: 'events', query: { status: 'pending', page: '1', size: '20' } }"
+            :aria-label="`通知：${eventNoticeLabel}，查看待处理事件`"
+            :title="eventNoticeLabel"
           >
             <Bell /><span v-if="eventCount" class="notice-count">{{
               eventBadge
             }}</span>
-          </button>
+          </RouterLink>
           <div ref="userMenu" class="user-menu-wrap" @keydown="onUserMenuKeydown">
             <button
               ref="userMenuTrigger"
