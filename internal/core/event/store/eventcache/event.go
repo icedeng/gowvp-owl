@@ -109,8 +109,7 @@ func (c *Event) Count(ctx context.Context, opts ...orm.QueryOption) (int64, erro
 
 // Session 事务组合
 func (c *Event) Session(ctx context.Context, changeFns ...func(*gorm.DB) error) error {
-	// return c.store.Event().Session(ctx, changeFns...)
-	return nil
+	return c.store.Event().Session(ctx, changeFns...)
 }
 
 // UpdateWithSession 修改事务

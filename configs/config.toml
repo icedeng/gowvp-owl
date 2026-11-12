@@ -4,11 +4,13 @@
   RTMPSecret = ''
   # 登录用户名
   Username = 'admin'
-  # 登录密码
+  # 旧版登录密码：启动时迁移为 PasswordHash 并清空；新部署请设置 OWL_ADMIN_PASSWORD
   Password = ''
 
   # ai 分析服务
   [Server.AI]
+    # 同时运行任务上限，0=默认32，负数=不限制；重启生效。
+    MaxTasks = 32
     # 是否禁用 ai 分析服务
     Disabled = false
     # 保留天数
@@ -28,6 +30,12 @@
     # 60 = 1 分钟内不重复告警（适合目标长时间驻留场景）
     AlertCooldownSeconds = 10
 
+  # 独立 ONVIF 凭据；首次启动自动生成，客户端需使用此账号重新配置。
+  # 可由 OWL_ONVIF_USERNAME / OWL_ONVIF_PASSWORD 环境变量覆盖。
+  [Server.ONVIF]
+    Username = 'owl-onvif'
+    Password = ''
+
   # 对外提供的服务，建议由 nginx 代理
   [Server.HTTP]
     # http 端口
@@ -40,9 +48,9 @@
     AuthURL = ''
 
     [Server.HTTP.PProf]
-      # 是否启用 pprof, 建议设置为 true
+      # 性能诊断接口默认关闭；启用后需要管理员 Bearer 令牌。
       Enabled = false
-      # 访问白名单
+      # 真实 TCP 对端 IP 白名单，不信任转发头；空列表拒绝所有访问。
       AccessIps = ['::1', '127.0.0.1']
 
   # 录像配置

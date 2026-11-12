@@ -26,6 +26,15 @@ type ConfigAPI struct {
 	sipConfig  *conf.SIP
 }
 
+// 配置快照会复制管理员字段，与改密使用同一把锁，避免复制到混合状态。
+func (a ConfigAPI) lockCredentials() func() {
+	if a.uc == nil || a.uc.UserAPI.credentialsMu == nil {
+		return func() {}
+	}
+	a.uc.UserAPI.credentialsMu.RLock()
+	return a.uc.UserAPI.credentialsMu.RUnlock
+}
+
 func NewConfigAPI(db *gorm.DB, cfg *conf.Bootstrap) ConfigAPI {
 	core := config.NewCore(configdb.NewDB(db).AutoMigrate(orm.GetEnabledAutoMigrate()))
 	var sipConfig conf.SIP
@@ -255,6 +264,8 @@ func (a ConfigAPI) updateSIP(_ *gin.Context, in *updateSIPInput) (gin.H, error) 
 			return nil, reason.ErrBadRequest.WithMsg(err.Error())
 		}
 	}
+	unlock := a.lockCredentials()
+	defer unlock()
 	candidate := *a.conf
 	candidate.Sip = next
 	if err := conf.WriteConfig(&candidate, a.conf.ConfigPath); err != nil {

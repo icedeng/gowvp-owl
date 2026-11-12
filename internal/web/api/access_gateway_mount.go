@@ -88,14 +88,11 @@ func mountAccessGateway(router gin.IRouter, uc *Usecase) {
 			deny()
 			return
 		}
-		uc.UserAPI.credentialsMu.RLock()
-		username := uc.Conf.Server.Username
-		uc.UserAPI.credentialsMu.RUnlock()
-		if username == "" || claims.Data[web.KeyUsername] != username {
+		if !uc.validAdminSession(claims) {
 			deny()
 			return
 		}
-		c.Set("access_gateway_admin", username)
+		c.Set("access_gateway_admin", claims.Data[web.KeyUsername])
 		c.Next()
 	}, func(c *gin.Context) string { return c.GetString("access_gateway_admin") })
 }

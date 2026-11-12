@@ -188,14 +188,11 @@ func strictOpenAdmin(uc *Usecase) gin.HandlerFunc {
 			deny()
 			return
 		}
-		uc.UserAPI.credentialsMu.RLock()
-		username := uc.Conf.Server.Username
-		uc.UserAPI.credentialsMu.RUnlock()
-		if username == "" || claims.Data[web.KeyUsername] != username {
+		if !uc.validAdminSession(claims) {
 			deny()
 			return
 		}
-		c.Set("open_admin", username)
+		c.Set("open_admin", claims.Data[web.KeyUsername])
 		c.Next()
 	}
 }

@@ -37,7 +37,6 @@ import (
 	"github.com/ixugo/goddd/domain/version/store/versiondb"
 	"github.com/ixugo/goddd/domain/version/versionapi"
 	"github.com/ixugo/goddd/pkg/orm"
-	"github.com/ixugo/goddd/pkg/web"
 	"gorm.io/gorm"
 )
 
@@ -101,10 +100,7 @@ func NewHTTPHandler(uc *Usecase) http.Handler {
 	g.NoRoute(func(c *gin.Context) {
 		c.JSON(404, "来到了无人的荒漠")
 	})
-	// 如果启用了 Pprof，设置 Pprof 监控
-	if cfg.HTTP.PProf.Enabled {
-		web.SetupPProf(g, &cfg.HTTP.PProf.AccessIps) // 设置 Pprof 监控
-	}
+	registerPProf(g, uc)
 
 	uc.GB28181API.captures = capture.New(uc.DB, filepath.Join(uc.Conf.ConfigDir, "cover", "captures"))
 	snapshot := uc.GB28181API.captureSettings()
@@ -273,13 +269,13 @@ type IPCBundle struct {
 
 // NewIPCCoreWithProtocols 创建 IPC Core 和 Protocols
 // 先用临时 Core 构建 protocols（adapter 仅存引用，运行时才调用方法），再创建含 protocols 的最终 Core
-func NewIPCCoreWithProtocols(store ipc.Storer, uni uniqueid.Core, adapter ipc.Adapter, smsCore sms.Core, gbsServer *gbs.Server, conf *conf.Bootstrap) IPCBundle {
+func NewIPCCoreWithProtocols(ctx context.Context, store ipc.Storer, uni uniqueid.Core, adapter ipc.Adapter, smsCore sms.Core, gbsServer *gbs.Server, conf *conf.Bootstrap) IPCBundle {
 	// 第一步：创建临时 Core（adapter 构造时仅存储引用，不依赖 protocols）
 	tmpCore := ipc.NewCore(store, uni, nil)
 
 	// 第二步：构建 protocols（adapter 内部持有 tmpCore 的值副本，运行时访问 DB 方法不依赖 protocols）
 	protocols := make(map[string]ipc.Protocoler)
-	protocols[ipc.TypeOnvif] = onvifadapter.NewAdapter(adapter, smsCore)
+	protocols[ipc.TypeOnvif] = onvifadapter.NewAdapterContext(ctx, adapter, smsCore)
 	protocols[ipc.TypeRTSP] = rtspadapter.NewAdapter(tmpCore, smsCore)
 	protocols[ipc.TypeRTMP] = rtmpadapter.NewAdapter(tmpCore, conf)
 	protocols[ipc.TypeGB28181] = gbadapter.NewAdapter(adapter, gbsServer, smsCore)

@@ -51,7 +51,7 @@ func wireApp(ctx context.Context, bc *conf.Bootstrap, log *slog.Logger) (http.Ha
 	}
 	versionapiAPI := versionapi.New(core)
 	smsAPI := api.NewSmsAPI(smsCore)
-	ipcBundle := api.NewIPCCoreWithProtocols(storer, uniqueidCore, adapter, smsCore, server, bc)
+	ipcBundle := api.NewIPCCoreWithProtocols(ctx, storer, uniqueidCore, adapter, smsCore, server, bc)
 	smsProvider := api.NewSMSProviderAdapter(smsCore)
 	ipcProvider := api.NewIPCProviderAdapter(ipcBundle)
 	playProvider := api.NewPlayProviderAdapter(smsCore)

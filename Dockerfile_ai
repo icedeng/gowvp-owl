@@ -100,6 +100,8 @@ RUN corepack enable
 COPY admin-ui/package.json admin-ui/pnpm-lock.yaml admin-ui/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY admin-ui/ ./
+COPY docs/open-platform/ /src/docs/open-platform/
+COPY examples/open-platform/ /src/examples/open-platform/
 RUN pnpm build
 
 # ============================================
@@ -125,11 +127,11 @@ RUN pip3 config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && 
 # --only-binary :all:: 强制只安装预编译包
 RUN pip3 install --no-cache-dir --break-system-packages --target=/python-packages --no-deps --only-binary :all: onnxruntime && \
     pip3 install --no-cache-dir --break-system-packages --target=/python-packages --only-binary :all: \
-        grpcio \
+        'grpcio>=1.76.0' \
         opencv-python-headless \
         numpy \
         requests \
-        protobuf \
+        'protobuf>=6.31.1,<7' \
         packaging \
         coloredlogs \
         flatbuffers

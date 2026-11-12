@@ -72,6 +72,6 @@ test("国标设备列表提供四版本筛选并兼容旧版分页接口", () =>
   assert.match(devicesSource, /2014（1\.1）/);
   assert.match(devicesSource, /2016（2\.0）/);
   assert.match(devicesSource, /2022（3\.0）/);
-  assert.match(devicesSource, /watch\(\[query, status, version\]/);
-  assert.match(devicesSource, /collectPages\(api\.devices, \{ type: "GB28181" \}\)/);
+  assert.match(devicesSource, /watch\(\[query, status, version, gatewayID\]/);
+  assert.match(devicesSource, /collectPages\(api\.devices, \{ type: "GB28181", gateway_id: gatewayID\.value \|\| undefined \}\)/);
 });

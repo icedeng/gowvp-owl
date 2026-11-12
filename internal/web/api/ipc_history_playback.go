@@ -4,12 +4,10 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/pkg/gbs"
-	"github.com/ixugo/goddd/pkg/web"
 )
 
 // historyPlaybackOutput 仅为已成功建立的历史会话签发播放地址，不调用直播接口。
@@ -24,7 +22,7 @@ func (a IPCAPI) historyPlaybackOutput(c *gin.Context, channelID string) (*playOu
 		return nil, err
 	}
 	stream := gbs.HistoryStreamID("playback", ch.ID)
-	token, err := web.NewToken(map[string]any{"stream": stream, "app": "rtp", "media_server_id": mediaServerID}, a.uc.Conf.Server.HTTP.JwtSecret+"_play", web.WithExpiresAt(time.Now().Add(42*time.Hour)))
+	token, err := a.uc.newPlayToken(c, map[string]any{"stream": stream, "app": "rtp", "media_server_id": mediaServerID})
 	if err != nil {
 		return nil, err
 	}

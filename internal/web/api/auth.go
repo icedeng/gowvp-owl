@@ -20,6 +20,10 @@ type HandlerOption func(*gin.Context) bool
 // 开启第三方鉴权时，两者任何一个通过，则鉴权通过!
 // 优先尝试 JWT（开销小），失败后再尝试 authURL（开销大）
 func AuthMiddleware(secret string, authURL string, handler ...HandlerOption) gin.HandlerFunc {
+	return authMiddleware(secret, authURL, nil, handler...)
+}
+
+func authMiddleware(secret string, authURL string, validSession func(*web.Claims) bool, handler ...HandlerOption) gin.HandlerFunc {
 	client := http.Client{Timeout: 10 * time.Second}
 	return func(c *gin.Context) {
 		for _, h := range handler {
@@ -51,6 +55,11 @@ func AuthMiddleware(secret string, authURL string, handler ...HandlerOption) gin
 				if err := claims.Valid(); err != nil {
 					// token 有效但过期，直接返回需要重新登录，不降级到 authURL
 					web.AbortWithStatusJSON(c, reason.ErrUnauthorizedToken.WithMsg("请重新登录"))
+					return
+				}
+				// 本平台签发但已撤销的会话必须直接拒绝，不能由第三方鉴权重新放行。
+				if validSession != nil && !validSession(claims) {
+					web.AbortWithStatusJSON(c, reason.ErrUnauthorizedToken.WithMsg("登录已失效，请重新登录"))
 					return
 				}
 				// JWT 鉴权通过

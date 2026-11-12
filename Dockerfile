@@ -5,6 +5,8 @@ RUN corepack enable
 COPY admin-ui/package.json admin-ui/pnpm-lock.yaml admin-ui/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY admin-ui/ ./
+COPY docs/open-platform/ /src/docs/open-platform/
+COPY examples/open-platform/ /src/examples/open-platform/
 RUN pnpm build
 
 FROM alpine:latest

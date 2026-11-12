@@ -141,6 +141,6 @@ func (c Core) DeleteEvent(ctx context.Context, id int64) (*Event, error) {
 	if err := c.store.Event().Delete(ctx, &out, orm.Where("id=?", id)); err != nil {
 		return nil, err
 	}
-	removeEventMedia(out.ImagePath, out.VideoPath)
+	c.cleanupPendingMedia(ctx, out.ID)
 	return &out, nil
 }

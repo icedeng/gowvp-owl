@@ -18,6 +18,8 @@ type Bootstrap struct {
 	ConfigPath   string `toml:"-" json:"-"`
 	// AISecret 进程内随机 UUID，用于 Python AI 回调鉴权，重启后失效，不写配置文件
 	AISecret string `toml:"-" json:"-"`
+	// AdminSessionVersion 由有效凭据派生或从凭据文件恢复，不暴露给配置 API。
+	AdminSessionVersion string `toml:"-" json:"-"`
 
 	Server        Server // 服务器
 	Data          Data   // 数据
@@ -40,13 +42,20 @@ type Server struct {
 	Debug      bool
 	RTMPSecret string `comment:"rtmp 推流秘钥"`
 
-	Username string `comment:"登录用户名"`
-	Password string `comment:"登录密码"`
+	Username     string      `comment:"登录用户名"`
+	Password     string      `comment:"旧版登录密码，仅用于启动迁移，迁移后清空" json:"-"`
+	PasswordHash string      `comment:"管理员口令哈希，由服务维护" json:"-"`
+	ONVIF        ServerONVIF `comment:"独立 ONVIF 服务凭据，不再共用管理员口令"`
 
 	AI        ServerAI        `comment:"ai 分析服务"`
 	HTTP      ServerHTTP      `comment:"对外提供的服务，建议由 nginx 代理"` // HTTP服务器
 	Recording ServerRecording `comment:"录像配置"`
 	Webhook   ServerWebhook   `comment:"告警 webhook 推送与接收配置"`
+}
+
+type ServerONVIF struct {
+	Username string `comment:"ONVIF 服务用户名"`
+	Password string `comment:"ONVIF 协议摘要所需的独立密码" json:"-"`
 }
 
 // ServerWebhook webhook 推送与接收配置
@@ -72,12 +81,21 @@ type ServerRecording struct {
 }
 
 type ServerAI struct {
+	MaxTasks   int  `comment:"AI 并发任务上限，0=默认32，负数=不限制；重启生效"`
 	Disabled   bool `comment:"是否禁用 ai 分析服务"`
 	RetainDays int  `comment:"保留天数"`
 	// 全局默认分析间隔（秒）。0=内置默认5秒；0.5=每秒2张；1=每秒1张；5=每5秒1张；30=每30秒1张
 	AnalysisInterval float32 `comment:"全局默认分析间隔（秒）"`
 	// 告警冷却时间（秒）。同一目标在冷却期内不重复告警。0=内置默认30秒；10=10秒；60=1分钟
 	AlertCooldownSeconds float32 `comment:"告警冷却时间（秒）"`
+}
+
+// TaskLimit 返回任务准入上限；负数显式保留旧版不限制行为。
+func (a ServerAI) TaskLimit() int {
+	if a.MaxTasks == 0 {
+		return 32
+	}
+	return a.MaxTasks
 }
 
 type ServerHTTP struct {
@@ -88,10 +106,10 @@ type ServerHTTP struct {
 	AuthURL   string      `comment:"第三方认证服务地址，空串则不启用，post 请求返回 200 表示认证通过，填写本服务 /health 表示免鉴权但不安全!"`
 }
 
-// ServerPPROF 结构体，包含 Enabled 和 AccessIps 两个字段
+// ServerPPROF 控制诊断入口；启用后同时校验真实连接来源和管理员 Bearer 身份。
 type ServerPPROF struct {
-	Enabled   bool     `comment:"是否启用 pprof, 建议设置为 true"`  // 是否启用
-	AccessIps []string `comment:"访问白名单" json:"access_ips"` // 允许访问的IP地址列表
+	Enabled   bool     `comment:"性能诊断接口默认关闭；启用后需要管理员 Bearer 令牌"`
+	AccessIps []string `comment:"真实 TCP 对端 IP 白名单，不信任转发头；空列表拒绝所有访问" json:"access_ips"`
 }
 
 // Data 结构体，包含 Database 和 Redis 两个字段

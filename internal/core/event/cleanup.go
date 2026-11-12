@@ -2,156 +2,81 @@ package event
 
 import (
 	"context"
+	"errors"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/ixugo/goddd/pkg/orm"
-	"github.com/ixugo/goddd/pkg/system"
 	"github.com/ixugo/goddd/pkg/web"
 	"gorm.io/gorm"
 )
 
-// StartCleanupWorker 启动可取消的定时清理协程。
-// days 参数指定保留的天数，超过该天数的事件将被删除
+// StartCleanupWorker 保留清理每日执行，已提交删除的附件任务每分钟重试。
+// 禁用保留期清理也不会遗失手工删除后尚未完成的附件任务。
 func (c Core) StartCleanupWorker(ctx context.Context, days int) {
-	if days <= 0 {
-		slog.Info("event cleanup disabled", "days", days)
+	if ctx.Err() != nil {
 		return
 	}
-
-	slog.Info("event cleanup worker started", "retain_days", days)
-
-	select {
-	case <-ctx.Done():
-		return
-	default:
-	}
-
-	// 启动时先执行一次清理
-	c.cleanupExpiredEvents(days)
-
-	// 计算到下一个凌晨 3 点的时间
-	ticker := time.NewTicker(24 * time.Hour)
-	defer ticker.Stop()
-
+	c.cleanupExpiredEvents(ctx, days)
+	retention := time.NewTicker(24 * time.Hour)
+	retry := time.NewTicker(time.Minute)
+	defer retention.Stop()
+	defer retry.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			c.cleanupExpiredEvents(days)
+		case <-retention.C:
+			c.cleanupExpiredEvents(ctx, days)
+		case <-retry.C:
+			c.cleanupPendingMedia(ctx, 0)
 		}
 	}
 }
 
-// cleanupExpiredEvents 清理过期的事件，先删除本地图片文件，再删除数据库记录
-func (c Core) cleanupExpiredEvents(days int) {
-	ctx := context.Background()
-	cutoffTime := time.Now().AddDate(0, 0, -days)
-
-	slog.Info("starting event cleanup", "cutoff_time", cutoffTime.Format(time.DateTime), "retain_days", days)
-
-	// 分批查询并删除，避免一次性加载过多数据
-	batchSize := 100
-	totalDeleted := 0
-	totalFilesDeleted := 0
-
-	for {
-		// 查询一批过期事件
-		var events []*Event
-		pager := web.PagerFilter{Page: 1, Size: batchSize}
-		options := []orm.QueryOption{orm.Where("started_at < ?", orm.Time{Time: cutoffTime})}
-		if c.workflow != nil {
-			options = append(options, orm.Where("NOT EXISTS (SELECT 1 FROM event_evidence_tasks t WHERE t.event_id = events.id AND t.state IN ('queued','working'))"))
-		}
-		_, err := c.store.Event().List(ctx, &events, &pager, options...)
-		if err != nil {
-			slog.Error("failed to query expired events", "err", err)
-			break
-		}
-
-		if len(events) == 0 {
-			break
-		}
-
-		// 收集需要删除的图片路径（去重）
-		imagePaths := make(map[string]struct{})
-		eventIDs := make([]int64, 0, len(events))
-		for _, e := range events {
-			eventIDs = append(eventIDs, e.ID)
-			if e.VideoPath != "" {
-				imagePaths[e.VideoPath] = struct{}{}
-			}
-			if e.ImagePath != "" {
-				imagePaths[e.ImagePath] = struct{}{}
-			}
-		}
-
-		// 先删除本地图片文件
-		for imagePath := range imagePaths {
-			totalFilesDeleted += removeEventMedia(imagePath)
-		}
-
-		// 批量删除数据库记录，使用 WHERE IN 一次性删除
-		var deletedRows int64
-		err = c.store.Event().Session(ctx, func(tx *gorm.DB) error {
-			if err := tx.Where("event_id IN ?", eventIDs).Delete(&AlarmReport{}).Error; err != nil {
-				return err
-			}
-			if c.workflow != nil {
-				if err := tx.Where("event_id IN ?", eventIDs).Delete(&Action{}).Error; err != nil {
-					return err
-				}
-				if err := tx.Where("event_id IN ?", eventIDs).Delete(&EvidenceTask{}).Error; err != nil {
-					return err
-				}
-			}
-			result := tx.Where("id IN ?", eventIDs).Delete(&Event{})
-			deletedRows = result.RowsAffected
-			return result.Error
-		})
-		if err != nil {
-			slog.Warn("failed to batch delete events", "count", len(eventIDs), "err", err)
-			break
-		}
-		// 删除无实际进展时不反复查询同一批事件，保留记录供下一轮重试。
-		if deletedRows == 0 {
-			slog.Warn("event cleanup made no progress, stop current run", "count", len(eventIDs))
-			break
-		}
-		totalDeleted += int(deletedRows)
-	}
-
-	// 清理空目录
-	cleanupEmptyDirs(filepath.Join(system.Getwd(), "configs", "events"))
-
-	slog.Info("event cleanup completed",
-		"events_deleted", totalDeleted,
-		"files_deleted", totalFilesDeleted,
-	)
-}
-
-// cleanupEmptyDirs 递归删除空目录
-func cleanupEmptyDirs(dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+// 先提交事件删除与附件任务，再回收文件；每次删除在事务内重新检查保留期和取证状态。
+func (c Core) cleanupExpiredEvents(ctx context.Context, days int) {
+	if days <= 0 {
+		c.cleanupPendingMedia(ctx, 0)
 		return
 	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			subDir := filepath.Join(dir, entry.Name())
-			cleanupEmptyDirs(subDir)
-
-			// 检查子目录是否为空
-			subEntries, err := os.ReadDir(subDir)
-			if err == nil && len(subEntries) == 0 {
-				if err := os.Remove(subDir); err == nil {
-					slog.Debug("removed empty directory", "path", subDir)
-				}
+	cutoff := orm.Time{Time: time.Now().AddDate(0, 0, -days)}
+	var cursor int64
+	deleted := 0
+	defer func() {
+		if ctx.Err() == nil {
+			c.cleanupPendingMedia(ctx, 0)
+		}
+		slog.InfoContext(ctx, "event cleanup completed", "events_deleted", deleted)
+	}()
+	for ctx.Err() == nil {
+		var events []*Event
+		pager := web.PagerFilter{Page: 1, Size: 100}
+		_, err := c.store.Event().List(ctx, &events, &pager,
+			orm.Where("started_at < ?", cutoff), orm.Where("id > ?", cursor), orm.OrderBy("id"),
+			orm.Where("NOT EXISTS (SELECT 1 FROM event_evidence_tasks t WHERE t.event_id = events.id AND t.state IN ('queued','working'))"))
+		if err != nil {
+			slog.WarnContext(ctx, "query expired events", "err", err)
+			return
+		}
+		if len(events) == 0 {
+			return
+		}
+		for _, candidate := range events {
+			if ctx.Err() != nil {
+				return
 			}
+			cursor = candidate.ID
+			var current Event
+			err := c.store.Event().Delete(ctx, &current, orm.Where("id = ?", candidate.ID), orm.Where("started_at < ?", cutoff))
+			if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, ErrEvidenceActive) {
+				continue
+			}
+			if err != nil {
+				slog.WarnContext(ctx, "delete expired event", "event_id", candidate.ID, "err", err)
+				return
+			}
+			deleted++
 		}
 	}
 }

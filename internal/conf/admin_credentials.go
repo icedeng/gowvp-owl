@@ -14,8 +14,10 @@ import (
 const AdminCredentialsFile = "admin-credentials.toml"
 
 type adminCredentials struct {
-	Username string
-	Password string
+	Username       string
+	Password       string `toml:",omitempty"`
+	PasswordHash   string
+	SessionVersion string
 }
 
 func validateAdminCredentials(username, password string) error {
@@ -29,14 +31,27 @@ func validateAdminCredentials(username, password string) error {
 }
 
 // SaveAdminCredentials 原子保存成功后才由调用方更新内存，不重写主配置及其他密钥。
-func SaveAdminCredentials(cfg *Bootstrap, username, password string) error {
+func SaveAdminCredentials(cfg *Bootstrap, username, password string) (string, string, error) {
 	if cfg == nil || cfg.ConfigPath == "" {
-		return fmt.Errorf("未配置凭据持久化目录")
+		return "", "", fmt.Errorf("未配置凭据持久化目录")
 	}
 	if err := validateAdminCredentials(username, password); err != nil {
-		return err
+		return "", "", err
 	}
-	data, err := toml.Marshal(adminCredentials{Username: username, Password: password})
+	hash, err := HashAdminPassword(password)
+	if err != nil {
+		return "", "", err
+	}
+	version, err := randomSecret(32)
+	if err != nil {
+		return "", "", err
+	}
+	err = writeAdminCredentials(cfg, adminCredentials{Username: username, PasswordHash: hash, SessionVersion: version})
+	return hash, version, err
+}
+
+func writeAdminCredentials(cfg *Bootstrap, credentials adminCredentials) error {
+	data, err := toml.Marshal(credentials)
 	if err != nil {
 		return err
 	}
@@ -74,10 +89,37 @@ func loadAdminCredentials(cfg *Bootstrap) error {
 	if err := toml.Unmarshal(data, &credentials); err != nil {
 		return err
 	}
-	if err := validateAdminCredentials(credentials.Username, credentials.Password); err != nil {
+	if strings.TrimSpace(credentials.Username) == "" {
+		return fmt.Errorf("管理员账号不能为空")
+	}
+	if credentials.PasswordHash == "" {
+		if err := validateAdminCredentials(credentials.Username, credentials.Password); err != nil {
+			return err
+		}
+		credentials.PasswordHash, err = HashAdminPassword(credentials.Password)
+		if err != nil {
+			return err
+		}
+	}
+	if _, _, err := decodePasswordHash(credentials.PasswordHash); err != nil {
 		return err
 	}
+	migrate := credentials.Password != "" || credentials.SessionVersion == ""
+	credentials.Password = ""
+	if credentials.SessionVersion == "" {
+		credentials.SessionVersion, err = randomSecret(32)
+		if err != nil {
+			return err
+		}
+	}
+	if migrate {
+		if err := writeAdminCredentials(cfg, credentials); err != nil {
+			return err
+		}
+	}
 	cfg.Server.Username = credentials.Username
-	cfg.Server.Password = credentials.Password
+	cfg.Server.Password = ""
+	cfg.Server.PasswordHash = credentials.PasswordHash
+	cfg.AdminSessionVersion = credentials.SessionVersion
 	return nil
 }

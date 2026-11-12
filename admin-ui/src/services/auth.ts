@@ -1,6 +1,6 @@
 import { http } from './http'
 
-interface LoginKeyResponse { key: string; oaep_seed?: string }
+interface LoginKeyResponse { key: string; key_id?: string; oaep_seed?: string }
 interface LoginResponse { token: string; user: string }
 
 function base64ToBytes(value: string): Uint8Array {
@@ -57,11 +57,11 @@ async function encryptCredentials(publicKeyPem: string, plaintext: string, oaepS
   return forge.util.encode64(ciphertext)
 }
 
-async function encryptedPayload(credentials: object): Promise<{ data: string }> {
+async function encryptedPayload(credentials: object): Promise<{ data: string; key_id?: string }> {
   const { data: keyResponse } = await http.get<LoginKeyResponse>('/login/key')
   const publicKeyPem = new TextDecoder().decode(base64ToBytes(keyResponse.key))
   const ciphertext = await encryptCredentials(publicKeyPem, JSON.stringify(credentials), keyResponse.oaep_seed)
-  return { data: ciphertext }
+  return { data: ciphertext, key_id: keyResponse.key_id }
 }
 
 export async function login(username: string, password: string): Promise<LoginResponse> {

@@ -14,18 +14,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 10
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.26.0-rc.1"
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: admin-ui/package.json
+
+      - name: Install UPX
+        run: sudo apt-get update && sudo apt-get install -y upx-ucl
 
       - name: Build Linux binaries
         run: make build/linux
 
       - name: Prepare release assets
         run: |
+          tar -czf linux_amd64.tar.gz -C build/linux_amd64 bin www
+          tar -czf linux_arm64.tar.gz -C build/linux_arm64 bin www
           mv build/linux_amd64/bin linux_amd64
           mv build/linux_arm64/bin linux_arm64
 
@@ -35,5 +50,7 @@ jobs:
           files: |
             linux_amd64
             linux_arm64
+            linux_amd64.tar.gz
+            linux_arm64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

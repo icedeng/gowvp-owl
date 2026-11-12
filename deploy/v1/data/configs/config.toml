@@ -24,6 +24,8 @@
   Password = ''
 
   [Server.AI]
+    # 同时运行任务上限，0=默认32，负数=不限制；重启生效。
+    MaxTasks = 32
     # v1 编排暂未包含 AI 服务，因此默认禁用。
     Disabled = true
     # AI 事件保留天数，0 使用程序默认策略。
@@ -32,6 +34,12 @@
     AnalysisInterval = 5
     # 同类告警冷却时间（秒）。
     AlertCooldownSeconds = 30
+
+  # 独立 ONVIF 凭据；首次启动自动生成，客户端需使用此账号重新配置。
+  # 可由 OWL_ONVIF_USERNAME / OWL_ONVIF_PASSWORD 环境变量覆盖。
+  [Server.ONVIF]
+    Username = 'owl-onvif'
+    Password = ''
 
   [Server.HTTP]
     # 容器内部 HTTP 端口；宿主机入口由 deploy/v1/.env 的 OWL_HTTP_PORT 控制。
@@ -43,8 +51,9 @@
     AuthURL = ''
 
     [Server.HTTP.PProf]
-      # 性能诊断接口默认关闭；启用后务必限制访问 IP。
+      # 性能诊断接口默认关闭；启用后需要管理员 Bearer 令牌。
       Enabled = false
+      # 真实 TCP 对端 IP 白名单，不信任转发头；空列表拒绝所有访问。
       AccessIps = ['::1', '127.0.0.1']
 
   [Server.Recording]

@@ -52,6 +52,12 @@ type DeviceEditCoordinator interface {
 	DeviceEdited(ctx context.Context, before, after *Device) error
 }
 
+// DeviceEditInitializer 可选地在已有编辑锁内初始化连接，避免适配器重复获取同一把锁。
+// 不实现时继续调用 Protocoler.InitDevice，保持原有协议行为。
+type DeviceEditInitializer interface {
+	InitEditedDevice(ctx context.Context, device *Device) error
+}
+
 // ChannelMediaBindingCoordinator 可选地把媒体节点绑定与同通道媒体会话串行化。
 // 管理端在锁内重新读取通道状态，避免绑定结果与实际运行节点发生漂移。
 type ChannelMediaBindingCoordinator interface {

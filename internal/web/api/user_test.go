@@ -6,12 +6,59 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/conf"
 )
+
+func TestConcurrentLoginKeysRemainUsable(t *testing.T) {
+	var secret Secret
+	var wg sync.WaitGroup
+	keys := make([]*rsa.PublicKey, 16)
+	start := make(chan struct{})
+	for i := range keys {
+		wg.Go(func() {
+			<-start
+			key, err := secret.GetOrCreatePublicKey()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			keys[i] = key
+		})
+	}
+	close(start)
+	wg.Wait()
+	for _, key := range keys {
+		if key == nil {
+			t.Fatal("missing key")
+		}
+		ciphertext, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, key, []byte("credentials"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plain, err := secret.Decrypt(base64.StdEncoding.EncodeToString(ciphertext))
+		if err != nil || string(plain) != "credentials" {
+			t.Fatalf("issued key became unusable: %v", err)
+		}
+	}
+}
+
+func TestUserUpdateRunsAuthenticationOnce(t *testing.T) {
+	r := gin.New()
+	calls := 0
+	RegisterUser(r, NewUserAPI(nil), func(c *gin.Context) { calls++; c.Next() })
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPut, "/users", nil))
+	if calls != 1 {
+		t.Fatalf("authentication calls = %d, want 1", calls)
+	}
+}
 
 func TestLoginKeyOAEPSeed(t *testing.T) {
 	api := NewUserAPI(nil)
@@ -111,14 +158,16 @@ func TestUpdateCredentialsFailureLeavesCurrentCredentials(t *testing.T) {
 			if tc.missingDirectory {
 				cfg.ConfigPath = filepath.Join(filepath.Dir(cfg.ConfigPath), "missing", "config.toml")
 			}
-			cfg.Server.Username, cfg.Server.Password = "admin", "initial-password"
+			cfg.Server.Username = "admin"
+			cfg.Server.PasswordHash, _ = conf.HashAdminPassword("initial-password")
+			cfg.AdminSessionVersion = "before-update"
 			api := NewUserAPI(&cfg)
 			input := map[string]string{"old_password": tc.oldPassword, "username": "operator", "password": tc.newPassword}
 			_, err := api.updateCredentials(nil, &updateCredentialsInput{Data: encryptUserTestCredentials(t, api, input)})
 			if err == nil {
 				t.Fatal("expected credential update to fail")
 			}
-			if cfg.Server.Username != "admin" || cfg.Server.Password != "initial-password" {
+			if cfg.Server.Username != "admin" || !conf.VerifyAdminPassword(cfg.Server.PasswordHash, "initial-password") || cfg.AdminSessionVersion != "before-update" {
 				t.Fatal("failed update changed active credentials")
 			}
 			if _, err := os.Stat(filepath.Join(filepath.Dir(cfg.ConfigPath), conf.AdminCredentialsFile)); !os.IsNotExist(err) {

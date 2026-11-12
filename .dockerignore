@@ -3,5 +3,9 @@ admin-ui/node_modules/
 admin-ui/dist/
 .git/
 *.yaml
+!admin-ui/pnpm-lock.yaml
+!admin-ui/pnpm-workspace.yaml
+!admin-ui/public/open-platform/openapi.yaml
+!docs/open-platform/openapi.yaml
 *.pt
 webhook_openapi.yaml

@@ -24,7 +24,7 @@ func (a *API) snapshotAddress(c *gin.Context, row *op.Snapshot) error {
 	if err != nil {
 		return err
 	}
-	row.ImageURL = a.S.Config.PublicBaseURL + "/openmedia/v1/snapshot/" + row.ID + "/content?ticket=" + raw
+	row.ImageURL = a.mediaBaseURL(c) + "/openmedia/v1/snapshot/" + row.ID + "/content?ticket=" + raw
 	row.ImageExpiresAt = &t.ExpiresAt
 	return nil
 }
@@ -33,7 +33,7 @@ func (a *API) captureAddress(c *gin.Context, row *captureResult) error {
 	if err != nil {
 		return err
 	}
-	row.ImageURL = a.S.Config.PublicBaseURL + "/openmedia/v1/capture/" + row.ID + "/content?ticket=" + raw
+	row.ImageURL = a.mediaBaseURL(c) + "/openmedia/v1/capture/" + row.ID + "/content?ticket=" + raw
 	row.ImageExpiresAt = &t.ExpiresAt
 	return nil
 }

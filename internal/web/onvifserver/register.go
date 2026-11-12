@@ -20,18 +20,8 @@ func Register(g gin.IRouter, ipcCore ipc.Core, smsCore sms.Core, cfg *conf.Boots
 		serial = "gowvp-owl"
 	}
 	advHost := advertiseHost(cfg)
-	srv := server.New(server.Config{
-		Manufacturer:  "gowvp",
-		Model:         "owl",
-		Version:       cfg.BuildVersion,
-		SerialNumber:  serial,
-		ScopeName:     "owl",
-		Username:      cfg.Server.Username,
-		Password:      cfg.Server.Password,
-		AdvertiseHost: advHost,
-	}, provider)
 	// 仅注册 SOAP 端点，避免与 /onvif/discover 等 REST 路由冲突。
-	h := gin.WrapH(srv.Handler())
+	h := gin.WrapH(soapHandler(provider, cfg, serial, advHost))
 	g.Any("/onvif/device_service", h)
 	g.Any("/onvif/media_service", h)
 	g.GET("/onvif/profiles", func(c *gin.Context) {
@@ -40,6 +30,25 @@ func Register(g gin.IRouter, ipcCore ipc.Core, smsCore sms.Core, cfg *conf.Boots
 	})
 
 	startDiscovery(cfg, serial, advHost)
+}
+
+func soapHandler(provider server.StreamProvider, cfg *conf.Bootstrap, serial, advHost string) http.Handler {
+	// 避免未经过启动初始化的嵌入式调用因空凭据变成匿名 ONVIF 服务。
+	if cfg.Server.ONVIF.Username == "" || cfg.Server.ONVIF.Password == "" {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "ONVIF credentials required", http.StatusUnauthorized)
+		})
+	}
+	return server.New(server.Config{
+		Manufacturer:  "gowvp",
+		Model:         "owl",
+		Version:       cfg.BuildVersion,
+		SerialNumber:  serial,
+		ScopeName:     "owl",
+		Username:      cfg.Server.ONVIF.Username,
+		Password:      cfg.Server.ONVIF.Password,
+		AdvertiseHost: advHost,
+	}, provider).Handler()
 }
 
 // startDiscovery 启动 WS-Discovery，供 HA 等客户端在局域网自动发现本机 ONVIF 设备。

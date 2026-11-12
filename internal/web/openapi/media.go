@@ -213,7 +213,7 @@ func (a *API) media(c *gin.Context) {
 			if strings.HasPrefix(resource, "/") || strings.HasPrefix(r, "../") || r == "" {
 				return "", op.ErrNotFound
 			}
-			return a.S.Config.PublicBaseURL + "/openmedia/v1/" + kind + "/" + id + "/" + r + "?ticket=" + url.QueryEscape(raw), nil
+			return a.mediaBaseURL(c) + "/openmedia/v1/" + kind + "/" + id + "/" + r + "?ticket=" + url.QueryEscape(raw), nil
 		})
 		if e != nil {
 			respond(c, nil, op.ErrUnavailable)

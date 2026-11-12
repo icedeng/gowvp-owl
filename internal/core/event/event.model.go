@@ -13,7 +13,7 @@ type Event struct {
 	OccurrenceCount int           `gorm:"not null;default:1" json:"occurrence_count"`
 	Status          string        `gorm:"size:16;not null;default:pending;index:idx_events_status_started,priority:1" json:"status"`
 	Revision        int           `gorm:"not null;default:1" json:"revision"`
-	VideoPath       string        `gorm:"not null;default:''" json:"video_path"`
+	VideoPath       string        `gorm:"not null;default:'';index:idx_events_video_path,length:191" json:"video_path"`
 	DeviceName      string        `gorm:"-" json:"device_name"`
 	DeviceCode      string        `gorm:"-" json:"device_code"`
 	ChannelName     string        `gorm:"-" json:"channel_name"`
@@ -27,7 +27,7 @@ type Event struct {
 	Label           string        `gorm:"column:label;notNull;default:'';comment:检测标签 (person, car 等)" json:"label"`                                                                 // 检测标签 (person, car 等)
 	Score           float32       `gorm:"column:score;notNull;default:0;comment:置信度 (0.0-1.0)" json:"score"`                                                                         // 置信度 (0.0-1.0)
 	Zones           string        `gorm:"column:zones;notNull;default:'';comment:检测区域，JSON 格式存储边界框信息" json:"zones"`                                                                  // 检测区域，JSON 格式存储边界框信息
-	ImagePath       string        `gorm:"column:image_path;notNull;default:'';comment:图片相对路径 (cid/年月日时分秒_随机6位.jpg)" json:"image_path"`                                               // 图片相对路径 (cid/年月日时分秒_随机6位.jpg)
+	ImagePath       string        `gorm:"column:image_path;index:idx_events_image_path,length:191;notNull;default:'';comment:图片相对路径 (cid/年月日时分秒_随机6位.jpg)" json:"image_path"`        // 图片相对路径 (cid/年月日时分秒_随机6位.jpg)
 	Model           string        `gorm:"column:model;notNull;default:'';comment:分析模型名称" json:"model"`                                                                               // 分析模型名称
 	SourceKey       *string       `gorm:"column:source_key;uniqueIndex:idx_events_source_key;comment:外部事件幂等键" json:"-"`                                                              // 外部事件幂等键；普通事件保持 NULL
 	CreatedAt       orm.Time      `gorm:"column:created_at;notNull;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`                                                        // 创建时间

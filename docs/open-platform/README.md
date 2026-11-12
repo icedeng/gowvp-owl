@@ -24,7 +24,9 @@
 4. HTTPS 三方网关仅放行 `/openapi/v1/` 和 `/openmedia/v1/`，详见 [Nginx 示例](./nginx.conf.example)。管理员从管理网络访问 `/web/#/open-platform`；管理 API `/admin/open-platform/*` 只接受当前管理员 Bearer JWT，不回退到 AuthURL，不接受 query token。
 5. 禁止三方直连旧业务 API、`/proxy/sms/`、流媒体 HTTP/API/直连播放端口及内部 Webhook。按设备用途保留 SIP、RTP、RTMP 入站规则，避免影响设备接入。未完成此网络隔离不能宣称媒体资源授权闭环。
 
-当前服务器按用户要求使用现有 `http://10.144.0.20:15123`，配置 `OWL_OPEN_PLATFORM_ALLOW_HTTP=true`；该开关同时允许 HTTP 回调和密钥一次性响应，HMAC 不加密传输内容。HTTPS 网关示例可留作后续切换。现网旧业务与媒体端口保持原配置，尚未建立仅开放新入口的网络隔离，不能宣称旧播放入口已受应用资源授权保护。
+当前服务器的 `OWL_OPEN_PLATFORM_PUBLIC_URL` 为 `http://192.168.6.20:15123`，配置 `OWL_OPEN_PLATFORM_ALLOW_HTTP=true`；该开关同时允许 HTTP 回调和密钥一次性响应，HMAC 不加密传输内容。HTTPS 网关示例可留作后续切换。现网旧业务与媒体端口保持原配置，尚未建立仅开放新入口的网络隔离，不能宣称旧播放入口已受应用资源授权保护。
+
+同步返回的播放/回放票据、抓拍图片及 HLS 播放列表内资源地址跟随当前请求的协议、Host 和端口；通过 `192.168.6.20:15123` 或 `10.144.0.20:15123` 请求即返回对应入口。仅当直接连接方属于 `OWL_OPEN_PLATFORM_TRUSTED_PROXIES` 时读取单值 `X-Forwarded-Host` / `X-Forwarded-Proto`；代理须覆盖这些头并保留外部端口，不支持通过转发头声明路径前缀。非法 Host 回退到配置地址。异步告警回调无当前请求，图片地址继续使用 `OWL_OPEN_PLATFORM_PUBLIC_URL`；公开元信息的 `public_url` 仍表示此固定配置。调用方必须使用浏览器可达的 OWL 入口，不能使用仅后端可达的容器内部地址。
 
 所有前端页面与管理 API 默认同源。开放业务 API 面向服务端，不提供浏览器跨域签名调用；媒体入口允许不带 cookie 的跨域 GET。开发管理页面可使用 Vite 代理。
 

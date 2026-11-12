@@ -101,9 +101,6 @@ func TestStartAIDetectionRejectsUnsuccessfulResponse(t *testing.T) {
 			if _, err := aiAPI.StartAIDetection(t.Context(), channel, "rtsp://127.0.0.1/rtp/"+channel.ID); err == nil {
 				t.Fatal("unsuccessful AI response accepted as a running task")
 			}
-			if _, ok := aiAPI.aiTasks.Load(channel.ID); ok {
-				t.Fatal("unsuccessful AI response registered a running task")
-			}
 		})
 	}
 }
@@ -140,11 +137,10 @@ func TestAddZoneReloadsEnabledAITask(t *testing.T) {
 	}
 }
 
-func TestDisableAIRetainsRunningTaskForRetryWhenStopFails(t *testing.T) {
+func TestDisableAIPreservesDesiredStateWhenStopFails(t *testing.T) {
 	channel := &ipc.Channel{ID: "gb_ai_stop_retry", Type: ipc.TypeGB28181, Ext: ipc.DeviceExt{EnabledAI: true}}
 	api := newChannelMediaServerAPI(t, channel)
 	aiAPI := configureTestAI(&api)
-	aiAPI.aiTasks.Store(channel.ID, struct{}{})
 	aiAPI.stopCameraFn = func(context.Context, *protos.StopCameraRequest) (*protos.StopCameraResponse, error) {
 		return nil, errors.New("AI stop unavailable")
 	}
@@ -159,13 +155,10 @@ func TestDisableAIRetainsRunningTaskForRetryWhenStopFails(t *testing.T) {
 	if stored.Ext.EnabledAI {
 		t.Fatal("failed stop did not preserve the desired disabled state")
 	}
-	if _, ok := aiAPI.aiTasks.Load(channel.ID); !ok {
-		t.Fatal("failed stop removed running task ownership and prevented sync retry")
-	}
 }
 
 func TestReloadAITaskDoesNotStartDuplicateWhenStopFails(t *testing.T) {
-	channel := &ipc.Channel{ID: "gb_ai_reload_stop", Type: ipc.TypeGB28181}
+	channel := &ipc.Channel{ID: "gb_ai_reload_stop", Type: ipc.TypeGB28181, Ext: ipc.DeviceExt{EnabledAI: true}}
 	api := newChannelMediaServerAPI(t, channel)
 	aiAPI := configureTestAI(&api)
 	aiAPI.smsCore = api.uc.SMSAPI.smsCore

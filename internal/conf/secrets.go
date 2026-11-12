@@ -37,6 +37,11 @@ func SecureRuntimeSecrets(cfg *Bootstrap) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
+	if cfg.Server.PasswordHash != "" {
+		if _, _, err := decodePasswordHash(cfg.Server.PasswordHash); err != nil {
+			return err
+		}
+	}
 
 	changed := false
 	rotate := func(value *string, bytes int) error {
@@ -56,11 +61,27 @@ func SecureRuntimeSecrets(cfg *Bootstrap) error {
 		cfg.Server.Username = "admin"
 		changed = true
 	}
+	// 主配置中的旧口令只用于迁移；协议凭据另行生成，不能复制管理员口令。
+	if cfg.Server.Password != "" {
+		if cfg.Server.PasswordHash == "" && !isRevokedSecret(cfg.Server.Password) {
+			var err error
+			cfg.Server.PasswordHash, err = HashAdminPassword(cfg.Server.Password)
+			if err != nil {
+				return err
+			}
+		}
+		cfg.Server.Password = ""
+		changed = true
+	}
+	if cfg.Server.ONVIF.Username == "" {
+		cfg.Server.ONVIF.Username = "owl-onvif"
+		changed = true
+	}
 	for _, item := range []struct {
 		value *string
 		bytes int
 	}{
-		{&cfg.Server.Password, 24},
+		{&cfg.Server.ONVIF.Password, 24},
 		{&cfg.Server.HTTP.JwtSecret, 32},
 		{&cfg.Server.RTMPSecret, 32},
 		{&cfg.Server.Webhook.RecvSecret, 32},
@@ -88,8 +109,21 @@ func SecureRuntimeSecrets(cfg *Bootstrap) error {
 		}
 	}
 	applyEnv(envAdminUsername, &cfg.Server.Username)
-	applyEnv(envAdminPassword, &cfg.Server.Password)
 	applyEnv(envJWTSecret, &cfg.Server.HTTP.JwtSecret)
+	credential := cfg.Server.PasswordHash
+	var environmentPassword, environmentHash string
+	if password, ok := os.LookupEnv(envAdminPassword); ok && strings.TrimSpace(password) != "" {
+		var err error
+		cfg.Server.PasswordHash, err = HashAdminPassword(password)
+		if err != nil {
+			return err
+		}
+		credential = password
+		environmentPassword, environmentHash = password, cfg.Server.PasswordHash
+	}
+	cfg.AdminSessionVersion = adminSessionVersion(cfg.Server.HTTP.JwtSecret, cfg.Server.Username, credential)
+	applyEnv("OWL_ONVIF_USERNAME", &cfg.Server.ONVIF.Username)
+	applyEnv("OWL_ONVIF_PASSWORD", &cfg.Server.ONVIF.Password)
 	applyEnv(envRTMPSecret, &cfg.Server.RTMPSecret)
 	applyEnv(envSIPPassword, &cfg.Sip.Password)
 	applyEnv(envMediaSecret, &cfg.Media.Secret)
@@ -97,6 +131,18 @@ func SecureRuntimeSecrets(cfg *Bootstrap) error {
 	// 环境变量用于初始化；网页显式保存的管理员凭据在重启后仍然生效。
 	if err := loadAdminCredentials(cfg); err != nil {
 		return fmt.Errorf("load admin credentials: %w", err)
+	}
+	// 已保存凭据优先；只有环境口令实际生效时才校验它，避免旧部署变量阻止启动。
+	if environmentPassword != "" && cfg.Server.PasswordHash == environmentHash {
+		if err := validateAdminCredentials(cfg.Server.Username, environmentPassword); err != nil {
+			return err
+		}
+	}
+	if cfg.Server.PasswordHash == "" {
+		return fmt.Errorf("管理员口令未配置，请设置 OWL_ADMIN_PASSWORD（至少 8 个字符且不可使用公开示例口令）")
+	}
+	if _, _, err := decodePasswordHash(cfg.Server.PasswordHash); err != nil {
+		return err
 	}
 	applyEnv(envMediaIP, &cfg.Media.IP)
 	applyEnv(envMediaWebhook, &cfg.Media.WebHookIP)
@@ -109,12 +155,12 @@ func SecureRuntimeSecrets(cfg *Bootstrap) error {
 		cfg.Media.HTTPPort = port
 	}
 	for name, value := range map[string]string{
-		envAdminPassword: cfg.Server.Password,
-		envJWTSecret:     cfg.Server.HTTP.JwtSecret,
-		envRTMPSecret:    cfg.Server.RTMPSecret,
-		envMediaSecret:   cfg.Media.Secret,
-		envWebhookSecret: cfg.Server.Webhook.RecvSecret,
-		envSIPPassword:   cfg.Sip.Password,
+		"OWL_ONVIF_PASSWORD": cfg.Server.ONVIF.Password,
+		envJWTSecret:         cfg.Server.HTTP.JwtSecret,
+		envRTMPSecret:        cfg.Server.RTMPSecret,
+		envMediaSecret:       cfg.Media.Secret,
+		envWebhookSecret:     cfg.Server.Webhook.RecvSecret,
+		envSIPPassword:       cfg.Sip.Password,
 	} {
 		if isRevokedSecret(value) {
 			return fmt.Errorf("%s contains a revoked secret", name)

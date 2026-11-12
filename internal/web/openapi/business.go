@@ -240,7 +240,7 @@ func (a *API) ticket(c *gin.Context, kind, id string) {
 			suffix = "stream.live.flv"
 		}
 	}
-	respond(c, gin.H{"url": a.S.Config.PublicBaseURL + "/openmedia/v1/" + kind + "/" + id + "/" + suffix + "?ticket=" + raw, "expires_at": t.ExpiresAt}, nil)
+	respond(c, gin.H{"url": a.mediaBaseURL(c) + "/openmedia/v1/" + kind + "/" + id + "/" + suffix + "?ticket=" + raw, "expires_at": t.ExpiresAt}, nil)
 }
 func (a *API) createLive(c *gin.Context) {
 	if !require(c, a.S, "live:play") {

@@ -31,8 +31,8 @@ func (uc *Usecase) verifyPlayToken(c *gin.Context, requestPath string) error {
 	if err != nil {
 		return fmt.Errorf("无效的播放 token")
 	}
-	if err := claims.Valid(); err != nil {
-		return fmt.Errorf("播放 token 已过期")
+	if !uc.validPlaySession(claims) {
+		return fmt.Errorf("播放 token 已过期或被撤销")
 	}
 	grant := smsPlayGrant{token: token}
 	app, hasApp := claims.Data["app"].(string)

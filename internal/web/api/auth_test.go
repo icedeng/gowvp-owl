@@ -253,8 +253,10 @@ func TestAuthMiddleware(t *testing.T) {
 	})
 
 	t.Run("authURL网络不可达返回502", func(t *testing.T) {
-		// 使用 TEST-NET 地址模拟网络不可达，不产生实际网络流量
-		r, w := makeEngine(t, secret, "http://192.0.2.1:1")
+		// 已关闭的回环监听器稳定返回连接错误，不受外部 HTTP 代理或路由影响。
+		srv := httptest.NewServer(http.NotFoundHandler())
+		srv.Close()
+		r, w := makeEngine(t, secret, srv.URL)
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		r.ServeHTTP(w, req)
 		if w.Code != http.StatusBadGateway {

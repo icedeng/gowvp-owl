@@ -77,7 +77,7 @@ docker compose -p owl-v1 --env-file .env -f docker-compose.yml up -d --no-deps -
 - 完整开发文档：`http://10.144.0.20:15123/web/#/open-platform/docs`，无需管理员登录，包含全部接口参数、返回值、权限与示例，以及签名、回调和客户端下载。公开元信息 `/open-platform/docs/config` 仅含 enabled/public_url/audience/allow_http，不公开凭据或设备数据。
 - 应用详情独立打开为 `/web/#/open-platform/apps/{id}`；分区通过 `tab` 查询参数保留，返回列表恢复搜索条件与页码。
 - 已启用，管理入口 `http://10.144.0.20:15123/web/#/open-platform`；API `/openapi/v1/`，受控媒体 `/openmedia/v1/`。
-- 按用户要求保留 HTTP，`.env` 设置 `OWL_OPEN_PLATFORM_ALLOW_HTTP=true`、`OWL_OPEN_PLATFORM_PUBLIC_URL=http://10.144.0.20:15123`，Audience 为 `owl-192-168-6-20`。HTTP 开关同时允许 HTTP 回调和密钥的一次性响应；HMAC 仅签名，不加密传输。
+- 按用户要求保留 HTTP，`.env` 设置 `OWL_OPEN_PLATFORM_ALLOW_HTTP=true`、`OWL_OPEN_PLATFORM_PUBLIC_URL=http://192.168.6.20:15123`，Audience 为 `owl-192-168-6-20`。同步媒体地址跟随请求入口，异步告警图片使用此固定地址；反向代理仅信任配置的代理网段。HTTP 开关同时允许 HTTP 回调和密钥的一次性响应；HMAC 仅签名，不加密传输。
 - 独立主密钥文件 `data/configs/open-platform-keyring.json`，权限 `0600`，容器内 `/app/configs/open-platform-keyring.json`；每日受控备份已加入该文件。密钥丢失将无法恢复应用 SK，不得提交或输出密钥内容。
 - 15 张 `open_*` 表已通过迁移工具建立，原业务表结构未变。当前无预置三方应用；从页面创建、授权设备和 Scope，再生成 AK/SK 并启用。
 - 旧业务、媒体端口与来源放行保持现状，未建立只允许三方访问新入口的网络隔离；应用级媒体授权只覆盖新 `/openmedia/v1` 入口。完整接入与人工验收重点见 [开放平台说明](../../docs/open-platform/README.md)。

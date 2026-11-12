@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gowvp/onvif"
@@ -17,7 +18,6 @@ import (
 	m "github.com/gowvp/onvif/media"
 	p "github.com/gowvp/onvif/ptz"
 	sdk "github.com/gowvp/onvif/sdk"
-	sdkdevice "github.com/gowvp/onvif/sdk/device"
 	sdkmedia "github.com/gowvp/onvif/sdk/media"
 	sdkptz "github.com/gowvp/onvif/sdk/ptz"
 	"github.com/gowvp/onvif/xsd"
@@ -42,13 +42,24 @@ type Adapter struct {
 	adapter ipc.Adapter               // 通用适配器，提供 SaveChannels 等方法
 	client  *http.Client
 	sms     sms.Core
+	cancel  context.CancelFunc
+	// 固定分片锁保护每设备的连接、心跳、目录、编辑和删除，避免锁表随设备增删无限增长。
+	deviceLocks [64]sync.Mutex
+	connectFn   func(onvif.DeviceParams) (*onvif.Device, error)
+	infoFn      func(context.Context, *onvif.Device) (devicemodel.GetDeviceInformationResponse, error)
+	profilesFn  func(context.Context, *onvif.Device) (m.GetProfilesResponse, error)
 }
 
 // Device ONVIF 设备包装（内存状态 + ONVIF 连接）
 type Device struct {
 	*onvif.Device
-	KeepaliveAt orm.Time // 最后心跳时间
-	IsOnline    bool     // 在线状态（内存缓存）
+	KeepaliveAt     orm.Time // 最近一次成功探测，所有字段均由设备操作锁保护
+	IsOnline        bool     // 已成功落库的在线状态
+	config          deviceConfig
+	statusSynced    bool
+	syncedKeepalive orm.Time
+	profilesPending bool
+	profileIDs      []string
 }
 
 // DeleteDevice implements ipc.Protocoler.
@@ -57,58 +68,35 @@ func (a *Adapter) DeleteDevice(ctx context.Context, device *ipc.Device) error {
 	return nil
 }
 
-func NewAdapter(adapter ipc.Adapter, sms sms.Core) *Adapter {
-	cli := *http.DefaultClient
-	cli.Timeout = time.Millisecond * 3000
-	a := Adapter{
-		adapter: adapter,
-		client:  &cli,
-		sms:     sms,
-	}
-	a.init()
-
-	// 启动健康检查
-	go a.startHealthCheck(context.Background())
-
-	return &a
+// NewAdapter 保留旧构造入口；宿主应使用 NewAdapterContext 绑定服务生命周期。
+func NewAdapter(adapter ipc.Adapter, smsCore sms.Core) *Adapter {
+	return NewAdapterContext(context.Background(), adapter, smsCore)
 }
 
-func (a *Adapter) init() {
-	devices, err := a.adapter.ListDevices(context.TODO())
-	if err != nil {
-		panic(err)
+func NewAdapterContext(ctx context.Context, adapter ipc.Adapter, smsCore sms.Core) *Adapter {
+	ctx, cancel := context.WithCancel(ctx)
+	cli := *http.DefaultClient
+	cli.Timeout = 3 * time.Second
+	transport := cli.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
 	}
-	for _, device := range devices {
-		if device.IsOnvif() {
-			go func(device *ipc.Device) {
-				onvifDev, err := onvif.NewDevice(onvif.DeviceParams{
-					Xaddr:      fmt.Sprintf("%s:%d", device.IP, device.Port),
-					Username:   device.GetUsername(),
-					Password:   device.Password,
-					HttpClient: a.client,
-				})
-				if err != nil {
-					_ = a.adapter.Update(device.ID, func(d *ipc.Device) {
-						d.IsOnline = false
-					})
-					slog.Error("初始化 ONVIF 设备失败", "err", err, "device_id", device.ID)
-				}
-				if onvifDev == nil {
-					return
-				}
-				a.devices.Store(device.ID, &Device{
-					Device:   onvifDev,
-					IsOnline: err == nil,
-				})
-			}(device)
-		}
+	cli.Transport = lifecycleTransport{ctx: ctx, base: transport}
+	a := &Adapter{adapter: adapter, client: &cli, sms: smsCore, cancel: cancel}
+	a.startHealthCheck(ctx)
+	return a
+}
+
+func (a *Adapter) Close() {
+	if a.cancel != nil {
+		a.cancel()
 	}
 }
 
 // ValidateDevice 实现 ipc.Protocol 接口 - ONVIF 设备验证
 func (a *Adapter) ValidateDevice(ctx context.Context, dev *ipc.Device) error {
-	onvifDev, err := onvif.NewDevice(onvif.DeviceParams{
-		Xaddr:      fmt.Sprintf("%s:%d", dev.IP, dev.Port),
+	onvifDev, err := a.connect(onvif.DeviceParams{
+		Xaddr:      configFor(dev).address,
 		Username:   dev.GetUsername(),
 		Password:   dev.Password,
 		HttpClient: a.client,
@@ -118,7 +106,7 @@ func (a *Adapter) ValidateDevice(ctx context.Context, dev *ipc.Device) error {
 	}
 
 	// 获取设备信息并填充到领域模型
-	resp, err := sdkdevice.Call_GetDeviceInformation(ctx, onvifDev, devicemodel.GetDeviceInformation{})
+	resp, err := a.deviceInfo(ctx, onvifDev)
 	if err != nil {
 		return fmt.Errorf("账号或密码错误: %w", err)
 	}
@@ -127,63 +115,36 @@ func (a *Adapter) ValidateDevice(ctx context.Context, dev *ipc.Device) error {
 	dev.Ext.Manufacturer = resp.Manufacturer
 	dev.Ext.Model = resp.Model
 	dev.IsOnline = true
-	dev.Address = fmt.Sprintf("%s:%d", dev.IP, dev.Port)
+	dev.Address = configFor(dev).address
 	return nil
 }
 
 // InitDevice 实现 ipc.Protocol 接口 - 初始化 ONVIF 设备
 // ONVIF 设备初始化时，自动查询 Profiles 并创建为通道
 func (a *Adapter) InitDevice(ctx context.Context, dev *ipc.Device) error {
-	// 创建 ONVIF 连接
-	onvifDev, err := onvif.NewDevice(onvif.DeviceParams{
-		Xaddr:      fmt.Sprintf("%s:%d", dev.IP, dev.Port),
-		Username:   dev.GetUsername(),
-		Password:   dev.Password,
-		HttpClient: a.client,
-	})
-	if err != nil {
-		return err
-	}
-
-	// 缓存设备连接
-	d := Device{
-		Device:   onvifDev,
-		IsOnline: true,
-	}
-	a.devices.Store(dev.ID, &d)
-
-	// 自动查询 Profiles 作为通道
-	return a.queryAndSaveProfiles(ctx, dev, &d)
+	unlock := a.lockDevice(dev.ID)
+	defer unlock()
+	return a.initDeviceLocked(ctx, dev.ID, false)
 }
 
-// QueryCatalog 实现 ipc.Protocol 接口 - ONVIF 查询 Profiles
-func (a *Adapter) QueryCatalog(ctx context.Context, dev *ipc.Device) error {
-	onvifDev, ok := a.devices.Load(dev.ID)
-	if !ok {
-		// 设备连接不在缓存中，尝试重新连接
-		var err error
-		d, err := onvif.NewDevice(onvif.DeviceParams{
-			Xaddr:    fmt.Sprintf("%s:%d", dev.IP, dev.Port),
-			Username: dev.GetUsername(),
-			Password: dev.Password,
-		})
-		if err != nil {
-			return fmt.Errorf("ONVIF 设备未初始化: %w", err)
-		}
-		onvifDev = &Device{
-			Device:   d,
-			IsOnline: true,
-		}
-		a.devices.Store(dev.ID, onvifDev)
-	}
+// InitEditedDevice 在 Core 已持有编辑锁时调用，避免重复加锁。
+func (a *Adapter) InitEditedDevice(ctx context.Context, dev *ipc.Device) error {
+	return a.initDeviceLocked(ctx, dev.ID, false)
+}
 
-	return a.queryAndSaveProfiles(ctx, dev, onvifDev)
+// QueryCatalog 始终读取已提交的设备配置，旧请求不能恢复已删除的设备或旧凭据。
+func (a *Adapter) QueryCatalog(ctx context.Context, dev *ipc.Device) error {
+	unlock := a.lockDevice(dev.ID)
+	defer unlock()
+	return a.initDeviceLocked(ctx, dev.ID, true)
 }
 
 // StartPlay 实现 ipc.Protocol 接口 - ONVIF 播放
 func (a *Adapter) StartPlay(ctx context.Context, dev *ipc.Device, ch *ipc.Channel) (*ipc.PlayResponse, error) {
+	unlock := a.lockDevice(dev.ID)
+	defer unlock()
 	onvifDev, ok := a.devices.Load(dev.ID)
-	if !ok {
+	if !ok || onvifDev.Device == nil {
 		return nil, fmt.Errorf("ONVIF 设备未初始化")
 	}
 
@@ -206,9 +167,9 @@ func (a *Adapter) StopPlay(ctx context.Context, dev *ipc.Device, ch *ipc.Channel
 
 // queryAndSaveProfiles 查询 ONVIF Profiles 并保存为通道
 //
-// 使用统一的 SaveChannels 方法，自动处理增量更新和删除
+// 使用统一的 SaveChannelSnapshot 方法，自动处理增量更新及缺失通道离线
 func (a *Adapter) queryAndSaveProfiles(ctx context.Context, device *ipc.Device, onvifDev *Device) error {
-	resp, err := sdkmedia.Call_GetProfiles(ctx, onvifDev.Device, m.GetProfiles{})
+	resp, err := a.getProfiles(ctx, onvifDev.Device)
 	if err != nil {
 		return fmt.Errorf("账号或密码错误: %w", err)
 	}
@@ -230,10 +191,17 @@ func (a *Adapter) queryAndSaveProfiles(ctx context.Context, device *ipc.Device, 
 		return fmt.Errorf("没有找到 ONVIF 通道")
 	}
 
-	// 使用统一的 SaveChannels 方法保存（自动处理增删改）
-	if err := a.adapter.SaveChannels(channels); err != nil {
+	// 使用请求上下文保存目录，失败由后续心跳重试。
+	if err := a.adapter.SaveChannelSnapshot(ctx, device.ID, channels); err != nil {
 		return fmt.Errorf("保存 ONVIF 通道失败: %w", err)
 	}
+
+	onvifDev.profileIDs = make([]string, 0, len(channels))
+	for _, channel := range channels {
+		onvifDev.profileIDs = append(onvifDev.profileIDs, channel.ChannelID)
+	}
+	onvifDev.profilesPending = false
+	onvifDev.statusSynced = false
 
 	slog.InfoContext(ctx, "ONVIF Profiles 同步完成",
 		"device_id", device.ID,
@@ -264,8 +232,10 @@ func buildPlayURL(rawurl, username, password string) string {
 }
 
 func (a *Adapter) PTZControl(ctx context.Context, dev *ipc.Device, ch *ipc.Channel, in *ipc.PTZControlInput) error {
+	unlock := a.lockDevice(dev.ID)
+	defer unlock()
 	onvifDev, ok := a.devices.Load(dev.ID)
-	if !ok {
+	if !ok || onvifDev.Device == nil {
 		return fmt.Errorf("ONVIF 设备未初始化")
 	}
 	action := strings.ToLower(strings.TrimSpace(in.Action))
@@ -495,7 +465,9 @@ func (a *Adapter) Discover(ctx context.Context, w io.Writer) error {
 			}
 			var exists bool
 			a.devices.Range(func(key string, value *Device) bool {
-				if value.GetDeviceParams().Xaddr == dev.GetDeviceParams().Xaddr {
+				unlock := a.lockDevice(key)
+				defer unlock()
+				if value.config.address == dev.GetDeviceParams().Xaddr {
 					exists = true
 					return false
 				}

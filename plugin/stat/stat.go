@@ -1,6 +1,7 @@
 package stat
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -114,7 +115,7 @@ func collectTop(path string, network *networkSampler) {
 	if memory != nil {
 		memData.Push(PercentData{Time: now, Used: memory.UsedPercent})
 	}
-	if counters, err := net.IOCounters(true); err == nil {
+	if counters, err := readNetworkCounters(net.IOCounters); err == nil {
 		sampledAt := time.Now()
 		if up, down, ready := network.sample(counters, sampledAt); ready {
 			netData.Push(PercentData{Time: orm.Time{Time: sampledAt}, Up: up, Down: down})
@@ -125,13 +126,24 @@ func collectTop(path string, network *networkSampler) {
 	defer currentMu.Unlock()
 	if memory != nil {
 		currentMem = memory.UsedPercent
-		if len(cpuValues) > 0 {
-			currentCPU = cpuValues[0]
-		}
+	}
+	if len(cpuValues) > 0 {
+		currentCPU = cpuValues[0]
 	}
 	if diskErr == nil {
 		currentMainDisk, totalMainDisk = diskUsage.Used, diskUsage.Total
 	}
+}
+
+// 第三方 netstat 解析在部分 macOS 环境会 panic；指标不可用不能终止整个服务。
+func readNetworkCounters(read func(bool) ([]net.IOCountersStat, error)) (counters []net.IOCountersStat, err error) {
+	defer func() {
+		if failure := recover(); failure != nil {
+			counters = nil
+			err = fmt.Errorf("read network counters: %v", failure)
+		}
+	}()
+	return read(true)
 }
 
 type networkSampler struct {

@@ -224,7 +224,11 @@ func (c Core) EditDevice(ctx context.Context, in *EditDeviceInput, id string) (*
 
 	protocol, ok := c.protocols[out.GetType()]
 	if ok {
-		if err := protocol.InitDevice(ctx, &out); err != nil {
+		initDevice := protocol.InitDevice
+		if initializer, coordinated := protocol.(DeviceEditInitializer); coordinated && editCoordinator != nil {
+			initDevice = initializer.InitEditedDevice
+		}
+		if err := initDevice(ctx, &out); err != nil {
 			slog.WarnContext(ctx, "初始化协议失败", "err", err, "device_id", out.ID)
 		}
 	}

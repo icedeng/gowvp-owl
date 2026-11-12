@@ -19,7 +19,8 @@ import (
 func TestLoginGuardCredentialBackoffAndRecovery(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := conf.DefaultConfig()
-	cfg.Server.Username, cfg.Server.Password = "admin", "test-password"
+	cfg.Server.Username = "admin"
+	cfg.Server.PasswordHash, _ = conf.HashAdminPassword("test-password")
 	cfg.Server.HTTP.JwtSecret = "login-guard-test-secret"
 	api := NewUserAPI(&cfg)
 	guard := newLoginGuard()

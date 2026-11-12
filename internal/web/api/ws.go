@@ -1,9 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gowvp/owl/internal/notify"
@@ -12,7 +16,49 @@ import (
 )
 
 // wsHub 全局 WebSocket Hub 实例，供各模块广播告警
-var wsHub ws.Huber
+var wsHub *adminSockets
+
+// 每个会话代次使用独立 Hub，关闭整个旧 Hub 也会拦住正在握手的旧连接。
+type adminSockets struct {
+	mu     sync.RWMutex
+	hub    ws.Huber
+	create func() ws.Huber
+}
+
+func (s *adminSockets) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.create == nil {
+		return
+	}
+	old := s.hub
+	s.hub = s.create()
+	if old != nil {
+		old.Close()
+	}
+}
+
+func (s *adminSockets) Broadcast(message ws.Message) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.hub != nil {
+		s.hub.Broadcast(message)
+	}
+}
+
+func (s *adminSockets) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	s.hub.ServeHTTP(w, r)
+}
+
+func (s *adminSockets) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.hub != nil {
+		s.hub.Close()
+	}
+}
 
 // broadcastWarn 向所有已认证的 WebSocket 客户端广播一条通用警告通知
 func broadcastWarn(msg string) {
@@ -39,7 +85,18 @@ func broadcastIPCInfo(msg, deviceID, name string) {
 }
 
 // registerWS 注册 WebSocket 路由并初始化 Hub
-func registerWS(r *gin.Engine, jwtSecret string) {
+func registerWS(r *gin.Engine, uc *Usecase) {
+	sockets := uc.UserAPI.sockets
+	sockets.create = func() ws.Huber { return newAdminHub(uc) }
+	sockets.reset()
+	r.GET("/ws", func(c *gin.Context) { sockets.ServeHTTP(c.Writer, c.Request) })
+	wsHub = sockets
+	notify.SetWarnFunc(broadcastWarn)
+	notify.SetIPCWarnFunc(broadcastIPCWarn)
+	notify.SetIPCInfoFunc(broadcastIPCInfo)
+}
+
+func newAdminHub(uc *Usecase) ws.Huber {
 	hub := ws.NewHub(func(c *ws.Config) {
 		c.MaxConnections = 128
 	})
@@ -54,31 +111,27 @@ func registerWS(r *gin.Engine, jwtSecret string) {
 		if data.Token == "" {
 			return "", fmt.Errorf("token is empty")
 		}
-		claims, err := web.ParseToken(data.Token, jwtSecret)
+		claims, err := web.ParseToken(data.Token, uc.Conf.Server.HTTP.JwtSecret)
 		if err != nil {
 			return "", fmt.Errorf("invalid token")
 		}
-		if err := claims.Valid(); err != nil {
-			return "", fmt.Errorf("token expired")
+		if !uc.validAdminSession(claims) {
+			return "", fmt.Errorf("token expired or revoked")
 		}
-		userID, _ := claims.Data["user_id"].(string)
+		userID, _ := claims.Data[web.KeyUsername].(string)
 		return userID, nil
 	})
 
 	hub.SetConnectHandler(func(client *ws.Client) error {
-		return client.Send(client.Request().Context(), ws.NewMessage("auth", nil))
+		// HTTP 升级请求返回后其 context 会取消；握手提示使用独立的有界上下文。
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return client.Send(ctx, ws.NewMessage("auth", nil))
 	})
 
 	hub.SetErrorHandler(func(client *ws.Client, err error) {
 		slog.Debug("ws client error", "client_id", client.ID(), "err", err)
 	})
 
-	r.GET("/ws", func(c *gin.Context) {
-		hub.ServeHTTP(c.Writer, c.Request)
-	})
-
-	wsHub = hub
-	notify.SetWarnFunc(broadcastWarn)
-	notify.SetIPCWarnFunc(broadcastIPCWarn)
-	notify.SetIPCInfoFunc(broadcastIPCInfo)
+	return hub
 }

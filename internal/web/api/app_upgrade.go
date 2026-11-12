@@ -32,12 +32,17 @@ func (uc *Usecase) registerAppUpgrade(r gin.IRouter) {
 			return
 		}
 		claims, err := web.ParseToken(strings.TrimPrefix(auth, "Bearer "), uc.Conf.Server.HTTP.JwtSecret)
-		if err != nil || claims.Valid() != nil {
+		if err != nil || claims.ExpiresAt == nil || claims.Valid() != nil {
 			c.AbortWithStatusJSON(401, gin.H{"msg": "登录已失效，请重新登录"})
 			return
 		}
-		if claims.Data[web.KeyUsername] != uc.Conf.Server.Username {
+		username, _ := uc.sessionSnapshot()
+		if claims.Data[web.KeyUsername] != username {
 			c.AbortWithStatusJSON(403, gin.H{"msg": "仅本平台管理员可管理版本升级"})
+			return
+		}
+		if !uc.validAdminSession(claims) {
+			c.AbortWithStatusJSON(401, gin.H{"msg": "登录已失效，请重新登录"})
 			return
 		}
 		c.Next()

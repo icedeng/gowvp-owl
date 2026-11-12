@@ -4,7 +4,6 @@ import os
 import queue
 import subprocess
 import threading
-import time
 from typing import Deque, Optional
 import numpy as np
 
@@ -36,8 +35,7 @@ class LogPipe(threading.Thread):
             pass
         finally:
             try:
-                if not self._closed:
-                    self.pipe_reader.close()
+                self.pipe_reader.close()
             except (OSError, ValueError):
                 pass
 
@@ -74,6 +72,7 @@ class FrameCapture:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._proccess: Optional[subprocess.Popen] = None
+        self._process_lock = threading.Lock()
 
         # 流信息
         self.width = 0
@@ -112,7 +111,7 @@ class FrameCapture:
         # 等待线程结束
         if self._thread:
             self._thread.join(timeout=2)
-        slog.info(f"FrameCapture stopped for {self.rtsp_url}")
+        return self._thread is None or not self._thread.is_alive()
 
     def _get_stream_info(self) -> bool:
         slog.debug(f"正在探测流信息... {self.rtsp_url}")
@@ -167,10 +166,10 @@ class FrameCapture:
                         )
                         slog.error(self.last_error)
                         return
-                    time.sleep(3)
+                    self._stop_event.wait(3)
                     continue
-            # 成功获取流信息后重置错误计数
-            self.error_count = 0
+            if self._stop_event.is_set():
+                break
             if log_pipe:
                 log_pipe.close()
             log_pipe = LogPipe(f"ffmpeg.{self.rtsp_url}")
@@ -194,17 +193,27 @@ class FrameCapture:
             slog.info(f"启动 ffmpeg 进程: {' '.join(ffmpeg_cmd[:-2])} ...")
 
             try:
-                self._proccess = subprocess.Popen(
-                    ffmpeg_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=log_pipe.fileno(),
-                    bufsize=10**7,
-                )
+                with self._process_lock:
+                    if self._stop_event.is_set():
+                        log_pipe.close()
+                        break
+                    self._proccess = subprocess.Popen(
+                        ffmpeg_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=log_pipe.fileno(),
+                        bufsize=10**7,
+                    )
             except Exception as e:
                 slog.error(f"启动 ffmpeg 进程失败: {e}")
                 if log_pipe:
                     log_pipe.dump()
-                time.sleep(3)
+                    log_pipe.close()
+                self.error_count += 1
+                if self.error_count >= self.retry_limit:
+                    self.is_failed = True
+                    self.last_error = f"启动 ffmpeg 失败，已重试 {self.error_count} 次"
+                    return
+                self._stop_event.wait(3)
                 continue
             frame_size = self.width * self.height * 3
             slog.info(f"开始读取帧 (size={frame_size})...")
@@ -227,6 +236,8 @@ class FrameCapture:
                     image = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(
                         self.height, self.width, 3
                     )
+                    # 只有实际收到完整帧才恢复重试预算，探测成功不代表能够拉流。
+                    self.error_count = 0
 
                     try:
                         while not self.output_queue.empty():
@@ -258,16 +269,23 @@ class FrameCapture:
                 self.last_error = f"帧捕获失败，已重试 {self.error_count} 次"
                 slog.error(self.last_error)
                 return
-            time.sleep(2)
+            self._stop_event.wait(2)
 
     def _terminate_process(self):
-        if self._proccess:
-            if self._proccess.poll() is None:
-                self._proccess.terminate()
+        # stop() 与采集线程都会清理进程，串行化清理和创建，确认退出后才释放引用。
+        with self._process_lock:
+            process = self._proccess
+            if process is None:
+                return
+            if process.poll() is None:
+                process.terminate()
                 try:
-                    self._proccess.wait(timeout=2)
+                    process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    self._proccess.kill()
+                    process.kill()
+                    process.wait(timeout=2)
+            if process.stdout:
+                process.stdout.close()
             self._proccess = None
 
     def _hide_password(self, url):

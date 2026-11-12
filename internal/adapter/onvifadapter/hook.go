@@ -29,8 +29,10 @@ func (a *Adapter) OnStreamNotFound(ctx context.Context, app, stream string) erro
 		return err
 	}
 
-	onvifDev, ok := a.devices.Load(ch.DeviceID)
-	if !ok {
+	unlock := a.lockDevice(ch.DID)
+	defer unlock()
+	onvifDev, ok := a.devices.Load(ch.DID)
+	if !ok || onvifDev.Device == nil {
 		return fmt.Errorf("ONVIF 设备未初始化")
 	}
 

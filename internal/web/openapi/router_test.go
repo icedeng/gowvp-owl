@@ -183,12 +183,12 @@ func TestHLSAllResourcesUseTicketAndNoRedirect(t *testing.T) {
 		t.Fatal(e)
 	}
 	out := httptest.NewRecorder()
-	r.ServeHTTP(out, httptest.NewRequest("GET", "/openmedia/v1/live/session/hls.fmp4.m3u8?ticket="+raw, nil))
+	r.ServeHTTP(out, httptest.NewRequest("GET", "http://192.168.6.20:15123/openmedia/v1/live/session/hls.fmp4.m3u8?ticket="+raw, nil))
 	if out.Code != 200 {
 		t.Fatal(out.Code, out.Body.String())
 	}
 	for _, part := range []string{"init.mp4", "video.key", "chunk.m4s"} {
-		if !strings.Contains(out.Body.String(), "https://open.example/openmedia/v1/live/session/"+part+"?ticket="+raw) {
+		if !strings.Contains(out.Body.String(), "http://192.168.6.20:15123/openmedia/v1/live/session/"+part+"?ticket="+raw) {
 			t.Fatal("unguarded resource", part, out.Body.String())
 		}
 	}

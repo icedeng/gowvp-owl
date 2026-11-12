@@ -219,7 +219,7 @@ func (c *Core) EditChannel(ctx context.Context, in *EditChannelInput, id string)
 		return nil, reason.ErrBadRequest.SetMsg("app=rtp 为 GB28181 专用，RTMP/RTSP 不可使用")
 	}
 
-	// TODO: 修改 onvif 的账号/密码 后需要重新连接设备
+	// ONVIF 凭据属于设备，由 EditDevice 的协议编辑协调器负责重连。
 	var out Channel
 	if err := c.store.Channel().Update(ctx, &out, func(b *Channel) error {
 		if err := copier.Copy(b, in); err != nil {

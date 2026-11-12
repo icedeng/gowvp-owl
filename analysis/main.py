@@ -114,68 +114,80 @@ class CameraTask:
     def stop(self):
         self.status = "stopping"
         self._stop_event.set()
-        self.capture.stop()
+        capture_stopped = self.capture.stop()
         if self._thread:
             self._thread.join(timeout=2)
-        slog.info(f"CameraTask stopped for {self.camera_id}")
+        stopped = capture_stopped and (self._thread is None or not self._thread.is_alive())
+        if stopped:
+            self.status = "stopped"
+            self.motion_detector.backgrounds.pop(self.camera_id, None)
+        return stopped
+
+    def current_status(self):
+        if self.status == "running" and (
+            self.capture.is_failed or self._thread is None or not self._thread.is_alive()
+        ):
+            self.status = "error"
+            self.last_error = self.capture.last_error or "分析线程已退出"
+        return self.status
 
     def _analysis_loop(self):
         error_streak = 0
         retry_limit = int(self.config.get("retry_limit", 10))
 
-        while not self._stop_event.is_set():
-            # 检查 FrameCapture 是否已达到重试上限
-            if self.capture.is_failed:
-                self.status = "error"
-                self.last_error = self.capture.last_error
-                self._send_stopped_callback("capture_failed", self.last_error)
-                slog.error(
-                    f"CameraTask {self.camera_id} 因帧捕获失败而停止: {self.last_error}"
-                )
-                break
-
-            try:
-                try:
-                    frame = self.frame_queue.get(timeout=2.0)
-                except queue.Empty:
-                    slog.debug("CameraTask frame queue empty, skipping")
-                    continue
-
-                error_streak = 0
-                self.frames_processed += 1
-
-                zones = self.config.get("zones") or []
-                motion_boxes, has_motion = self.motion_detector.detect(
-                    frame, self.camera_id, zones if zones else None
-                )
-
-                if not has_motion:
-                    continue
-
-                try:
-                    detections = self._detect_with_zones(frame, zones)
-                except Exception as e:
-                    slog.error(f"CameraTask detect error: {e}")
-                    continue
-
-                if not detections:
-                    continue
-
-                detections = self._dedup(detections)
-                if not detections:
-                    continue
-                self._send_detection_callback(detections, frame)
-            except Exception as e:
-                slog.error(f"CameraTask analysis loop error: {e}")
-                error_streak += 1
-                self.last_error = str(e)
-                if error_streak >= retry_limit:
+        try:
+            while not self._stop_event.is_set():
+                # 检查 FrameCapture 是否已达到重试上限
+                if self.capture.is_failed:
                     self.status = "error"
-                    self._send_stopped_callback("error", self.last_error)
-                    self.capture.stop()
+                    self.last_error = self.capture.last_error
+                    self._send_stopped_callback("capture_failed", self.last_error)
+                    slog.error(
+                        f"CameraTask {self.camera_id} 因帧捕获失败而停止: {self.last_error}"
+                    )
                     break
-                # 防止 cpu 在异常里空转
-                time.sleep(1)
+
+                try:
+                    try:
+                        frame = self.frame_queue.get(timeout=2.0)
+                    except queue.Empty:
+                        slog.debug("CameraTask frame queue empty, skipping")
+                        continue
+
+                    self.frames_processed += 1
+
+                    zones = self.config.get("zones") or []
+                    motion_boxes, has_motion = self.motion_detector.detect(
+                        frame, self.camera_id, zones if zones else None
+                    )
+
+                    if not has_motion:
+                        continue
+
+                    detections = self._detect_with_zones(frame, zones)
+                    error_streak = 0
+                    self.retry_count = 0
+
+                    if not detections:
+                        continue
+
+                    detections = self._dedup(detections)
+                    if not detections:
+                        continue
+                    self._send_detection_callback(detections, frame)
+                except Exception as e:
+                    slog.error(f"CameraTask analysis loop error: {e}")
+                    error_streak += 1
+                    self.retry_count = error_streak
+                    self.last_error = str(e)
+                    if error_streak >= retry_limit:
+                        self.status = "error"
+                        self._send_stopped_callback("error", self.last_error)
+                        break
+                    # 防止 cpu 在异常里空转
+                    self._stop_event.wait(1)
+        finally:
+            self.capture.stop()
 
     def _detect_with_zones(self, frame, zones: list[dict]) -> list[dict]:
         """
@@ -339,7 +351,7 @@ class HealthServicer(analysis_pb2_grpc.HealthServicer):
         self._servicer = servicer
 
     def Check(self, request, context):
-        if not self._servicer.is_ready:
+        if not self._servicer.is_ready():
             return analysis_pb2.HealthCheckResponse(
                 status=analysis_pb2.HealthCheckResponse.NOT_SERVING
             )
@@ -349,7 +361,8 @@ class HealthServicer(analysis_pb2_grpc.HealthServicer):
 
 
 class AnalysisServiceServicer(analysis_pb2_grpc.AnalysisServiceServicer):
-    def __init__(self, model_path):
+    def __init__(self, model_path, max_tasks=32):
+        self._max_tasks = 32 if max_tasks == 0 else max_tasks
         self._camera_tasks: dict[str, CameraTask] = {}
         self._lock = threading.Lock()
         self._is_ready = False
@@ -381,13 +394,17 @@ class AnalysisServiceServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             )
         camera_id = request.camera_id
         with self._lock:
-            if camera_id in self._camera_tasks:
-                slog.info(
-                    f"Camera {camera_id} already exists, status: {self._camera_tasks[camera_id].status}"
-                )
-                return analysis_pb2.StartCameraResponse(
-                    success=True, message="任务已运行"
-                )
+            existing = self._camera_tasks.get(camera_id)
+            if existing is not None:
+                if existing.current_status() in ("running", "initializing"):
+                    return analysis_pb2.StartCameraResponse(success=True, message="任务已运行")
+                # 失败对象不能当作运行成功；旧线程/ffmpeg 未退出时禁止创建第二个任务。
+                if not self._stop_task(camera_id):
+                    return analysis_pb2.StartCameraResponse(success=False, message="旧任务尚未停止，请稍后重试")
+            if self._max_tasks > 0 and len(self._camera_tasks) >= self._max_tasks:
+                context.set_code(grpc.StatusCode.RESOURCE_EXHAUSTED)
+                context.set_details(f"AI 任务已达到上限 {self._max_tasks}")
+                return analysis_pb2.StartCameraResponse(success=False, message=f"AI 任务已达到上限 {self._max_tasks}")
             cb_url = request.callback_url or GLOBAL_CONFIG["callback_url"]
             cb_secret = request.callback_secret or GLOBAL_CONFIG["callback_secret"]
             if not cb_url:
@@ -419,8 +436,14 @@ class AnalysisServiceServicer(analysis_pb2_grpc.AnalysisServiceServicer):
                 detector=self.object_detector,
                 motion_detector=self.motion_detector,
             )
-            task.start()
             self._camera_tasks[camera_id] = task
+            try:
+                task.start()
+            except Exception as exc:
+                task.status = "error"
+                task.last_error = str(exc)
+                self._stop_task(camera_id)
+                return analysis_pb2.StartCameraResponse(success=False, message="任务启动失败")
 
         timeout = 5.0
         start = time.time()
@@ -430,6 +453,9 @@ class AnalysisServiceServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             if w > 0:
                 break
             time.sleep(0.5)
+        with self._lock:
+            if self._camera_tasks.get(camera_id) is not task or task.current_status() not in ("running", "initializing"):
+                return analysis_pb2.StartCameraResponse(success=False, message="任务已停止或启动失败")
         return analysis_pb2.StartCameraResponse(
             success=True,
             message="任务已启动",
@@ -438,29 +464,41 @@ class AnalysisServiceServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             source_fps=fps,
         )
 
-    def StopCamera(self, request, context):
-        camera_id = request.camera_id
-        with self._lock:
-            if camera_id not in self._camera_tasks:
-                return analysis_pb2.StopCameraResponse(
-                    success=False, message="Camera not found"
-                )
+    def _stop_task(self, camera_id):
+        # 调用方持有 _lock；只有确认所有线程退出才释放任务名和容量。
+        task = self._camera_tasks.get(camera_id)
+        if task is None:
+            return True
+        try:
+            if not task.stop():
+                return False
+        except Exception as exc:
+            slog.warning(f"停止任务 {camera_id} 失败: {exc}")
+            return False
+        del self._camera_tasks[camera_id]
+        return True
 
-            task = self._camera_tasks.pop(camera_id)
-            task.stop()
-            return analysis_pb2.StopCameraResponse(success=True, message="任务已停止")
+    def StopCamera(self, request, context):
+        with self._lock:
+            stopped = self._stop_task(request.camera_id)
+            return analysis_pb2.StopCameraResponse(
+                success=stopped,
+                message="任务已停止" if stopped else "任务尚未停止，请稍后重试",
+            )
 
     def GetStatus(self, request, context):
         response = analysis_pb2.StatusResponse()
         response.is_ready = self._is_ready
-        response.stats.active_streams = len(self._camera_tasks)
         response.stats.uptime_seconds = int(time.time() - self._start_time)
 
         with self._lock:
             for cid, task in self._camera_tasks.items():
+                status = task.current_status()
+                if status in ("running", "initializing"):
+                    response.stats.active_streams += 1
                 cam_status = analysis_pb2.CameraStatus(
                     camera_id=cid,
-                    status=task.status,
+                    status=status,
                     frames_processed=task.frames_processed,
                     retry_count=task.retry_count,
                     last_error=task.last_error,
@@ -571,12 +609,12 @@ def send_keepalive_callback(stats: dict):
         slog.debug(f"Failed to send keepalive callback: {e}")
 
 
-def serve(port, model_path):
+def serve(port, model_path, max_tasks=32):
     # 启动父进程监控线程，确保 Go 退出时 Python 也退出
     threading.Thread(target=_watch_parent_process, daemon=True).start()
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=20))
-    servicer = AnalysisServiceServicer(model_path)
+    servicer = AnalysisServiceServicer(model_path, max_tasks=max_tasks)
     analysis_pb2_grpc.add_AnalysisServiceServicer_to_server(servicer, server)
 
     health_servicer = HealthServicer(servicer)
@@ -617,6 +655,7 @@ def discover_model(model_arg: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--max-tasks", type=int, default=32, help="并发任务上限，0=32，负数=不限制")
     parser.add_argument("--port", type=int, default=50051)
     parser.add_argument("--model", type=str, default="owl.onnx")
     parser.add_argument(
@@ -645,7 +684,7 @@ def main():
         f"log level: {args.log_level}, model: {model_path}, callback url: {args.callback_url}, callback secret configured: {bool(args.callback_secret)}"
     )
 
-    serve(args.port, model_path)
+    serve(args.port, model_path, args.max_tasks)
 
 
 if __name__ == "__main__":

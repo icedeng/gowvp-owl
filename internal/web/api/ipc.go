@@ -1606,10 +1606,8 @@ func (a IPCAPI) play(c *gin.Context, _ *struct{}) (*playOutput, error) {
 		host = h
 	}
 
-	playToken, err := web.NewToken(
+	playToken, err := a.uc.newPlayToken(c,
 		map[string]any{"stream": appStream, "app": app, "media_server_id": mediaServerID},
-		a.uc.Conf.Server.HTTP.JwtSecret+"_play",
-		web.WithExpiresAt(time.Now().Add(42*time.Hour)),
 	)
 	if err != nil {
 		return nil, reason.ErrServer.SetMsg("生成播放 token 失败")
@@ -4103,6 +4101,9 @@ func (a IPCAPI) enableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
 		return nil, ErrAIServiceNotReady
 	}
 
+	a.uc.AIWebhookAPI.taskMu.Lock()
+	defer a.uc.AIWebhookAPI.taskMu.Unlock()
+
 	channel, err := a.ipc.GetChannel(ctx, channelID)
 	if err != nil {
 		return nil, err
@@ -4115,13 +4116,13 @@ func (a IPCAPI) enableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
 	}
 
 	// 启动 AI 检测任务
-	resp, err := a.uc.AIWebhookAPI.StartAIDetection(ctx, channel, rtspURL)
+	resp, err := a.uc.AIWebhookAPI.startAIDetection(ctx, channel, rtspURL)
 	if err != nil {
 		slog.ErrorContext(ctx, "start camera AI", "err", err)
 		return nil, reason.ErrUsedLogic.SetMsg("启动 AI 检测失败: " + err.Error())
 	}
 	if _, err = a.ipc.SetAIEnabled(ctx, channelID, true); err != nil {
-		if stopErr := a.uc.AIWebhookAPI.StopAIDetection(ctx, channelID); stopErr != nil {
+		if stopErr := a.uc.AIWebhookAPI.stopAIDetection(ctx, channelID); stopErr != nil {
 			return nil, errors.Join(err, fmt.Errorf("rollback AI task: %w", stopErr))
 		}
 		return nil, err
@@ -4161,13 +4162,16 @@ func (a IPCAPI) disableAI(c *gin.Context, _ *struct{}) (gin.H, error) {
 		return nil, ErrAIServiceNotReady
 	}
 
+	a.uc.AIWebhookAPI.taskMu.Lock()
+	defer a.uc.AIWebhookAPI.taskMu.Unlock()
+
 	// 更新数据库中的 AI 启用状态
 	if _, err := a.ipc.SetAIEnabled(ctx, channelID, false); err != nil {
 		return nil, err
 	}
 
 	// 停止 AI 检测任务
-	if err := a.uc.AIWebhookAPI.StopAIDetection(ctx, channelID); err != nil {
+	if err := a.uc.AIWebhookAPI.stopAIDetection(ctx, channelID); err != nil {
 		slog.ErrorContext(ctx, "stop camera AI", "err", err)
 		return nil, reason.ErrUsedLogic.SetMsg("停止 AI 检测失败: " + err.Error())
 	}

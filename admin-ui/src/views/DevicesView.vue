@@ -62,6 +62,7 @@ const statisticError = ref("");
 const statisticRows = ref<DeviceHistoryRecord[]>([]);
 const PAGE_SIZE = 20;
 let loadSequence = 0;
+let legacyGatewayID: string | null = null;
 let searchTimer: number | undefined;
 const form = reactive({ name: "", device_id: "", password: "", stream_mode: 1 });
 const accessInfo = reactive({
@@ -210,6 +211,7 @@ async function load(refreshSummary = false) {
         onlineTotal.value = summary.online;
         offlineTotal.value = summary.offline;
         legacyRows.value = [];
+        legacyGatewayID = null;
       }
     }
 
@@ -227,10 +229,11 @@ async function load(refreshSummary = false) {
       rows.value = (response.data?.items || []).filter(isGbDevice);
       total.value = Number(response.data?.total ?? rows.value.length);
     } else {
-      if (!legacyRows.value.length || refreshSummary || version.value !== "all") {
+      if (legacyGatewayID !== gatewayID.value || refreshSummary) {
         const data = await collectPages(api.devices, { type: "GB28181", gateway_id: gatewayID.value || undefined });
         if (sequence !== loadSequence) return;
         legacyRows.value = data.items.filter(isGbDevice);
+        legacyGatewayID = gatewayID.value;
         deviceTotal.value = legacyRows.value.length;
         onlineTotal.value = legacyRows.value.filter(
           (item) => item.is_online === true
@@ -311,8 +314,13 @@ async function addDevice() {
 }
 
 onMounted(() => load(true));
-onBeforeUnmount(() => window.clearTimeout(searchTimer));
+onBeforeUnmount(() => {
+  ++loadSequence;
+  window.clearTimeout(searchTimer);
+});
 watch([query, status, version, gatewayID], () => {
+  // 筛选变化即作废旧响应，避免防抖期间仍展示旧入口的数据。
+  ++loadSequence;
   currentPage.value = 1;
   window.clearTimeout(searchTimer);
   searchTimer = window.setTimeout(() => void load(), 280);

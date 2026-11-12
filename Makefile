@@ -65,7 +65,7 @@ protobuf:
 		./protos/*.proto
 
 python/init:
-	@pip install -r python/requirements.txt
+	@pip install -r analysis/requirements.txt
 
 
 # ==================================================================================== #
@@ -172,9 +172,9 @@ build/local: build/admin-ui
 		-trimpath \
 		-ldflags="-s -w \
 			-X main.buildVersion=$(VERSION) \
-			-X main.gitBranch=$(BRANCH_NAME) \
+			-X main.gitBranch=$(BRANCH) \
 			-X main.gitHash=$(HASH_AND_DATE) \
-			-X main.buildTimeAt=$(shell date +%s) \
+			-X main.buildTime=$(shell date +%s) \
 			-X main.release=true \
 			" -o=$(dir)/bin ./main.go
 	@rm -rf $(dir)/www

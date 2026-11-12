@@ -219,6 +219,8 @@ func (a ConfigAPI) updateSnapshotConfig(_ *gin.Context, in *map[string]json.RawM
 	if err := value.validate(); err != nil {
 		return nil, reason.ErrBadRequest.WithMsg(err.Error())
 	}
+	unlock := a.lockCredentials()
+	defer unlock()
 	candidate := *a.conf
 	value.applyTo(&candidate.Media)
 	if err := conf.WriteConfig(&candidate, a.conf.ConfigPath); err != nil {

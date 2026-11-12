@@ -51,22 +51,12 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 			c.AbortWithStatus(http.StatusInternalServerError)
 		}),
 		web.Metrics(),
-		web.Logger(web.IgnorePrefix(staticPrefix),
+		requestLogger(web.IgnorePrefix(staticPrefix),
 			web.IgnoreMethod(http.MethodOptions),
 			web.IgnorePrefix("/openapi/"), web.IgnorePrefix("/openmedia/"), web.IgnorePrefix("/admin/open-platform"),
 			web.IgnorePrefix("/events/image"),
 			web.IgnorePrefix("/recordings/channels"), // m3u8 播放列表
 			web.IgnorePrefix("/static/recordings"),   // 录像文件
-		),
-		web.LoggerWithBody(web.DefaultBodyLimit,
-			web.IgnorePrefix("/access_gateways"), web.IgnorePrefix("/access_gateway_migrations"),
-			web.IgnorePrefix("/app/upgrade"),
-			web.IgnoreBool(uc.Conf.Debug),
-			web.IgnoreMethod(http.MethodOptions),
-			web.IgnorePrefix("/openapi/"), web.IgnorePrefix("/openmedia/"), web.IgnorePrefix("/admin/open-platform"),
-			web.IgnorePrefix("/events/image"),
-			web.IgnorePrefix("/recordings/channels"),
-			web.IgnorePrefix("/static/recordings"),
 		),
 	)
 	go web.CountGoroutines(10*time.Minute, 20)
@@ -142,7 +132,7 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 	docs.SwaggerInfo.Version = uc.Conf.BuildVersion
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	auth := AuthMiddleware(uc.Conf.Server.HTTP.JwtSecret, uc.Conf.Server.HTTP.AuthURL)
+	auth := authMiddleware(uc.Conf.Server.HTTP.JwtSecret, uc.Conf.Server.HTTP.AuthURL, uc.validAdminSession)
 	onvifserver.Register(r, uc.GB28181API.ipc, uc.SMSAPI.smsCore, uc.Conf)
 	r.Any("/health", web.WrapH(uc.getHealth))
 	r.GET("/app/metrics/api", web.WrapH(uc.getMetricsAPI))
@@ -158,7 +148,7 @@ func setupRouter(r *gin.Engine, uc *Usecase) {
 	registerSms(r, uc.SMSAPI, auth)
 	RegisterUser(r, uc.UserAPI, auth)
 
-	registerWS(r, uc.Conf.Server.HTTP.JwtSecret)
+	registerWS(r, uc)
 
 	// 反向代理流媒体数据
 	r.Any("/proxy/sms/*path", uc.proxySMS)

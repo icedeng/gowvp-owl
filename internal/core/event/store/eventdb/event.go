@@ -7,7 +7,6 @@ import (
 
 	"github.com/gowvp/owl/internal/core/event"
 	"github.com/ixugo/goddd/pkg/orm"
-	"github.com/ixugo/goddd/pkg/reason"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -82,23 +81,7 @@ func (d Event) Delete(ctx context.Context, model *event.Event, opts ...orm.Query
 		if err := orm.FirstWithContext(ctx, tx.Clauses(clause.Locking{Strength: "UPDATE"}), model, opts...); err != nil {
 			return err
 		}
-		var active int64
-		if err := tx.Model(&event.EvidenceTask{}).Where("event_id = ? AND state IN ?", model.ID, []string{"queued", "working"}).Count(&active).Error; err != nil {
-			return err
-		}
-		if active > 0 {
-			return reason.ErrBadRequest.WithMsg("事件正在取证，请完成后再删除")
-		}
-		if err := tx.Where("event_id = ?", model.ID).Delete(&event.AlarmReport{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("event_id = ?", model.ID).Delete(&event.Action{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("event_id = ?", model.ID).Delete(&event.EvidenceTask{}).Error; err != nil {
-			return err
-		}
-		return tx.Delete(model).Error
+		return event.DeleteEventRecord(tx, model)
 	})
 }
 

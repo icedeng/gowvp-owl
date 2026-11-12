@@ -17,6 +17,7 @@ import (
 	"github.com/ixugo/goddd/pkg/system"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func TestCleanupWorkerStopsWhenContextCanceled(t *testing.T) {
@@ -58,6 +59,17 @@ type cleanupStore struct{ events EventStorer }
 
 func (s cleanupStore) Event() EventStorer { return s.events }
 
+func (s cleanupEventStore) Session(ctx context.Context, fns ...func(*gorm.DB) error) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, fn := range fns {
+			if err := fn(tx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func TestCleanupBindsTimestampForPostgres(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -69,9 +81,12 @@ func TestCleanupBindsTimestampForPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	mock.ExpectQuery(`SELECT .* FROM "events" WHERE started_at < \$1`).
-		WithArgs(cleanupTimeArgument{}).
+		WithArgs(cleanupTimeArgument{}, int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
-	NewCore(cleanupStore{events: cleanupEventStore{db: db}}, nil).cleanupExpiredEvents(30)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT .* FROM "event_media_cleanup_tasks" WHERE id > \$1 ORDER BY id LIMIT \$2`).WithArgs(int64(0), 100).WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectCommit()
+	NewCore(cleanupStore{events: cleanupEventStore{db: db}}, nil).cleanupExpiredEvents(context.Background(), 30)
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
@@ -79,9 +94,10 @@ func TestCleanupBindsTimestampForPostgres(t *testing.T) {
 
 type progressCleanupEventStore struct {
 	EventStorer
-	db      *gorm.DB
-	queries int
-	failDB  bool
+	db           *gorm.DB
+	queries      int
+	failDB       bool
+	beforeDelete func(*Event)
 }
 
 func (s *progressCleanupEventStore) List(ctx context.Context, out *[]*Event, pager orm.Pager, options ...orm.QueryOption) (int64, error) {
@@ -107,10 +123,22 @@ func (s *progressCleanupEventStore) Session(ctx context.Context, fns ...func(*go
 	})
 }
 
+func (s *progressCleanupEventStore) Delete(ctx context.Context, e *Event, opts ...orm.QueryOption) error {
+	if s.beforeDelete != nil {
+		s.beforeDelete(e)
+	}
+	return s.Session(ctx, func(tx *gorm.DB) error {
+		if err := orm.FirstWithContext(ctx, tx.Clauses(clause.Locking{Strength: "UPDATE"}), e, opts...); err != nil {
+			return err
+		}
+		return DeleteEventRecord(tx, e)
+	})
+}
+
 func newProgressCleanupEventStore(t *testing.T) *progressCleanupEventStore {
 	t.Helper()
 	t.Chdir(t.TempDir())
-	db, err := gorm.Open(sqlite.Open(":memory:"))
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "events.db")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +148,7 @@ func newProgressCleanupEventStore(t *testing.T) *progressCleanupEventStore {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := db.AutoMigrate(&Event{}, &AlarmReport{}); err != nil {
+	if err := db.AutoMigrate(&Event{}, &AlarmReport{}, &Action{}, &EvidenceTask{}, &MediaCleanupTask{}); err != nil {
 		t.Fatal(err)
 	}
 	return &progressCleanupEventStore{db: db}
@@ -132,6 +160,15 @@ func TestExpiredEventCleanupStopsOnFailedOrZeroRowDeletionAndCanRetry(t *testing
 			store := newProgressCleanupEventStore(t)
 			core := NewCore(cleanupStore{events: store}, nil)
 			expired := Event{StartedAt: orm.Time{Time: time.Now().AddDate(0, 0, -10)}}
+			expired.ImagePath = "rollback.jpg"
+			root := filepath.Join(system.Getwd(), "configs", "events")
+			if err := os.MkdirAll(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(root, expired.ImagePath)
+			if err := os.WriteFile(file, []byte("evidence"), 0600); err != nil {
+				t.Fatal(err)
+			}
 			recent := Event{StartedAt: orm.Time{Time: time.Now()}}
 			if err := store.db.Create(&expired).Error; err != nil {
 				t.Fatal(err)
@@ -147,7 +184,7 @@ func TestExpiredEventCleanupStopsOnFailedOrZeroRowDeletionAndCanRetry(t *testing
 					t.Fatal(err)
 				}
 			}
-			core.cleanupExpiredEvents(7)
+			core.cleanupExpiredEvents(context.Background(), 7)
 			var count int64
 			if err := store.db.Model(&Event{}).Count(&count).Error; err != nil {
 				t.Fatal(err)
@@ -155,17 +192,27 @@ func TestExpiredEventCleanupStopsOnFailedOrZeroRowDeletionAndCanRetry(t *testing
 			if count != 2 || store.queries != 1 {
 				t.Fatalf("failed cleanup records=%d queries=%d, want 2/1", count, store.queries)
 			}
+			if body, err := os.ReadFile(file); err != nil || string(body) != "evidence" {
+				t.Fatal("rollback lost evidence", err)
+			}
+			store.db.Model(&MediaCleanupTask{}).Count(&count)
+			if count != 0 {
+				t.Fatal("rolled-back deletion left a cleanup task")
+			}
 			store.failDB, store.queries = false, 0
 			if err := store.db.Callback().Delete().Replace("gorm:delete", originalDelete); err != nil {
 				t.Fatal(err)
 			}
-			core.cleanupExpiredEvents(7)
+			core.cleanupExpiredEvents(context.Background(), 7)
 			var remaining []Event
 			if err := store.db.Find(&remaining).Error; err != nil {
 				t.Fatal(err)
 			}
 			if len(remaining) != 1 || remaining[0].ID != recent.ID || store.queries != 2 {
 				t.Fatalf("retry did not recover or retention changed: remaining=%v queries=%d", remaining, store.queries)
+			}
+			if _, err := os.Stat(file); !os.IsNotExist(err) {
+				t.Fatal("retry left evidence", err)
 			}
 		})
 	}
@@ -216,7 +263,7 @@ func TestExpiredEventCleanupContinuesWithProgressAndPreservesRecentImages(t *tes
 	if err := os.WriteFile(thumbnail.Path(filepath.Join(dir, "recent.jpg")), []byte("keep-preview"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	core.cleanupExpiredEvents(7)
+	core.cleanupExpiredEvents(context.Background(), 7)
 	var remaining []Event
 	if err := store.db.Find(&remaining).Error; err != nil {
 		t.Fatal(err)

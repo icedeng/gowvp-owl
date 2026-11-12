@@ -37,6 +37,8 @@ func (a ConfigAPI) updateMedia(_ *gin.Context, in *mediaPlaybackConfig) (gin.H, 
 	}
 	a.sipMu.Lock() // 与 SIP 配置写盘共用锁，避免并发覆盖配置文件。
 	defer a.sipMu.Unlock()
+	unlock := a.lockCredentials()
+	defer unlock()
 	previous := *a.conf
 	candidate := previous
 	candidate.Media.StreamNoneReaderDelaySeconds = in.StreamNoneReaderDelaySeconds

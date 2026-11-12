@@ -37,6 +37,11 @@ func EnqueueEvidence(tx *gorm.DB, e *Event) error {
 	if !strings.EqualFold(e.Model, "GB28181") {
 		return nil
 	}
+	// 与删除使用相同的事件行锁；事件一旦删除，不能再为其建立取证任务。
+	var locked Event
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, e.ID).Error; err != nil {
+		return err
+	}
 	var p Policy
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&p, "did = ?", e.DID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -143,16 +148,21 @@ func (w *Workflow) processNextEvidence(ctx context.Context) {
 		return
 	}
 	began := time.Now()
-	claim := w.db.WithContext(ctx).Model(&EvidenceTask{}).Where("event_id = ? AND state = ?", task.EventID, "queued").Updates(map[string]any{"state": "working", "started_at": began, "snapshot_state": gorm.Expr("CASE WHEN snapshot_state = 'queued' THEN 'working' ELSE snapshot_state END"), "video_state": gorm.Expr("CASE WHEN video_state = 'queued' THEN 'working' ELSE video_state END")})
-	if claim.Error != nil || claim.RowsAffected != 1 {
+	var e Event
+	claimed := false
+	err = w.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&e, task.EventID).Error; err != nil {
+			return err
+		}
+		claim := tx.Model(&EvidenceTask{}).Where("event_id = ? AND state = ?", task.EventID, "queued").Updates(map[string]any{"state": "working", "started_at": began, "snapshot_state": gorm.Expr("CASE WHEN snapshot_state = 'queued' THEN 'working' ELSE snapshot_state END"), "video_state": gorm.Expr("CASE WHEN video_state = 'queued' THEN 'working' ELSE video_state END")})
+		claimed = claim.RowsAffected == 1
+		return claim.Error
+	})
+	if err != nil || !claimed {
 		return
 	}
 	task.State = "working"
 	task.StartedAt = &began
-	var e Event
-	if err := w.db.WithContext(ctx).First(&e, task.EventID).Error; err != nil {
-		return
-	}
 	stale := time.Since(e.StartedAt.Time) > 120*time.Second
 	taskCtx, cancel := context.WithTimeout(ctx, time.Duration(task.ClipSeconds+150)*time.Second)
 	defer cancel()

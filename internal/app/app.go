@@ -78,12 +78,12 @@ func Run(bc *conf.Bootstrap) {
 	}
 	go setupZLM(ctx, bc.ConfigDir, bc.Media.Secret)
 	if !bc.Server.AI.Disabled {
-		go setupAIClient(ctx, "http://127.0.0.1:15123/ai", bc.AISecret, bc.Debug)
+		go setupAIClient(ctx, fmt.Sprintf("http://127.0.0.1:%d/ai", bc.Server.HTTP.Port), bc.AISecret, bc.Debug, bc.Server.AI.TaskLimit())
 	}
 
 	// 如果需要执行表迁移，递增此版本号和表更新说明
-	versionapi.DBVersion = "0.0.34"
-	versionapi.DBRemark = "alarm semantic deduplication and continuous event aggregation"
+	versionapi.DBVersion = "0.0.35"
+	versionapi.DBRemark = "durable event media cleanup and attachment reference indexes"
 
 	handler, cleanUp, err := wireApp(ctx, bc, log)
 	if err != nil {
@@ -287,7 +287,7 @@ func findPythonPath() string {
 	return "python3"
 }
 
-func setupAIClient(ctx context.Context, callback, callbackSecret string, debug bool) {
+func setupAIClient(ctx context.Context, callback, callbackSecret string, debug bool, maxTasks int) {
 	workDir := filepath.Join(system.Getwd(), "analysis")
 	if _, err := os.Stat(filepath.Join(workDir, "main.py")); err != nil && os.IsNotExist(err) {
 		slog.Info("main.py 文件不存在，跳过启动 ai", "path", filepath.Join(workDir, "main.py"))
@@ -297,7 +297,7 @@ func setupAIClient(ctx context.Context, callback, callbackSecret string, debug b
 	pythonPath := findPythonPath()
 	slog.Info("使用 Python 路径", "path", pythonPath)
 
-	args := []string{"main.py"}
+	args := []string{"main.py", "--max-tasks", fmt.Sprint(maxTasks)}
 	if callback != "" {
 		args = append(args, "--callback-url", callback)
 	}

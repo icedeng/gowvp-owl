@@ -1,12 +1,27 @@
 package stat
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/net"
 )
+
+func TestNetworkCounterFailureDoesNotCrashService(t *testing.T) {
+	counters, err := readNetworkCounters(func(bool) ([]net.IOCountersStat, error) {
+		panic("unexpected netstat output")
+	})
+	if err == nil || counters != nil {
+		t.Fatal("panic must become an unavailable sample")
+	}
+	want := errors.New("permission denied")
+	_, err = readNetworkCounters(func(bool) ([]net.IOCountersStat, error) { return nil, want })
+	if !errors.Is(err, want) {
+		t.Fatal("ordinary collector errors must be preserved")
+	}
+}
 
 func TestNetworkSamplerUsesElapsedTimeAndResetsInvalidBaseline(t *testing.T) {
 	var sampler networkSampler

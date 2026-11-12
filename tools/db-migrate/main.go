@@ -34,7 +34,7 @@ import (
 var models = append([]any{
 	new(version.Version), new(sms.MediaServer), new(ipc.Device), new(ipc.Channel),
 	new(ipc.GBTaskStateRecord), new(ipc.GBCascadeTaskRouteRecord), new(ipc.DeviceHistoryRecord),
-	new(uniqueid.UniqueID), new(recording.Recording), new(event.Event), new(config.Config), new(metadata.Metadata),
+	new(uniqueid.UniqueID), new(recording.Recording), new(event.Event), new(event.Policy), new(event.Action), new(event.EvidenceTask), new(event.AlarmReport), new(event.MediaCleanupTask), new(config.Config), new(metadata.Metadata),
 }, op.Models()...)
 
 func main() {

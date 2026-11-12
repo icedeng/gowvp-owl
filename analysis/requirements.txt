@@ -2,7 +2,8 @@
 onnxruntime>=1.17.0
 
 # gRPC 框架
-grpcio>=1.60.0
+grpcio>=1.76.0
+protobuf>=6.31.1,<7
 
 # 图像处理 (headless 版本更小)
 opencv-python-headless>=4.8.0
