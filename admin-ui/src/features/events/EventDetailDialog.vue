@@ -5,7 +5,7 @@ import ModalDialog from '../../components/ModalDialog.vue'
 import { api, errorMessage } from '../../services/api'
 import type { ApiEvent, EventAction, EventStatus } from '../../types/api'
 import { formatDate } from '../../utils/format'
-import { alarmSummary, channelLabel, deviceLabel, eventTitle, evidenceLabel, isAlarm, statusLabels } from './format'
+import { alarmSummary, channelLabel, deviceLabel, eventTitle, evidenceLabel, isAlarm, sourceLabel, statusLabels } from './format'
 const props = defineProps<{ eventId: number }>()
 const emit = defineEmits<{ close: []; processed: []; policy: [did: string] }>()
 const item = ref<ApiEvent | null>(null), actions = ref<EventAction[]>([])
@@ -47,10 +47,12 @@ watch(() => props.eventId, load, { immediate: true })
    <div v-else-if="error" class="warning-box" role="alert"><ShieldAlert /><span>{{ error }}</span><button class="btn btn-sm" @click="load">重试</button></div>
    <template v-else-if="item">
     <div class="event-detail-heading"><div><h3>{{ eventTitle(item) }}</h3><p>{{ formatDate(item.started_at) }} · #{{ item.id }}</p></div><span class="status" :class="item.status === 'resolved' ? 'online' : item.status === 'ignored' ? '' : 'pending'">{{ statusLabels[item.status] }}</span><button class="btn btn-sm" :disabled="saving" @click="load"><RefreshCcw />刷新详情</button></div>
-    <dl class="event-facts"><div><dt>设备</dt><dd>{{ deviceLabel(item) }}<small>{{ item.device_code || item.did }}</small></dd></div><div><dt>通道</dt><dd>{{ channelLabel(item) }}<small>{{ item.channel_code || item.cid }}</small></dd></div><div><dt>报警信息</dt><dd>{{ alarmSummary(item) || item.model || '—' }}</dd></div></dl>
-    <p v-if="(item.occurrence_count || 1) > 1" class="section-note">连续报警 {{ item.occurrence_count }} 次 · 首次 {{ formatDate(item.started_at) }} · 末次 {{ formatDate(item.ended_at) }}；现场证据取自首次报警。</p>
+    <RouterLink v-if="item.gateway_id" class="btn btn-sm" :to="`/access-gateways/${encodeURIComponent(item.gateway_id)}`">查看网关运行状态</RouterLink>
+ <dl class="event-facts"><div><dt>设备</dt><dd>{{ deviceLabel(item) }}<small>{{ item.device_code || item.did }}</small></dd></div><div><dt>通道</dt><dd>{{ channelLabel(item) }}<small>{{ item.channel_code || item.cid }}</small></dd></div><div><dt>报警信息</dt><dd>{{ alarmSummary(item) || item.model || '—' }}</dd></div></dl>
+    <p v-if="(item.occurrence_count || 1) > 1" class="section-note">连续报警 {{ item.occurrence_count }} 次 · 首次 {{ formatDate(item.started_at) }} · 末次 {{ formatDate(item.ended_at) }}<template v-if="!item.historical">；现场证据取自首次报警</template>。</p>
     <div class="event-resource-actions"><RouterLink v-if="item.did" class="btn btn-sm" :to="`/devices/${encodeURIComponent(item.did)}`"><ExternalLink />设备详情</RouterLink><RouterLink v-if="item.cid" class="btn btn-sm" :to="`/live?channel=${encodeURIComponent(item.cid)}`">实时画面</RouterLink><RouterLink v-if="item.cid" class="btn btn-sm" :to="`/recordings?event=${item.id}&channel=${encodeURIComponent(item.cid)}`">查询平台录像</RouterLink><button v-if="item.did && isAlarm(item)" class="btn btn-sm" :disabled="saving" @click="emit('policy', item.did)">配置该设备联动</button></div>
-    <section class="evidence-section" aria-label="事件现场证据"><h3>现场证据</h3><p class="section-note">抓拍和视频在平台收到报警后获取；“查询平台录像”单独查询已有录像。</p>
+    <p v-if="item.historical" class="warning-box">历史补报、现场取证不可用。仅补回报警文字和原始发生时间，接收于 {{ formatDate(item.received_at || item.created_at) }}。</p>
+ <section v-else-if="item.model !== 'AccessGateway'" class="evidence-section" aria-label="事件现场证据"><h3>现场证据</h3><p class="section-note">抓拍和视频在平台收到报警后获取；“查询平台录像”单独查询已有录像。</p>
      <div class="event-evidence-grid"><div><h4>事件抓拍 · {{ item.image_path ? '已保存' : evidenceLabel(item.evidence?.snapshot_state) }}</h4><a v-if="item.image_path" class="event-original-link" :href="api.eventImage(item.image_path)" target="_blank" rel="noopener"><img v-if="!imageFailed" :src="api.eventThumbnail(item.image_path)" :alt="`${deviceLabel(item)} ${eventTitle(item)}现场抓拍`" @error="imageFailed = true"><span>查看原图</span></a><p v-if="!item.image_path || imageFailed" class="evidence-empty"><Camera />{{ imageFailed ? '缩略图暂不可用，可点击查看原图' : item.evidence?.snapshot_error || '本事件没有抓拍图片；可为后续报警启用自动抓拍。' }}</p></div><div><h4>报警后视频 · {{ item.video_path ? '已保存' : evidenceLabel(item.evidence?.video_state) }}</h4><video v-if="item.video_path && !videoFailed" :src="api.eventVideo(item.id)" controls preload="none" aria-label="报警后视频片段" @error="videoFailed = true"/><p v-else class="evidence-empty">{{ videoFailed ? '视频不可用或浏览器不支持，请下载查看' : item.evidence?.video_error || '本事件没有视频片段；可为后续报警启用平台录制。' }}</p><a v-if="item.video_path" class="btn btn-sm" :href="api.eventVideo(item.id, true)" download>下载视频</a></div></div>
      <p v-if="item.evidence?.started_at" class="section-note">取证任务开始于 {{ formatDate(item.evidence.started_at) }}<template v-if="item.evidence.finished_at">，结束于 {{ formatDate(item.evidence.finished_at) }}</template>。</p>
     </section>

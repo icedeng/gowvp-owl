@@ -34,13 +34,16 @@ func (EvidenceTask) TableName() string { return "event_evidence_tasks" }
 
 // EnqueueEvidence 必须在创建事件的事务内调用；取证排队失败不能留下未安排动作的半条事件。
 func EnqueueEvidence(tx *gorm.DB, e *Event) error {
-	if !strings.EqualFold(e.Model, "GB28181") {
+	if e.Historical || !strings.EqualFold(e.Model, "GB28181") {
 		return nil
 	}
 	// 与删除使用相同的事件行锁；事件一旦删除，不能再为其建立取证任务。
 	var locked Event
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, e.ID).Error; err != nil {
 		return err
+	}
+	if locked.Historical {
+		return nil
 	}
 	var p Policy
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&p, "did = ?", e.DID).Error; err != nil {
@@ -107,8 +110,7 @@ func (w *Workflow) SetEvidenceExecutor(execute EvidenceExecutor) {
 // RunEvidenceWorkers 有限并发处理持久任务。失败不晚到补拍，防止用之后画面冒充报警现场。
 func (w *Workflow) RunEvidenceWorkers(ctx context.Context) {
 	// 单实例生命周期恢复：执行中的任务在重启后不重放。
-	now := time.Now()
-	if err := w.db.WithContext(ctx).Model(&EvidenceTask{}).Where("state = ?", "working").Updates(map[string]any{"state": "failed", "snapshot_state": gorm.Expr("CASE WHEN snapshot_state = 'working' THEN 'failed' ELSE snapshot_state END"), "video_state": gorm.Expr("CASE WHEN video_state = 'working' THEN 'failed' ELSE video_state END"), "snapshot_error": gorm.Expr("CASE WHEN snapshot_state = 'working' THEN '服务重启，未完成抓拍' ELSE snapshot_error END"), "video_error": gorm.Expr("CASE WHEN video_state = 'working' THEN '服务重启，未完成录像' ELSE video_error END"), "finished_at": now}).Error; err != nil {
+	if err := w.recoverEvidence(ctx); err != nil {
 		slog.Error("recover event evidence tasks", "err", err)
 		return
 	}
@@ -154,9 +156,15 @@ func (w *Workflow) processNextEvidence(ctx context.Context) {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&e, task.EventID).Error; err != nil {
 			return err
 		}
+		if e.Historical {
+			return tx.Model(&EvidenceTask{}).Where("event_id = ? AND state = ?", task.EventID, "queued").Updates(map[string]any{"state": "skipped", "snapshot_state": "skipped", "video_state": "skipped", "snapshot_error": "历史补报、现场取证不可用", "video_error": "历史补报、现场取证不可用", "finished_at": began}).Error
+		}
 		claim := tx.Model(&EvidenceTask{}).Where("event_id = ? AND state = ?", task.EventID, "queued").Updates(map[string]any{"state": "working", "started_at": began, "snapshot_state": gorm.Expr("CASE WHEN snapshot_state = 'queued' THEN 'working' ELSE snapshot_state END"), "video_state": gorm.Expr("CASE WHEN video_state = 'queued' THEN 'working' ELSE video_state END")})
 		claimed = claim.RowsAffected == 1
-		return claim.Error
+		if claim.Error != nil || !claimed {
+			return claim.Error
+		}
+		return w.changed(tx, e.ID, "event.evidence.updated")
 	})
 	if err != nil || !claimed {
 		return
@@ -191,14 +199,20 @@ func (w *Workflow) processNextEvidence(ctx context.Context) {
 			results <- out
 		}(kind)
 	}
+	for _, kind := range []string{"snapshot", "video"} {
+		if kind == "snapshot" && task.SnapshotState == "queued" {
+			task.SnapshotState = "working"
+		}
+		if kind == "video" && task.VideoState == "queued" {
+			task.VideoState = "working"
+		}
+	}
 	updates := map[string]any{}
-	for range count {
+	for i := 0; i < count; i++ {
 		out := <-results
-		state := "succeeded"
-		message := ""
+		state, message := "succeeded", ""
 		if out.err != nil {
-			state = "failed"
-			message = out.err.Error()
+			state, message = "failed", out.err.Error()
 		}
 		if out.kind == "snapshot" {
 			task.SnapshotState, task.SnapshotError = state, message
@@ -211,26 +225,35 @@ func (w *Workflow) processNextEvidence(ctx context.Context) {
 				updates["video_path"] = out.path
 			}
 		}
-	}
-	task.State = "succeeded"
-	if task.SnapshotState == "failed" || task.VideoState == "failed" {
-		task.State = "failed"
-	}
-	finished := time.Now()
-	task.FinishedAt = &finished
-	// 关停时仍把结果写入；未写成功的 working 任务由下次启动标记中断。
-	saveCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
-	defer stop()
-	err = w.db.WithContext(saveCtx).Transaction(func(tx *gorm.DB) error {
-		if len(updates) > 0 {
-			if err := tx.Model(&Event{}).Where("id = ?", e.ID).Updates(updates).Error; err != nil {
+		if i == count-1 {
+			task.State = "succeeded"
+			if task.SnapshotState == "failed" || task.VideoState == "failed" {
+				task.State = "failed"
+			}
+			finished := time.Now()
+			task.FinishedAt = &finished
+		}
+		// 每个结果单独提交，抓拍先完成即可通知，无需等待视频结束。
+		saveCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		err = w.db.WithContext(saveCtx).Transaction(func(tx *gorm.DB) error {
+			var locked Event
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, e.ID).Error; err != nil {
 				return err
 			}
+			if len(updates) > 0 {
+				if err := tx.Model(&Event{}).Where("id = ?", e.ID).Updates(updates).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Model(&EvidenceTask{}).Where("event_id = ?", e.ID).Select("state", "snapshot_state", "video_state", "snapshot_error", "video_error", "finished_at").Updates(&task).Error; err != nil {
+				return err
+			}
+			return w.changed(tx, e.ID, "event.evidence.updated")
+		})
+		stop()
+		if err != nil {
+			slog.Error("save event evidence result", "event_id", e.ID, "err", err)
 		}
-		return tx.Model(&EvidenceTask{}).Where("event_id = ?", e.ID).Select("state", "snapshot_state", "video_state", "snapshot_error", "video_error", "finished_at").Updates(&task).Error
-	})
-	if err != nil {
-		slog.Error("save event evidence result", "event_id", e.ID, "err", err)
 	}
 }
 
@@ -246,4 +269,29 @@ func safeExecuteEvidence(execute EvidenceExecutor, ctx context.Context, e *Event
 		err = fmt.Errorf("取证未返回有效文件")
 	}
 	return
+}
+
+// 恢复失败状态及对应通知同事务保存，避免重启后第三方永远停留在working。
+func (w *Workflow) recoverEvidence(ctx context.Context) error {
+	var tasks []EvidenceTask
+	if err := w.db.WithContext(ctx).Where("state = ?", "working").Find(&tasks).Error; err != nil {
+		return err
+	}
+	for _, task := range tasks {
+		if err := w.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var e Event
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&e, task.EventID).Error; err != nil {
+				return err
+			}
+			now := time.Now()
+			r := tx.Model(&EvidenceTask{}).Where("event_id = ? AND state = ?", task.EventID, "working").Updates(map[string]any{"state": "failed", "snapshot_state": gorm.Expr("CASE WHEN snapshot_state = 'working' THEN 'failed' ELSE snapshot_state END"), "video_state": gorm.Expr("CASE WHEN video_state = 'working' THEN 'failed' ELSE video_state END"), "snapshot_error": gorm.Expr("CASE WHEN snapshot_state = 'working' THEN '服务重启，未完成抓拍' ELSE snapshot_error END"), "video_error": gorm.Expr("CASE WHEN video_state = 'working' THEN '服务重启，未完成录像' ELSE video_error END"), "finished_at": now})
+			if r.Error != nil || r.RowsAffected == 0 {
+				return r.Error
+			}
+			return w.changed(tx, task.EventID, "event.evidence.updated")
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

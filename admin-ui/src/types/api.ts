@@ -267,6 +267,10 @@ export interface EventEvidence {
  finished_at?: string
 }
 export interface ApiEvent {
+ historical?: boolean
+ received_at?: string
+ gateway_id?: string
+ gateway_name?: string
  occurrence_count?: number
  status: EventStatus
  revision: number

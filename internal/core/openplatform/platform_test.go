@@ -56,7 +56,7 @@ func fixture(t *testing.T) (*Service, Principal, *testHost) {
 	sqlDB, _ := db.DB()
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { sqlDB.Close() })
-	if e = db.AutoMigrate(&ipc.Device{}, &ipc.Channel{}, &event.Event{}, &recording.Recording{}); e != nil {
+	if e = db.AutoMigrate(&ipc.Device{}, &ipc.Channel{}, &event.Event{}, &event.Policy{}, &event.Action{}, &event.EvidenceTask{}, &recording.Recording{}); e != nil {
 		t.Fatal(e)
 	}
 	if e = Migrate(db); e != nil {

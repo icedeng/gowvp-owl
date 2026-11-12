@@ -63,9 +63,13 @@ func (c Core) ListEvents(ctx context.Context, in *FindEventInput) ([]*Event, int
 	// 在分页前筛选来源，避免仅在当前页过滤导致漏看设备报警。
 	alarmSource := "(LOWER(model) = ? OR LOWER(model) LIKE ? OR LOWER(label) LIKE ? OR label LIKE ?)"
 	if in.Source == "alarm" {
+		query.Where("model <> ?", "AccessGateway")
 		query.Where(alarmSource, "gb28181", "%alarm%", "%alarm%", "%报警%")
 	} else if in.Source == "ai" {
+		query.Where("model <> ?", "AccessGateway")
 		query.Where("NOT "+alarmSource, "gb28181", "%alarm%", "%alarm%", "%报警%")
+	} else if in.Source == "gateway" {
+		query.Where("model = ?", "AccessGateway")
 	}
 
 	if in.StartMs > 0 && in.EndMs > 0 {

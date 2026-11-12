@@ -41,6 +41,8 @@ func (a *API) Register(router gin.IRouter, admin gin.HandlerFunc) {
 	r.PUT("/:id", a.update)
 	r.DELETE("/:id", a.remove)
 	r.POST("/:id/test", a.test)
+	r.POST("/:id/channel-diagnostic", a.channelDiagnostic)
+	r.POST("/:id/release-reports", a.reportRelease)
 	r.PUT("/:id/state", a.state)
 	r.POST("/:id/reconnect", a.reconnect)
 	r.GET("/:id/devices", a.devices)
@@ -488,4 +490,30 @@ func (a *API) template(c *gin.Context) {
 	}
 	v, e := a.service.DeploymentTemplate(c.Request.Context(), c.Param("id"), strings.TrimSpace(c.Query("format")))
 	getResult(c, v, e)
+}
+
+func (a *API) channelDiagnostic(c *gin.Context) {
+	m, ok := a.mutation(c, true)
+	if !ok {
+		return
+	}
+	var in service.ChannelDiagnosticRequest
+	if !decode(c, &in) {
+		return
+	}
+	v, e := a.service.ChannelDiagnostic(c.Request.Context(), m, c.Param("id"), in)
+	respond(c, v, e)
+}
+
+func (a *API) reportRelease(c *gin.Context) {
+	m, ok := a.mutation(c, true)
+	if !ok {
+		return
+	}
+	var in service.ReleaseReport
+	if !decode(c, &in) {
+		return
+	}
+	v, e := a.service.ReportRelease(c.Request.Context(), m, c.Param("id"), in)
+	respond(c, v, e)
 }

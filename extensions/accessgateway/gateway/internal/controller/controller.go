@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -151,7 +152,7 @@ func (c *Controller) Close() error {
 	return e
 }
 func (c *Controller) Capabilities() []string {
-	caps := []string{"sip_udp", "sip_tcp", "rtp_udp", "rtp_tcp_passive", "rtp_tcp_active", "rtcp_udp", "rtcp_tcp_mux", "playback", "rtp_download", "voice_duplex", "broadcast", "cascade"}
+	caps := []string{"gateway_info_v1", "media_inspect_v1", "alarm_spool_v1", "sip_resume_v1", "sip_udp", "sip_tcp", "rtp_udp", "rtp_tcp_passive", "rtp_tcp_active", "rtcp_udp", "rtcp_tcp_mux", "playback", "rtp_download", "voice_duplex", "broadcast", "cascade"}
 	if c.config.Platform.MaxTransferSessions > 0 {
 		caps = append(caps, "raw_tcp_download")
 		if c.config.TaskListen != "" && c.config.TaskPublicBaseURL != nil {
@@ -161,10 +162,20 @@ func (c *Controller) Capabilities() []string {
 	return caps
 }
 
-func (c *Controller) Probe() protocol.Probe {
+func (c *Controller) negotiatedCapabilities(extensions string) []string {
+	offered := strings.Split(extensions, ",")
+	return slices.DeleteFunc(c.Capabilities(), func(capability string) bool {
+		return slices.Contains(protocol.ExtensionCapabilities, capability) && !slices.Contains(offered, capability)
+	})
+}
+func (c *Controller) Probe(extensions ...string) protocol.Probe {
+	requested := ""
+	if len(extensions) > 0 {
+		requested = extensions[0]
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return protocol.Probe{Version: protocol.Version, GatewayID: c.config.GatewayID, PlatformID: c.config.Platform.ID, Generation: c.generation, ConfigRevision: c.revision, Capabilities: c.Capabilities(), ConfigSHA256: c.configHash, OwnerConnected: c.peer != nil && c.ready, CooldownRemainingMS: c.Ports.CooldownMS()}
+	return protocol.Probe{Version: protocol.Version, GatewayID: c.config.GatewayID, PlatformID: c.config.Platform.ID, Generation: c.generation, ConfigRevision: c.revision, Capabilities: c.negotiatedCapabilities(requested), ConfigSHA256: c.configHash, OwnerConnected: c.peer != nil && c.ready, CooldownRemainingMS: c.Ports.CooldownMS()}
 }
 
 // Reserve 在 Upgrade 前预留控制所有权，避免两个并发握手都通过冲突检查。
@@ -181,7 +192,7 @@ func (c *Controller) Reserve() (func(), error) {
 	var once sync.Once
 	return func() { once.Do(func() { c.mu.Lock(); c.reserved = false; c.mu.Unlock() }) }, nil
 }
-func (c *Controller) ServeControl(conn *websocket.Conn, fingerprint string) {
+func (c *Controller) ServeControl(conn *websocket.Conn, fingerprint string, extensions ...string) {
 	defer conn.Close()
 	c.mu.Lock()
 	if c.closed {
@@ -265,9 +276,16 @@ func (c *Controller) ServeControl(conn *websocket.Conn, fingerprint string) {
 			c.owner = lease.Owner{}
 		}
 		c.mu.Unlock()
-		c.Hub.Invalidate()
+		// 保留仍在注册有效期内的已认证 flow，媒体租约仍按旧代次过期。
+		if len(extensions) == 0 || !slices.Contains(strings.Split(extensions[0], ","), "sip_resume_v1") {
+			c.Hub.Invalidate()
+		}
 	}()
-	reply := protocol.HelloAck{SelectedVersion: protocol.Version, Capabilities: c.Capabilities(), Config: effective, ConfigRevision: revision, HeartbeatIntervalMS: effective.HeartbeatIntervalMS, HeartbeatTimeoutMS: effective.HeartbeatTimeoutMS, LeaseTTLMS: effective.LeaseTTLMS, CooldownRemainingMS: c.Ports.CooldownMS()}
+	extensionRequest := ""
+	if len(extensions) > 0 {
+		extensionRequest = extensions[0]
+	}
+	reply := protocol.HelloAck{SelectedVersion: protocol.Version, Capabilities: c.negotiatedCapabilities(extensionRequest), Config: effective, ConfigRevision: revision, HeartbeatIntervalMS: effective.HeartbeatIntervalMS, HeartbeatTimeoutMS: effective.HeartbeatTimeoutMS, LeaseTTLMS: effective.LeaseTTLMS, CooldownRemainingMS: c.Ports.CooldownMS()}
 	if e = peer.Reply(c.ctx, env, reply, nil); e != nil {
 		return
 	}
@@ -338,6 +356,27 @@ func (c *Controller) packet(route protocol.Route, data []byte) error {
 	c.mu.Lock()
 	p, ready := c.peer, c.ready
 	c.mu.Unlock()
+	// 在线报警仍由 A 的持久收件箱接纳，保留业务应答、订阅校验及级联分发。
+	if !ready && c.store.Snapshot().AlarmSpoolEnabled {
+		if a, alarm, err := sip.ParseAlarm(data); alarm {
+			if err != nil {
+				return err
+			}
+			subject, rev, ok := c.Hub.AlarmBinding(route.FlowID)
+			if !ok {
+				return protocol.Failure(protocol.Forbidden, "报警需要有效的设备认证绑定")
+			}
+			a.SubjectID = subject
+			a.BindingRevision = rev
+			a.ID = sip.AlarmID(subject, data)
+			a.ReceivedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			a.Historical = !ready
+			if err := c.store.SaveAlarm(a); err != nil {
+				return err
+			}
+			return c.Hub.Send(route, sip.Accepted(data))
+		}
+	}
 	if p == nil || !ready {
 		return protocol.Failure(protocol.GatewayDisabled, "no control owner")
 	}

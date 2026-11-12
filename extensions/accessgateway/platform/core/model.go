@@ -58,6 +58,9 @@ type Snapshot struct {
 	Stale      bool       `json:"stale"`
 }
 type GatewayView struct {
+	Software           *protocol.GatewayInfo     `json:"software"`
+	AlarmError         *protocol.Error           `json:"alarm_error"`
+	RecoveryDurationMS *int64                    `json:"recovery_duration_ms"`
 	ID                 string                    `json:"id"`
 	Name               string                    `json:"name"`
 	Group              string                    `json:"group"`
@@ -129,23 +132,27 @@ type IngressRoute struct {
 	ConfigRevision  protocol.Decimal
 }
 type RuntimeSnapshot struct {
-	ConnectionState   string
-	HealthState       string
-	ConnectedAt       *time.Time
-	LastSeenAt        *time.Time
-	Error             *protocol.Error
-	Generation        string
-	Epoch             protocol.Decimal
-	OwnerEpoch        protocol.Decimal
-	Capabilities      []string
-	Status            *protocol.StatusSnapshot
-	Metrics           *protocol.MetricsSnapshot
-	ReceivedAt        *time.Time
-	MetricsReceivedAt *time.Time
-	StatusReceivedAt  *time.Time
-	RTTMS             *float64
-	ToABPS            *protocol.Decimal
-	ToDeviceBPS       *protocol.Decimal
+	Software           *protocol.GatewayInfo
+	AlarmError         *protocol.Error
+	RecoveryStartedAt  *time.Time
+	RecoveryDurationMS *int64
+	ConnectionState    string
+	HealthState        string
+	ConnectedAt        *time.Time
+	LastSeenAt         *time.Time
+	Error              *protocol.Error
+	Generation         string
+	Epoch              protocol.Decimal
+	OwnerEpoch         protocol.Decimal
+	Capabilities       []string
+	Status             *protocol.StatusSnapshot
+	Metrics            *protocol.MetricsSnapshot
+	ReceivedAt         *time.Time
+	MetricsReceivedAt  *time.Time
+	StatusReceivedAt   *time.Time
+	RTTMS              *float64
+	ToABPS             *protocol.Decimal
+	ToDeviceBPS        *protocol.Decimal
 }
 type Subject struct {
 	Type            string           `json:"type"`
@@ -153,6 +160,7 @@ type Subject struct {
 	BindingRevision protocol.Decimal `json:"binding_revision"`
 }
 type DeviceIngressView struct {
+	RecoveryState   string           `json:"recovery_state"`
 	DeviceID        string           `json:"device_id"`
 	DeviceCode      string           `json:"device_code"`
 	Name            string           `json:"name"`
@@ -164,4 +172,9 @@ type DeviceIngressView struct {
 	ChannelOnline   int64            `json:"channel_online"`
 	RegisteredAt    *time.Time       `json:"registered_at"`
 	KeepaliveAt     *time.Time       `json:"keepalive_at"`
+}
+
+type PathTimings struct {
+	WSSAttachedAt *time.Time `json:"wss_attached_at"`
+	AForwardedAt  *time.Time `json:"a_forwarded_at"`
 }

@@ -104,6 +104,23 @@ func (c *Controller) execute(ctx context.Context, owner lease.Owner, in transpor
 		return nil, e
 	}
 	switch v := in.Payload.(type) {
+	case *protocol.GatewayInfoRequest:
+		n, b, e := c.store.AlarmStats()
+		return protocol.GatewayInfo{Build: protocol.GatewayBuild, ProtocolVersion: protocol.Version, AlarmPending: n, AlarmBytes: protocol.Number(b), AlarmStoreError: e != nil}, nil
+	case *protocol.MediaInspect:
+		return c.Media.Inspect(owner, v.SessionID)
+	case *protocol.AlarmPull:
+		if !c.store.Snapshot().AlarmSpoolEnabled {
+			if err := c.store.Update(func(d *state.Data) error { d.AlarmSpoolEnabled = true; return nil }); err != nil {
+				return nil, err
+			}
+		}
+		return c.store.PullAlarms(v.After)
+	case *protocol.AlarmAck:
+		n, err := c.store.AckAlarms(v.IDs)
+		return protocol.AlarmAckResult{Removed: n}, err
+	case *protocol.ResumeList:
+		return c.Hub.ResumeFlows(v.After), nil
 	case *protocol.Heartbeat:
 		a, ar := c.Registry.Renew(owner, v.RenewSessionIDs)
 		b, br := c.Registry.Renew(owner, v.RenewTransferIDs)

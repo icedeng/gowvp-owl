@@ -64,7 +64,7 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(s.controller.Probe())
+	_ = json.NewEncoder(w).Encode(s.controller.Probe(r.Header.Get(protocol.ExtensionsHeader)))
 }
 func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 	fingerprint, ok := s.authenticate(w, r)
@@ -81,7 +81,7 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 	if e != nil {
 		return
 	}
-	s.controller.ServeControl(conn, fingerprint)
+	s.controller.ServeControl(conn, fingerprint, r.Header.Get(protocol.ExtensionsHeader))
 }
 func (s *Server) attachment(w http.ResponseWriter, r *http.Request) {
 	fingerprint, ok := s.authenticate(w, r)

@@ -11,12 +11,14 @@ import (
 
 	"github.com/gowvp/owl/extensions/accessgateway/gateway/internal/app"
 	"github.com/gowvp/owl/extensions/accessgateway/gateway/internal/config"
+	"github.com/gowvp/owl/extensions/accessgateway/protocol"
 )
 
 var gatewayVersion = "dev"
 var sourceCommit = "unknown"
 
 func main() {
+	protocol.GatewayBuild = gatewayVersion + "+" + sourceCommit
 	path := flag.String("config", "/etc/owl-gateway/gateway.toml", "网关 TOML 配置路径")
 	version := flag.Bool("version", false, "显示构建版本")
 	flag.Parse()

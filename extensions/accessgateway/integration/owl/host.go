@@ -31,6 +31,8 @@ type Host struct {
 	mu           sync.RWMutex
 	runtime      *runtime.Manager
 	transfers    sync.Map
+	faultSink    func(context.Context, string, string, string, string, bool) error
+	alarmSink    func(context.Context, protocol.AlarmRecord, string, string) error
 	snapshotSink func(context.Context, string, string, string, []byte) error
 }
 
@@ -94,7 +96,7 @@ func (h *Host) RecoverLocalSession(ctx context.Context, session core.RecoverySes
 	return h.media.RecoverLocalSession(ctx, session)
 }
 func (h *Host) SupportedGatewayCapabilities(ctx context.Context, config core.DesiredConfig) ([]string, error) {
-	caps := []string{"sip_udp", "sip_tcp"}
+	caps := []string{"sip_udp", "sip_tcp", "gateway_info_v1", "media_inspect_v1", "alarm_spool_v1", "sip_resume_v1"}
 	if h.media != nil {
 		supported, e := h.media.Capabilities(ctx, config)
 		if e != nil {

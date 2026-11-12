@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/gowvp/owl/internal/core/event"
 	"github.com/gowvp/owl/internal/core/ipc"
 	op "github.com/gowvp/owl/internal/core/openplatform"
 	"gorm.io/gorm"
@@ -32,7 +33,7 @@ func apiFixture(t *testing.T) (*gin.Engine, *op.Service, op.Principal, []byte) {
 	rawDB, _ := db.DB()
 	rawDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { rawDB.Close() })
-	if e = db.AutoMigrate(&ipc.Device{}, &ipc.Channel{}); e != nil {
+	if e = db.AutoMigrate(&ipc.Device{}, &ipc.Channel{}, &event.Event{}, &event.Policy{}, &event.Action{}, &event.EvidenceTask{}); e != nil {
 		t.Fatal(e)
 	}
 	if e = op.Migrate(db); e != nil {

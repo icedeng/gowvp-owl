@@ -104,11 +104,22 @@ func EndpointURL(raw, path string) (string, error) {
 	return u.String(), nil
 }
 func Dial(ctx context.Context, raw, path string, config *tls.Config, headers http.Header) (*websocket.Conn, error) {
+	return DialVia(ctx, raw, path, config, headers, nil)
+}
+func DialVia(ctx context.Context, raw, path string, config *tls.Config, headers http.Header, proxy *ConnectProxy) (*websocket.Conn, error) {
 	target, err := EndpointURL(raw, path)
 	if err != nil {
 		return nil, err
 	}
 	d := websocket.Dialer{TLSClientConfig: config, NetDialContext: PublicDialer, HandshakeTimeout: 10 * time.Second, Subprotocols: []string{protocol.Subprotocol}, EnableCompression: false}
+	if proxy != nil {
+		d.NetDialContext = proxy.DialContext
+	}
+	headers = headers.Clone()
+	if headers == nil {
+		headers = http.Header{}
+	}
+	headers.Set(protocol.ExtensionsHeader, strings.Join(protocol.ExtensionCapabilities, ","))
 	conn, response, err := d.DialContext(ctx, target, headers)
 	if response != nil && response.Body != nil {
 		_ = response.Body.Close()
@@ -123,6 +134,9 @@ func Dial(ctx context.Context, raw, path string, config *tls.Config, headers htt
 	return conn, nil
 }
 func Probe(ctx context.Context, raw string, config *tls.Config) (protocol.Probe, error) {
+	return ProbeVia(ctx, raw, config, nil)
+}
+func ProbeVia(ctx context.Context, raw string, config *tls.Config, proxy *ConnectProxy) (protocol.Probe, error) {
 	var result protocol.Probe
 	target, err := EndpointURL(raw, protocol.ProbePath)
 	if err != nil {
@@ -130,12 +144,16 @@ func Probe(ctx context.Context, raw string, config *tls.Config) (protocol.Probe,
 	}
 	target = strings.Replace(target, "wss://", "https://", 1)
 	transport := &http.Transport{TLSClientConfig: config, DialContext: PublicDialer, ForceAttemptHTTP2: false, TLSHandshakeTimeout: 10 * time.Second}
+	if proxy != nil {
+		transport.DialContext = proxy.DialContext
+	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return result, err
 	}
+	req.Header.Set(protocol.ExtensionsHeader, strings.Join(protocol.ExtensionCapabilities, ","))
 	resp, err := client.Do(req)
 	if err != nil {
 		return result, err

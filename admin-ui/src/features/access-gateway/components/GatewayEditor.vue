@@ -103,6 +103,7 @@ function file(event: Event) { return (event.target as HTMLInputElement).files?.[
           <label class="form-group">文件任务上限<input v-model.number="config.max_transfer_sessions" class="input" type="number" min="0" required /></label>
           <label class="form-group">到 A 带宽上限（bps）<input v-model="config.max_to_a_bps" class="input" inputmode="numeric" pattern="[0-9]+" required /></label>
           <label class="form-group">到设备带宽上限（bps）<input v-model="config.max_to_device_bps" class="input" inputmode="numeric" pattern="[0-9]+" required /></label>
+          <label class="form-group full">受控代理引用<input v-model.trim="config.proxy_ref" class="input" maxlength="64" pattern="[A-Za-z0-9_-]+" placeholder="留空直连，例如 corporate-egress" /><small>由管理员在 A 端预配置代理及允许连接的网关地址，此处仅选择引用。</small></label>
           <label class="form-group full">必要能力<input v-model="caps" class="input" placeholder="多个能力用逗号分隔" /><small>使用协议能力标识，例如 sip_udp、sip_tcp、rtp_udp。</small></label>
           <label class="form-group full">允许的媒体来源 CIDR<textarea v-model="cidrs" class="textarea" rows="2" placeholder="每行一个 CIDR，例如 203.0.113.0/24" /><small>留空时，仅允许已认证 SIP 对端的 IP。</small></label>
           <label v-for="(label, field) in timeouts" :key="field" class="form-group">{{ label }}（ms）<input v-model.number="config[field]" type="number" class="input" min="1" required /></label>

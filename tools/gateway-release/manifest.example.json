@@ -1,0 +1,102 @@
+{
+  "release_id": "gateway-recovery-REPLACE",
+  "api_base": "https://owl.example.com/api/v1",
+  "gateways": [
+    "b-example"
+  ],
+  "schema_backward_compatible": true,
+  "steps": [
+    "b",
+    "a",
+    "zlm"
+  ],
+  "targets": {
+    "a": {
+      "ssh": "root@a.example.com",
+      "port": 22,
+      "key": "/secure/keys/a_ed25519",
+      "directory": "/data/owl",
+      "version": "REPLACE_VERSION",
+      "current_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "candidate_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "artifact": "/secure/artifacts/a-image.tar",
+      "file_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "project": "owl",
+      "service": "owl",
+      "compose_file": "/data/owl/compose.yaml",
+      "healthcheck_required": true,
+      "backup_paths": [
+        "/data/owl/compose.yaml",
+        "/data/owl/.env",
+        "/data/owl/config",
+        "/data/owl/credentials"
+      ],
+      "database_service": "postgres",
+      "database_user": "owl",
+      "database_name": "owl"
+    },
+    "b": {
+      "ssh": "root@b.example.com",
+      "port": 6022,
+      "key": "/secure/keys/b_ed25519",
+      "directory": "/data/owl-gateway",
+      "version": "REPLACE_VERSION",
+      "current_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "candidate_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "artifact": "/secure/artifacts/owl-gateway",
+      "file_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "unit": "owl-gateway.service",
+      "binary_rel": "owl-gateway",
+      "config_path": "/data/owl-gateway/gateway.toml",
+      "state_path": "/data/owl-gateway/state",
+      "backup_paths": [
+        "/data/owl-gateway/gateway.toml",
+        "/data/owl-gateway/state",
+        "/data/owl-gateway/tls"
+      ]
+    },
+    "zlm": {
+      "ssh": "root@a.example.com",
+      "port": 22,
+      "key": "/secure/keys/a_ed25519",
+      "directory": "/data/owl",
+      "version": "REPLACE_ZLM_VERSION",
+      "current_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "candidate_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "artifact": "/secure/artifacts/zlm-image.tar",
+      "file_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+      "project": "owl",
+      "service": "zlm",
+      "compose_file": "/data/owl/compose.yaml",
+      "healthcheck_required": true,
+      "backup_paths": [
+        "/data/owl/compose.yaml",
+        "/data/owl/.env",
+        "/data/owl/config",
+        "/data/owl/credentials"
+      ]
+    }
+  },
+  "compatible_sets": [
+    {
+      "a": "0000000000000000000000000000000000000000000000000000000000000000",
+      "b": "3333333333333333333333333333333333333333333333333333333333333333",
+      "zlm": "5555555555555555555555555555555555555555555555555555555555555555"
+    },
+    {
+      "a": "0000000000000000000000000000000000000000000000000000000000000000",
+      "b": "4444444444444444444444444444444444444444444444444444444444444444",
+      "zlm": "5555555555555555555555555555555555555555555555555555555555555555"
+    },
+    {
+      "a": "1111111111111111111111111111111111111111111111111111111111111111",
+      "b": "4444444444444444444444444444444444444444444444444444444444444444",
+      "zlm": "5555555555555555555555555555555555555555555555555555555555555555"
+    },
+    {
+      "a": "1111111111111111111111111111111111111111111111111111111111111111",
+      "b": "4444444444444444444444444444444444444444444444444444444444444444",
+      "zlm": "6666666666666666666666666666666666666666666666666666666666666666"
+    }
+  ]
+}

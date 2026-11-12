@@ -102,7 +102,7 @@ Content-Type: application/json
 2. 应用 `POST /subscriptions`，body 包括 callback_target_id、可选 channel_codes（兼容 channel_ids）/labels/expires_at，带幂等键；空 channel_ids 表示当前应用全部可见资源，**不扩大应用设备范围**。初始 paused。
 3. 应用 `POST /subscriptions/{id}/signing-keys`，接收一次性独立回调 SK/key_id。与 API SK、主密钥完全独立；轮换后旧 key_id 最多保留 24 小时用于在途校验，新投递立即用最新 key_id。
 4. `PATCH /subscriptions/{id}` body `{revision,status:"active"}` 启用；可暂停，DELETE 取消。应用密钥轮换后使用新 AK PATCH 绑定新凭据再撤销旧 AK。撤销旧 AK 会暂停仍绑定旧组的订阅。
-5. events 与 outbox 同事务；worker 按订阅当前授权筛选，创建 `(subscription,event)` 唯一 delivery。每次投递、重试、人工重投都重新检查应用、签发凭据、订阅、目标、事件设备授权；投递中尽力取消撤权请求。
+5. events 与 outbox 同事务；worker 按订阅当前授权筛选，创建 `(subscription_id,outbox_id)` 唯一 delivery，同一事件的首次报警、取证变化及处理变化分别投递。每次投递、重试、人工重投都重新检查应用、签发凭据、订阅、目标、事件设备授权；投递中尽力取消撤权请求。
 6. 至少一次语义。接收方按 [回调签名规范](./signing-v1.md#回调签名) 验签并持久化防重放，按 delivery_id 幂等落库再返回 2xx。delivery_id 重试保持不变，nonce/timestamp 每次更新。签名无效不能返回成功；重复已处理 delivery 返回 2xx。图片只在具备 event:image 时临时签发 URL，票据不写入 outbox。
 7. 2xx 成功；重定向/其他 4xx（408/429 除外）failed；网络/超时/5xx/408/429 退避重试最多 8 次后 dead。并发全局 8、每应用默认 2；云台停止在独立循环运行。失败/死信允许管理员或应用受控重投并审计。投递记录和已完成 outbox 默认 30 天清理；临时三方抓拍文件 24 小时、通道图片记录永久保留（管理员可删除）、审计 90 天；nonce/票据/幂等记录分批清理。
 
@@ -126,3 +126,30 @@ Content-Type: application/json
 每个回放使用独立UUID、SIP会话键、SSRC和ZLM流。应用/凭据撤销、授权变化、到期、失流或正常关闭服务时失效并回收；异常重启后旧会话不会恢复，按持久化的原媒体节点关闭独立RTP接收端。重启丢失SIP对话后无法补发原BYE，设备侧资源仍依赖设备的超时释放。首期仍仅支持单实例。
 
 本能力新增 `open_playback_sessions` 表。已有开放平台升级须先在维护窗口备份并运行 `go run ./tools/openplatform-migrate`（使用现有库的 `OWL_DATABASE_DSN`），再启动新版；不执行迁移会使开放平台入口返回503。普通无迁移升级通道不能直接用于本版。迁移只增开放表，原设备和录像数据不变；回滚程序后保留新增表，避免删除回放记录影响排查。完整参数、返回字段、状态及错误说明已同步到公开在线开发文档。
+
+
+## 事件取证与处理补齐（接口契约 1.1）
+
+事件列表/详情新增设备与通道名称、完整编码、`status`、处理版本`revision`、`occurrence_count`、`has_image/has_video`及`evidence`状态。列表支持`status`筛选，仍沿用设备授权、编码筛选及游标分页。返回不含原始文件路径、协议正文或内部取证错误。
+
+| 接口（前缀 `/openapi/v1`） | 权限 | 说明 |
+| --- | --- | --- |
+| `POST /events/{id}/image-tickets` | `event:image` | 原图，兼容原接口，body `{}` |
+| `POST /events/{id}/thumbnail-tickets` | `event:image` | 640像素JPEG缩略图，body `{}`，历史图片按需补齐 |
+| `POST /events/{id}/video-tickets` | `event:video` / `event:download` | body `{"purpose":"play"}` 或 `{"purpose":"download"}`；播放支持单段Range，下载返回附件 |
+| `POST /events/{id}/process` | `event:process` | body `{"revision":1,"status":"processing","note":"正在核实"}`；必须带`Idempotency-Key` |
+| `GET /events/{id}/actions` | `event:read` | 最近100条处理记录，倒序 |
+
+媒体票据约5分钟有效，种类和事件绑定，播放票据不能升级为下载票据；失效/撤权/删除后拒绝。视频是报警后平台录制的片段，与设备历史录像、平台常规录像区分。事件尚无对应媒体时返回404，可根据取证状态等待通知后换票。
+
+处理沿用管理端工作流：`pending/processing`可开始处理、完成或忽略；`resolved/ignored`必须先以`pending`重开。完成、忽略、重开说明必填（最多1000字），过期版本返回409。状态、处理审计、追加通知及幂等结果在同一事务提交；相同请求重试返回原`action_id`，失败事务不占用幂等键。应用操作人记录为`open-app:<app_id>`。新权限不会自动授予已有应用，管理员需按需授权。
+
+已启用订阅在原`event.created`首次通知之外，接收`event.evidence.updated`（排队、开始、抓拍和视频分别完成/失败、重启中断）及`event.status.changed`（管理端或应用处理）。抓拍先完成就单独提交并通知，不等待视频。连续报警聚合本身不再推送首次通知。
+
+每个通知有递增`notification_id`，每个订阅的投递有独立`delivery_id`。同一个`event_id`会收到多条通知；接收端按`delivery_id`幂等，不按`event_id`丢弃追加通知，并为每个事件仅应用较大的`notification_id`，因为并发投递/重试不保证到达顺序。图片/缩略图/视频URL只在投递时按当前权限签发，不存入outbox；签名、防重放、超时与最多8次自动重试规则保持不变。历史订阅无需重建即可接收新增通知类型；对正文做严格校验的接收方需同步更新字段契约。
+
+升级前停止旧应用写入并备份数据库，再运行`go run ./tools/openplatform-migrate`（DSN与原库一致）。迁移新增通知类型及语义去重键，将投递唯一约束从`(subscription_id,event_id)`改为`(subscription_id,outbox_id)`，移除旧outbox的事件唯一约束；保留原outbox、投递ID和状态，不批量补推历史事件。先建立新索引再移除旧索引，支持重复执行；MySQL DDL失败不能保证整批回滚，应保持开放平台禁用、核对后重试。新服务发现迁移不完整时拒绝开放平台入口。回退旧版本前须暂停开放平台投递并评估新增通知的旧版兼容性，不能直接把通知结构改回旧唯一索引。
+
+这些可靠性保证从A端接收并入库开始，未包含B到A断线期间报警缓存/补传。
+
+网关历史补报在设备事件列表、详情和通知中提供 `historical`、`received_at`、`evidence_availability`。当 `evidence_availability=historical_unavailable` 时显示“历史补报、现场取证不可用”，仅补报警文字与原时间，不创建抓拍/录像，不能申请不存在的媒体。设备原始时间不可解析时显示B接收时间，原值保留在管理侧元数据。首次通知仍为 `event.created`，处理工作流仍可使用；只有实际取证状态变化才发追加通知。网关自身故障属于管理员事件中心的运维事件，无设备归属，不纳入按设备授权的开放平台事件订阅。

@@ -98,6 +98,52 @@ func Validate(value any) error {
 		return err
 	}
 	switch v := value.(type) {
+	case *AlarmPull:
+		if v.After != "" && !ValidHash(v.After) {
+			return invalid("alarm cursor")
+		}
+	case *AlarmAck:
+		if len(v.IDs) > 64 {
+			return invalid("alarm ack batch")
+		}
+		for _, id := range v.IDs {
+			if !ValidHash(id) {
+				return invalid("alarm id")
+			}
+		}
+	case *AlarmBatch:
+		if v.Next != "" && !ValidHash(v.Next) {
+			return invalid("alarm cursor")
+		}
+		if len(v.Items) > 64 {
+			return invalid("alarm batch")
+		}
+		for _, a := range v.Items {
+			if err := ValidateAlarm(a); err != nil {
+				return err
+			}
+		}
+	case *ResumeList:
+		if v.After != "" && !ValidID(v.After) {
+			return invalid("resume cursor")
+		}
+	case *ResumeFlows:
+		if v.Next != "" && !ValidID(v.Next) {
+			return invalid("resume cursor")
+		}
+		for _, f := range v.Items {
+			if n, e := f.BindingRevision.Int64(); e != nil || n < 1 {
+				return invalid("resume binding")
+			}
+			expires, e1 := time.Parse(time.RFC3339Nano, f.ExpiresAt)
+			seen, e2 := time.Parse(time.RFC3339Nano, f.LastSeenAt)
+			if e1 != nil || e2 != nil || !expires.After(seen) {
+				return invalid("resume times")
+			}
+		}
+		if len(v.Items) > 64 {
+			return invalid("resume batch")
+		}
 	case *Hello:
 		if len(v.SupportedVersions) == 0 || len(v.SupportedVersions) > 16 {
 			return invalid("supported_versions")
@@ -372,6 +418,24 @@ func validateFields(v reflect.Value, name string) error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func ValidateAlarm(a AlarmRecord) error {
+	if !ValidHash(a.ID) || a.SubjectID == "" || len(a.SubjectID) > 64 || len(a.DeviceCode) != 20 || len(a.ChannelCode) > 20 || len(a.Description) > 4096 || len(a.AlarmTime) > 64 || len(a.Priority) > 32 || len(a.Method) > 32 || len(a.Type) > 128 || len(a.Longitude) > 64 || len(a.Latitude) > 64 {
+		return invalid("alarm record")
+	}
+	for _, c := range a.DeviceCode + a.ChannelCode {
+		if c < '0' || c > '9' {
+			return invalid("alarm code")
+		}
+	}
+	if n, e := a.BindingRevision.Int64(); e != nil || n < 1 {
+		return invalid("alarm binding")
+	}
+	if _, e := time.Parse(time.RFC3339Nano, a.ReceivedAt); e != nil {
+		return invalid("alarm receipt time")
 	}
 	return nil
 }

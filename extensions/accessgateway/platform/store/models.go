@@ -93,6 +93,7 @@ type CleanupSteps struct {
 	Committed           bool `json:"committed"`
 }
 type Session struct {
+	Timings *core.PathTimings    `gorm:"serializer:json;type:text"`
 	Traffic *core.SessionTraffic `gorm:"serializer:json;type:text"`
 	Base
 	GatewayID         string       `gorm:"type:varchar(64);not null;uniqueIndex:idx_ags_remote,priority:1;index:idx_ags_gateway_state,priority:1"`
@@ -215,5 +216,18 @@ type MigrationItem struct {
 
 func (MigrationItem) TableName() string { return "access_gateway_migration_items" }
 func Models() []any {
-	return []any{&Gateway{}, &Credential{}, &Binding{}, &PlatformBinding{}, &Session{}, &SSRCReservation{}, &Operation{}, &Metric{}, &Event{}, &Migration{}, &MigrationItem{}}
+	return []any{&Fault{}, &Gateway{}, &Credential{}, &Binding{}, &PlatformBinding{}, &Session{}, &SSRCReservation{}, &Operation{}, &Metric{}, &Event{}, &Migration{}, &MigrationItem{}}
 }
+
+// Fault 持久化采样、防抖与事件中心关联；同一故障只创建一次事件。
+type Fault struct {
+	GatewayID     string    `gorm:"type:varchar(64);primaryKey"`
+	Kind          string    `gorm:"type:varchar(40);primaryKey"`
+	Observed      bool      `gorm:"not null"`
+	ObservedSince time.Time `gorm:"not null"`
+	Active        bool      `gorm:"not null"`
+	IncidentID    string    `gorm:"type:varchar(64);not null"`
+	Transitions   string    `gorm:"type:text;not null"`
+}
+
+func (Fault) TableName() string { return "access_gateway_faults" }

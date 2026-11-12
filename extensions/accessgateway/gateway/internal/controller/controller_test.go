@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,5 +141,21 @@ func TestRestartClosesUncommittedReceiptsWithoutInventingSuccess(t *testing.T) {
 	receipts := original.store.Snapshot().Transfers
 	if len(receipts) != 2 || receipts[0].Committed || receipts[0].State != "closed" || receipts[0].Phase != "failed" || !receipts[1].Committed || receipts[1].Phase != "completed" || receipts[0].CleanupReserve != "" {
 		t.Fatalf("invalid recovered receipts: %+v", receipts)
+	}
+}
+
+func TestExtensionCapabilitiesRemainCompatibleWithOldA(t *testing.T) {
+	c := testController(t)
+	old := c.Probe()
+	for _, cap := range protocol.ExtensionCapabilities {
+		if slices.Contains(old.Capabilities, cap) {
+			t.Fatal("旧 A 收到未知能力", cap)
+		}
+	}
+	current := c.Probe(strings.Join(protocol.ExtensionCapabilities, ","))
+	for _, cap := range protocol.ExtensionCapabilities {
+		if !slices.Contains(current.Capabilities, cap) {
+			t.Fatal("新 A 未协商到扩展能力", cap)
+		}
 	}
 }

@@ -154,9 +154,12 @@ func (s *Service) IssueTicket(p Principal, kind, id string) (string, Ticket, err
 			return "", t, ErrNotFound
 		}
 		t.ChannelID = row.CID
-	case "event":
+	case "event", "event-thumbnail", "event-video", "event-download":
 		var row event.Event
-		if e = s.DB.First(&row, "id = ?", id).Error; e != nil || row.ImagePath == "" {
+		if e = s.DB.First(&row, "id = ?", id).Error; e != nil {
+			return "", t, ErrNotFound
+		}
+		if (kind == "event" || kind == "event-thumbnail") && row.ImagePath == "" || (kind == "event-video" || kind == "event-download") && row.VideoPath == "" {
 			return "", t, ErrNotFound
 		}
 		t.ChannelID = row.CID
@@ -165,7 +168,7 @@ func (s *Service) IssueTicket(p Principal, kind, id string) (string, Ticket, err
 	if t.ChannelID != "" {
 		if ch, err := s.Channel(p.App, t.ChannelID); err != nil {
 			return "", t, err
-		} else if kind == "event" && t.DeviceID != "" && ch.DID != t.DeviceID {
+		} else if isEventMedia(kind) && t.DeviceID != "" && ch.DID != t.DeviceID {
 			return "", t, ErrNotFound
 		}
 		if _, e = s.Channel(p.App, t.ChannelID); e != nil {
@@ -199,6 +202,11 @@ func (s *Service) CheckTicket(raw, kind, id string) (Ticket, Principal, error) {
 	}
 	if p.App.Revision != t.Revision || t.ChannelID == "" && !s.AllowedDevice(p.App, t.DeviceID) {
 		return t, p, ErrAuth
+	}
+	if isEventMedia(kind) {
+		if err := s.checkEventTicket(t); err != nil {
+			return t, p, err
+		}
 	}
 	if kind == "snapshot" {
 		var row Snapshot
@@ -509,6 +517,17 @@ func (s *Service) File(t Ticket) (string, error) {
 			return "", ErrNotFound
 		}
 		return s.Host.EventImagePath(context.Background(), id)
+	case "event-thumbnail", "event-video", "event-download":
+		if e != nil {
+			return "", ErrNotFound
+		}
+		host, ok := s.Host.(interface {
+			EventMediaPath(context.Context, int64, string) (string, error)
+		})
+		if !ok {
+			return "", ErrUnavailable
+		}
+		return host.EventMediaPath(context.Background(), id, t.Kind)
 	case "snapshot":
 		var row Snapshot
 		if err := s.DB.First(&row, "id = ? AND app_id = ? AND expires_at > ?", t.ResourceID, t.AppID, time.Now()).Error; err != nil {

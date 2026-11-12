@@ -7,13 +7,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"encoding/json"
 	"github.com/gin-gonic/gin"
 	agowl "github.com/gowvp/owl/extensions/accessgateway/integration/owl"
 	agplatform "github.com/gowvp/owl/extensions/accessgateway/platform"
 	agcore "github.com/gowvp/owl/extensions/accessgateway/platform/core"
 	"github.com/gowvp/owl/extensions/accessgateway/platform/httpapi"
 	"github.com/gowvp/owl/extensions/accessgateway/platform/migrations"
+	"github.com/gowvp/owl/extensions/accessgateway/protocol"
 	"github.com/gowvp/owl/internal/conf"
+	"github.com/gowvp/owl/internal/core/event"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/ipc/store/ipccache"
 	"github.com/gowvp/owl/internal/core/sms"
@@ -22,6 +25,7 @@ import (
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/web"
 	"gorm.io/gorm"
+	"time"
 )
 
 func NewAccessGatewayHost(db *gorm.DB) *agowl.Host { return agowl.New(db, nil, nil) }
@@ -64,6 +68,40 @@ func NewAccessGatewayModule(ctx context.Context, cfg *conf.Bootstrap, db *gorm.D
 	return m, func() { _ = m.Close() }, nil
 }
 func mountAccessGateway(router gin.IRouter, uc *Usecase) {
+	uc.AccessGatewayHost.SetFaultSink(func(ctx context.Context, id, name, incident, label string, recovered bool) error {
+		key := "gateway-fault:" + incident
+		if !recovered {
+			body, _ := json.Marshal(map[string]string{"gateway_id": id, "gateway_name": name, "description": label})
+			_, err := uc.EventAPI.eventCore.CreateEventAndNotify(ctx, &event.AddEventInput{StartedAt: orm.Now(), EndedAt: orm.Now(), Label: label, Score: 1, Model: "AccessGateway", SourceKey: &key, Zones: string(body), GatewayID: id, GatewayName: name})
+			return err
+		}
+		var e event.Event
+		if err := uc.EventAPI.eventCore.Workflow().DBEventBySource(ctx, key, &e); err != nil {
+			return err
+		}
+		if e.Status == "resolved" || e.Status == "ignored" {
+			return nil
+		}
+		return uc.EventAPI.eventCore.Workflow().Process(ctx, event.ProcessInput{Items: []event.ProcessTarget{{ID: e.ID, Revision: e.Revision}}, Status: "resolved", Note: "系统检测到网关故障已恢复"}, "system:gateway")
+	})
+	uc.AccessGatewayHost.SetAlarmSink(func(ctx context.Context, a protocol.AlarmRecord, did, cid string) error {
+		received, err := time.Parse(time.RFC3339Nano, a.ReceivedAt)
+		if err != nil {
+			return err
+		}
+		alarm := gbs.AlarmEvent{AlarmTime: a.AlarmTime}
+		started := received
+		if t, ok := alarm.ParseTime(); ok {
+			started = t
+		}
+		body, err := json.Marshal(a)
+		if err != nil {
+			return err
+		}
+		key := "gateway-alarm:" + a.ID
+		_, err = uc.EventAPI.eventCore.CreateAlarmAndNotify(ctx, &event.AddEventInput{DID: did, CID: cid, StartedAt: orm.Time{Time: started}, EndedAt: orm.Time{Time: started}, Label: "gb_alarm_" + a.Method, Score: 1, Zones: string(body), Model: "GB28181", SourceKey: &key, Historical: a.Historical, ReceivedAt: &received}, event.AlarmIdentity{DeviceCode: a.DeviceCode, ChannelCode: a.ChannelCode, Method: a.Method, Type: a.Type, Priority: a.Priority, Description: a.Description, EventType: a.EventType, Longitude: a.Longitude, Latitude: a.Latitude})
+		return err
+	})
 	uc.AccessGatewayHost.SetSnapshotSink(uc.GB28181API.persistGatewaySnapshot)
 	uc.AccessGateway.Register(router, func(c *gin.Context) {
 		deny := func() {

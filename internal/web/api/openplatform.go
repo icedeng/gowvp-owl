@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +20,7 @@ import (
 	op "github.com/gowvp/owl/internal/core/openplatform"
 	"github.com/gowvp/owl/internal/core/recording"
 	"github.com/gowvp/owl/internal/web/openapi"
-	"github.com/ixugo/goddd/pkg/system"
+	"github.com/gowvp/owl/pkg/thumbnail"
 	"github.com/ixugo/goddd/pkg/web"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -159,19 +158,25 @@ func (h openHost) EventImagePath(ctx context.Context, id int64) (string, error) 
 	if e := h.uc.DB.WithContext(ctx).First(&row, "id = ?", id).Error; e != nil || row.ImagePath == "" {
 		return "", op.ErrNotFound
 	}
-	root, e := filepath.EvalSymlinks(filepath.Join(system.Getwd(), "configs", "events"))
-	if e != nil {
-		return "", e
-	}
-	target, e := filepath.EvalSymlinks(filepath.Join(root, row.ImagePath))
-	if e != nil {
-		return "", e
-	}
-	rel, e := filepath.Rel(root, target)
-	if e != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+	return resolveEventMediaPath(row.ImagePath)
+}
+func (h openHost) EventMediaPath(ctx context.Context, id int64, kind string) (string, error) {
+	var row event.Event
+	if err := h.uc.DB.WithContext(ctx).First(&row, "id = ?", id).Error; err != nil {
 		return "", op.ErrNotFound
 	}
-	return target, nil
+	relative := row.ImagePath
+	if kind == "event-video" || kind == "event-download" {
+		relative = row.VideoPath
+	}
+	path, err := resolveEventMediaPath(relative)
+	if err != nil {
+		return "", op.ErrNotFound
+	}
+	if kind == "event-thumbnail" {
+		return thumbnail.Ensure(ctx, path)
+	}
+	return path, nil
 }
 func strictOpenAdmin(uc *Usecase) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -231,6 +236,7 @@ func setupOpenPlatform(r *gin.Engine, uc *Usecase) http.Handler {
 				}
 				return row.ID, nil
 			})
+			service.BindEventWorkflow(uc.EventAPI.eventCore.Workflow())
 			service.Start(context.Background())
 		}
 	}

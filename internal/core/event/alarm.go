@@ -53,8 +53,12 @@ func (a AlarmIdentity) keys(in *AddEventInput) (string, string) {
 		digest := sha256.Sum256(body)
 		return hex.EncodeToString(digest[:])
 	}
-	group := hash(values)
-	return group, hash(append(values, in.StartedAt.UTC().Format(time.RFC3339Nano)))
+	occurrence := hash(append(append([]string{}, values...), in.StartedAt.UTC().Format(time.RFC3339Nano)))
+	// 聚合分组隔离历史补报；同一次报警跨重启仍共用 occurrence 幂等键。
+	if in.Historical {
+		values = append(values, "historical")
+	}
+	return hash(values), occurrence
 }
 
 // CreateAlarmAndNotify 对国标报警做语义去重及连续聚合，仅新建事件时通知和取证。
@@ -69,7 +73,7 @@ func (c Core) CreateAlarmAndNotify(ctx context.Context, in *AddEventInput, ident
 	group, occurrence := identity.keys(in)
 	out := Event{DID: in.DID, CID: in.CID, StartedAt: in.StartedAt, EndedAt: in.StartedAt,
 		Label: in.Label, Score: in.Score, Zones: in.Zones, ImagePath: in.ImagePath, Model: in.Model,
-		SourceKey: in.SourceKey, AggregationKey: &group, OccurrenceCount: 1}
+		SourceKey: in.SourceKey, Historical: in.Historical, ReceivedAt: in.ReceivedAt, AggregationKey: &group, OccurrenceCount: 1}
 	created, err := store.CreateAlarm(ctx, &out, occurrence)
 	if err != nil {
 		return nil, err

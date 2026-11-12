@@ -71,7 +71,7 @@ func (m *Manager) Attach(ctx context.Context, pk string, ref protocol.ResourceRe
 		path = protocol.TransferPath
 	}
 	headers := http.Header{"X-Owl-Resource-Id": {ref.ID}, "X-Owl-Attach-Ticket": {r.(*protocol.AttachmentResult).Ticket}}
-	conn, err := m.dial(ctx, row.Desired.URL, path, tlsConfig, headers)
+	conn, err := w.dialGateway(ctx, row.Desired.URL, path, tlsConfig, headers)
 	if err != nil {
 		return nil, err
 	}

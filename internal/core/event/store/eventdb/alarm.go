@@ -14,6 +14,9 @@ import (
 func (d Event) CreateAlarm(ctx context.Context, model *event.Event, occurrence string) (bool, error) {
 	created := false
 	err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := event.CheckAdmission(ctx, tx); err != nil {
+			return err
+		}
 		// 与策略保存和取证使用同一设备行锁，多实例也不会并发建立重复事件。
 		seed := event.Policy{DID: model.DID, ClipSeconds: 15, CooldownSeconds: 60}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&seed).Error; err != nil {

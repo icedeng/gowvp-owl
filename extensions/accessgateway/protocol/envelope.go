@@ -9,6 +9,26 @@ import (
 // payloadType 是消息名、方向分类与 Go 类型的唯一字典。
 func payloadType(name string) (string, any, string) {
 	switch name {
+	case "gateway.info":
+		return "request", &GatewayInfoRequest{}, "gateway.info.result"
+	case "gateway.info.result":
+		return "response", &GatewayInfo{}, ""
+	case "media.inspect":
+		return "request", &MediaInspect{}, "media.inspect.result"
+	case "media.inspect.result":
+		return "response", &MediaInspection{}, ""
+	case "alarm.pull":
+		return "request", &AlarmPull{}, "alarm.pull.result"
+	case "alarm.pull.result":
+		return "response", &AlarmBatch{}, ""
+	case "alarm.ack":
+		return "request", &AlarmAck{}, "alarm.ack.result"
+	case "alarm.ack.result":
+		return "response", &AlarmAckResult{}, ""
+	case "sip.resume.list":
+		return "request", &ResumeList{}, "sip.resume.list.result"
+	case "sip.resume.list.result":
+		return "response", &ResumeFlows{}, ""
 	case "hello":
 		return "request", &Hello{}, "hello.ack"
 	case "hello.ack":

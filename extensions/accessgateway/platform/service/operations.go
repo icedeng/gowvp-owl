@@ -254,7 +254,14 @@ func (s *Service) probeConfig(ctx context.Context, row store.Gateway) (protocol.
 	if e != nil {
 		return protocol.Probe{}, core.Fail(409, "CREDENTIAL_INVALID", "客户端凭据无效")
 	}
-	probe, e := transport.Probe(ctx, row.DesiredConfig.URL, tlsConfig)
+	var proxy *transport.ConnectProxy
+	if row.DesiredConfig.ProxyRef != nil {
+		proxy, e = transport.LoadProxy(transport.ProxyDirectory(s.config.CredentialDir), *row.DesiredConfig.ProxyRef, row.DesiredConfig.URL)
+		if e != nil {
+			return protocol.Probe{}, e
+		}
+	}
+	probe, e := transport.ProbeVia(ctx, row.DesiredConfig.URL, tlsConfig, proxy)
 	if e != nil {
 		return probe, e
 	}

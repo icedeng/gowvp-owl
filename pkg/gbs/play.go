@@ -298,12 +298,15 @@ func (g *GB28181API) playNoLock(ctx context.Context, ch *Channel, in *PlayInput)
 	}
 
 	log.Debug("2. 发送SDP请求", "port", resp.Port)
+	sipStarted := time.Now()
 	if err := g.sipPlayPush2(requestCtx, ch, in, resp.Port, stream); err != nil {
+		traceSIP(ctx, sipStarted, true)
 		log.Debug("2.1. 发送SDP请求失败", "err", err)
 		cleanupErr := g.cleanupFailedMediaStart(key, stream, "start_failed")
 		return errors.Join(operation.ErrorOr(err), cleanupErr)
 	}
 
+	traceSIP(ctx, sipStarted, false)
 	var persistErr error
 	streamPublished := false
 	if !operation.Deliver(func() {

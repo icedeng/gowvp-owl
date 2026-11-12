@@ -192,7 +192,17 @@ func (h *Host) GatewayDevices(ctx context.Context, pk string, snapshot core.Runt
 		if !isOnline {
 			count[1] = 0
 		}
-		result.Items = append(result.Items, core.DeviceIngressView{DeviceID: r.ID, DeviceCode: r.DeviceID, Name: r.Name, IngressType: "gateway", GatewayID: &stable, BindingRevision: protocol.Number(r.BindingRevision), Online: isOnline, ChannelTotal: count[0], ChannelOnline: count[1], RegisteredAt: &r.RegisteredAt, KeepaliveAt: &r.KeepaliveAt})
+		state := "device_offline"
+		if snapshot.ConnectionState != "connected" {
+			state = "gateway_unreachable"
+		} else if snapshot.HealthState != "ready" || snapshot.RecoveryStartedAt != nil && snapshot.RecoveryDurationMS == nil {
+			state = "gateway_recovering"
+		} else if r.LastGeneration == nil || *r.LastGeneration != snapshot.Generation || r.LastConnectionEpoch == nil || protocol.Number(*r.LastConnectionEpoch) != snapshot.Epoch {
+			state = "awaiting_registration"
+		} else if isOnline {
+			state = "online"
+		}
+		result.Items = append(result.Items, core.DeviceIngressView{RecoveryState: state, DeviceID: r.ID, DeviceCode: r.DeviceID, Name: r.Name, IngressType: "gateway", GatewayID: &stable, BindingRevision: protocol.Number(r.BindingRevision), Online: isOnline, ChannelTotal: count[0], ChannelOnline: count[1], RegisteredAt: &r.RegisteredAt, KeepaliveAt: &r.KeepaliveAt})
 	}
 	return result, nil
 }

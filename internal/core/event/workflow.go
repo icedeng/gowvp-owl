@@ -57,11 +57,28 @@ type Workflow struct {
 	db      *gorm.DB
 	mu      sync.RWMutex
 	execute EvidenceExecutor
+	change  func(*gorm.DB, int64, string) error
 }
 
 func NewWorkflow(db *gorm.DB) *Workflow      { return &Workflow{db: db} }
 func (c Core) WithWorkflow(w *Workflow) Core { c.workflow = w; return c }
 func (c Core) Workflow() *Workflow           { return c.workflow }
+
+// SetChangeHandler 的回调必须使用传入事务；失败时业务变更一起回滚。
+func (w *Workflow) SetChangeHandler(fn func(*gorm.DB, int64, string) error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.change = fn
+}
+func (w *Workflow) changed(tx *gorm.DB, id int64, kind string) error {
+	w.mu.RLock()
+	fn := w.change
+	w.mu.RUnlock()
+	if fn != nil {
+		return fn(tx, id, kind)
+	}
+	return nil
+}
 
 func (w *Workflow) Policy(ctx context.Context, did string) (*Policy, error) {
 	p := Policy{DID: did, ClipSeconds: 15, CooldownSeconds: 60}
@@ -139,6 +156,9 @@ func (w *Workflow) Process(ctx context.Context, in ProcessInput, actor string) e
 				return fmt.Errorf("事件状态发生变化，请刷新后重试")
 			}
 			if err := tx.Omit("Event").Create(&Action{EventID: e.ID, FromStatus: previous, ToStatus: in.Status, Note: in.Note, Actor: actor}).Error; err != nil {
+				return err
+			}
+			if err := w.changed(tx, e.ID, "event.status.changed"); err != nil {
 				return err
 			}
 		}
@@ -236,4 +256,9 @@ func (w *Workflow) CheckDevice(ctx context.Context, did string) error {
 		return reason.ErrNotFound.WithMsg("国标设备不存在")
 	}
 	return nil
+}
+
+// DBEventBySource 仅供内部故障闭环按幂等键关联原事件。
+func (w *Workflow) DBEventBySource(ctx context.Context, key string, out *Event) error {
+	return w.db.WithContext(ctx).First(out, "source_key = ?", key).Error
 }

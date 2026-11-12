@@ -4,6 +4,7 @@ package event
 import (
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/web"
+	"time"
 )
 
 type FindEventInput struct {
@@ -12,10 +13,10 @@ type FindEventInput struct {
 	Key      string `form:"key" binding:"max=128"`
 	Status   string `form:"status" binding:"omitempty,oneof=pending processing resolved ignored"`
 	Evidence string `form:"evidence" binding:"omitempty,oneof=image video failed"`
-	DID      string `form:"did"`                                           // 设备 ID
-	CID      string `form:"cid"`                                           // 通道 ID
-	Label    string `form:"label"`                                         // 检测标签
-	Source   string `form:"source" binding:"omitempty,oneof=all alarm ai"` // 事件来源
+	DID      string `form:"did"`                                                   // 设备 ID
+	CID      string `form:"cid"`                                                   // 通道 ID
+	Label    string `form:"label"`                                                 // 检测标签
+	Source   string `form:"source" binding:"omitempty,oneof=all alarm ai gateway"` // 事件来源
 }
 
 type EditEventInput struct {
@@ -23,14 +24,18 @@ type EditEventInput struct {
 }
 
 type AddEventInput struct {
-	DID       string   `json:"-"`          // 设备 ID (API 层填充)
-	CID       string   `json:"-"`          // 通道 ID (API 层填充)
-	StartedAt orm.Time `json:"started_at"` // 事件开始时间 (毫秒时间戳)
-	EndedAt   orm.Time `json:"ended_at"`   // 事件结束时间 (毫秒时间戳)
-	Label     string   `json:"label"`      // 检测标签
-	Score     float32  `json:"score"`      // 置信度
-	Zones     string   `json:"zones"`      // 检测区域 JSON
-	ImagePath string   `json:"image_path"` // 图片相对路径
-	Model     string   `json:"model"`      // 分析模型名称
-	SourceKey *string  `json:"-"`          // 外部事件幂等键（仅内部桥接使用）
+	GatewayID   string     `json:"-"`
+	GatewayName string     `json:"-"`
+	Historical  bool       `json:"-"`
+	ReceivedAt  *time.Time `json:"-"`
+	DID         string     `json:"-"`          // 设备 ID (API 层填充)
+	CID         string     `json:"-"`          // 通道 ID (API 层填充)
+	StartedAt   orm.Time   `json:"started_at"` // 事件开始时间 (毫秒时间戳)
+	EndedAt     orm.Time   `json:"ended_at"`   // 事件结束时间 (毫秒时间戳)
+	Label       string     `json:"label"`      // 检测标签
+	Score       float32    `json:"score"`      // 置信度
+	Zones       string     `json:"zones"`      // 检测区域 JSON
+	ImagePath   string     `json:"image_path"` // 图片相对路径
+	Model       string     `json:"model"`      // 分析模型名称
+	SourceKey   *string    `json:"-"`          // 外部事件幂等键（仅内部桥接使用）
 }

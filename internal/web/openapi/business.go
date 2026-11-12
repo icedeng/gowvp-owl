@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/gowvp/owl/internal/core/event"
 	"github.com/gowvp/owl/internal/core/ipc"
 	op "github.com/gowvp/owl/internal/core/openplatform"
 	"github.com/gowvp/owl/internal/core/recording"
@@ -24,7 +23,7 @@ type cursor struct {
 	Exp   int64
 }
 
-func (a *API) page(c *gin.Context, q *gorm.DB, table string) {
+func (a *API) page(c *gin.Context, q *gorm.DB, table string, decorate ...func([]map[string]any) error) {
 	size, e := strconv.Atoi(c.DefaultQuery("size", "50"))
 	if e != nil || size < 1 || size > 100 {
 		respond(c, nil, op.Fail(400, "INVALID_PAGE", "size须为1至100"))
@@ -59,6 +58,12 @@ func (a *API) page(c *gin.Context, q *gorm.DB, table string) {
 	}
 	if items == nil {
 		items = []map[string]any{}
+	}
+	for _, fn := range decorate {
+		if err := fn(items); err != nil {
+			respond(c, nil, err)
+			return
+		}
 	}
 	respond(c, gin.H{"items": items, "next_cursor": next}, nil)
 }
@@ -152,6 +157,7 @@ func (a *API) business(g *gin.RouterGroup) {
 		respond(c, gin.H{"stop_requested": true}, a.S.StopCommand(c.Request.Context(), principal(c).App.ID, c.Param("command")))
 	})
 	a.subscriptionRoutes(g)
+	a.eventRoutes(g)
 }
 func (a *API) read(c *gin.Context, resource string, detail bool) {
 	p := principal(c)
@@ -174,12 +180,28 @@ func (a *API) read(c *gin.Context, resource string, detail bool) {
 	case "recordings":
 		q = a.S.ChannelQuery(a.S.DB.Model(&recording.Recording{}), p.App, "recordings.cid").Where("delete_flag = ?", false).Select("recordings.id, recordings.cid, recordings.started_at, recordings.ended_at, recordings.duration, recordings.size")
 	case "events":
-		q = a.S.DB.Model(&event.Event{})
-		visibleChannels := a.S.DeviceQuery(a.S.DB.Model(&ipc.Channel{}).Select("id"), p.App, "did")
-		visibleDevices := a.S.DeviceQuery(a.S.DB.Model(&ipc.Device{}).Select("id"), p.App, "id")
-		q = q.Where("(cid IN (?) AND (did = '' OR EXISTS (SELECT 1 FROM channels owner_channel WHERE owner_channel.id = events.cid AND owner_channel.did = events.did))) OR (cid = '' AND did IN (?))", visibleChannels, visibleDevices).Select("events.id, events.did, events.cid, events.started_at, events.ended_at, events.label, events.score, events.model")
+		q = a.S.EventQuery(p.App)
 		if v := c.Query("label"); v != "" {
 			q = q.Where("label = ?", v)
+		}
+	}
+	if resource == "events" {
+		if v := c.Query("status"); v != "" {
+			if !op.Has([]string{"pending", "processing", "resolved", "ignored"}, v) {
+				respond(c, nil, op.Fail(400, "INVALID_STATUS", "事件状态无效"))
+				return
+			}
+			q = q.Where("events.status = ?", v)
+		}
+		if detail {
+			id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+			if err != nil || id <= 0 {
+				respond(c, nil, op.ErrNotFound)
+				return
+			}
+			row, err := a.S.Event(c.Request.Context(), p.App, id)
+			respond(c, row, err)
+			return
 		}
 	}
 	if detail {
@@ -209,10 +231,14 @@ func (a *API) read(c *gin.Context, resource string, detail bool) {
 			return
 		}
 	}
+	if resource == "events" {
+		a.page(c, q, resource, func(rows []map[string]any) error { return a.S.FillEventMaps(c.Request.Context(), p.App, rows) })
+		return
+	}
 	a.page(c, q, resource)
 }
 func (a *API) ticket(c *gin.Context, kind, id string) {
-	if kind != "recording" && kind != "download" {
+	if kind != "recording" && kind != "download" && kind != "event-video" && kind != "event-download" {
 		if e := Body(c, &struct{}{}); e != nil {
 			respond(c, nil, e)
 			return

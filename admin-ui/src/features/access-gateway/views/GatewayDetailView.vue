@@ -8,24 +8,30 @@ import GatewayState from '../components/GatewayState.vue'
 import ConfigSummary from '../components/ConfigSummary.vue'
 import { stateLabel, metricLabels, probeLabels } from '../presentation'
 import { gatewayAPI } from '../api'
-import type { Device, Event, Gateway, MetricSeries, Migration, Operation, Page, Session } from '../types'
+import type { Device, Event, Gateway, MetricSeries, Operation, Page, Session } from '../types'
 import GatewayAccessInfo from '../components/GatewayAccessInfo.vue'
-import { errorMessage } from '../../../services/api'
+import { api, errorMessage } from '../../../services/api'
 import ModalDialog from '../../../components/ModalDialog.vue'
 import TrendChart from '../../../components/TrendChart.vue'
 import GatewayEditor from '../components/GatewayEditor.vue'
 import OperationStatus from '../components/OperationStatus.vue'
+import type { ApiChannel } from '../../../types/api'
 import { useVisiblePoll } from '../composables/useVisiblePoll'
 const route = useRoute(); const router = useRouter(); const id = computed(() => String(route.params.id))
 const loading = ref(false)
 const gateway = shallowRef<Gateway>(); const error = ref(''); const tabError = ref(''); const busy = ref(false); const editor = ref(false)
 const tabs = [
-  ['metrics', '运行监控'], ['overview', '国标接入'], ['devices', '设备与迁移'], ['platforms', '级联平台'],
+  ['metrics', '运行监控'], ['overview', '国标接入'], ['devices', '接入设备'], ['platforms', '级联平台'],
   ['sessions', '媒体与任务'], ['config', '配置与能力'], ['deployment', '部署与运维'], ['events', '事件审计'],
 ]
 const tab = computed({ get: () => tabs.some(t => t[0] === route.query.tab) ? String(route.query.tab) : 'metrics', set: value => { void router.replace({ query: { ...route.query, tab: value === 'metrics' ? undefined : value } }) } }); const page = ref(1); const hours = ref(1); const metric = ref('media_sessions')
 const devices = shallowRef<Page<Device>>(); const sessions = shallowRef<Page<Session>>(); const events = shallowRef<Page<Event>>(); const platforms = shallowRef<Page<Record<string, unknown>>>(); const metrics = shallowRef<MetricSeries>()
-const operationID = ref(''); const selected = shallowRef(new Map<string, Device>()); const targets = shallowRef<Gateway[]>([]); const target = ref(''); const migration = shallowRef<Migration>(); const migrationID = ref(''); const migrationPage = ref(1)
+const operationID = ref('')
+const diagnosticDevice = ref(''); const diagnosticChannel = ref(''); const channelPage = ref(1)
+const diagnosticDevices = shallowRef<Page<Device>>(); const diagnosticChannels = shallowRef<ApiChannel[]>([]); const channelTotal = ref(0)
+const channelDiagnosis = shallowRef<Awaited<ReturnType<typeof gatewayAPI.diagnoseChannel>>>()
+const diagnosing = ref(false); const diagnosticError = ref(''); const releases = shallowRef<Page<Event>>()
+
 const filters = reactive({ q: '', state: '', online: '', purpose: '', subject_id: '', type: '', start: '', end: '' })
 function queryFilters() {
  const keys = tab.value === 'devices' ? ['q','online'] : tab.value === 'platforms' ? ['q','state'] : tab.value === 'sessions' ? ['purpose','state','subject_id'] : tab.value === 'events' ? ['type','subject_id','start','end'] : []
@@ -40,7 +46,7 @@ const currentPage = computed(() => tab.value === 'devices' ? devices.value : tab
 const chartValues = computed(() => metrics.value?.points.map(p => p.valid && p.values ? p.values[metric.value] ?? null : null) || [])
 const chartLabels = computed(() => metrics.value?.points.map(p => new Date(p.sampled_at).toLocaleTimeString()) || [])
 const diagnosis = shallowRef<Awaited<ReturnType<typeof gatewayAPI.probe>>>()
-const capabilities: Record<string, string> = { sip_udp: 'SIP / UDP', sip_tcp: 'SIP / TCP', rtp_udp: 'RTP / UDP', rtp_tcp_passive: 'RTP / TCP 被动', rtp_tcp_active: 'RTP / TCP 主动', rtcp_udp: 'RTCP / UDP', rtcp_tcp_mux: 'RTCP / TCP 复用', playback: '录像回放', rtp_download: 'RTP 录像下载', raw_tcp_download: 'TCP 文件下载', voice_duplex: '双向对讲', broadcast: '语音广播', cascade: '平台级联', https_transfer: 'HTTPS 文件传输' }
+const capabilities: Record<string, string> = { gateway_info_v1: '网关版本与补传状态', media_inspect_v1: '媒体首包诊断', alarm_spool_v1: '报警持久化补传', sip_resume_v1: '已认证设备续接', sip_udp: 'SIP / UDP', sip_tcp: 'SIP / TCP', rtp_udp: 'RTP / UDP', rtp_tcp_passive: 'RTP / TCP 被动', rtp_tcp_active: 'RTP / TCP 主动', rtcp_udp: 'RTCP / UDP', rtcp_tcp_mux: 'RTCP / TCP 复用', playback: '录像回放', rtp_download: 'RTP 录像下载', raw_tcp_download: 'TCP 文件下载', voice_duplex: '双向对讲', broadcast: '语音广播', cascade: '平台级联', https_transfer: 'HTTPS 文件传输' }
 function metricNumber(key: string) {
   const value = gateway.value?.metrics[key]
   return value == null || value === '' || !Number.isFinite(Number(value)) || Number(value) < 0 ? undefined : Number(value)
@@ -57,6 +63,8 @@ function bitrateText(key: string) {
   return `${(value / 1000 ** index).toLocaleString('zh-CN', { maximumFractionDigits: 2 })} ${['bps', 'Kbps', 'Mbps', 'Gbps'][index]}`
 }
 const runtimeFacts = computed(() => [
+  ['最近连接恢复耗时', gateway.value?.recovery_duration_ms == null ? '尚无记录' : `${gateway.value.recovery_duration_ms} ms`],
+  ['待补传报警', gateway.value?.software ? `${gateway.value.software.alarm_pending} 条` : '等待 B 端上报'],
   ['到 A 端带宽', bitrateText('to_a_bps')], ['到设备带宽', bitrateText('to_device_bps')],
   ['往返时延', numberText('rtt_ms', ' ms', 1)], ['媒体端口占用', `${numberText('port_used')} / ${numberText('port_total')}`],
   ['CPU 使用率', numberText('cpu_percent', '%', 2)], ['内存占用', bytesText('rss_bytes')],
@@ -79,15 +87,15 @@ const { refresh } = useVisiblePoll(async signal => {
     if (tab.value === 'platforms') platforms.value = await gatewayAPI.platforms(id.value, page.value, signal, queryFilters())
     if (tab.value === 'events') events.value = await gatewayAPI.events(id.value, page.value, signal, queryFilters())
     if (tab.value === 'metrics') metrics.value = await gatewayAPI.metrics(id.value, hours.value, signal)
-    if (migrationID.value) migration.value = await gatewayAPI.migration(migrationID.value, migrationPage.value, signal)
+    if (tab.value === 'deployment') releases.value = await gatewayAPI.events(id.value, 1, signal, { type: 'release_report' })
     tabError.value = ''
   } catch (e) { if (!signal.aborted) tabError.value = errorMessage(e) }
   finally { if (!signal.aborted) loading.value = false }
 })
-watch([tab, hours], () => { page.value = 1; void refresh() }); watch([page, migrationPage], () => void refresh())
-watch(id, () => { gateway.value = undefined; devices.value = undefined; sessions.value = undefined; events.value = undefined; platforms.value = undefined; metrics.value = undefined; diagnosis.value = undefined; template.value = ''; warnings.value = []; selected.value = new Map(); operationID.value = ''; migrationID.value = ''; void refresh() })
+watch([tab, hours], () => { page.value = 1; void refresh() }); watch(page, () => void refresh())
+watch(id, () => { gateway.value = undefined; devices.value = undefined; sessions.value = undefined; events.value = undefined; platforms.value = undefined; metrics.value = undefined; diagnosis.value = undefined; template.value = ''; warnings.value = []; operationID.value = ''; diagnosticDevice.value = ''; diagnosticChannel.value = ''; channelDiagnosis.value = undefined; releases.value = undefined; void refresh() })
 function saved(result: Gateway | Operation) { if ('operation_id' in result) operationID.value = result.operation_id; void refresh() }
-function select(d: Device) { const next = new Map(selected.value); if (next.has(d.device_id)) next.delete(d.device_id); else next.set(d.device_id, d); selected.value = next }
+
 async function run(fn: () => Promise<void>) { if (busy.value) return; busy.value = true; error.value = ''; try { await fn() } catch (e) { error.value = errorMessage(e) } finally { busy.value = false } }
 async function confirmAction() { await run(async () => {
   const g = gateway.value; const a = action.value; if (!g || !a) return
@@ -101,23 +109,31 @@ async function confirmAction() { await run(async () => {
 }) }
 async function diagnose() { await run(async () => { diagnosis.value = await gatewayAPI.probe(id.value, createRequestKey()); tab.value = 'deployment' }) }
 async function deployTemplate() { await run(async () => { const result = await gatewayAPI.template(id.value, templateFormat.value); template.value = result.content; warnings.value = result.warnings }) }
-async function loadTargets() { await run(async () => {
- const items: Gateway[] = []
- for (let index = 1; ; index++) {
-   const result = await gatewayAPI.list({ admin_state: 'enabled', health_state: 'ready', size: 100, page: index })
-   items.push(...result.items.filter(g => g.id !== id.value))
-   if (index * result.size >= result.total) break
- }
- targets.value = items
-}) }
-async function migrate() { await run(async () => {
-  if (!selected.value.size) throw new Error('请先选择迁移设备')
-  const list = [...selected.value.values()]; const op = await gatewayAPI.migrate(id.value, target.value || null, list, keyFor({ kind: 'migration', target: target.value, list }))
-  const result = op.result as { migration_id?: string } | null
-  if (result?.migration_id) migrationID.value = result.migration_id
-  operationID.value = op.operation_id; selected.value = new Map(); await refresh()
-}) }
-async function cancelMigration() { await run(async () => { if (!migration.value) return; await gatewayAPI.cancelMigration(migration.value, '管理员取消迁移', keyFor({ kind: 'cancel-migration', id: migration.value.id, revision: migration.value.revision })); await refresh() }) }
+let diagnosticDeviceSequence = 0
+let diagnosticChannelSequence = 0
+async function loadDiagnosticDevices(page = 1) {
+  const request = ++diagnosticDeviceSequence; const gatewayID = id.value
+  diagnosticError.value = ''
+  try { const result = await gatewayAPI.devices(gatewayID, page); if (request === diagnosticDeviceSequence && gatewayID === id.value) diagnosticDevices.value = result }
+  catch (e) { if (request === diagnosticDeviceSequence && gatewayID === id.value) diagnosticError.value = errorMessage(e) }
+}
+async function loadDiagnosticChannels(page = 1) {
+  const request = ++diagnosticChannelSequence; const deviceID = diagnosticDevice.value; const gatewayID = id.value
+  channelPage.value = page; diagnosticChannel.value = ''; diagnosticChannels.value = []; channelTotal.value = 0; diagnosticError.value = ''
+  if (!diagnosticDevice.value) return
+  try { const response = await api.channels({ did: deviceID, page, size: 30 }); if (request !== diagnosticChannelSequence || deviceID !== diagnosticDevice.value || gatewayID !== id.value) return; diagnosticChannels.value = response.data.items || []; channelTotal.value = response.data.total || 0 } catch (e) { if (request === diagnosticChannelSequence && gatewayID === id.value) diagnosticError.value = errorMessage(e) }
+}
+watch(diagnosticDevice, () => { channelDiagnosis.value = undefined; void loadDiagnosticChannels() })
+watch([tab, id], ([value]) => { diagnosticDevices.value = undefined; if (value === 'deployment') void loadDiagnosticDevices() }, { immediate: true })
+async function diagnoseChannel() {
+  if (!gateway.value || !diagnosticChannel.value || diagnosing.value) return
+  const gatewayID = id.value; const channelID = diagnosticChannel.value
+  diagnosing.value = true; diagnosticError.value = ''; channelDiagnosis.value = undefined
+  try { const result = await gatewayAPI.diagnoseChannel(gateway.value, channelID, createRequestKey()); if (gatewayID === id.value && channelID === diagnosticChannel.value) channelDiagnosis.value = result }
+  catch (e) { if (gatewayID === id.value) diagnosticError.value = errorMessage(e) }
+  finally { diagnosing.value = false }
+}
+
 function openAction(kind: string, label: string, session?: string) { error.value = ''; action.value = { kind, label, session }; reason.value = ''; force.value = false }
 </script>
 <template>
@@ -132,6 +148,7 @@ function openAction(kind: string, label: string, session?: string) { error.value
 <p v-if="error" role="alert" class="warning-box">{{ error }}</p><OperationStatus v-if="operationID" :key="operationID" :gateway-id="id" :operation-id="operationID" @finished="refresh" />
 <div v-if="!gateway" class="card empty-state">{{ error ? '网关信息暂不可用，请重试。' : '正在读取网关信息…' }}</div>
 <template v-if="gateway">
+  <p v-if="gateway.alarm_error || gateway.software?.alarm_store_error" class="warning-box" role="alert">{{ gateway.alarm_error?.message || 'B 端报警存储异常，请检查磁盘及权限' }}。<RouterLink :to="{ name: 'events', query: { source: 'gateway' } }">查看网关故障事件</RouterLink></p>
   <p v-if="gateway.last_error" class="warning-box">{{ gateway.last_error.code }}：{{ gateway.last_error.message }}</p>
   <div class="gateway-workspace"><nav class="channel-detail-tabs gateway-tabs" aria-label="网关详情"><button v-for="t in tabs" :key="t[0]" :aria-current="tab === t[0] ? 'page' : undefined" :class="{ active: tab === t[0] }" @click="tab = t[0]!">{{ t[1] }}</button></nav>
   <p v-if="tabError" role="alert" class="warning-box">{{ tabError }}。{{ currentPage || metrics ? '下方保留上次成功读取的数据。' : '请刷新重试。' }}</p>
@@ -162,7 +179,7 @@ function openAction(kind: string, label: string, session?: string) { error.value
     <div class="disclosure-content"><ul v-if="gateway.capabilities.length" class="capability-list"><li v-for="capability in gateway.capabilities" :key="capability" :title="capability">{{ capabilities[capability] || capability }}</li></ul><p v-else class="section-note">尚未确认协议能力，请检查网关连接。</p></div>
   </details>
 </section>
-<section v-else-if="tab === 'devices'" class="content"><div class="actions"><span>已选 {{ selected.size }} 个设备</span><button class="btn" :disabled="busy" @click="loadTargets">加载可用目标</button><select v-model="target" class="select" aria-label="迁移目标"><option value="">迁移为直连</option><option v-for="g in targets" :key="g.id" :value="g.id">{{ g.name }}（{{ g.id }}）</option></select><button class="btn" :disabled="busy || !selected.size" @click="migrate">创建一小时迁移计划</button></div><p>迁移先排空原有业务，目标需重新认证注册。设备地址须由运维同步调整。</p><table><thead><tr><th>选择</th><th>设备</th><th>状态</th><th>绑定版本</th><th>通道 / 在线</th></tr></thead><tbody><tr v-for="d in devices?.items" :key="d.device_id"><td><input type="checkbox" :checked="selected.has(d.device_id)" :aria-label="`选择 ${d.name || d.device_code}`" @change="select(d)" /></td><td><RouterLink :to="{name:'device-detail',params:{id:d.device_id}}">{{ d.name || d.device_code }}</RouterLink><small>{{ d.device_code }}</small></td><td><GatewayState :value="d.online ? 'online' : 'offline'" /></td><td>{{ d.binding_revision }}</td><td>{{ d.channel_total }} / {{ d.channel_online }}</td></tr><tr v-if="devices && !devices.items.length"><td colspan="5" class="empty-state">暂无符合条件的记录，请调整筛选条件。</td></tr></tbody></table><div v-if="migration"><h3>迁移计划 {{ migration.id }} · {{ stateLabel(migration.state) }}</h3><p>{{ migration.counts }}</p><ul><li v-for="item in migration.items" :key="item.subject_id">{{ item.subject_id }} · {{ stateLabel(item.state) }} · {{ item.error?.message }}</li></ul><div class="actions"><button class="btn" :disabled="migrationPage === 1" @click="migrationPage--">上一批</button><button class="btn" :disabled="migration.items.length < 20" @click="migrationPage++">下一批</button><button class="btn" :disabled="busy || ['completed','expired','cancelled'].includes(migration.state)" @click="cancelMigration">取消剩余迁移</button></div></div><label>查看已有迁移计划<input v-model="migrationID" class="input" placeholder="计划 ID" @change="refresh" /></label></section>
+<section v-else-if="tab === 'devices'" class="content"><p class="section-note">同一网关重新连接后按设备编码续接原有数据；认证失效时等待设备重新注册。</p><table><thead><tr><th>设备</th><th>接入状态</th><th>绑定版本</th><th>通道 / 在线</th></tr></thead><tbody><tr v-for="d in devices?.items" :key="d.device_id"><td><RouterLink :to="{name:'device-detail',params:{id:d.device_id}}">{{ d.name || d.device_code }}</RouterLink><small>{{ d.device_code }}</small></td><td><GatewayState :value="d.recovery_state || (d.online ? 'online' : 'offline')" /></td><td>{{ d.binding_revision }}</td><td>{{ d.channel_total }} / {{ d.channel_online }}</td></tr><tr v-if="devices && !devices.items.length"><td colspan="4" class="empty-state">暂无符合条件的设备。</td></tr></tbody></table></section>
 <section v-else-if="tab === 'platforms'" class="content"><h2 class="section-title">平台绑定</h2><table><thead><tr><th>平台 ID</th><th>角色</th><th>入口</th><th>版本</th></tr></thead><tbody><tr v-for="p in platforms?.items" :key="String(p.id)"><td>{{ p.subject_id }}</td><td>{{ p.role }}</td><td>{{ stateLabel(p.ingress_type) }} · {{ stateLabel(p.state) }}</td><td>{{ p.binding_revision }}</td></tr><tr v-if="platforms && !platforms.items.length"><td colspan="4" class="empty-state">暂无符合条件的记录，请调整筛选条件。</td></tr></tbody></table></section>
 <section v-else-if="tab === 'sessions'" class="content"><header class="section-head"><h2 class="section-title">媒体与任务会话</h2><span class="section-note">媒体回流：{{ gateway.counts?.active_sources ? '已有活动源，播放状态以媒体节点为准' : gateway.counts ? '暂无活动源，尚未验证播放' : '资源统计不可用' }}</span></header><table><thead><tr><th>对象 / 会话</th><th>用途 / 状态</th><th>传输 / 方向</th><th>端点</th><th>流量采样（设备侧）</th><th>清理状态</th><th>操作</th></tr></thead><tbody><tr v-for="s in sessions?.items" :key="s.id"><td>{{ s.subject_id }}<small>{{ s.id }}</small></td><td>{{ stateLabel(s.purpose) }} / {{ stateLabel(s.state) }}<small>{{ s.error?.message }}</small></td><td>{{ s.wire_mode }} → {{ s.local_mode }}<small>{{ s.direction }} · SSRC {{ s.ssrc ?? '—' }}</small></td><td><details><summary>查看</summary><pre>公网 {{ s.public_endpoint }}
 本地 {{ s.local_endpoint }}
@@ -176,7 +193,15 @@ function openAction(kind: string, label: string, session?: string) { error.value
   </section>
 </section>
 <section v-else-if="tab === 'events'" class="content"><table><thead><tr><th>时间</th><th>类型</th><th>操作人</th><th>对象 / 原因</th><th>跟踪 ID</th></tr></thead><tbody><tr v-for="e in events?.items" :key="e.event_id"><td>{{ new Date(e.occurred_at).toLocaleString() }}</td><td>{{ e.type }}</td><td>{{ e.actor }}</td><td>{{ e.subject_id }} {{ e.reason }}<details><summary>详情</summary><pre>{{ e.details }}</pre></details></td><td>{{ e.trace_id }}</td></tr><tr v-if="events && !events.items.length"><td colspan="5" class="empty-state">暂无符合条件的记录，请调整筛选条件。</td></tr></tbody></table></section>
-<section v-else-if="tab === 'deployment'" class="content"><section v-if="diagnosis" class="diagnosis-section"><header class="section-head"><h2 class="section-title">连接诊断结果</h2><GatewayState :value="diagnosis.can_enable ? 'passed' : 'failed'" /></header><ul class="diagnosis-list"><li v-for="check in diagnosis.checks" :key="check.name"><strong>{{ probeLabels[check.name] || check.name }}</strong><GatewayState :value="check.status" /><span>{{ check.msg || '—' }}</span></li></ul></section><h2 class="section-title">当前凭据</h2><template v-if="gateway.certificate"><p>状态 {{ stateLabel(gateway.certificate.status) }} · 有效期 {{ new Date(gateway.certificate.not_before).toLocaleString() }} 至 {{ new Date(gateway.certificate.not_after).toLocaleString() }}</p><p class="fingerprint">指纹 {{ gateway.certificate.fingerprint }}</p><p class="fingerprint">CA {{ gateway.certificate.ca_fingerprint }}</p></template><p v-else>尚未导入凭据。</p><div class="actions"><select v-model="templateFormat" class="select" aria-label="部署模板"><option value="toml">TOML</option><option value="compose">Compose</option></select><button class="btn" :disabled="busy" @click="deployTemplate">生成部署模板</button></div><p v-for="w in warnings" :key="w">{{ w }}</p><pre v-if="template">{{ template }}</pre>
+<section v-else-if="tab === 'deployment'" class="content">
+<header class="section-head"><h2 class="section-title">网关软件</h2><span class="section-note">{{ gateway.software ? `B ${gateway.software.build} · 协议 v${gateway.software.protocol_version}` : 'B 版本暂不可用，旧版本需升级后上报' }}</span></header>
+<section class="diagnosis-section"><h2 class="section-title">通道链路诊断</h2><p class="section-note">选择本网关下的通道，临时点播以检查各阶段。诊断结束自动回收会话，最多等待约 60 秒；正在观看的直播不受影响。</p>
+<div class="actions"><select v-model="diagnosticDevice" class="select" aria-label="诊断设备" :disabled="diagnosing"><option value="">请选择设备</option><option v-for="d in diagnosticDevices?.items" :key="d.device_id" :value="d.device_id">{{ d.name || d.device_code }}</option></select><button class="btn" :disabled="diagnosing || !diagnosticDevices || diagnosticDevices.page === 1" @click="loadDiagnosticDevices((diagnosticDevices?.page || 1) - 1)">上一批设备</button><button class="btn" :disabled="diagnosing || !diagnosticDevices || diagnosticDevices.page * diagnosticDevices.size >= diagnosticDevices.total" @click="loadDiagnosticDevices((diagnosticDevices?.page || 1) + 1)">下一批设备</button></div>
+<div class="actions diagnostic-channel"><select v-model="diagnosticChannel" class="select" aria-label="诊断通道" :disabled="diagnosing || !diagnosticDevice"><option value="">请选择通道</option><option v-for="ch in diagnosticChannels" :key="ch.id" :value="ch.id">{{ ch.name || ch.channel_id }}</option></select><button class="btn" :disabled="diagnosing || channelPage === 1" @click="loadDiagnosticChannels(channelPage - 1)">上一批通道</button><button class="btn" :disabled="diagnosing || channelPage * 30 >= channelTotal" @click="loadDiagnosticChannels(channelPage + 1)">下一批通道</button><button class="btn btn-primary" :disabled="busy || diagnosing || !diagnosticChannel || gateway.admin_state !== 'enabled'" @click="diagnoseChannel">{{ diagnosing ? '正在诊断…' : '开始链路诊断' }}</button></div>
+<p v-if="diagnosing" role="status" class="section-note">正在检查设备响应与媒体回流，请稍候。</p><p v-if="diagnosticError" class="warning-box" role="alert">{{ diagnosticError }}</p>
+<div v-if="channelDiagnosis" aria-live="polite"><p>{{ channelDiagnosis.media_path_verified ? '已验证通道可播放' : '链路未全部验证，请查看各阶段结果' }}</p><ul class="diagnosis-list"><li v-for="check in channelDiagnosis.checks" :key="check.name"><strong>{{ probeLabels[check.name] || check.name }}</strong><GatewayState :value="check.status" /><span>{{ check.msg }}<small>{{ check.status === 'skipped' ? '未观测到耗时' : `${check.duration_ms} ms` }} · {{ check.reason }}</small></span></li></ul></div></section>
+<section v-if="diagnosis" class="diagnosis-section"><header class="section-head"><h2 class="section-title">连接诊断结果</h2><GatewayState :value="diagnosis.can_enable ? 'passed' : 'failed'" /></header><ul class="diagnosis-list"><li v-for="check in diagnosis.checks" :key="check.name"><strong>{{ probeLabels[check.name] || check.name }}</strong><GatewayState :value="check.status" /><span>{{ check.msg || '—' }}</span></li></ul></section><h2 class="section-title">当前凭据</h2><template v-if="gateway.certificate"><p>状态 {{ stateLabel(gateway.certificate.status) }} · 有效期 {{ new Date(gateway.certificate.not_before).toLocaleString() }} 至 {{ new Date(gateway.certificate.not_after).toLocaleString() }}</p><p class="fingerprint">指纹 {{ gateway.certificate.fingerprint }}</p><p class="fingerprint">CA {{ gateway.certificate.ca_fingerprint }}</p></template><p v-else>尚未导入凭据。</p><div class="actions"><select v-model="templateFormat" class="select" aria-label="部署模板"><option value="toml">TOML</option><option value="compose">Compose</option></select><button class="btn" :disabled="busy" @click="deployTemplate">生成部署模板</button></div><p v-for="w in warnings" :key="w">{{ w }}</p><pre v-if="template">{{ template }}</pre>
+  <section class="tab-section"><header class="section-head"><h2 class="section-title">最近发布结果</h2><button class="btn" @click="filters.type = 'release_report'; tab = 'events'">查看全部</button></header><p v-if="!releases?.items.length" class="section-note">暂无统一发布工具回写的报告。</p><ul class="release-list"><li v-for="e in releases?.items" :key="e.event_id"><span>{{ formatDate(e.occurred_at) }} · {{ e.actor }}</span><pre>{{ e.details }}</pre></li></ul><p class="section-note">升级由统一发布工具执行预检、排空、备份与回退；报告显示实际执行结果。</p></section>
   <section class="tab-section gateway-operations"><div><h2 class="section-title">网关运维</h2><p class="section-note">排空后停止接入新业务，待已有业务结束。停用与重连可能中断当前业务。</p></div><div class="actions"><button class="btn" :disabled="busy || gateway.admin_state === 'enabled'" @click="openAction('enabled','启用网关')">启用</button><button class="btn" :disabled="busy || gateway.admin_state !== 'enabled'" @click="openAction('draining','排空网关')">排空</button><button class="btn" :disabled="busy || gateway.admin_state === 'disabled'" @click="openAction('disabled','停用网关')">停用</button><button class="btn" :disabled="busy" @click="openAction('reconnect','重连网关')">重连</button><button class="btn btn-danger" :disabled="busy" @click="openAction('delete','删除网关')">删除</button></div></section>
 </section>
 <p class="empty-state" v-if="['devices','platforms','sessions','events'].includes(tab) && !currentPage && !tabError">正在加载…</p><footer v-if="['devices','platforms','sessions','events'].includes(tab)" class="actions gateway-detail-pagination"><span>共 {{ currentPage?.total ?? '—' }} 条</span><button class="btn" :disabled="loading || page === 1" @click="page--">上一页</button><span>第 {{ page }} / {{ Math.max(1, Math.ceil((currentPage?.total || 0) / (currentPage?.size || 20))) }} 页</span><button class="btn" :disabled="loading || !currentPage || page * currentPage.size >= currentPage.total" @click="page++">下一页</button></footer>
@@ -185,6 +210,7 @@ function openAction(kind: string, label: string, session?: string) { error.value
 <ModalDialog :open="!!action" :title="action?.label || ''" @close="!busy && (action = undefined)"><div class="gateway-confirm"><p v-if="error" class="warning-box" role="alert">{{ error }}</p><p v-if="action?.kind === 'delete'">删除前必须解除全部绑定并完成资源清理，网关 ID 会保留审计记录。</p><p v-else>此操作可能影响当前公网业务，请确认后执行。</p><label v-if="['reconnect','stop'].includes(action?.kind || '')">原因<textarea v-model="reason" class="textarea" rows="3" maxlength="500" /></label><label v-if="action?.kind === 'disabled'"><input v-model="force" type="checkbox" /> 强制停止全部活动业务</label></div><template #footer><button class="btn" :disabled="busy" @click="action = undefined">取消</button><button class="btn" :class="action?.kind === 'delete' ? 'btn-danger' : 'btn-primary'" :disabled="busy || (['reconnect','stop'].includes(action?.kind || '') && !reason.trim())" @click="confirmAction">{{ busy ? '处理中…' : '确认执行' }}</button></template></ModalDialog>
 </main></template>
 <style scoped>
+.diagnostic-channel { margin-top: 10px; }.release-list { padding: 0; list-style: none; font-size: 12px; }.diagnosis-section .select { max-width: 100%; }
 .gateway-detail { min-width: 0; }.gateway-detail > .device-command-header { margin-bottom: 14px; }.gateway-detail .device-command-meta { font-size: 12px; }.gateway-detail .device-command-identity { gap: 10px; min-width: 0; }.gateway-detail .device-command-identity > div { min-width: 0; }.gateway-detail .device-command-title h1 { font-size: 18px; overflow-wrap: anywhere; }.gateway-description { margin: 6px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .gateway-workspace { min-width: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }.gateway-tabs { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; }.gateway-filters { border-width: 0 0 1px; border-radius: 0; margin: 0; }.gateway-workspace .content { margin: 0; }.access-content { overflow-x: visible; }.tab-section { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }.content .section-head h2 { margin: 0; }.section-note { color: var(--muted); font-size: 12px; line-height: 1.7; }.content p.section-note { font-size: 12px; margin: 8px 0 0; }.runtime-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }.runtime-facts > div { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; }.runtime-facts dt { color: var(--muted); }.runtime-facts dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }.capability-list { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0; padding: 0; list-style: none; font-size: 13px; }.capability-list li { line-height: 1.8; overflow-wrap: anywhere; }.gateway-operations { display: flex; justify-content: space-between; gap: 14px; align-items: center; }.gateway-operations h2 { margin-bottom: 4px; }.diagnosis-section { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }.diagnosis-list { margin: 0; padding: 0; list-style: none; }.diagnosis-list li { display: grid; grid-template-columns: 130px 90px minmax(0, 1fr); gap: 10px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; }.diagnosis-list strong { font-weight: 500; }.diagnosis-list li > span:last-child { color: var(--muted); overflow-wrap: anywhere; }
 .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }.gateway-header-status { display: flex; flex: 1 0 100%; width: 100%; align-items: center; flex-wrap: wrap; gap: 8px 22px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12px; }.gateway-header-status > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }.gateway-header-status > div > span:first-child { color: var(--muted); }.gateway-header-status strong { font-weight: 500; }.gateway-header-status small { display: inline; }.state-updated { margin-left: auto; color: var(--muted); font-size: 12px; }.state-updated small { display: block; margin-top: 4px; }

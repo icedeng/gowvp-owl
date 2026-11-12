@@ -1,4 +1,4 @@
-// openplatform-migrate 仅新增开放平台表或重新加密密钥，不启动设备及回调服务。
+// openplatform-migrate 迁移开放平台表结构或重新加密密钥，不启动设备及回调服务。
 package main
 
 import (

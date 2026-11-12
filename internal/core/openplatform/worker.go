@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,29 +27,36 @@ import (
 // InstallOutbox 必须在事件提交前注册；与原事件写入共享事务，失败时一并回滚。
 func (s *Service) InstallOutbox() error {
 	return s.DB.Callback().Create().After("gorm:after_create").Before("gorm:commit_or_rollback_transaction").Register("owl:openplatform_outbox", func(tx *gorm.DB) {
-		if tx.Error != nil || tx.Statement.Schema == nil || tx.Statement.Schema.Table != "events" || tx.RowsAffected == 0 {
+		if tx.Error != nil || tx.Statement.Schema == nil || tx.RowsAffected == 0 {
 			return
 		}
-		var events []*event.Event
-		switch v := tx.Statement.Dest.(type) {
-		case *event.Event:
-			events = []*event.Event{v}
-		case *[]*event.Event:
-			events = *v
-		case *[]event.Event:
-			for i := range *v {
-				events = append(events, &(*v)[i])
-			}
-		default:
-			tx.AddError(fmt.Errorf("不支持的开放事件写入类型"))
-			return
-		}
-		for _, ev := range events {
-			payload := marshal(map[string]any{"id": ev.ID, "did": ev.DID, "cid": ev.CID, "started_at": ev.StartedAt, "ended_at": ev.EndedAt, "label": ev.Label, "score": ev.Score, "model": ev.Model})
-			box := Outbox{EventID: ev.ID, DeviceID: ev.DID, ChannelID: ev.CID, Label: ev.Label, Payload: payload}
-			if e := tx.Session(&gorm.Session{NewDB: true}).Clauses(clause.OnConflict{DoNothing: true}).Create(&box).Error; e != nil {
-				tx.AddError(e)
+		switch tx.Statement.Schema.Table {
+		case "events":
+			var events []*event.Event
+			switch v := tx.Statement.Dest.(type) {
+			case *event.Event:
+				events = []*event.Event{v}
+			case *[]*event.Event:
+				events = *v
+			case *[]event.Event:
+				for i := range *v {
+					events = append(events, &(*v)[i])
+				}
+			default:
+				tx.AddError(fmt.Errorf("不支持的开放事件写入类型"))
 				return
+			}
+			for _, ev := range events {
+				if err := s.EnqueueEventChange(tx.Session(&gorm.Session{NewDB: true}), ev.ID, "event.created"); err != nil {
+					tx.AddError(err)
+					return
+				}
+			}
+		case "event_evidence_tasks":
+			if task, ok := tx.Statement.Dest.(*event.EvidenceTask); ok {
+				if err := s.EnqueueEventChange(tx.Session(&gorm.Session{NewDB: true}), task.EventID, "event.evidence.updated"); err != nil {
+					tx.AddError(err)
+				}
 			}
 		}
 	})
@@ -103,7 +111,7 @@ func (s *Service) fanout() {
 				if e != nil || s.Scope(p.App, "event:subscribe") != nil || !visible {
 					continue
 				}
-				d := Delivery{ID: uuid.NewString(), AppID: sub.AppID, SubscriptionID: sub.ID, EventID: box.EventID, OutboxID: box.ID, State: "queued", NextRetryAt: time.Now()}
+				d := Delivery{ID: uuid.NewString(), AppID: sub.AppID, SubscriptionID: sub.ID, EventID: box.EventID, OutboxID: box.ID, EventType: notificationType(box), State: "queued", NextRetryAt: time.Now()}
 				if e = tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&d).Error; e != nil {
 					return e
 				}
@@ -189,19 +197,20 @@ func (s *Service) deliver(ctx context.Context, d Delivery) {
 		return
 	}
 	var payload map[string]any
-	if json.Unmarshal([]byte(box.Payload), &payload) != nil {
+	decoder := json.NewDecoder(strings.NewReader(box.Payload))
+	decoder.UseNumber()
+	if decoder.Decode(&payload) != nil {
 		cancel("事件快照不可用")
 		return
 	}
+	payload["event_type"] = notificationType(box)
+	payload["notification_id"] = box.ID
 	payload["event_id"] = box.EventID
 	payload["delivery_id"] = d.ID
-	if Has(p.App.Scopes, "event:image") {
-		raw, t, err := s.IssueTicket(p, "event", strconv.FormatInt(box.EventID, 10))
-		if err == nil {
-			payload["image_url"] = s.Config.PublicBaseURL + "/openmedia/v1/event/" + strconv.FormatInt(box.EventID, 10) + "/content?ticket=" + raw
-			payload["image_expires_at"] = t.ExpiresAt
-		}
+	if err := s.AddEventMedia(p, box.EventID, payload); err != nil {
+		return
 	}
+
 	body, _ := json.Marshal(payload)
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	nonce := Random(24)
@@ -477,4 +486,11 @@ func (s *Service) run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func notificationType(box Outbox) string {
+	if box.EventType == "" {
+		return "event.created"
+	}
+	return box.EventType
 }

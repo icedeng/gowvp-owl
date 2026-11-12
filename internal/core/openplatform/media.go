@@ -18,10 +18,10 @@ func (s *Service) AcquireConnection(p Principal, kind string) (func(), error) {
 	if kind == "device-record-query" {
 		limit = 2
 	}
-	if kind == "download" || kind == "recording" {
+	if kind == "download" || kind == "recording" || kind == "event-download" || kind == "event-video" {
 		limit = p.App.DownloadLimit
 	}
-	if kind == "event" || kind == "snapshot" || kind == "capture" {
+	if kind == "event" || kind == "event-thumbnail" || kind == "snapshot" || kind == "capture" {
 		limit = 10
 	}
 	if s.connections[key] >= limit {
@@ -70,6 +70,11 @@ func (s *Service) CheckActive(t Ticket) error {
 	} else if !s.AllowedDevice(p.App, t.DeviceID) {
 		return ErrAuth
 	}
+	if isEventMedia(t.Kind) {
+		if err := s.checkEventTicket(t); err != nil {
+			return err
+		}
+	}
 	if t.Kind == "snapshot" {
 		var row Snapshot
 		if s.DB.First(&row, "id = ? AND state IN ? AND expires_at > ?", t.ResourceID, []string{"queued", "running", "succeeded"}, time.Now()).Error != nil {
@@ -101,5 +106,5 @@ func (s *Service) CheckActive(t Ticket) error {
 }
 
 func mediaScope(kind string) string {
-	return map[string]string{"live": "live:play", "playback": "recording:play", "recording": "recording:play", "download": "recording:download", "event": "event:image", "snapshot": "snapshot:capture", "capture": "snapshot:capture"}[kind]
+	return map[string]string{"live": "live:play", "playback": "recording:play", "recording": "recording:play", "download": "recording:download", "event": "event:image", "event-thumbnail": "event:image", "event-video": "event:video", "event-download": "event:download", "snapshot": "snapshot:capture", "capture": "snapshot:capture"}[kind]
 }

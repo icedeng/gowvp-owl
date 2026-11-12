@@ -291,6 +291,7 @@ func (h *Host) PrepareReceive(ctx context.Context, in gbs.ExternalReceiveSpec) (
 	if err != nil {
 		return b, err
 	}
+	b.row.Timings = &core.PathTimings{WSSAttachedAt: timePointer(time.Now().UTC())}
 	b.row.State = "attached"
 	now := time.Now().UTC()
 	expires := now.Add(time.Duration(b.lease.LeaseTTLMS) * time.Millisecond)
@@ -369,6 +370,10 @@ func (b *mediaBridge) receivedPacket() {
 			if !owned {
 				return
 			}
+			if b.row.Timings == nil {
+				b.row.Timings = &core.PathTimings{}
+			}
+			b.row.Timings.AForwardedAt = timePointer(time.Now().UTC())
 			b.row.State = "receiving"
 			_ = b.host.host.repo.SaveSession(ctx, &b.row, owner, epoch)
 		}()
@@ -703,3 +708,5 @@ func (m *mediaHost) Capabilities(ctx context.Context, c core.DesiredConfig) ([]s
 }
 
 var _ gbs.ExternalMediaPort = (*Host)(nil)
+
+func timePointer(t time.Time) *time.Time { return &t }

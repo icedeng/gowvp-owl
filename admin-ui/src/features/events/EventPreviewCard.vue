@@ -3,7 +3,7 @@ import { Camera, Clapperboard, ImageOff, Play, ShieldAlert } from '@lucide/vue'
 import type { ApiEvent } from '../../types/api'
 import { api } from '../../services/api'
 import { formatDate } from '../../utils/format'
-import { alarmSummary, channelLabel, deviceLabel, eventTitle, evidenceLabel, isAlarm, statusLabels } from './format'
+import { alarmSummary, channelLabel, deviceLabel, eventTitle, evidenceLabel, isAlarm, sourceLabel, statusLabels } from './format'
 
 defineProps<{ item: ApiEvent; selected: boolean; imageFailed: boolean }>()
 const emit = defineEmits<{ open: [id: number]; select: [id: number, checked: boolean]; imageError: [id: number] }>()
@@ -16,10 +16,10 @@ const emit = defineEmits<{ open: [id: number]; select: [id: number, checked: boo
         <img v-if="item.image_path && !imageFailed" :src="api.eventThumbnail(item.image_path)" :alt="`${deviceLabel(item)} · ${eventTitle(item)}现场抓拍`" loading="lazy" @error="emit('imageError', item.id)">
         <span v-else class="event-preview-empty">
           <ImageOff v-if="imageFailed" aria-hidden="true" />
-          <ShieldAlert v-else-if="isAlarm(item)" aria-hidden="true" />
+          <ShieldAlert v-else-if="isAlarm(item) || item.model === 'AccessGateway'" aria-hidden="true" />
           <Camera v-else aria-hidden="true" />
           <strong>{{ eventTitle(item) }}</strong>
-          <span>{{ imageFailed ? '抓拍图片不可用' : item.evidence?.snapshot_state === 'queued' || item.evidence?.snapshot_state === 'working' ? `抓拍${evidenceLabel(item.evidence.snapshot_state)}` : '本事件未保存抓拍' }}</span>
+          <span>{{ item.historical ? '历史补报、现场取证不可用' : item.model === 'AccessGateway' ? '网关运行故障' : imageFailed ? '抓拍图片不可用' : item.evidence?.snapshot_state === 'queued' || item.evidence?.snapshot_state === 'working' ? `抓拍${evidenceLabel(item.evidence.snapshot_state)}` : '本事件未保存抓拍' }}</span>
         </span>
       </button>
       <label class="event-preview-select">
@@ -33,7 +33,9 @@ const emit = defineEmits<{ open: [id: number]; select: [id: number, checked: boo
             <div><dt>通道编码</dt><dd>{{ item.channel_code || item.cid || '设备级事件' }}</dd></div>
           </dl>
           <p :title="alarmSummary(item)">事件 #{{ item.id }} · {{ alarmSummary(item) || item.model || '未提供附加报警信息' }}</p>
-          <div class="event-preview-evidence">
+          <p v-if="item.historical">历史补报、现场取证不可用</p>
+          <p v-else-if="item.model === 'AccessGateway'">网关运行事件</p>
+          <div v-else class="event-preview-evidence">
             <span :class="{ 'is-failed': imageFailed || item.evidence?.snapshot_state === 'failed' }"><Camera aria-hidden="true" />{{ item.image_path ? imageFailed ? '图片不可用' : '有抓拍' : `抓拍${evidenceLabel(item.evidence?.snapshot_state)}` }}</span>
             <span :class="{ 'is-failed': item.evidence?.video_state === 'failed' }"><Clapperboard aria-hidden="true" />{{ item.video_path ? '有视频片段' : `视频${evidenceLabel(item.evidence?.video_state)}` }}</span>
           </div>
@@ -45,18 +47,20 @@ const emit = defineEmits<{ open: [id: number]; select: [id: number, checked: boo
       </div>
     </div>
     <div class="event-preview-body">
-      <div class="event-preview-heading"><button type="button" @click="emit('open', item.id)">{{ eventTitle(item) }}</button><span>{{ isAlarm(item) ? '设备报警' : 'AI 检测' }}</span></div>
+      <div class="event-preview-heading"><button type="button" @click="emit('open', item.id)">{{ eventTitle(item) }}</button><span>{{ sourceLabel(item) }}</span></div>
       <div class="event-preview-identity">
         <strong class="event-preview-device" :title="deviceLabel(item)">{{ deviceLabel(item) }}</strong>
         <span class="event-preview-separator" aria-hidden="true">/</span>
         <span class="event-preview-channel" :title="channelLabel(item)">{{ channelLabel(item) }}</span>
       </div>
+      <small v-if="item.historical" class="historical-notice">历史补报、现场取证不可用</small>
       <time class="event-preview-timestamp">{{ formatDate(item.started_at || item.created_at) }}<template v-if="(item.occurrence_count || 1) > 1"> · 连续 {{ item.occurrence_count }} 次</template></time>
     </div>
   </article>
 </template>
 
 <style scoped>
+.historical-notice { color: var(--amber); font-size: 12px; }
 .event-preview-card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); transition: border-color .16s ease; }
 .event-preview-card:hover, .event-preview-card:focus-within, .event-preview-card.is-selected { border-color: var(--blue); }
 .event-preview-frame { position: relative; width: 100%; min-width: 0; max-width: 100%; aspect-ratio: 16 / 10; min-height: 224px; background: var(--panel-2); }

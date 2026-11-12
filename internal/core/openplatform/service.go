@@ -48,7 +48,31 @@ type Service struct {
 func Models() []any {
 	return []any{&App{}, &Resource{}, &Credential{}, &Nonce{}, &Idempotency{}, &Audit{}, &Session{}, &Playback{}, &Ticket{}, &Snapshot{}, &Command{}, &Lease{}, &CallbackTarget{}, &Subscription{}, &Outbox{}, &Delivery{}}
 }
-func Migrate(db *gorm.DB) error { return db.AutoMigrate(Models()...) }
+
+// Migrate 先建立新去重索引，再移除旧唯一约束；历史投递和ID保持不变，可重复执行。
+func Migrate(db *gorm.DB) error {
+	if err := db.AutoMigrate(Models()...); err != nil {
+		return err
+	}
+	for _, index := range []struct {
+		model any
+		name  string
+	}{
+		{&Outbox{}, "idx_open_event_outbox_event_id"}, {&Delivery{}, "idx_open_delivery_event"},
+	} {
+		if db.Migrator().HasIndex(index.model, index.name) {
+			if err := db.Migrator().DropIndex(index.model, index.name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, model := range []any{&Outbox{}, &Delivery{}} {
+		if err := db.Model(model).Where("event_type = ? OR event_type IS NULL", "").Update("event_type", "event.created").Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func New(db *gorm.DB, cfg Config, host Host) (*Service, error) {
 	s := &Service{DB: db, Config: cfg, Host: host, buckets: map[string]bucket{}}
 	if !cfg.Enabled {
@@ -61,6 +85,9 @@ func New(db *gorm.DB, cfg Config, host Host) (*Service, error) {
 		if !db.Migrator().HasTable(m) {
 			return nil, fmt.Errorf("开放平台数据库尚未迁移")
 		}
+	}
+	if !db.Migrator().HasIndex(&Delivery{}, "idx_open_delivery_notification") || !db.Migrator().HasIndex(&Outbox{}, "idx_open_event_outbox_notification_key") || !db.Migrator().HasColumn(&Outbox{}, "notification_key") || !db.Migrator().HasColumn(&Outbox{}, "event_type") || !db.Migrator().HasColumn(&Delivery{}, "event_type") || db.Migrator().HasIndex(&Delivery{}, "idx_open_delivery_event") || db.Migrator().HasIndex(&Outbox{}, "idx_open_event_outbox_event_id") {
+		return nil, fmt.Errorf("开放平台事件通知结构尚未迁移，请运行开放平台迁移工具")
 	}
 	if err := os.MkdirAll(filepath.Join(cfg.DataDir, "open-snapshots"), 0700); err != nil {
 		return nil, err

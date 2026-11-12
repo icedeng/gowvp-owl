@@ -3,6 +3,8 @@ package owl
 import (
 	"context"
 	"errors"
+	"gorm.io/gorm/clause"
+	"time"
 
 	"github.com/gowvp/owl/extensions/accessgateway/platform/core"
 	"github.com/gowvp/owl/extensions/accessgateway/platform/store"
@@ -31,6 +33,20 @@ func (h *Host) CommitRegistration(ctx context.Context, tx *gorm.DB, device *ipc.
 		owner, epoch, owned = manager.OwnerLease(route.GatewayPK)
 		if !owned || protocol.Number(epoch) != route.OwnerEpoch {
 			return &ipc.IngressDenied{Message: "网关所有权已失效"}
+		}
+	}
+	if external, ok := ingress.Connection.(*connection); ok && external.resume != nil {
+		f := external.resume
+		// 与普通注册、报警接纳统一使用设备→网关→绑定的锁顺序。
+		if _, err := store.LockGateway(tx, route.GatewayPK); err != nil {
+			return err
+		}
+		var binding store.Binding
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("subject_id = ?", device.ID).First(&binding).Error; err != nil {
+			return err
+		}
+		if err := validateResumeBinding(device.ID, route, binding, *f, time.Now()); err != nil {
+			return &ipc.IngressDenied{Message: "续接凭据过期或不属于当前设备入口"}
 		}
 	}
 	claim := store.RegistrationClaim{SubjectID: device.ID, Route: route, OwnerID: owner, NewDevice: ingress.NewDevice, Unregister: ingress.Expires == 0, ExpiresSeconds: ingress.Expires}

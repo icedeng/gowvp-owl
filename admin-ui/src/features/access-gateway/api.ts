@@ -1,5 +1,5 @@
 import { http } from '../../services/http'
-import type { DesiredConfig, Gateway, Page, Operation, Device, Session, Event, MetricSeries, Migration, Subject } from './types'
+import type { DesiredConfig, Gateway, Page, Operation, Device, Session, Event, MetricSeries, Migration, Subject, ChannelDiagnostic } from './types'
 const root = '/access_gateways'
 const path = (id: string) => `${root}/${encodeURIComponent(id)}`
 export function mutationHeaders(key: string, revision?: string) {
@@ -14,6 +14,7 @@ export const gatewayAPI = {
   action: async (g: Gateway, action: string, body: unknown, key: string) => (await http.request<Operation>({ url: `${path(g.id)}/${action}`, method: action === 'state' ? 'PUT' : 'POST', data: body, headers: mutationHeaders(key, ['state', 'certificate-rotation'].includes(action) ? g.revision : undefined) })).data,
   remove: async (g: Gateway, key: string) => (await http.delete(path(g.id), { headers: mutationHeaders(key, g.revision) })).data,
   credential: async (id: string, form: FormData, key: string) => (await http.post<{ id: string }>(`${path(id)}/credentials`, form, { headers: mutationHeaders(key) })).data,
+  diagnoseChannel: async (g: Gateway, channel_id: string, key: string) => (await http.post<ChannelDiagnostic>(`${path(g.id)}/channel-diagnostic`, { channel_id }, { headers: mutationHeaders(key, g.revision), timeout: 65000 })).data,
   probe: async (id: string, key: string) => (await http.post<{ can_enable: boolean; checks: { name: string; status: string; msg: string }[] }>(`${path(id)}/test`, {}, { headers: mutationHeaders(key) })).data,
   operation: async (id: string, op: string, signal?: AbortSignal) => (await http.get<Operation>(`${path(id)}/operations/${encodeURIComponent(op)}`, { signal })).data,
   devices: async (id: string, page: number, signal?: AbortSignal, filters: Record<string, string> = {}) => (await http.get<Page<Device>>(`${path(id)}/devices`, { params: { page, size: 20, ...filters }, signal })).data,

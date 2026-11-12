@@ -3,15 +3,17 @@ export const connectionStates = { disconnected: '未连接', connecting: '连接
 export const healthStates = { unknown: '待确认', ready: '就绪', degraded: '性能降级', unavailable: '不可用' }
 const labels: Record<string, string> = {
   ...adminStates, ...connectionStates, ...healthStates,
+  gateway_info_v1: '网关版本与补传状态', media_inspect_v1: '媒体首包诊断', alarm_spool_v1: '报警持久化补传', sip_resume_v1: '已认证设备续接',
   staged: '待使用', active: '使用中', retired: '已退役', revoked: '已撤销', expired: '已过期', valid: '有效', expiring: '即将到期',
   accepted: '已受理', running: '执行中', waiting_external: '等待外部响应', succeeded: '已完成', failed: '失败', cancelled: '已取消',
   pending: '待处理', completed: '已完成', committed: '已提交', drained: '已排空',
   pass: '通过', passed: '通过', ok: '通过', success: '通过', fail: '未通过', skipped: '未执行', warning: '需关注',
+  gateway_unreachable: '网关未连接', gateway_recovering: '网关恢复中', awaiting_registration: '等待设备注册', device_offline: '设备离线', channel_diagnostic: '通道链路诊断', release_report: '版本发布报告',
   online: '在线', offline: '离线', live: '实时预览', playback: '录像回放', download: '录像下载', talk: '语音对讲', broadcast: '语音广播',
   opening: '建立中', receiving: '接收中', closing: '关闭中', closed: '已关闭', direct: '直连', gateway: '网关', waiting_register: '等待重新注册',
   state: '状态变更', reconnect: '重新连接', config_update: '配置更新', certificate_rotation: '证书轮换', migration: '入口迁移', migration_cancel: '取消迁移',
 }
-export const probeLabels: Record<string, string> = { config: '配置校验', identity: '身份校验', dns: '域名解析', tcp: 'TCP 连接', tls: 'TLS 安全连接', mtls: '双向证书认证', protocol: '协议兼容性', capabilities: '协议能力' }
+export const probeLabels: Record<string, string> = { sip: '设备点播响应', b_first_packet: 'B 端媒体首包', wss: '媒体 WSS', a_zlm: 'A 转发至 ZLM', play_ready: '可播放状态', cleanup: '资源回收', config: '配置校验', identity: '身份校验', dns: '域名解析', tcp: 'TCP 连接', tls: 'TLS 安全连接', mtls: '双向证书认证', protocol: '协议兼容性', capabilities: '协议能力' }
 export const configLabels: Record<string, string> = {
   name: '网关名称', group: '分组', description: '备注', url: 'WSS 地址', platform_id: 'A 平台身份', credential_id: '凭据 ID', default_media_server_id: '默认媒体节点', proxy_ref: '代理引用',
   required_capabilities: '必要能力', public_ip: '公网通告 IP', sip_port: 'SIP 端口', media_port_start: '媒体起始端口', media_port_end: '媒体结束端口',

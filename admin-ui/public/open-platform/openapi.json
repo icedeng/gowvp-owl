@@ -594,7 +594,10 @@
                 "event:image",
                 "snapshot:capture",
                 "ptz:control",
-                "event:subscribe"
+                "event:subscribe",
+                "event:video",
+                "event:download",
+                "event:process"
               ],
               "type": "string"
             },
@@ -783,7 +786,10 @@
                 "event:image",
                 "snapshot:capture",
                 "ptz:control",
-                "event:subscribe"
+                "event:subscribe",
+                "event:video",
+                "event:download",
+                "event:process"
               ],
               "type": "string"
             },
@@ -965,7 +971,10 @@
                 "event:image",
                 "snapshot:capture",
                 "ptz:control",
-                "event:subscribe"
+                "event:subscribe",
+                "event:video",
+                "event:download",
+                "event:process"
               ],
               "type": "string"
             },
@@ -1142,7 +1151,10 @@
                 "event:image",
                 "snapshot:capture",
                 "ptz:control",
-                "event:subscribe"
+                "event:subscribe",
+                "event:video",
+                "event:download",
+                "event:process"
               ],
               "type": "string"
             },
@@ -1215,6 +1227,14 @@
       "CallbackEvent": {
         "additionalProperties": false,
         "properties": {
+          "channel_code": {
+            "description": "通道完整编码。",
+            "type": "string"
+          },
+          "channel_name": {
+            "description": "通道名称。",
+            "type": "string"
+          },
           "cid": {
             "description": "所属通道的内部 ID。",
             "example": "channel-001",
@@ -1223,6 +1243,14 @@
           "delivery_id": {
             "description": "对应 X-Owl-Delivery-ID。多次重试保持相同，接收端按此幂等。",
             "example": "delivery-001",
+            "type": "string"
+          },
+          "device_code": {
+            "description": "设备完整编码。",
+            "type": "string"
+          },
+          "device_name": {
+            "description": "设备名称。",
             "type": "string"
           },
           "did": {
@@ -1242,8 +1270,40 @@
             "format": "int64",
             "type": "integer"
           },
+          "event_type": {
+            "description": "通知类型；同一事件可多次通知，接收方按类型处理。",
+            "enum": [
+              "event.created",
+              "event.evidence.updated",
+              "event.status.changed"
+            ],
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/EventEvidence"
+          },
+          "evidence_availability": {
+            "description": "historical_unavailable 表示历史补报、现场取证不可用。",
+            "enum": [
+              "live_policy",
+              "historical_unavailable"
+            ],
+            "type": "string"
+          },
+          "has_image": {
+            "description": "已有抓拍路径；文件删除或过期后票据读取可返回404。",
+            "type": "boolean"
+          },
+          "has_video": {
+            "description": "已有报警后视频路径；取证进行中时为false。",
+            "type": "boolean"
+          },
+          "historical": {
+            "description": "历史补报，只补回报警文字及原始发生时间，现场取证不可用。",
+            "type": "boolean"
+          },
           "id": {
-            "description": "当前资源内部唯一标识。设备/通道的内部 ID 与国标编码不同。",
+            "description": "Event 资源的内部唯一标识。",
             "example": 101,
             "format": "int64",
             "type": "integer"
@@ -1267,6 +1327,26 @@
             "example": "model-001",
             "type": "string"
           },
+          "notification_id": {
+            "description": "持久化通知序号。回调可能乱序，接收方按事件记录最新序号；每条通知的delivery_id独立且重试不变。",
+            "format": "int64",
+            "type": "integer"
+          },
+          "occurrence_count": {
+            "description": "连续报警聚合的有效上报次数。",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "received_at": {
+            "description": "B 端收到原始报警的时间，不替代 started_at 发生时间。",
+            "format": "date-time",
+            "type": "string"
+          },
+          "revision": {
+            "description": "处理版本号；处理请求必须提交最新值。",
+            "minimum": 1,
+            "type": "integer"
+          },
           "score": {
             "description": "告警置信度，原始模型得分。",
             "example": 0.96,
@@ -1276,6 +1356,47 @@
             "description": "事件或录像开始时间，RFC3339。",
             "example": "2026-11-04T08:00:00Z",
             "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "description": "事件处理状态。",
+            "enum": [
+              "pending",
+              "processing",
+              "resolved",
+              "ignored"
+            ],
+            "type": "string"
+          },
+          "thumbnail_expires_at": {
+            "description": "可选。缩略图票据到期时间。",
+            "format": "date-time",
+            "type": "string"
+          },
+          "thumbnail_url": {
+            "description": "可选。具备相应权限且媒体已生成时附加的缩略图短期URL。",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "事件最近更新时间，与管理端时间格式一致。",
+            "type": "string"
+          },
+          "video_download_expires_at": {
+            "description": "可选。视频下载票据到期时间。",
+            "format": "date-time",
+            "type": "string"
+          },
+          "video_download_url": {
+            "description": "可选。具备相应权限且媒体已生成时附加的视频下载短期URL。",
+            "type": "string"
+          },
+          "video_expires_at": {
+            "description": "可选。视频播放票据到期时间。",
+            "format": "date-time",
+            "type": "string"
+          },
+          "video_url": {
+            "description": "可选。具备相应权限且媒体已生成时附加的视频播放短期URL。",
             "type": "string"
           }
         },
@@ -1662,6 +1783,15 @@
             "format": "int64",
             "type": "integer"
           },
+          "event_type": {
+            "description": "通知类型；同一事件可多次通知，接收方按类型处理。",
+            "enum": [
+              "event.created",
+              "event.evidence.updated",
+              "event.status.changed"
+            ],
+            "type": "string"
+          },
           "id": {
             "description": "Delivery 资源的内部唯一标识。",
             "example": "delivery-001",
@@ -1914,9 +2044,25 @@
       "Event": {
         "additionalProperties": false,
         "properties": {
+          "channel_code": {
+            "description": "通道完整编码。",
+            "type": "string"
+          },
+          "channel_name": {
+            "description": "通道名称。",
+            "type": "string"
+          },
           "cid": {
             "description": "所属通道的内部 ID。",
             "example": "channel-001",
+            "type": "string"
+          },
+          "device_code": {
+            "description": "设备完整编码。",
+            "type": "string"
+          },
+          "device_name": {
+            "description": "设备名称。",
             "type": "string"
           },
           "did": {
@@ -1929,6 +2075,29 @@
             "example": "2026-11-04T08:01:00Z",
             "format": "date-time",
             "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/EventEvidence"
+          },
+          "evidence_availability": {
+            "description": "historical_unavailable 表示历史补报、现场取证不可用。",
+            "enum": [
+              "live_policy",
+              "historical_unavailable"
+            ],
+            "type": "string"
+          },
+          "has_image": {
+            "description": "已有抓拍路径；文件删除或过期后票据读取可返回404。",
+            "type": "boolean"
+          },
+          "has_video": {
+            "description": "已有报警后视频路径；取证进行中时为false。",
+            "type": "boolean"
+          },
+          "historical": {
+            "description": "历史补报，只补回报警文字及原始发生时间，现场取证不可用。",
+            "type": "boolean"
           },
           "id": {
             "description": "Event 资源的内部唯一标识。",
@@ -1946,6 +2115,21 @@
             "example": "model-001",
             "type": "string"
           },
+          "occurrence_count": {
+            "description": "连续报警聚合的有效上报次数。",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "received_at": {
+            "description": "B 端收到原始报警的时间，不替代 started_at 发生时间。",
+            "format": "date-time",
+            "type": "string"
+          },
+          "revision": {
+            "description": "处理版本号；处理请求必须提交最新值。",
+            "minimum": 1,
+            "type": "integer"
+          },
           "score": {
             "description": "告警置信度，原始模型得分。",
             "example": 0.96,
@@ -1956,6 +2140,155 @@
             "example": "2026-11-04T08:00:00Z",
             "format": "date-time",
             "type": "string"
+          },
+          "status": {
+            "description": "事件处理状态。",
+            "enum": [
+              "pending",
+              "processing",
+              "resolved",
+              "ignored"
+            ],
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "事件最近更新时间，与管理端时间格式一致。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "EventAction": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "description": "处理者；开放平台应用标识为open-app:\u003capp_id\u003e。",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "处理时间。",
+            "format": "date-time",
+            "type": "string"
+          },
+          "event_id": {
+            "description": "事件ID。",
+            "format": "int64",
+            "type": "integer"
+          },
+          "from_status": {
+            "description": "处理前状态。",
+            "type": "string"
+          },
+          "id": {
+            "description": "处理记录ID。",
+            "format": "int64",
+            "type": "integer"
+          },
+          "note": {
+            "description": "处理说明。",
+            "type": "string"
+          },
+          "to_status": {
+            "description": "处理后状态。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "EventEvidence": {
+        "additionalProperties": false,
+        "description": "平台取证状态；不暴露内部任务错误及文件路径。",
+        "properties": {
+          "finished_at": {
+            "description": "取证任务结束时间。",
+            "format": "date-time",
+            "type": "string"
+          },
+          "snapshot_state": {
+            "description": "抓拍状态。",
+            "enum": [
+              "not_requested",
+              "queued",
+              "working",
+              "succeeded",
+              "failed",
+              "skipped"
+            ],
+            "type": "string"
+          },
+          "started_at": {
+            "description": "取证任务开始时间。",
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "description": "总状态。",
+            "enum": [
+              "queued",
+              "working",
+              "succeeded",
+              "failed",
+              "skipped"
+            ],
+            "type": "string"
+          },
+          "video_state": {
+            "description": "视频状态。",
+            "enum": [
+              "not_requested",
+              "queued",
+              "working",
+              "succeeded",
+              "failed",
+              "skipped"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "EventProcessInput": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "description": "处理说明。完成、忽略和重新打开时必填，最多1000字。",
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "revision": {
+            "description": "从事件详情读取的当前revision；冲突返回409。",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "description": "目标状态：开始处理、完成、忽略、重新打开。",
+            "enum": [
+              "pending",
+              "processing",
+              "resolved",
+              "ignored"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "status"
+        ],
+        "type": "object"
+      },
+      "EventProcessResult": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "description": "本次处理记录ID；幂等重试保持相同。",
+            "format": "int64",
+            "type": "integer"
+          },
+          "event_id": {
+            "description": "目标事件ID。",
+            "format": "int64",
+            "type": "integer"
           }
         },
         "type": "object"
@@ -3262,7 +3595,7 @@
   "info": {
     "description": "Owl 三方应用开放接口。完整在线文档位于 /web/#/open-platform/docs，公开可读，无需管理员账号。业务API仅AK/SK，管理API仅管理员JWT，媒体仅短期票据。 支持按设备完整编码和完整通道编码查询、播放、抓拍及云台控制；内部 ID 接口保持兼容。",
     "title": "Owl Third-party Open Platform",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "openapi": "3.0.3",
   "paths": {
@@ -9080,7 +9413,7 @@
     },
     "/openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/events": {
       "get": {
-        "description": "直接按设备完整编码与完整通道编码查询告警事件。无需内部设备/通道 ID，不额外要求 device:read 或 channel:read。路径资源不存在或未授权统一 404；通道编码不唯一返回 409。路径已限定资源，不接受 device_id/channel_id/device_code/channel_code 查询参数。 使用 size/cursor 分页，保留 start/end、state（若有）等筛选，时间默认最近 24 小时、最大 7 天。设备级包含设备自身告警及其通道告警，通道级只含该通道告警。",
+        "description": "直接按设备完整编码与完整通道编码查询告警事件。无需内部设备/通道 ID，不额外要求 device:read 或 channel:read。路径资源不存在或未授权统一 404；通道编码不唯一返回 409。路径已限定资源，不接受 device_id/channel_id/device_code/channel_code 查询参数。 使用 size/cursor 分页，保留 start/end、state（若有）等筛选，时间默认最近 24 小时、最大 7 天。设备级包含设备自身告警及其通道告警，通道级只含该通道告警。 返回设备/通道名称及编码、处理状态、revision、连续次数、has_image/has_video和取证状态；图片及视频通过独立票据接口读取。",
         "operationId": "get_openapi_v1_devices_by_code_device_code_channels_channel_code_events",
         "parameters": [
           {
@@ -9175,6 +9508,20 @@
             "name": "Authorization",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "事件处理状态，省略时不筛选。",
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "enum": [
+                "pending",
+                "processing",
+                "resolved",
+                "ignored"
+              ],
               "type": "string"
             }
           }
@@ -11258,7 +11605,7 @@
     },
     "/openapi/v1/devices/by-code/{device_code}/events": {
       "get": {
-        "description": "直接按设备完整编码查询告警事件。无需内部设备/通道 ID，不额外要求 device:read 或 channel:read。路径资源不存在或未授权统一 404；通道编码不唯一返回 409。路径已限定资源，不接受 device_id/channel_id/device_code/channel_code 查询参数。 使用 size/cursor 分页，保留 start/end、state（若有）等筛选，时间默认最近 24 小时、最大 7 天。设备级包含设备自身告警及其通道告警，通道级只含该通道告警。",
+        "description": "直接按设备完整编码查询告警事件。无需内部设备/通道 ID，不额外要求 device:read 或 channel:read。路径资源不存在或未授权统一 404；通道编码不唯一返回 409。路径已限定资源，不接受 device_id/channel_id/device_code/channel_code 查询参数。 使用 size/cursor 分页，保留 start/end、state（若有）等筛选，时间默认最近 24 小时、最大 7 天。设备级包含设备自身告警及其通道告警，通道级只含该通道告警。 返回设备/通道名称及编码、处理状态、revision、连续次数、has_image/has_video和取证状态；图片及视频通过独立票据接口读取。",
         "operationId": "get_openapi_v1_devices_by_code_device_code_events",
         "parameters": [
           {
@@ -11341,6 +11688,20 @@
             "name": "Authorization",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "事件处理状态，省略时不筛选。",
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "enum": [
+                "pending",
+                "processing",
+                "resolved",
+                "ignored"
+              ],
               "type": "string"
             }
           }
@@ -12508,7 +12869,7 @@
     },
     "/openapi/v1/events": {
       "get": {
-        "description": "返回当前应用设备授权范围内的告警事件。结果采用游标分页，next_cursor=null 表示结束。 支持 device_code、channel_code 编码精确筛选，也保留内部 device_id、channel_id；所有条件取交集，不会因未知编码退化为全量结果。仅传 channel_code 时匹配所有授权设备的同码通道。",
+        "description": "返回当前应用设备授权范围内的告警事件。结果采用游标分页，next_cursor=null 表示结束。 支持 device_code、channel_code 编码精确筛选，也保留内部 device_id、channel_id；所有条件取交集，不会因未知编码退化为全量结果。仅传 channel_code 时匹配所有授权设备的同码通道。 返回设备/通道名称及编码、处理状态、revision、连续次数、has_image/has_video和取证状态；图片及视频通过独立票据接口读取。",
         "operationId": "get_openapi_v1_events",
         "parameters": [
           {
@@ -12621,6 +12982,20 @@
             "name": "device_id",
             "required": false,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "事件处理状态，省略时不筛选。",
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "enum": [
+                "pending",
+                "processing",
+                "resolved",
+                "ignored"
+              ],
               "type": "string"
             }
           }
@@ -12839,6 +13214,121 @@
         "x-scope": "event:read"
       }
     },
+    "/openapi/v1/events/{id}/actions": {
+      "get": {
+        "description": "按当前设备授权读取最近100条事件处理记录，按ID倒序；无权限与不存在统一404。",
+        "operationId": "get_openapi_v1_events_id_actions",
+        "parameters": [
+          {
+            "description": "路径所指资源的内部 ID。设备/通道不是国标编码；录像/事件为整数 ID。",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "items": []
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "properties": {
+                            "items": {
+                              "items": {
+                                "$ref": "#/components/schemas/EventAction"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；检查 data 中的实际状态。secret_key 仅生成/轮换响应返回一次。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "查询事件处理记录",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "event:read"
+      }
+    },
     "/openapi/v1/events/{id}/image-tickets": {
       "post": {
         "description": "仅当事件属于已授权设备且图片真实存在时签发；无图片、越权或原通道归属已变化返回 404。 这里的路径 ID 是具体录像/事件/会话/任务/命令的结果标识；同一通道可有多条结果，先 GET /openapi/v1/devices/by-code/{device_code}/channels/{channel_code}/events 按设备和通道编码查询列表，再使用目标记录的 id。",
@@ -12969,6 +13459,411 @@
           "业务"
         ],
         "x-scope": "event:image"
+      }
+    },
+    "/openapi/v1/events/{id}/process": {
+      "post": {
+        "description": "复用事件中心状态机。pending/processing可开始处理、完成或忽略；resolved/ignored必须先以pending重新打开。完成、忽略、重新打开必须填写说明。按当前设备授权和event:process校验，revision过期返回409；状态、处理记录、通知及幂等结果同事务提交，失败整体回滚。同幂等键及相同请求重试返回同一action_id，不重复处理；同键异请求409。",
+        "operationId": "post_openapi_v1_events_id_process",
+        "parameters": [
+          {
+            "description": "路径所指资源的内部 ID。设备/通道不是国标编码；录像/事件为整数 ID。",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "POST/PATCH/PUT 为 application/json，不带 charset；GET/DELETE 不传此头。",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "note": "已核实，正在处理",
+                "revision": 1,
+                "status": "processing"
+              },
+              "schema": {
+                "$ref": "#/components/schemas/EventProcessInput"
+              }
+            }
+          },
+          "description": "JSON 请求体，未知或重复属性拒绝。签名必须使用实际发送字节。",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "action_id": 1,
+                    "event_id": 101
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/EventProcessResult"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；检查 data 中的实际状态。secret_key 仅生成/轮换响应返回一次。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "处理事件",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "event:process"
+      }
+    },
+    "/openapi/v1/events/{id}/thumbnail-tickets": {
+      "post": {
+        "description": "读取最长边640像素的JPEG缩略图，历史原图按需生成；默认原图票据接口保持兼容。 文件尚未生成、已过期或不在授权设备范围返回404；票据约5分钟到期，活动连接检查撤权。",
+        "operationId": "post_openapi_v1_events_id_thumbnail_tickets",
+        "parameters": [
+          {
+            "description": "路径所指资源的内部 ID。设备/通道不是国标编码；录像/事件为整数 ID。",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "POST/PATCH/PUT 为 application/json，不带 charset；GET/DELETE 不传此头。",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {},
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          },
+          "description": "JSON 请求体，未知或重复属性拒绝。签名必须使用实际发送字节。",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "expires_at": "2026-11-04T08:05:00Z",
+                    "url": "\u003c当前部署开放地址\u003e/openmedia/v1/event-thumbnail/101/content?ticket=\u003c短期票据\u003e"
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Ticket"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；检查 data 中的实际状态。secret_key 仅生成/轮换响应返回一次。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "申请事件抓拍缩略图票据",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "event:image"
+      }
+    },
+    "/openapi/v1/events/{id}/video-tickets": {
+      "post": {
+        "description": "视频是报警后平台录制的片段，不是设备历史录像。purpose必填，play内联播放、download附件下载；两种票据不能互换。 文件尚未生成、已过期或不在授权设备范围返回404；票据约5分钟到期，活动连接检查撤权。",
+        "operationId": "post_openapi_v1_events_id_video_tickets",
+        "parameters": [
+          {
+            "description": "路径所指资源的内部 ID。设备/通道不是国标编码；录像/事件为整数 ID。",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XOwlAudience"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlNonce"
+          },
+          {
+            "$ref": "#/components/parameters/XOwlContentSHA256"
+          },
+          {
+            "description": "应用：OWL-HMAC-SHA256 Credential=\u003cAK\u003e,Signature=\u003c小写hex\u003e；管理员：Bearer \u003cJWT\u003e；媒体：Owl-Media \u003cticket\u003e。",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "POST/PATCH/PUT 为 application/json，不带 charset；GET/DELETE 不传此头。",
+            "in": "header",
+            "name": "Content-Type",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "purpose": "play"
+              },
+              "schema": {
+                "$ref": "#/components/schemas/RecordingTicketInput"
+              }
+            }
+          },
+          "description": "JSON 请求体，未知或重复属性拒绝。签名必须使用实际发送字节。",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "code": "OK",
+                  "data": {
+                    "expires_at": "2026-11-04T08:05:00Z",
+                    "url": "\u003c当前部署开放地址\u003e/openmedia/v1/event-video/101/content?ticket=\u003c短期票据\u003e"
+                  },
+                  "message": "success",
+                  "request_id": "request-001"
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/EnvelopeBase"
+                    },
+                    {
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Ticket"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "成功；检查 data 中的实际状态。secret_key 仅生成/轮换响应返回一次。"
+          },
+          "400": {
+            "$ref": "#/components/responses/HTTP400"
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401"
+          },
+          "403": {
+            "$ref": "#/components/responses/HTTP403"
+          },
+          "404": {
+            "$ref": "#/components/responses/HTTP404"
+          },
+          "409": {
+            "$ref": "#/components/responses/HTTP409"
+          },
+          "413": {
+            "$ref": "#/components/responses/HTTP413"
+          },
+          "429": {
+            "$ref": "#/components/responses/HTTP429"
+          },
+          "503": {
+            "$ref": "#/components/responses/HTTP503"
+          }
+        },
+        "security": [
+          {
+            "ApplicationSignature": []
+          }
+        ],
+        "summary": "申请事件视频播放或下载票据",
+        "tags": [
+          "业务"
+        ],
+        "x-scope": "purpose=play: event:video; purpose=download: event:download"
       }
     },
     "/openapi/v1/live-sessions": {
@@ -16119,7 +17014,7 @@
     },
     "/openapi/v1/subscriptions": {
       "get": {
-        "description": "游标分页返回本应用订阅，不返回独立回调密钥。",
+        "description": "游标分页返回本应用订阅，不返回独立回调密钥。 启用后接收event.created、event.evidence.updated及event.status.changed三类JSON回调；同一事件可有多条独立delivery。连续报警聚合本身不再次推送首次报警。",
         "operationId": "get_openapi_v1_subscriptions",
         "parameters": [
           {
@@ -16271,7 +17166,7 @@
         "x-scope": "event:subscribe"
       },
       "post": {
-        "description": "须引用管理员批准的 callback_target_id；channel_ids/labels 为空表示不追加对应筛选，不扩大设备权限。初始 paused，轮换签名密钥后 PATCH 为 active。 通道筛选可使用 channel_codes 数组，每项为 device_code 和完整 channel_code；与 channel_ids 互斥，空数组表示应用全部授权资源，未知或未授权资源 404，重复通道编码 409。返回 channel_ids 为解析后的内部 ID，后续可继续使用 channel_codes 修改。",
+        "description": "须引用管理员批准的 callback_target_id；channel_ids/labels 为空表示不追加对应筛选，不扩大设备权限。初始 paused，轮换签名密钥后 PATCH 为 active。 通道筛选可使用 channel_codes 数组，每项为 device_code 和完整 channel_code；与 channel_ids 互斥，空数组表示应用全部授权资源，未知或未授权资源 404，重复通道编码 409。返回 channel_ids 为解析后的内部 ID，后续可继续使用 channel_codes 修改。 启用后接收event.created、event.evidence.updated及event.status.changed三类JSON回调；同一事件可有多条独立delivery。连续报警聚合本身不再次推送首次报警。",
         "operationId": "post_openapi_v1_subscriptions",
         "parameters": [
           {
@@ -17267,14 +18162,14 @@
     },
     "/openmedia/v1/{kind}/{id}/{path}": {
       "get": {
-        "description": "使用票据接口返回 URL 原样访问。GET 成功返回 HLS 清单、FLV、MP4 或图片字节；不使用 JSON 成功包装。HLS 全部子资源经授权重写，不能拼接任意回源。新连接检查票据到期，活动连接约每秒检查撤权。 capture为通道永久图片、snapshot为三方抓拍任务结果，均支持直接使用API返回地址。异步snapshot未完成时409 SNAPSHOT_PENDING并带Retry-After:1，成功后同一地址取图；失败/删除/撤权后拒绝访问。 playback为独立设备录像回放流，ready/paused可播放；会话停止/到期/撤权后拒绝新请求并中断活动连接，不会自动重启流。",
+        "description": "使用票据接口返回 URL 原样访问。GET 成功返回 HLS 清单、FLV、MP4 或图片字节；不使用 JSON 成功包装。HLS 全部子资源经授权重写，不能拼接任意回源。新连接检查票据到期，活动连接约每秒检查撤权。 capture为通道永久图片、snapshot为三方抓拍任务结果，均支持直接使用API返回地址。异步snapshot未完成时409 SNAPSHOT_PENDING并带Retry-After:1，成功后同一地址取图；失败/删除/撤权后拒绝访问。 playback为独立设备录像回放流，ready/paused可播放；会话停止/到期/撤权后拒绝新请求并中断活动连接，不会自动重启流。 事件图片/视频均通过独立种类票据授权；event-video支持单段Range拖动，event-download设置附件响应头，图片权限不会授予视频权限。",
         "operationId": "get_openmedia_v1_kind_id_path",
         "parameters": [
           {
             "$ref": "#/components/parameters/Range"
           },
           {
-            "description": "媒体种类：live / playback / recording / download / event / snapshot / capture。",
+            "description": "媒体种类：live / playback / recording / download / event / snapshot / capture。 event=原图，event-thumbnail=缩略图，event-video=播放，event-download=下载。",
             "in": "path",
             "name": "kind",
             "required": true,
@@ -17286,7 +18181,10 @@
                 "download",
                 "event",
                 "snapshot",
-                "capture"
+                "capture",
+                "event-thumbnail",
+                "event-video",
+                "event-download"
               ],
               "type": "string"
             }

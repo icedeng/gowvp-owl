@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-var Scopes = []string{"device:read", "channel:read", "live:play", "recording:read", "recording:play", "recording:download", "event:read", "event:image", "snapshot:capture", "ptz:control", "event:subscribe"}
+var Scopes = []string{"device:read", "channel:read", "live:play", "recording:read", "recording:play", "recording:download", "event:read", "event:image", "event:video", "event:download", "event:process", "snapshot:capture", "ptz:control", "event:subscribe"}
 var BasicActions = []string{"left", "right", "up", "down", "left_up", "left_down", "right_up", "right_down", "zoom_in", "zoom_out", "focus_near", "focus_far", "iris_open", "iris_close", "preset_call"}
 
 type Error struct {
@@ -244,14 +244,16 @@ type Subscription struct {
 func (Subscription) TableName() string { return "open_subscriptions" }
 
 type Outbox struct {
-	ID        uint64 `gorm:"primaryKey"`
-	EventID   int64  `gorm:"uniqueIndex"`
-	DeviceID  string
-	ChannelID string
-	Label     string
-	Payload   string `gorm:"type:text"`
-	CreatedAt time.Time
-	Done      bool `gorm:"index"`
+	ID              uint64  `gorm:"primaryKey"`
+	EventID         int64   `gorm:"index:idx_open_outbox_event"`
+	NotificationKey *string `gorm:"size:128;uniqueIndex"`
+	EventType       string  `gorm:"size:64"`
+	DeviceID        string
+	ChannelID       string
+	Label           string
+	Payload         string `gorm:"type:text"`
+	CreatedAt       time.Time
+	Done            bool `gorm:"index"`
 }
 
 func (Outbox) TableName() string { return "open_event_outbox" }
@@ -259,9 +261,10 @@ func (Outbox) TableName() string { return "open_event_outbox" }
 type Delivery struct {
 	ID             string    `gorm:"primaryKey;size:64" json:"id"`
 	AppID          string    `gorm:"index;size:64" json:"app_id"`
-	SubscriptionID string    `gorm:"uniqueIndex:idx_open_delivery_event;size:64" json:"subscription_id"`
-	EventID        int64     `gorm:"uniqueIndex:idx_open_delivery_event" json:"event_id"`
-	OutboxID       uint64    `json:"-"`
+	SubscriptionID string    `gorm:"uniqueIndex:idx_open_delivery_notification;size:64" json:"subscription_id"`
+	EventID        int64     `gorm:"index" json:"event_id"`
+	OutboxID       uint64    `gorm:"uniqueIndex:idx_open_delivery_notification" json:"-"`
+	EventType      string    `gorm:"size:64" json:"event_type"`
 	State          string    `gorm:"index;size:24" json:"state"`
 	Attempt        int       `json:"attempt"`
 	LastStatus     int       `json:"last_status"`

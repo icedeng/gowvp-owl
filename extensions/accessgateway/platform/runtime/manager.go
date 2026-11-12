@@ -306,7 +306,11 @@ func (w *worker) run() {
 			return
 		}
 		w.setState("connecting", "unknown", nil)
+		connectedStart := time.Now()
 		err = w.connect()
+		if time.Since(connectedStart) > time.Minute {
+			backoff = time.Second
+		}
 		if w.ctx.Err() != nil {
 			return
 		}
@@ -317,7 +321,7 @@ func (w *worker) run() {
 		var unknownCA x509.UnknownAuthorityError
 		var hostname x509.HostnameError
 		var invalidCert x509.CertificateInvalidError
-		if errors.As(err, &certificateError) || errors.As(err, &unknownCA) || errors.As(err, &hostname) || errors.As(err, &invalidCert) || errors.As(err, &pe) && !pe.Retryable {
+		if errors.As(err, &certificateError) || errors.As(err, &unknownCA) || errors.As(err, &hostname) || errors.As(err, &invalidCert) || errors.As(err, &pe) && (pe.Code == protocol.Forbidden || pe.Code == protocol.ProtocolUnsupported || pe.Code == protocol.InvalidArgument) {
 			delay = 5 * time.Minute
 		}
 		timer := time.NewTimer(delay)
@@ -331,14 +335,17 @@ func (w *worker) run() {
 	}
 }
 func (w *worker) connect() error {
+	started := time.Now()
+	w.mu.Lock()
+	w.snapshot.RecoveryStartedAt = &started
+	w.snapshot.RecoveryDurationMS = nil
+	w.mu.Unlock()
 	m := w.manager
 	row := w.configuration()
 	if row.Desired.CredentialID == nil {
 		return protocol.Failure(protocol.Forbidden, "网关尚未配置客户端凭据")
 	}
-	if row.Desired.ProxyRef != nil {
-		return protocol.Failure(protocol.CapabilityUnsupported, "当前未配置受控 HTTP CONNECT 代理适配器")
-	}
+
 	refs, err := m.repo.RuntimeCredential(w.ctx, row.GatewayPK, *row.Desired.CredentialID)
 	if err != nil {
 		return err
@@ -353,7 +360,7 @@ func (w *worker) connect() error {
 		return w.ctx.Err()
 	}
 	dialCtx, cancel := context.WithTimeout(w.ctx, 15*time.Second)
-	conn, err := m.dial(dialCtx, row.Desired.URL, protocol.ControlPath, tlsConfig, nil)
+	conn, err := w.dialGateway(dialCtx, row.Desired.URL, protocol.ControlPath, tlsConfig, nil)
 	cancel()
 	<-m.connecting
 	if err != nil {
@@ -432,7 +439,7 @@ func (w *worker) connect() error {
 		health = "degraded"
 	}
 	w.setState("connected", health, nil)
-	return w.serve(p, ack)
+	return w.serve(p, ack, started)
 }
 func (w *worker) recover(p *transport.Peer) error {
 	ctx, cancel := context.WithTimeout(w.ctx, 30*time.Second)

@@ -18,6 +18,7 @@ import (
 )
 
 type connection struct {
+	resume          *protocol.ResumeFlow
 	platformSubject string
 	host            *Host
 	ingress         core.IngressRoute

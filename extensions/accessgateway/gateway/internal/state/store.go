@@ -28,18 +28,19 @@ type TransferResult struct {
 	ExpiresAt      time.Time            `json:"expires_at"`
 }
 type Data struct {
-	Version          int                       `json:"version"`
-	GatewayID        string                    `json:"gateway_id"`
-	PlatformID       string                    `json:"platform_id"`
-	OwnerEpoch       protocol.Decimal          `json:"owner_epoch"`
-	ClientInstanceID string                    `json:"client_instance_id"`
-	AppliedRevision  protocol.Decimal          `json:"applied_revision"`
-	AppliedConfig    *protocol.EffectiveConfig `json:"applied_config"`
-	ConfigSHA256     string                    `json:"config_sha256"`
-	HadResources     bool                      `json:"had_resources"`
-	MaxLeaseTTLMS    int                       `json:"max_lease_ttl_ms"`
-	Ports            map[string]time.Time      `json:"ports"`
-	Transfers        []TransferResult          `json:"transfers"`
+	AlarmSpoolEnabled bool                      `json:"alarm_spool_enabled,omitempty"`
+	Version           int                       `json:"version"`
+	GatewayID         string                    `json:"gateway_id"`
+	PlatformID        string                    `json:"platform_id"`
+	OwnerEpoch        protocol.Decimal          `json:"owner_epoch"`
+	ClientInstanceID  string                    `json:"client_instance_id"`
+	AppliedRevision   protocol.Decimal          `json:"applied_revision"`
+	AppliedConfig     *protocol.EffectiveConfig `json:"applied_config"`
+	ConfigSHA256      string                    `json:"config_sha256"`
+	HadResources      bool                      `json:"had_resources"`
+	MaxLeaseTTLMS     int                       `json:"max_lease_ttl_ms"`
+	Ports             map[string]time.Time      `json:"ports"`
+	Transfers         []TransferResult          `json:"transfers"`
 }
 type Store struct {
 	mu   sync.Mutex
@@ -111,6 +112,10 @@ func Open(dir, gateway, platform string) (*Store, error) {
 			s.data.Ports = map[string]time.Time{}
 		}
 	} else if !os.IsNotExist(err) {
+		root.Close()
+		return nil, err
+	}
+	if err := s.cleanAlarmTemps(); err != nil {
 		root.Close()
 		return nil, err
 	}

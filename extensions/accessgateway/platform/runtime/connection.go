@@ -12,12 +12,47 @@ import (
 	"github.com/gowvp/owl/extensions/accessgateway/transport"
 )
 
-func (w *worker) serve(p *transport.Peer, ack *protocol.HelloAck) error {
+func (w *worker) serve(p *transport.Peer, ack *protocol.HelloAck, recoveryStarted time.Time) error {
 	ctx, cancel := context.WithCancel(w.ctx)
 	defer cancel()
+	var alarms sync.WaitGroup
+	alarms.Add(1)
+	go func() { defer alarms.Done(); w.alarmLoop(ctx, p, ack) }()
+	defer func() { cancel(); alarms.Wait() }()
 	heartbeats := make(chan error, 1)
 	go func() { heartbeats <- w.heartbeatLoop(ctx, p, ack) }()
 	defer func() { cancel(); <-heartbeats }()
+	var recovery sync.WaitGroup
+	recovery.Add(1)
+	go func() {
+		defer recovery.Done()
+		readyTick := time.NewTicker(250 * time.Millisecond)
+		defer readyTick.Stop()
+		for {
+			w.mu.RLock()
+			ready := w.snapshot.HealthState == "ready"
+			w.mu.RUnlock()
+			if ready {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-readyTick.C:
+			}
+		}
+		if err := w.resumeFlows(ctx, p, ack); err != nil {
+			p.Close()
+			return
+		}
+
+		elapsed := time.Since(recoveryStarted).Milliseconds()
+		w.mu.Lock()
+		w.snapshot.RecoveryDurationMS = &elapsed
+		w.mu.Unlock()
+	}()
+	defer func() { cancel(); recovery.Wait() }()
+
 	signals := make(chan transport.Incoming, 64)
 	var workers sync.WaitGroup
 	workers.Add(4)

@@ -128,6 +128,12 @@ func (a *API) media(c *gin.Context) {
 			case <-stop:
 			}
 		}()
+		if kind == "event-video" || kind == "event-download" {
+			c.Header("Content-Type", "video/mp4")
+		}
+		if kind == "event-download" {
+			c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="event-%s.mp4"`, id))
+		}
 		if kind == "download" {
 			c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"recording-%s.mp4\"", id))
 		}

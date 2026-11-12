@@ -118,7 +118,11 @@ const (
 	IOError               = "IO_ERROR"
 )
 
-var Capabilities = []string{"sip_udp", "sip_tcp", "rtp_udp", "rtp_tcp_passive", "rtp_tcp_active", "rtcp_udp", "rtcp_tcp_mux", "playback", "rtp_download", "raw_tcp_download", "voice_duplex", "broadcast", "cascade", "https_transfer"}
+const ExtensionsHeader = "X-Owl-Gateway-Extensions"
+
+var ExtensionCapabilities = []string{"gateway_info_v1", "media_inspect_v1", "alarm_spool_v1", "sip_resume_v1"}
+
+var Capabilities = []string{"gateway_info_v1", "media_inspect_v1", "alarm_spool_v1", "sip_resume_v1", "sip_udp", "sip_tcp", "rtp_udp", "rtp_tcp_passive", "rtp_tcp_active", "rtcp_udp", "rtcp_tcp_mux", "playback", "rtp_download", "raw_tcp_download", "voice_duplex", "broadcast", "cascade", "https_transfer"}
 
 func ValidCapability(s string) bool {
 	for _, c := range Capabilities {

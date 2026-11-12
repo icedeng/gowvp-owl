@@ -30,6 +30,9 @@ func setupEventEvidence(uc *Usecase) {
 }
 
 func (a IPCAPI) collectEventEvidence(ctx context.Context, e *event.Event, kind string, seconds int) (string, error) {
+	if e.Historical {
+		return "", fmt.Errorf("历史补报、现场取证不可用")
+	}
 	ch, err := a.ipc.GetChannel(ctx, e.CID)
 	if err != nil || ch.DID != e.DID {
 		return "", fmt.Errorf("通道不存在或已变更归属，无法取证")

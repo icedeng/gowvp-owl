@@ -274,10 +274,10 @@
         {
           "title": "回调 body 示例",
           "paragraphs": [
-            "这些字段不使用业务 API 的 code/data 包装。id 和 event_id 指向同一事件；image_url/image_expires_at 仅在有 event:image 且图片存在时追加，重试时可能生成新 URL。完整字段字典见 CallbackEvent。"
+            "这些字段不使用业务 API 的 code/data 包装。id 和 event_id 指向同一事件；event_type 区分首次报警、取证变化及处理变化，notification_id 标识通知。媒体链接按当前 event:image/event:video/event:download 权限及已生成的媒体追加，重试时可能生成新 URL。事件状态是通知入库时的快照，媒体链接按投递时可用资源签发。完整字段字典见 CallbackEvent。"
           ],
           "language": "json",
-          "code": "{\n  \"id\": 101,\n  \"event_id\": 101,\n  \"delivery_id\": \"delivery-001\",\n  \"did\": \"device-001\",\n  \"cid\": \"channel-001\",\n  \"started_at\": \"2026-11-04T08:00:00Z\",\n  \"ended_at\": \"2026-11-04T08:00:01Z\",\n  \"label\": \"person\",\n  \"score\": 0.96,\n  \"model\": \"model-001\"\n}"
+          "code": "{\n  \"id\": 101,\n  \"event_id\": 101,\n  \"delivery_id\": \"delivery-001\",\n  \"did\": \"device-001\",\n  \"cid\": \"channel-001\",\n  \"started_at\": \"2026-11-04T08:00:00Z\",\n  \"ended_at\": \"2026-11-04T08:00:01Z\",\n  \"label\": \"person\",\n  \"score\": 0.96,\n  \"model\": \"model-001\",\n  \"event_type\": \"event.evidence.updated\",\n  \"notification_id\": 203,\n  \"status\": \"pending\",\n  \"revision\": 1,\n  \"occurrence_count\": 1,\n  \"has_image\": true,\n  \"has_video\": false,\n  \"evidence\": {\n    \"state\": \"working\",\n    \"snapshot_state\": \"succeeded\",\n    \"video_state\": \"working\"\n  }\n}"
         },
         {
           "title": "接收方处理",
@@ -320,6 +320,16 @@
             "默认只允许 HTTPS；本页接入配置显示允许 HTTP 时可使用 HTTP。内网需管理员显式批准 CIDR；始终拒绝回环、链路本地、云元数据和平台管理目标。DNS 保存及连接时均校验，不跟随重定向。",
             "独立 callback SK 轮换后，新投递立即使用最新 key_id；旧 key_id 最多保留24小时用于在途校验。应用编辑、停用、到期、凭据撤销、订阅取消或目标禁用可能暂停或取消后续投递。",
             "投递记录默认保留30天。已经发出的内容无法追回，接收方对数据保留与删除负责。"
+          ]
+        },
+        {
+          "title": "事件取证与处理通知",
+          "paragraphs": [
+            "event.created保留首次报警通知；event.evidence.updated在取证排队、执行、抓拍/录像分别完成或失败时追加通知；服务重启中断取证也通知失败。event.status.changed在管理员或应用处理事件后发送。首次报警无需等待图片或视频。",
+            "通知包含event_type、notification_id、event_id及独立delivery_id。至少一次投递且不保证顺序；按delivery_id去重，对同一event_id只应用更新的notification_id。不同通知即便event_id相同也不能按event_id丢弃。签名、防重放和重试规则不变。",
+            "具备event:image时附原图image_url及thumbnail_url；具备event:video/event:download时分别附video_url/video_download_url。只有媒体已生成才附链接，均约5分钟有效；到期后按事件ID换票。查询接口返回has_image/has_video及evidence，不暴露磁盘路径。",
+            "POST /events/{id}/process携带Idempotency-Key及{revision,status,note}。event:process是独立权限；revision取事件详情，冲突409后刷新。resolved/ignored先以pending重开，完成、忽略及重开说明必填。GET /events/{id}/actions读取最近100条处理记录。",
+            "event.created仅在首次事件新建时产生；新订阅不会补推此前已经分发的历史事件。回调可靠性从A端事件入库开始，不代表B到A断线期间未接收的报警已经得到保障。"
           ]
         }
       ]
@@ -870,6 +880,12 @@
           "paragraphs": [
             "每个接口页面提供完整请求头、body 示例、结果字段和响应示例。示例中的签名、nonce、ID、日期均为说明性数据；实际请求请用下载客户端生成，时间与资源ID需替换为当前值。",
             "页面只展示与下载文档，不收集 AK/SK，也不在浏览器发送云台、抓拍、订阅或管理操作。"
+          ]
+        },
+        {
+          "title": "网关历史补报",
+          "paragraphs": [
+            "historical=true、evidence_availability=historical_unavailable 表示历史补报、现场取证不可用；只补文字与原始发生时间，received_at 为网关接收时间，不补拍当前现场。"
           ]
         }
       ]

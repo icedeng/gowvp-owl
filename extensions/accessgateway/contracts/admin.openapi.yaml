@@ -11,6 +11,88 @@
   -
     "adminBearer": []
 "paths":
+  "/access_gateways/{id}/release-reports":
+    "post":
+      "summary": "记录组件发布结果"
+      "operationId": "release-reports"
+      "description": "需要管理员身份、幂等键和当前管理版本。仅记录统一发布工具的结果，不执行远程命令。"
+      "tags":
+        - "接入网关"
+      "parameters":
+        -
+          "name": "id"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+        -
+          "name": "Idempotency-Key"
+          "in": "header"
+          "required": true
+          "schema":
+            "type": "string"
+        -
+          "name": "If-Match"
+          "in": "header"
+          "required": true
+          "schema":
+            "type": "string"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/ReleaseReport"
+      "responses":
+        "200":
+          "description": "操作结果或幂等重放结果"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ReleaseReport"
+        "default":
+          "$ref": "#/components/responses/Failure"
+  "/access_gateways/{id}/channel-diagnostic":
+    "post":
+      "summary": "指定通道链路诊断"
+      "operationId": "channel-diagnostic"
+      "description": "需要管理员身份、幂等键和当前管理版本。使用独立临时点播，会话结束自动回收；最长约 50 秒。"
+      "tags":
+        - "接入网关"
+      "parameters":
+        -
+          "name": "id"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+        -
+          "name": "Idempotency-Key"
+          "in": "header"
+          "required": true
+          "schema":
+            "type": "string"
+        -
+          "name": "If-Match"
+          "in": "header"
+          "required": true
+          "schema":
+            "type": "string"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/ChannelDiagnosticRequest"
+      "responses":
+        "200":
+          "description": "操作结果或幂等重放结果"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/DiagnosticResult"
+        "default":
+          "$ref": "#/components/responses/Failure"
   "/access_gateways":
     "get":
       "operationId": "查询网关批量快照"
@@ -944,6 +1026,70 @@
           "schema":
             "$ref": "#/components/schemas/HTTPError"
   "schemas":
+    "GatewaySoftware":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "build":
+          "type": "string"
+        "protocol_version":
+          "type": "integer"
+        "alarm_pending":
+          "type": "integer"
+        "alarm_bytes":
+          "type": "string"
+        "alarm_store_error":
+          "type": "boolean"
+      "required":
+        - "build"
+        - "protocol_version"
+        - "alarm_pending"
+        - "alarm_bytes"
+        - "alarm_store_error"
+    "ChannelDiagnosticRequest":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "channel_id":
+          "type": "string"
+          "maxLength": 64
+      "required":
+        - "channel_id"
+    "ReleaseReport":
+      "type": "object"
+      "additionalProperties": false
+      "properties":
+        "release_id":
+          "type": "string"
+          "maxLength": 64
+        "component":
+          "type": "string"
+          "enum":
+            - "a"
+            - "b"
+            - "zlm"
+        "version":
+          "type": "string"
+          "maxLength": 128
+        "sha256":
+          "type": "string"
+          "pattern": "^[0-9a-f]{64}$"
+        "outcome":
+          "type": "string"
+          "enum":
+            - "succeeded"
+            - "rolled_back"
+            - "rollback_failed"
+        "previous":
+          "type": "string"
+          "maxLength": 256
+      "required":
+        - "release_id"
+        - "component"
+        - "version"
+        - "sha256"
+        - "outcome"
+        - "previous"
     "Certificate":
       "additionalProperties": false
       "properties":
@@ -1213,6 +1359,14 @@
     "DeviceIngressView":
       "additionalProperties": false
       "properties":
+        "recovery_state":
+          "type": "string"
+          "enum":
+            - "online"
+            - "device_offline"
+            - "awaiting_registration"
+            - "gateway_unreachable"
+            - "gateway_recovering"
         "binding_revision":
           "description": "非负 int64 十进制字符串，最大 9223372036854775807"
           "pattern": "^(0|[1-9][0-9]*)$"
@@ -1495,6 +1649,20 @@
     "GatewayView":
       "additionalProperties": false
       "properties":
+        "software":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/GatewaySoftware"
+          "nullable": true
+        "alarm_error":
+          "allOf":
+            -
+              "$ref": "#/components/schemas/Error"
+          "nullable": true
+        "recovery_duration_ms":
+          "type": "integer"
+          "format": "int64"
+          "nullable": true
         "admin_state":
           "type": "string"
           "enum":

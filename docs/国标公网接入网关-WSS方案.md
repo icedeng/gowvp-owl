@@ -889,7 +889,7 @@ B对终态transfer保留24小时的有界结果记录并落盘，内容只含平
 | `media_connect_timeout_ms/media_first_packet_timeout_ms` | int，默认 10000/30000，1000—60000 |
 | `source_cidrs` | string[]，最多 128；非空仅允许这些媒体源，空表示使用经认证设备的注册源 IP；不等于允许任意地址 |
 | `required_capabilities` | 第 15.2 节能力名数组，不重复；B/媒体节点不满足则禁止相关启用或操作 |
-| `proxy_ref` | string或null，预留服务端受控出站代理引用；当前实现须为null，非空明确拒绝，不隐式使用环境代理；浏览器不得提交含账号口令的任意代理 URL |
+| `proxy_ref` | string或null，服务端受控 HTTP CONNECT 代理引用；从 A 私有凭据目录读取代理及精确目标白名单，目标仍须为公网并验证 mTLS，不隐式使用环境代理；浏览器不得提交含账号口令的任意代理 URL |
 
 `GatewayEffectiveConfig` 为可发给 B 的子集：`public_ip/sip_port/media_port_start/media_port_end/task_public_base_url/max_media_sessions/max_transfer_sessions/max_to_a_bps/max_to_device_bps/heartbeat_interval_ms/heartbeat_timeout_ms/lease_ttl_ms/media_connect_timeout_ms/media_first_packet_timeout_ms/source_cidrs`。不传 A 媒体节点地址、CA 私钥、出站代理或数据库配置。B 本地上限与该对象取交集并在 prepare 阶段校验，不能静默裁剪为不同配置。
 
@@ -1467,3 +1467,7 @@ flowchart TD
 - 新模块单元检查就近放包内，集成检查只覆盖实际边界；B构建确认不依赖A业务，A加载开关关闭时确认原direct路径仍可用。没有功能实现前只检查目录规划和文档，不运行不存在的目标命令。
 
 实施落位顺序：先建立protocol/transport与core端口，再建立A模块和B入口，随后连接Owl适配与前端feature，最后接入构建部署。每次提交标明新增功能文件和原项目集成文件；目录与契约有变更时同步更新第12/19节，不能留下并存的旧路径。
+
+## 2026-11-12 可靠性增量
+
+本轮 P0～P2 开发与运维边界见 [可靠性改进](../extensions/accessgateway/docs/reliability.md)。报警补传仅含文字和原发生时间，明确标记“历史补报、现场取证不可用”；同网关按设备编码安全续接，不实施多网关迁移。2026-11-12 已更新 A、B，迁移及上线检查见 [本轮发布记录](../deploy/releases/gateway-reliability-20261112.md)，尚未完成的真机业务验收不以部署成功替代。

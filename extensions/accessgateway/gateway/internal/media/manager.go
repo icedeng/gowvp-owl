@@ -72,6 +72,8 @@ type Session struct {
 	failed     sync.Once
 	connected  bool
 	firstMedia chan struct{}
+	opened     time.Time
+	firstAt    *time.Time
 	firstOnce  sync.Once
 	config     protocol.EffectiveConfig
 }
@@ -117,7 +119,7 @@ func (m *Manager) Open(owner lease.Owner, request protocol.MediaOpen) (protocol.
 		return protocol.Lease{}, e
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
-	s := &Session{manager: m, ctx: ctx, cancel: cancel, config: m.config, spec: request.Spec, owner: owner, ports: ports, allowed: allowed, attached: make(chan struct{}), firstMedia: make(chan struct{})}
+	s := &Session{opened: time.Now(), manager: m, ctx: ctx, cancel: cancel, config: m.config, spec: request.Spec, owner: owner, ports: ports, allowed: allowed, attached: make(chan struct{}), firstMedia: make(chan struct{})}
 	s.lease = protocol.Lease{State: "allocated", PublicRTP: &protocol.Endpoint{IP: m.config.PublicIP, Port: ports.port}, LeaseTTLMS: m.config.LeaseTTLMS, AttachTTLMS: 30000, ConfigRevision: m.revision, WireMode: request.Spec.WireMode, Direction: request.Spec.Direction}
 	if ports.rtcpPort != 0 {
 		s.lease.PublicRTCP = &protocol.Endpoint{IP: m.config.PublicIP, Port: ports.rtcpPort}
@@ -354,12 +356,15 @@ func (s *Session) readUDP(conn *net.UDPConn, rtcp bool) {
 		if rtcp {
 			kind = protocol.UDPRTCP
 		}
+		if !rtcp {
+			s.markFirstPacket()
+		}
 		if e = b.Send(s.ctx, kind, packet); e != nil {
 			s.fail(e)
 			return
 		}
 		s.manager.registry.AddBytes(s.ref.ID, true, n)
-		s.firstOnce.Do(func() { close(s.firstMedia) })
+
 		s.manager.registry.Receiving(s.ref.ID)
 	}
 }
@@ -433,6 +438,7 @@ func (s *Session) acceptTCP() {
 			s.fail(protocol.Failure(protocol.MediaBackpressure, "gateway bandwidth budget exceeded"))
 			return
 		}
+		s.markFirstPacket()
 		for data := first; len(data) > 0; {
 			size := min(len(data), 65536)
 			if e = b.Send(s.ctx, protocol.TCPBytes, data[:size]); e != nil {
@@ -442,7 +448,7 @@ func (s *Session) acceptTCP() {
 			data = data[size:]
 		}
 		s.manager.registry.AddBytes(s.ref.ID, true, len(first))
-		s.firstOnce.Do(func() { close(s.firstMedia) })
+
 		s.manager.registry.Receiving(s.ref.ID)
 		s.readTCPWithParser(conn, parser)
 		stopCancel()
@@ -472,6 +478,7 @@ func (s *Session) readTCPWithParser(conn net.Conn, parser *protocol.RTPFramer) {
 				return
 			}
 			if len(data) > 0 {
+				s.markFirstPacket()
 				for len(data) > 0 {
 					size := min(len(data), 65536)
 					if !s.manager.budget.Allow(true, size) {
@@ -485,7 +492,7 @@ func (s *Session) readTCPWithParser(conn net.Conn, parser *protocol.RTPFramer) {
 					s.manager.registry.AddBytes(s.ref.ID, true, size)
 					data = data[size:]
 				}
-				s.firstOnce.Do(func() { close(s.firstMedia) })
+
 				s.manager.registry.Receiving(s.ref.ID)
 			}
 		}
@@ -643,4 +650,27 @@ func (s *Session) QueuedBytes() int64 {
 		return 0
 	}
 	return b.QueuedBytes()
+}
+
+func (m *Manager) Inspect(owner lease.Owner, id string) (protocol.MediaInspection, error) {
+	v, err := m.registry.Get(owner, id)
+	if err != nil {
+		return protocol.MediaInspection{}, err
+	}
+	s, ok := v.(*Session)
+	if !ok {
+		return protocol.MediaInspection{}, fmt.Errorf("not a media session")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := protocol.MediaInspection{}
+	if s.firstAt != nil {
+		n := s.firstAt.Sub(s.opened).Milliseconds()
+		out.FirstPacketMS = &n
+	}
+	return out, nil
+}
+
+func (s *Session) markFirstPacket() {
+	s.firstOnce.Do(func() { now := time.Now(); s.mu.Lock(); s.firstAt = &now; s.mu.Unlock(); close(s.firstMedia) })
 }

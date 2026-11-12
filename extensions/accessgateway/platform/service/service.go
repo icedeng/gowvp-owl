@@ -17,20 +17,23 @@ import (
 	"github.com/gowvp/owl/extensions/accessgateway/platform/credentials"
 	"github.com/gowvp/owl/extensions/accessgateway/platform/store"
 	"github.com/gowvp/owl/extensions/accessgateway/protocol"
+	"github.com/gowvp/owl/extensions/accessgateway/transport"
 	"gorm.io/gorm"
 )
 
 type Service struct {
-	config    core.Config
-	repo      *store.Repository
-	runtime   core.RuntimePort
-	files     *credentials.Files
-	host      core.ManagementHost
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	wake      chan struct{}
-	lastPrune time.Time
+	diagnosticMu   sync.Mutex
+	config         core.Config
+	repo           *store.Repository
+	runtime        core.RuntimePort
+	files          *credentials.Files
+	host           core.ManagementHost
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	wake           chan struct{}
+	lastPrune      time.Time
+	lastFaultCheck time.Time
 }
 
 func New(parent context.Context, config core.Config, repo *store.Repository, runtime core.RuntimePort, files *credentials.Files, host core.ManagementHost) *Service {
@@ -51,6 +54,7 @@ func (s *Service) Start() {
 			case <-s.wake:
 			}
 			s.runPending()
+			s.checkFaults()
 		}
 	}()
 }
@@ -94,7 +98,7 @@ func (s *Service) view(ctx context.Context, row store.Gateway, detail bool, batc
 		r = batch[0].snapshots[row.ID]
 	}
 	now := time.Now().UTC()
-	v := core.GatewayView{ID: row.StableID, Name: row.Name, Group: row.GroupName, Description: row.Description, Revision: protocol.Number(row.Revision), ConfigRevision: protocol.Number(row.ConfigRevision), AppliedRevision: protocol.Number(row.AppliedRevision), AdminState: row.AdminState, ConnectionState: r.ConnectionState, HealthState: r.HealthState, PendingOperationID: row.PendingOperationID, LastSeenAt: row.LastSeenAt, ConnectedAt: r.ConnectedAt, LastError: row.LastError, Capabilities: r.Capabilities, MetricsStale: true, Snapshot: core.Snapshot{SnapshotID: uuid.NewString(), SampledAt: now, ReceivedAt: r.ReceivedAt, Stale: true}}
+	v := core.GatewayView{Software: r.Software, AlarmError: r.AlarmError, RecoveryDurationMS: r.RecoveryDurationMS, ID: row.StableID, Name: row.Name, Group: row.GroupName, Description: row.Description, Revision: protocol.Number(row.Revision), ConfigRevision: protocol.Number(row.ConfigRevision), AppliedRevision: protocol.Number(row.AppliedRevision), AdminState: row.AdminState, ConnectionState: r.ConnectionState, HealthState: r.HealthState, PendingOperationID: row.PendingOperationID, LastSeenAt: row.LastSeenAt, ConnectedAt: r.ConnectedAt, LastError: row.LastError, Capabilities: r.Capabilities, MetricsStale: true, Snapshot: core.Snapshot{SnapshotID: uuid.NewString(), SampledAt: now, ReceivedAt: r.ReceivedAt, Stale: true}}
 	if v.Capabilities == nil {
 		v.Capabilities = []string{}
 	}
@@ -269,7 +273,9 @@ func (s *Service) validate(ctx context.Context, c core.DesiredConfig, gatewayPK 
 		return core.Fail(429, "RESOURCE_EXHAUSTED", "配置超过 A 的全局额度")
 	}
 	if c.ProxyRef != nil {
-		return core.Fail(409, "CAPABILITY_UNSUPPORTED", "尚未配置受控出站代理")
+		if _, err := transport.LoadProxy(transport.ProxyDirectory(s.config.CredentialDir), *c.ProxyRef, c.URL); err != nil {
+			return core.Fail(400, "PROXY_INVALID", err.Error())
+		}
 	}
 	if s.host != nil {
 		if e := s.host.ValidateMediaServer(ctx, c.DefaultMediaServerID, c.RequiredCapabilities); e != nil {
@@ -385,6 +391,9 @@ func (s *Service) mutate(ctx context.Context, m core.Mutation, id, kind string, 
 		}
 		gatewayID := op.GatewayID
 		event := store.Event{Base: store.Base{ID: uuid.NewString()}, GatewayID: gatewayID, GatewayNameSnapshot: row.Name, Actor: m.Actor, EventType: kind, TraceID: op.ID, Reason: kind, Details: encode(map[string]any{"operation_id": op.ID}), OccurredAt: now}
+		if kind == "release_report" || kind == "channel_diagnostic" {
+			event.Details = encode(result.Body)
+		}
 		return tx.Create(&event).Error
 	})
 	if e != nil {

@@ -3,12 +3,17 @@ package event
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/ixugo/goddd/pkg/orm"
 )
 
 // Event domain model
 type Event struct {
+	GatewayID       string        `gorm:"size:64;not null;default:''" json:"gateway_id,omitempty"`
+	GatewayName     string        `gorm:"size:80;not null;default:''" json:"gateway_name,omitempty"`
+	Historical      bool          `gorm:"not null;default:false" json:"historical"`
+	ReceivedAt      *time.Time    `json:"received_at,omitempty"`
 	AggregationKey  *string       `gorm:"size:64;index:idx_events_aggregation_end,priority:1" json:"-"`
 	OccurrenceCount int           `gorm:"not null;default:1" json:"occurrence_count"`
 	Status          string        `gorm:"size:16;not null;default:pending;index:idx_events_status_started,priority:1" json:"status"`
