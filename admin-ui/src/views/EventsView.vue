@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Camera, ChevronLeft, ChevronRight, Clapperboard, LayoutGrid, ListFilter, LoaderCircle, Play, RefreshCcw, Rows3, Search, Settings2, ShieldAlert } from '@lucide/vue'
 import { useRoute, useRouter } from 'vue-router'
 import RemoteChannelSelect from '../components/RemoteChannelSelect.vue'
@@ -16,12 +16,12 @@ const route = useRoute(), router = useRouter()
 const eventNotices = useEventNoticesStore()
 type Presentation = 'cards' | 'table'
 const presentation = ref<Presentation>(readPresentation())
-const cardsHovered = ref(false), cardsFocused = ref(false)
 const view = ref('events'), query = ref(''), source = ref('all'), period = ref('all'), status = ref('pending')
 const device = ref('all'), channel = ref('all'), evidence = ref(''), policyDevice = ref('all')
 const page = ref(1), size = ref(20), jumpPage = ref(1), total = ref(0)
 const events = ref<ApiEvent[]>([]), loading = ref(false), loadError = ref('')
-const selected = ref<number[]>([]), selectedId = ref(0), autoRefresh = ref(false), imageErrors = ref(new Set<number>())
+const selected = ref<number[]>([]), selectedId = ref(0), autoRefresh = ref(true), imageErrors = ref(new Set<number>())
+const refreshing = ref(false), lastRefreshedAt = ref(''), pageVisible = ref(document.visibilityState !== 'hidden')
 const bulkItems = ref<ApiEvent[]>([]), bulkStatus = ref<EventStatus>('processing'), bulkNote = ref(''), bulkSaving = ref(false), bulkError = ref('')
 let loadSequence = 0, timer: number | undefined
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
@@ -31,16 +31,15 @@ const isClosed = (item: ApiEvent) => item.status === 'resolved' || item.status =
 const canBatch = computed(() => chosen.value.length > 0 && (chosen.value.every(isClosed) || chosen.value.every(item => !isClosed(item))))
 const allSelected = computed(() => events.value.length > 0 && events.value.every(item => selected.value.includes(item.id)))
 const hasFilters = computed(() => Boolean(query.value || source.value !== 'all' || period.value !== 'all' || device.value !== 'all' || channel.value !== 'all' || evidence.value))
+const refreshPaused = computed(() => Boolean(selected.value.length || selectedId.value || bulkItems.value.length))
+const canAutoRefresh = computed(() => autoRefresh.value && view.value === 'events' && pageVisible.value && !refreshPaused.value)
 function readPresentation(): Presentation {
  try { return window.localStorage.getItem('owl.events.presentation') === 'table' ? 'table' : 'cards' }
  catch { return 'cards' }
 }
 function changePresentation(value: Presentation) {
- presentation.value = value; cardsHovered.value = false; cardsFocused.value = false
+ presentation.value = value
  try { window.localStorage.setItem('owl.events.presentation', value) } catch { /* 存储不可用时仍允许切换视图。 */ }
-}
-function onCardsFocusOut(event: FocusEvent) {
- cardsFocused.value = event.relatedTarget instanceof Node && (event.currentTarget as HTMLElement).contains(event.relatedTarget)
 }
 function selectEvent(id: number, checked: boolean) {
  selected.value = checked ? [...new Set([...selected.value, id])] : selected.value.filter(value => value !== id)
@@ -51,17 +50,20 @@ function ranges() {
  return { start_ms: period.value === 'today' ? today.getTime() : end - (period.value === '7d' ? 7 : 30) * 86400000, end_ms: end }
 }
 async function load(silent = false) {
+ if (silent && (!canAutoRefresh.value || loading.value || refreshing.value)) return
  void eventNotices.refresh()
  const sequence = ++loadSequence
- if (!silent) { cardsHovered.value = false; cardsFocused.value = false; loading.value = true }
+ refreshing.value = true
+ if (!silent) loading.value = true
  loadError.value = ''
  try {
   const { data } = await api.events({ page: page.value, size: size.value, key: query.value.trim() || undefined, status: status.value || undefined, source: source.value, did: device.value === 'all' ? undefined : device.value, cid: channel.value === 'all' ? undefined : channel.value, evidence: evidence.value || undefined, ...ranges() })
-  if (sequence !== loadSequence || (silent && (selected.value.length || selectedId.value || bulkItems.value.length || cardsHovered.value || cardsFocused.value))) return
+  if (sequence !== loadSequence || (silent && !canAutoRefresh.value)) return
   events.value = data.items || []; total.value = data.total || 0; selected.value = []; imageErrors.value = new Set()
+  lastRefreshedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
   if (page.value > pageCount.value) { navigate(pageCount.value); return }
  } catch (cause) { if (sequence === loadSequence) loadError.value = errorMessage(cause, '事件加载失败，请重试') }
- finally { if (sequence === loadSequence) loading.value = false }
+ finally { if (sequence === loadSequence) { loading.value = false; refreshing.value = false } }
 }
 function navigate(nextPage = 1) {
  const params: Record<string, string> = { status: status.value || 'all', page: String(nextPage), size: String(size.value) }
@@ -94,8 +96,13 @@ async function submitBatch() {
  finally { bulkSaving.value = false }
 }
 function toggleRefresh() {
- autoRefresh.value = !autoRefresh.value; window.clearInterval(timer)
- if (autoRefresh.value) timer = window.setInterval(() => { if (view.value === 'events' && !loading.value && !selected.value.length && !selectedId.value && !bulkItems.value.length && !cardsHovered.value && !cardsFocused.value) void load(true) }, 30000)
+ autoRefresh.value = !autoRefresh.value
+}
+function refreshVisiblePage() {
+ const wasVisible = pageVisible.value
+ pageVisible.value = document.visibilityState !== 'hidden'
+ // 从后台返回由 watch 补刷；已可见窗口重新获得焦点时也核对一次。
+ if (wasVisible && pageVisible.value) void load(true)
 }
 function restore() {
  const q = route.query
@@ -111,11 +118,21 @@ function restore() {
  if (view.value === 'events') void load()
 }
 watch(() => route.query, restore, { immediate: true })
-onBeforeUnmount(() => { ++loadSequence; window.clearInterval(timer) })
+watch(canAutoRefresh, active => { if (active) void load(true) })
+onMounted(() => {
+ timer = window.setInterval(() => { void load(true) }, 30000)
+ document.addEventListener('visibilitychange', refreshVisiblePage)
+ window.addEventListener('focus', refreshVisiblePage)
+})
+onBeforeUnmount(() => {
+ ++loadSequence; window.clearInterval(timer)
+ document.removeEventListener('visibilitychange', refreshVisiblePage)
+ window.removeEventListener('focus', refreshVisiblePage)
+})
 </script>
 <template>
  <main class="page-content event-workspace">
-  <header class="page-head"><div><h1 class="page-title">事件中心</h1><p class="page-desc">按设备核实报警、查看现场证据并记录处置结果。</p></div><div v-if="view === 'events'" class="head-actions"><button class="btn" :aria-pressed="autoRefresh" @click="toggleRefresh">{{ autoRefresh ? '自动刷新已开启' : '自动刷新 30 秒' }}</button><button class="btn" :disabled="loading" @click="load()"><RefreshCcw :class="{ 'animate-spin': loading }" />刷新事件</button></div></header>
+  <header class="page-head"><div><h1 class="page-title">事件中心</h1><p class="page-desc">按设备核实报警、查看现场证据并记录处置结果。</p></div><div v-if="view === 'events'" class="head-actions"><button class="btn" :aria-pressed="autoRefresh" @click="toggleRefresh">{{ autoRefresh ? '自动刷新：开（30 秒）' : '自动刷新：关' }}</button><button class="btn" :disabled="loading" @click="load()"><RefreshCcw :class="{ 'animate-spin': refreshing }" />刷新事件</button></div></header>
   <nav class="resource-detail-nav event-main-nav" aria-label="事件中心分区"><button :class="{ active: view === 'events' }" :aria-current="view === 'events' ? 'page' : undefined" @click="changeView('events')">事件处理</button><button :class="{ active: view === 'policies' }" :aria-current="view === 'policies' ? 'page' : undefined" @click="changeView('policies')"><Settings2 />联动策略</button></nav>
   <section v-if="view === 'policies'" class="card card-pad event-policy-panel"><div class="policy-selector"><label class="form-label">配置设备</label><RemoteChannelSelect v-model="policyDevice" resource="device" type="GB28181" all-label="请选择国标设备" aria-label="选择配置联动策略的国标设备" @change="navigate(page)"/><RouterLink v-if="policyDevice !== 'all'" class="btn" :to="`/devices/${encodeURIComponent(policyDevice)}?tab=events`">打开设备详情</RouterLink></div><EventPolicyEditor :device-id="policyDevice"/></section>
   <template v-else>
@@ -128,7 +145,7 @@ onBeforeUnmount(() => { ++loadSequence; window.clearInterval(timer) })
       <label v-if="presentation === 'cards'" class="event-select-all"><input type="checkbox" :checked="allSelected" :indeterminate="selected.length > 0 && !allSelected" :disabled="loading || !events.length" @change="selectAll(($event.target as HTMLInputElement).checked)">选择本页</label>
       <span aria-live="polite">{{ status ? statusLabels[status as EventStatus] : '全部事件' }} · 共 {{ total }} 条记录</span>
       <span v-if="selected.length" class="event-selection-actions">已选 {{ selected.length }} 条 <button class="btn btn-sm" :disabled="!canBatch" @click="openBatch">批量处理</button><small v-if="!canBatch">请分别选择未结束或已结束事件</small></span>
-      <small v-if="autoRefresh">{{ selected.length || selectedId || bulkItems.length || cardsHovered || cardsFocused ? '操作期间自动刷新已暂停' : '每 30 秒自动刷新' }}</small>
+      <small v-if="autoRefresh">{{ refreshPaused ? '勾选或处理期间暂停，结束后立即刷新' : '每 30 秒自动刷新' }}</small><small v-if="lastRefreshedAt">最近更新 {{ lastRefreshedAt }}</small>
      </div>
      <div class="event-presentation-switch" role="group" aria-label="事件展示方式">
       <button type="button" class="btn btn-sm" :class="{ active: presentation === 'cards' }" :aria-pressed="presentation === 'cards'" @click="changePresentation('cards')"><LayoutGrid aria-hidden="true" />卡片</button>
@@ -137,7 +154,7 @@ onBeforeUnmount(() => { ++loadSequence; window.clearInterval(timer) })
     </div>
     <div v-if="presentation === 'table'" class="table-wrap" :aria-busy="loading"><table class="data-table event-table"><thead><tr><th class="check-cell"><input type="checkbox" :checked="allSelected" :indeterminate="selected.length > 0 && !allSelected" :disabled="loading || !events.length" aria-label="选择本页全部事件" @change="selectAll(($event.target as HTMLInputElement).checked)"></th><th>发生时间</th><th>事件</th><th>设备 / 通道</th><th>现场证据</th><th>处理状态</th><th class="event-action-cell">操作</th></tr></thead><tbody v-if="!loading && !loadError"><tr v-for="item in events" :key="item.id" :class="{ 'event-row-selected': selected.includes(item.id) }"><td class="check-cell"><input v-model="selected" type="checkbox" :value="item.id" :aria-label="`选择 ${deviceLabel(item)} 的 ${eventTitle(item)}事件`"></td><td class="event-table-time">{{ formatDate(item.started_at || item.created_at) }}<small>事件 #{{ item.id }}<template v-if="(item.occurrence_count || 1) > 1"> · 连续 {{ item.occurrence_count }} 次</template></small></td><td><button class="event-title-link" @click="selectedId = item.id">{{ eventTitle(item) }}</button><small>{{ isAlarm(item) ? '设备报警' : 'AI 检测' }}<template v-if="alarmSummary(item)"> · {{ alarmSummary(item) }}</template></small></td><td class="event-device"><strong>{{ deviceLabel(item) }}</strong><span>{{ channelLabel(item) }}</span><small>{{ item.device_code || item.did || item.channel_code || item.cid }}</small></td><td><div class="event-evidence-status"><button v-if="item.image_path && !imageErrors.has(item.id)" class="event-thumb" :aria-label="`查看 ${deviceLabel(item)} 的报警抓拍`" @click="selectedId = item.id"><img :src="api.eventThumbnail(item.image_path)" loading="lazy" alt="" @error="imageErrors.add(item.id)"></button><div><span :class="{ 'evidence-failed': item.evidence?.snapshot_state === 'failed' }"><Camera />{{ item.image_path ? (imageErrors.has(item.id) ? '图片不可用' : '有抓拍') : evidenceLabel(item.evidence?.snapshot_state) }}</span><span :class="{ 'evidence-failed': item.evidence?.video_state === 'failed' }"><Clapperboard />{{ item.video_path ? '有视频片段' : evidenceLabel(item.evidence?.video_state) }}</span></div></div></td><td><span class="status" :class="item.status === 'resolved' ? 'online' : item.status === 'ignored' ? '' : 'pending'">{{ statusLabels[item.status] }}</span></td><td class="event-action-cell"><div class="event-row-actions"><button class="btn btn-sm" @click="selectedId = item.id">查看 / 处理</button><RouterLink v-if="item.cid" class="btn btn-sm" :to="`/live?channel=${encodeURIComponent(item.cid)}`"><Play aria-hidden="true" />实时画面</RouterLink></div></td></tr></tbody></table>
     </div>
-    <div v-else-if="!loading && !loadError && events.length" class="event-preview-grid" aria-label="事件卡片" @mouseenter="cardsHovered = true" @mouseleave="cardsHovered = false" @focusin="cardsFocused = true" @focusout="onCardsFocusOut">
+    <div v-else-if="!loading && !loadError && events.length" class="event-preview-grid" aria-label="事件卡片">
      <EventPreviewCard v-for="item in events" :key="item.id" :item="item" :selected="selected.includes(item.id)" :image-failed="imageErrors.has(item.id)" @open="selectedId = $event" @select="selectEvent" @image-error="imageErrors.add($event)" />
     </div>
      <div v-if="loading" class="empty-state" role="status"><LoaderCircle class="mx-auto h-6 w-6 animate-spin" />正在加载事件…</div><div v-else-if="!loadError && !events.length" class="empty-state empty-action"><ListFilter /><strong>{{ status === 'pending' ? '当前没有待处理事件' : '没有符合条件的事件' }}</strong><span>可切换处理状态、调整设备或时间范围查看历史记录。</span><button v-if="hasFilters" class="btn" @click="resetFilters">清除筛选</button><button v-else-if="status" class="btn" @click="status = ''; applyFilters()">查看全部事件</button></div>
