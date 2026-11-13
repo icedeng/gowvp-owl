@@ -1422,7 +1422,7 @@
           "event_id": {
             "format": "int64",
             "type": "integer",
-            "description": "事件整数 ID。",
+            "description": "告警事件整数 ID；设备上下线通知没有告警事件，固定为0。投递身份使用 id（delivery_id）。",
             "example": 101
           },
           "id": {
@@ -1464,7 +1464,9 @@
             "enum": [
               "event.created",
               "event.evidence.updated",
-              "event.status.changed"
+              "event.status.changed",
+              "device.online",
+              "device.offline"
             ]
           }
         },
@@ -2124,6 +2126,38 @@
             "type": "string",
             "description": "资源当前生命周期状态，详见枚举及该接口说明。",
             "example": "paused"
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "event.created",
+                "event.evidence.updated",
+                "event.status.changed",
+                "device.online",
+                "device.offline"
+              ]
+            },
+            "maxItems": 5,
+            "description": "选择通知类型。创建时省略或传 [] 仅接收原有三类告警通知；PATCH 省略保持原值，[] 恢复三类告警。device.online/device.offline 还需 device:read 权限，且不能设置非空 channel_ids/channel_codes/labels；需拆分订阅。",
+            "example": [
+              "device.online",
+              "device.offline"
+            ],
+            "nullable": true
+          },
+          "device_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "description": "设备内部 ID 筛选，适用于所有所选通知类型；空数组表示全部当前授权设备。与 device_codes 互斥，保存和投递时均检查应用设备权限。",
+            "example": [
+              "device-001"
+            ],
+            "nullable": true
           }
         },
         "type": "object"
@@ -2188,18 +2222,71 @@
                 "channel_code": "50010700001320000011"
               }
             ]
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "event.created",
+                "event.evidence.updated",
+                "event.status.changed",
+                "device.online",
+                "device.offline"
+              ]
+            },
+            "maxItems": 5,
+            "description": "选择通知类型。创建时省略或传 [] 仅接收原有三类告警通知；PATCH 省略保持原值，[] 恢复三类告警。device.online/device.offline 还需 device:read 权限，且不能设置非空 channel_ids/channel_codes/labels；需拆分订阅。",
+            "example": [
+              "device.online",
+              "device.offline"
+            ]
+          },
+          "device_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "description": "设备内部 ID 筛选，适用于所有所选通知类型；空数组表示全部当前授权设备。与 device_codes 互斥，保存和投递时均检查应用设备权限。",
+            "example": [
+              "device-001"
+            ]
+          },
+          "device_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "description": "按设备完整编码筛选，与 device_ids 不能同时出现。空数组表示全部当前授权设备，null 不合法；未知或未授权编码返回404。保存时解析并去重为内部 device_ids，同码重建设备不继承绑定。",
+            "example": [
+              "50010700001110000001"
+            ]
           }
         },
         "required": [
           "callback_target_id"
         ],
         "type": "object",
-        "not": {
-          "required": [
-            "channel_ids",
-            "channel_codes"
-          ]
-        }
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "channel_ids",
+                "channel_codes"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "device_ids",
+                "device_codes"
+              ]
+            }
+          }
+        ]
       },
       "SubscriptionPatch": {
         "additionalProperties": false,
@@ -2267,18 +2354,71 @@
                 "channel_code": "50010700001320000011"
               }
             ]
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "event.created",
+                "event.evidence.updated",
+                "event.status.changed",
+                "device.online",
+                "device.offline"
+              ]
+            },
+            "maxItems": 5,
+            "description": "选择通知类型。创建时省略或传 [] 仅接收原有三类告警通知；PATCH 省略保持原值，[] 恢复三类告警。device.online/device.offline 还需 device:read 权限，且不能设置非空 channel_ids/channel_codes/labels；需拆分订阅。",
+            "example": [
+              "device.online",
+              "device.offline"
+            ]
+          },
+          "device_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "description": "设备内部 ID 筛选，适用于所有所选通知类型；空数组表示全部当前授权设备。与 device_codes 互斥，保存和投递时均检查应用设备权限。",
+            "example": [
+              "device-001"
+            ]
+          },
+          "device_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "description": "按设备完整编码筛选，与 device_ids 不能同时出现。空数组表示全部当前授权设备，null 不合法；未知或未授权编码返回404。保存时解析并去重为内部 device_ids，同码重建设备不继承绑定。",
+            "example": [
+              "50010700001110000001"
+            ]
           }
         },
         "required": [
           "revision"
         ],
         "type": "object",
-        "not": {
-          "required": [
-            "channel_ids",
-            "channel_codes"
-          ]
-        }
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "channel_ids",
+                "channel_codes"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "device_ids",
+                "device_codes"
+              ]
+            }
+          }
+        ]
       },
       "TargetInput": {
         "additionalProperties": false,
@@ -3565,6 +3705,85 @@
             "format": "date-time"
           }
         }
+      },
+      "CallbackDeviceStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_type",
+          "notification_id",
+          "sequence",
+          "delivery_id",
+          "device_id",
+          "device_code",
+          "device_name",
+          "device_type",
+          "previous_is_online",
+          "is_online",
+          "occurred_at",
+          "reason"
+        ],
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "device.online",
+              "device.offline"
+            ],
+            "description": "设备上线或离线通知类型。"
+          },
+          "notification_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "description": "持久化通知序号，与 sequence 相同。"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "description": "全局递增但不连续的通知序号。同一设备的状态变更按序提交；到达可能乱序，接收方按 device_id 只应用大于已记录序号的通知。"
+          },
+          "delivery_id": {
+            "type": "string",
+            "description": "对应 X-Owl-Delivery-ID。多次重试保持相同，接收端按此幂等。",
+            "example": "delivery-001"
+          },
+          "device_id": {
+            "type": "string",
+            "description": "设备内部 ID，作为状态归属主键；与设备详情的 id 相同。"
+          },
+          "device_code": {
+            "type": "string",
+            "description": "设备完整编码，对应设备详情的 device_id。"
+          },
+          "device_name": {
+            "type": "string",
+            "description": "设备名称快照。"
+          },
+          "device_type": {
+            "type": "string",
+            "description": "设备协议类型；当前状态探测覆盖 GB28181 和 ONVIF。"
+          },
+          "previous_is_online": {
+            "type": "boolean",
+            "description": "变更前的设备持久化在线状态。"
+          },
+          "is_online": {
+            "type": "boolean",
+            "description": "变更后的设备在线状态，与 event_type 一致。"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "OWL 确认状态变化的服务器时间，UTC；不是设备端断电时间。"
+          },
+          "reason": {
+            "type": "string",
+            "description": "状态来源：registration、unregistration、heartbeat、heartbeat_timeout、device_status、options_probe、gateway_unavailable、gateway_recovered、credentials_changed、onvif_probe、onvif_timeout、device_created 或 status_changed。gateway_unavailable 只表示网关链路不可用，不能推断设备断电；接收方应兼容新增原因。"
+          }
+        },
+        "description": "设备状态通知，不含 event_id 或告警媒体；签名头 X-Owl-Event-ID 固定为字符串0，其余签名、重试和去重规则相同。"
       }
     },
     "securitySchemes": {
@@ -9575,7 +9794,9 @@
                           "person"
                         ],
                         "revision": 1,
-                        "status": "paused"
+                        "status": "paused",
+                        "event_types": [],
+                        "device_ids": []
                       }
                     ],
                     "page": 1,
@@ -13444,7 +13665,7 @@
     },
     "/openapi/v1/subscriptions": {
       "get": {
-        "description": "游标分页返回本应用订阅，不返回独立回调密钥。 启用后接收event.created、event.evidence.updated及event.status.changed三类JSON回调；同一事件可有多条独立delivery。连续报警聚合本身不再次推送首次报警。",
+        "description": "游标分页返回本应用订阅，不返回独立回调密钥。 event_types 省略或为空时保持原三类告警通知；显式指定 device.online/device.offline 可接收设备状态通知，并额外要求 device:read。device_codes（兼容 device_ids）可筛选设备，空数组仅表示全部授权设备。设备通知不能混用非空通道或告警标签筛选。同一状态变化按独立 delivery 投递，重复心跳不通知。",
         "operationId": "get_openapi_v1_subscriptions",
         "parameters": [
           {
@@ -13549,7 +13770,9 @@
                           "person"
                         ],
                         "revision": 1,
-                        "status": "paused"
+                        "status": "paused",
+                        "event_types": [],
+                        "device_ids": []
                       }
                     ],
                     "next_cursor": null
@@ -13589,14 +13812,14 @@
             "ApplicationSignature": []
           }
         ],
-        "summary": "查询告警订阅",
+        "summary": "查询事件订阅",
         "tags": [
           "业务"
         ],
         "x-scope": "event:subscribe"
       },
       "post": {
-        "description": "须引用管理员批准的 callback_target_id；channel_ids/labels 为空表示不追加对应筛选，不扩大设备权限。初始 paused，轮换签名密钥后 PATCH 为 active。 通道筛选可使用 channel_codes 数组，每项为 device_code 和完整 channel_code；与 channel_ids 互斥，空数组表示应用全部授权资源，未知或未授权资源 404，重复通道编码 409。返回 channel_ids 为解析后的内部 ID，后续可继续使用 channel_codes 修改。 启用后接收event.created、event.evidence.updated及event.status.changed三类JSON回调；同一事件可有多条独立delivery。连续报警聚合本身不再次推送首次报警。",
+        "description": "须引用管理员批准的 callback_target_id；channel_ids/labels 为空表示不追加对应筛选，不扩大设备权限。初始 paused，轮换签名密钥后 PATCH 为 active。 通道筛选可使用 channel_codes 数组，每项为 device_code 和完整 channel_code；与 channel_ids 互斥，空数组表示应用全部授权资源，未知或未授权资源 404，重复通道编码 409。返回 channel_ids 为解析后的内部 ID，后续可继续使用 channel_codes 修改。 event_types 省略或为空时保持原三类告警通知；显式指定 device.online/device.offline 可接收设备状态通知，并额外要求 device:read。device_codes（兼容 device_ids）可筛选设备，空数组仅表示全部授权设备。设备通知不能混用非空通道或告警标签筛选。同一状态变化按独立 delivery 投递，重复心跳不通知。",
         "operationId": "post_openapi_v1_subscriptions",
         "parameters": [
           {
@@ -13642,17 +13865,35 @@
               "schema": {
                 "$ref": "#/components/schemas/SubscriptionInput"
               },
-              "example": {
-                "callback_target_id": "target-001",
-                "channel_codes": [
-                  {
-                    "device_code": "50010700001110000001",
-                    "channel_code": "50010700001320000011"
+              "examples": {
+                "alarm": {
+                  "summary": "按通道订阅告警（兼容原有默认）",
+                  "value": {
+                    "callback_target_id": "target-001",
+                    "channel_codes": [
+                      {
+                        "device_code": "50010700001110000001",
+                        "channel_code": "50010700001320000011"
+                      }
+                    ],
+                    "labels": [
+                      "person"
+                    ]
                   }
-                ],
-                "labels": [
-                  "person"
-                ]
+                },
+                "deviceStatus": {
+                  "summary": "按设备编码订阅上下线",
+                  "value": {
+                    "callback_target_id": "target-001",
+                    "event_types": [
+                      "device.online",
+                      "device.offline"
+                    ],
+                    "device_codes": [
+                      "50010700001110000001"
+                    ]
+                  }
+                }
               }
             }
           },
@@ -13699,7 +13940,9 @@
                       "person"
                     ],
                     "revision": 1,
-                    "status": "paused"
+                    "status": "paused",
+                    "event_types": [],
+                    "device_ids": []
                   }
                 }
               }
@@ -13736,7 +13979,7 @@
             "ApplicationSignature": []
           }
         ],
-        "summary": "创建告警订阅",
+        "summary": "创建事件订阅",
         "tags": [
           "业务"
         ],
@@ -13819,7 +14062,9 @@
                       "person"
                     ],
                     "revision": 1,
-                    "status": "paused"
+                    "status": "paused",
+                    "event_types": [],
+                    "device_ids": []
                   }
                 }
               }
@@ -13856,7 +14101,7 @@
             "ApplicationSignature": []
           }
         ],
-        "summary": "取消告警订阅",
+        "summary": "取消事件订阅",
         "tags": [
           "业务"
         ],
@@ -13937,7 +14182,9 @@
                       "person"
                     ],
                     "revision": 1,
-                    "status": "paused"
+                    "status": "paused",
+                    "event_types": [],
+                    "device_ids": []
                   }
                 }
               }
@@ -13981,7 +14228,7 @@
         "x-scope": "event:subscribe"
       },
       "patch": {
-        "description": "必传最近 revision，仅修改传入字段。启用须有已批准目标和签名密钥；成功后绑定本次签名凭据。AK 轮换时先用新 AK 更新订阅，再撤销旧 AK。 通道筛选可使用 channel_codes 数组，每项为 device_code 和完整 channel_code；与 channel_ids 互斥，空数组表示应用全部授权资源，未知或未授权资源 404，重复通道编码 409。返回 channel_ids 为解析后的内部 ID，后续可继续使用 channel_codes 修改。",
+        "description": "必传最近 revision，仅修改传入字段。启用须有已批准目标和签名密钥；成功后绑定本次签名凭据。AK 轮换时先用新 AK 更新订阅，再撤销旧 AK。 通道筛选可使用 channel_codes 数组，每项为 device_code 和完整 channel_code；与 channel_ids 互斥，空数组表示应用全部授权资源，未知或未授权资源 404，重复通道编码 409。返回 channel_ids 为解析后的内部 ID，后续可继续使用 channel_codes 修改。 可修改 event_types 和 device_codes/device_ids；省略保留原值，空数组清除对应筛选（event_types 空数组恢复原三类告警）。设备状态类型需 device:read，且不能使用非空通道/告警标签筛选。",
         "operationId": "patch_openapi_v1_subscriptions_subscription",
         "parameters": [
           {
@@ -14082,7 +14329,9 @@
                       "person"
                     ],
                     "revision": 2,
-                    "status": "active"
+                    "status": "active",
+                    "event_types": [],
+                    "device_ids": []
                   }
                 }
               }
@@ -14451,7 +14700,7 @@
             "ApplicationSignature": []
           }
         ],
-        "summary": "重投失败或死信告警",
+        "summary": "重投失败或死信通知",
         "tags": [
           "业务"
         ],
@@ -18297,9 +18546,16 @@
     }
   ],
   "x-callback": {
-    "description": "告警通知 POST 到管理员批准的独立目标；与业务 API 使用不同签名密钥。",
+    "description": "告警及设备状态通知 POST 到管理员批准的独立目标；按 event_type 解析正文。与业务 API 使用不同签名密钥。设备状态回调的 X-Owl-Event-ID 固定为0。",
     "schema": {
-      "$ref": "#/components/schemas/CallbackEvent"
+      "oneOf": [
+        {
+          "$ref": "#/components/schemas/CallbackEvent"
+        },
+        {
+          "$ref": "#/components/schemas/CallbackDeviceStatus"
+        }
+      ]
     }
   }
 }

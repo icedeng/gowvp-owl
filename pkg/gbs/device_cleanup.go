@@ -253,7 +253,7 @@ func (s *Server) InvalidateDeviceRegistration(ctx context.Context, deviceID stri
 	if deviceID == "" {
 		return fmt.Errorf("GB28181 device ID is required")
 	}
-	if err := s.changeMemory(ctx, deviceID, func(device *ipc.Device) error {
+	if err := s.changeMemory(ipc.WithDeviceStatusReason(ctx, "credentials_changed"), deviceID, func(device *ipc.Device) error {
 		device.IsOnline = false
 		setPersistedRegistrationClosed(device, true)
 		return nil

@@ -18,7 +18,12 @@ type Device = Cache
 
 // Create implements ipc.DeviceStorer.
 func (d *Device) Create(ctx context.Context, dev *ipc.Device) error {
-	if err := d.Storer.Device().Create(ctx, dev); err != nil {
+	if err := d.Storer.Device().Session(ctx, func(tx *gorm.DB) error {
+		if err := tx.Create(dev).Error; err != nil {
+			return err
+		}
+		return d.RecordDeviceStatusChange(tx, false, dev, "device_created")
+	}); err != nil {
 		return err
 	}
 	// 首次 REGISTER 自动建档时尚未提交来源地址，由注册流程建立可用运行态。
@@ -95,6 +100,7 @@ func (d *Device) Update(ctx context.Context, dev *ipc.Device, changeFn func(*ipc
 					return err
 				}
 				previousPassword := dev.Password
+				previousOnline := dev.IsOnline
 				if err := changeFn(dev); err != nil {
 					return err
 				}
@@ -104,7 +110,14 @@ func (d *Device) Update(ctx context.Context, dev *ipc.Device, changeFn func(*ipc
 					closed := true
 					dev.Ext.GBRegistrationClosed = &closed
 				}
-				return tx.Save(dev).Error
+				if err := tx.Save(dev).Error; err != nil {
+					return err
+				}
+				reason := ipc.DeviceStatusReason(tx.Statement.Context)
+				if passwordChanged {
+					reason = "credentials_changed"
+				}
+				return d.RecordDeviceStatusChange(tx, previousOnline, dev, reason)
 			},
 			func(tx *gorm.DB) error {
 				if !passwordChanged {

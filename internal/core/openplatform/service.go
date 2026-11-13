@@ -86,8 +86,8 @@ func New(db *gorm.DB, cfg Config, host Host) (*Service, error) {
 			return nil, fmt.Errorf("开放平台数据库尚未迁移")
 		}
 	}
-	if !db.Migrator().HasIndex(&Delivery{}, "idx_open_delivery_notification") || !db.Migrator().HasIndex(&Outbox{}, "idx_open_event_outbox_notification_key") || !db.Migrator().HasColumn(&Outbox{}, "notification_key") || !db.Migrator().HasColumn(&Outbox{}, "event_type") || !db.Migrator().HasColumn(&Delivery{}, "event_type") || db.Migrator().HasIndex(&Delivery{}, "idx_open_delivery_event") || db.Migrator().HasIndex(&Outbox{}, "idx_open_event_outbox_event_id") {
-		return nil, fmt.Errorf("开放平台事件通知结构尚未迁移，请运行开放平台迁移工具")
+	if err := CheckNotificationSchema(db); err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Join(cfg.DataDir, "open-snapshots"), 0700); err != nil {
 		return nil, err
@@ -106,6 +106,14 @@ func New(db *gorm.DB, cfg Config, host Host) (*Service, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// CheckNotificationSchema 也供协议启动前装配通知使用；结构不完整时不能静默丢弃投递。
+func CheckNotificationSchema(db *gorm.DB) error {
+	if !db.Migrator().HasIndex(&Delivery{}, "idx_open_delivery_notification") || !db.Migrator().HasIndex(&Outbox{}, "idx_open_event_outbox_notification_key") || !db.Migrator().HasColumn(&Outbox{}, "notification_key") || !db.Migrator().HasColumn(&Outbox{}, "event_type") || !db.Migrator().HasColumn(&Delivery{}, "event_type") || !db.Migrator().HasColumn(&Subscription{}, "event_types") || !db.Migrator().HasColumn(&Subscription{}, "device_ids") || db.Migrator().HasIndex(&Delivery{}, "idx_open_delivery_event") || db.Migrator().HasIndex(&Outbox{}, "idx_open_event_outbox_event_id") {
+		return fmt.Errorf("开放平台事件通知结构尚未迁移，请运行开放平台迁移工具")
+	}
+	return nil
 }
 func (s *Service) Start(ctx context.Context) {
 	if !s.Config.Enabled {

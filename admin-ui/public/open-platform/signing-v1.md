@@ -75,3 +75,5 @@ OWL-CALLBACK-HMAC-SHA256
 ```
 
 接收方首先限制body大小并拒绝重复安全头，按 key_id 取独立回调密钥，核对时间窗、实际body hash和签名（常量时间比较）；之后按 `(subscription_id,key_id,nonce)` 持久化防重放，保留至 timestamp+360秒。解析JSON后核对 event_id/delivery_id 与头相同，按 delivery_id 幂等提交再响应2xx。不同投递重试有新nonce，同一 delivery_id 重复业务数据应返回成功而不重复处理。示例 verifyCallback 只做密码学验证，调用方负责持久化去重与header重复检查。
+
+`device.online` / `device.offline` 沿用上述签名，`X-Owl-Event-ID` 固定为字符串 `0`，六行待签名串的第四行也使用 `0`。设备通知正文无 `event_id`，改为核对该头为 `0` 以及 `delivery_id` 与头一致。正文包含设备内部 `device_id`、编码 `device_code`、名称、协议类型、`previous_is_online`、`is_online`、`occurred_at`、`reason`；不含告警媒体。`sequence` 与 `notification_id` 相同，均为持久化通知序号；按 `delivery_id` 去重，并为每台设备仅应用较大的序号，不能按固定为0的事件头去重。接收方须先验签、防重放，再根据 `event_type` 区分告警与设备状态正文。

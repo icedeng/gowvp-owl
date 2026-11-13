@@ -46,7 +46,7 @@ func (s *Server) InvalidateExternalIngress(ctx context.Context, prefix string) e
 		unlock := s.gb.lockRegisterOperation(code)
 		current := device.runtimeSnapshot()
 		if strings.HasPrefix(sip.RoutingScope(current.Conn), prefix) {
-			if e := s.gb.setDeviceOfflineContext(ctx, code, true, func(persisted *ipc.Device) error { persisted.IsOnline = false; return nil }); e != nil && first == nil {
+			if e := s.gb.setDeviceOfflineContext(ipc.WithDeviceStatusReason(ctx, "gateway_unavailable"), code, true, func(persisted *ipc.Device) error { persisted.IsOnline = false; return nil }); e != nil && first == nil {
 				first = e
 			}
 		}

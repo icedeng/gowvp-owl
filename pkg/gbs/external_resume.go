@@ -34,7 +34,7 @@ func (s *Server) ResumeExternalDevice(ctx context.Context, code string, conn sip
 	if remaining < 1 {
 		return fmt.Errorf("registration expired")
 	}
-	if err := s.changeMemory(ipc.WithRegistrationIngress(ctx, conn, remaining), code, func(d *ipc.Device) error {
+	if err := s.changeMemory(ipc.WithDeviceStatusReason(ipc.WithRegistrationIngress(ctx, conn, remaining), "gateway_recovered"), code, func(d *ipc.Device) error {
 		closed := false
 		d.Ext.GBRegistrationClosed = &closed
 		d.IsOnline = true

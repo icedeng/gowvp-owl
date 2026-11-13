@@ -998,7 +998,7 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 			replayDate      string
 			replayConfirmed bool
 		)
-		if err := g.setDeviceOfflineContext(ipc.WithRegistrationIngress(g.serviceContext(), ctx.Request.GetConnection(), 0), ctx.DeviceID, true, func(b *ipc.Device) error {
+		if err := g.setDeviceOfflineContext(ipc.WithDeviceStatusReason(ipc.WithRegistrationIngress(g.serviceContext(), ctx.Request.GetConnection(), 0), "unregistration"), ctx.DeviceID, true, func(b *ipc.Device) error {
 			replay, confirmed, err := applyRegisterBindingSequence(&b.Ext, ctx.Request, requestFingerprint, responseDate)
 			if err != nil {
 				return err
@@ -1379,7 +1379,7 @@ func (g *GB28181API) login(ctx *sip.Context, version GBProtocolVersion, disabled
 	if err != nil {
 		return err
 	}
-	return g.svr.changeMemory(ipc.WithRegistrationIngress(g.serviceContext(), ctx.Request.GetConnection(), expires, newDevice...), ctx.DeviceID, func(device *ipc.Device) error {
+	return g.svr.changeMemory(ipc.WithDeviceStatusReason(ipc.WithRegistrationIngress(g.serviceContext(), ctx.Request.GetConnection(), expires, newDevice...), "registration"), ctx.DeviceID, func(device *ipc.Device) error {
 		if fn != nil {
 			if err := fn(device); err != nil {
 				return err
@@ -1462,12 +1462,12 @@ func (g *GB28181API) respondRegisterIntervalTooBrief(ctx *sip.Context) {
 }
 
 func (g *GB28181API) logout(deviceID string, changeFn func(*ipc.Device) error) error {
-	return g.setDeviceOffline(deviceID, true, changeFn)
+	return g.setDeviceOfflineContext(ipc.WithDeviceStatusReason(g.serviceContext(), "unregistration"), deviceID, true, changeFn)
 }
 
 // setDeviceOffline 区分注册失效和临时心跳离线，后者保留绑定供后续心跳恢复。
 func (g *GB28181API) setDeviceOffline(deviceID string, closeRegistration bool, changeFn func(*ipc.Device) error) error {
-	return g.setDeviceOfflineContext(g.serviceContext(), deviceID, closeRegistration, changeFn)
+	return g.setDeviceOfflineContext(ipc.WithDeviceStatusReason(g.serviceContext(), "heartbeat_timeout"), deviceID, closeRegistration, changeFn)
 }
 
 func (g *GB28181API) setDeviceOfflineContext(operationCtx context.Context, deviceID string, closeRegistration bool, changeFn func(*ipc.Device) error) error {

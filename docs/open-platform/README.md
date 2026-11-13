@@ -1,6 +1,6 @@
 # Owl 三方应用开放平台
 
-首期与 Owl 同进程，独立认证与表空间，**仅支持单实例**。已提供设备/通道、实时播放、设备录像目录与回放、平台落盘录像、事件/图片、独立抓拍任务、云台控制、应用告警订阅和管理页面。真实设备、播放器与生产网络效果由人工验收。
+首期与 Owl 同进程，独立认证与表空间，**仅支持单实例**。已提供设备/通道、实时播放、设备录像目录与回放、平台落盘录像、事件/图片、独立抓拍任务、云台控制、告警与设备上下线订阅和管理页面。真实设备、播放器与生产网络效果由人工验收。
 
 ## 在线开发文档
 
@@ -96,7 +96,7 @@ Content-Type: application/json
 - 部分分包返回200、`complete=false` 和 `incomplete:{received_count,expected_count}`；零应答504 `DEVICE_RECORD_TIMEOUT`，不可当作无录像。离线409 `DEVICE_OFFLINE`，不支持协议400 `UNSUPPORTED_RECORD_QUERY`，其他设备错误503 `DEVICE_RECORD_QUERY_FAILED`。
 - 返回前再次检查当前授权。结果不含设备文件路径、原始XML或播放地址，也不是 `/recordings/{id}/tickets` 所需的平台录像ID；设备录像回放通过 `/playback-sessions` 按时间段申请，设备录像下载尚未开放。
 
-## 应用告警订阅
+## 应用事件订阅
 
 1. 管理员为应用配置独立回调目标并审核（默认 HTTPS，ALLOW_HTTP=true 时也可使用 HTTP）。批准时检查 DNS 结果，连接时重新解析、全部校验并固定连接 IP；不跟重定向。默认仅公网，内网目标须明确批准 CIDR。始终拒绝回环、链路本地、常见云元数据地址、宿主网卡地址及 `OWL_OPEN_PLATFORM_CALLBACK_DENY_CIDRS` 禁止网段。该配置必须覆盖管理网段、数据库/媒体节点和集群控制面；新增管理网络后同步更新配置并重启。
 2. 应用 `POST /subscriptions`，body 包括 callback_target_id、可选 channel_codes（兼容 channel_ids）/labels/expires_at，带幂等键；空 channel_ids 表示当前应用全部可见资源，**不扩大应用设备范围**。初始 paused。
@@ -105,6 +105,26 @@ Content-Type: application/json
 5. events 与 outbox 同事务；worker 按订阅当前授权筛选，创建 `(subscription_id,outbox_id)` 唯一 delivery，同一事件的首次报警、取证变化及处理变化分别投递。每次投递、重试、人工重投都重新检查应用、签发凭据、订阅、目标、事件设备授权；投递中尽力取消撤权请求。
 6. 至少一次语义。接收方按 [回调签名规范](./signing-v1.md#回调签名) 验签并持久化防重放，按 delivery_id 幂等落库再返回 2xx。delivery_id 重试保持不变，nonce/timestamp 每次更新。签名无效不能返回成功；重复已处理 delivery 返回 2xx。图片只在具备 event:image 时临时签发 URL，票据不写入 outbox。
 7. 2xx 成功；重定向/其他 4xx（408/429 除外）failed；网络/超时/5xx/408/429 退避重试最多 8 次后 dead。并发全局 8、每应用默认 2；云台停止在独立循环运行。失败/死信允许管理员或应用受控重投并审计。投递记录和已完成 outbox 默认 30 天清理；临时三方抓拍文件 24 小时、通道图片记录永久保留（管理员可删除）、审计 90 天；nonce/票据/幂等记录分批清理。
+
+### 设备上下线通知
+
+继续使用 `POST /openapi/v1/subscriptions`，应用需 `event:subscribe`、`device:read` 和对应设备授权。请求带 `Idempotency-Key`，例如：
+
+```json
+{
+  "callback_target_id": "已批准的回调目标ID",
+  "event_types": ["device.online", "device.offline"],
+  "device_codes": ["50010700001110000001"]
+}
+```
+
+随后按上述顺序创建独立签名密钥并 PATCH 启用。`device_codes` 与 `device_ids` 互斥；空数组或省略表示全部当前授权设备，保存编码时解析并去重为内部 ID，同码重建不继承绑定。PATCH 省略字段保持原值。`event_types` 省略或为空时仅订阅原三类告警，旧订阅不会自动收到上下线通知；也可明确选择五类中的任意组合。设备类型不能与非空通道或告警标签筛选混用，请拆分订阅。
+
+状态通知包括 `device_id`（设备内部 ID）、`device_code`、`device_name`、`device_type`、`previous_is_online`、`is_online`、`occurred_at`（OWL 确认时刻）、`reason`，以及公共的 `event_type`、`notification_id`、`sequence`、`delivery_id`。`sequence` 与 `notification_id` 相同，全局递增但不连续；按 `delivery_id` 幂等，为同一 `device_id` 仅应用更大的序号。通知正文没有 `event_id` 或告警媒体，签名头 `X-Owl-Event-ID` 固定为字符串 `0`，其余签名及重试规则不变。
+
+GB28181 注册/注销、心跳/状态查询、超时、可信网关失效/恢复及凭据变更，ONVIF 探测恢复/超时均接入状态事务；通知写入失败会回滚本次状态并由原协议持久化流程重试。重复注册/心跳但状态未变不通知，启动清理旧连接不推送离线；恢复后的注册/探测仍可产生上线通知。`gateway_unavailable` 仅表示网关链路不可达，不等于设备断电。现有超时判据保持，RTSP/RTMP 仅通道状态变化不属于设备通知。先查询 `is_online` 建立当前状态，订阅不补发历史或当前状态快照。
+
+升级前在维护窗口执行 `go run ./tools/openplatform-migrate`，新增订阅字段 `event_types`、`device_ids`，保留历史订阅、密钥和投递；重启服务后生效。未迁移时开放平台入口返回503，设备服务继续运行。本次迁移不改设备表。
 
 ## 运维与人工检查重点
 
@@ -146,7 +166,7 @@ Content-Type: application/json
 
 已启用订阅在原`event.created`首次通知之外，接收`event.evidence.updated`（排队、开始、抓拍和视频分别完成/失败、重启中断）及`event.status.changed`（管理端或应用处理）。抓拍先完成就单独提交并通知，不等待视频。连续报警聚合本身不再推送首次通知。
 
-每个通知有递增`notification_id`，每个订阅的投递有独立`delivery_id`。同一个`event_id`会收到多条通知；接收端按`delivery_id`幂等，不按`event_id`丢弃追加通知，并为每个事件仅应用较大的`notification_id`，因为并发投递/重试不保证到达顺序。图片/缩略图/视频URL只在投递时按当前权限签发，不存入outbox；签名、防重放、超时与最多8次自动重试规则保持不变。历史订阅无需重建即可接收新增通知类型；对正文做严格校验的接收方需同步更新字段契约。
+每个通知有递增`notification_id`，每个订阅的投递有独立`delivery_id`。同一个`event_id`会收到多条通知；接收端按`delivery_id`幂等，不按`event_id`丢弃追加通知，并为每个事件仅应用较大的`notification_id`，因为并发投递/重试不保证到达顺序。图片/缩略图/视频URL只在投递时按当前权限签发，不存入outbox；签名、防重放、超时与最多8次自动重试规则保持不变。历史默认订阅无需重建即可接收上述告警追加通知；设备上下线需显式选择。对正文做严格校验的接收方需同步更新字段契约。
 
 升级前停止旧应用写入并备份数据库，再运行`go run ./tools/openplatform-migrate`（DSN与原库一致）。迁移新增通知类型及语义去重键，将投递唯一约束从`(subscription_id,event_id)`改为`(subscription_id,outbox_id)`，移除旧outbox的事件唯一约束；保留原outbox、投递ID和状态，不批量补推历史事件。先建立新索引再移除旧索引，支持重复执行；MySQL DDL失败不能保证整批回滚，应保持开放平台禁用、核对后重试。新服务发现迁移不完整时拒绝开放平台入口。回退旧版本前须暂停开放平台投递并评估新增通知的旧版兼容性，不能直接把通知结构改回旧唯一索引。
 

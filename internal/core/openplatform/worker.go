@@ -62,16 +62,26 @@ func (s *Service) InstallOutbox() error {
 	})
 }
 func (s *Service) eventVisibility(a App, sub Subscription, box Outbox) (bool, error) {
+	kind := notificationType(box)
+	if !subscriptionAccepts(sub, kind) {
+		return false, nil
+	}
+	if isDeviceNotification(kind) && (s.Scope(a, "device:read") != nil || len(sub.ChannelIDs) > 0 || len(sub.Labels) > 0) {
+		return false, nil
+	}
 	if len(sub.Labels) > 0 && !Has(sub.Labels, box.Label) || len(sub.ChannelIDs) > 0 && !Has(sub.ChannelIDs, box.ChannelID) {
 		return false, nil
 	}
 	var err error
+	deviceID := box.DeviceID
 	if box.ChannelID != "" {
 		var ch ipc.Channel
 		ch, err = s.Channel(a, box.ChannelID)
 		if err == nil && box.DeviceID != "" && box.DeviceID != ch.DID {
 			return false, nil
 		}
+		// 历史通道告警可能没有 DID，设备筛选沿用通道当前归属及原有授权校验。
+		deviceID = ch.DID
 	} else {
 		err = s.CheckDevice(a, box.DeviceID)
 	}
@@ -81,7 +91,7 @@ func (s *Service) eventVisibility(a App, sub Subscription, box Outbox) (bool, er
 		}
 		return false, err
 	}
-	return true, nil
+	return len(sub.DeviceIDs) == 0 || Has(sub.DeviceIDs, deviceID), nil
 }
 func (s *Service) visibleEvent(a App, sub Subscription, box Outbox) bool {
 	visible, e := s.eventVisibility(a, sub, box)
@@ -205,10 +215,14 @@ func (s *Service) deliver(ctx context.Context, d Delivery) {
 	}
 	payload["event_type"] = notificationType(box)
 	payload["notification_id"] = box.ID
-	payload["event_id"] = box.EventID
 	payload["delivery_id"] = d.ID
-	if err := s.AddEventMedia(p, box.EventID, payload); err != nil {
-		return
+	if isDeviceNotification(notificationType(box)) {
+		payload["sequence"] = box.ID
+	} else {
+		payload["event_id"] = box.EventID
+		if err := s.AddEventMedia(p, box.EventID, payload); err != nil {
+			return
+		}
 	}
 
 	body, _ := json.Marshal(payload)

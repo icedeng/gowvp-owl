@@ -3,7 +3,7 @@
     {
       "id": "start",
       "title": "快速开始",
-      "intro": "从管理员分配凭据到读取设备、播放视频和接收告警。此页面可直接分享给接入开发者，无需访问源码仓库。",
+      "intro": "从管理员分配凭据到读取设备、播放视频和接收告警及设备上下线通知。此页面可直接分享给接入开发者，无需访问源码仓库。",
       "blocks": [
         {
           "title": "接入前准备",
@@ -247,7 +247,7 @@
     },
     {
       "id": "callbacks",
-      "title": "告警订阅与回调验签",
+      "title": "事件订阅、设备上下线与回调验签",
       "intro": "至少一次投递；API SK 与 callback SK 独立，接收方按 delivery_id 幂等处理。",
       "blocks": [
         {
@@ -255,16 +255,26 @@
           "steps": [
             "管理员创建独立回调目标，填写 URL、必要的内网 CIDR，完成批准。应用只能使用 callback_target_id，不能自行传任意 URL。",
             "指定通道优先传 channel_codes:[{device_code,channel_code}]；与旧 channel_ids 互斥，空数组订阅全部授权资源。编码在保存时解析为内部通道绑定；不会因为设备同码重建而自动扩大授权。",
-            "应用 POST /subscriptions，包含 callback_target_id、可选 channel_ids/labels；初始 paused。空筛选数组表示匹配应用当前全部可见资源，不扩大授权。",
+            "应用 POST /subscriptions，包含 callback_target_id、可选 event_types 和筛选条件；初始 paused。省略 event_types 或传 [] 只接收原有三类告警。设备通知显式指定 device.online/device.offline，额外要求 device:read；device_codes/device_ids 为空表示全部当前授权设备，不扩大授权。",
             "POST /subscriptions/{id}/signing-keys，保存仅一次返回的 key_id 和独立 callback SK。",
             "PATCH /subscriptions/{id}，传最近 revision 与 status=active。对方配置好对应 key_id 的验签后再启用。",
             "API AK 轮换时先用新 AK PATCH 订阅，绑定新凭据，再撤销旧 AK；否则仍绑定旧 AK 的订阅会暂停。"
           ]
         },
         {
+          "title": "订阅设备上下线",
+          "paragraphs": [
+            "应用需 event:subscribe、device:read 和相应设备授权。device_codes 是完整设备编码数组，与 device_ids 互斥，保存时解析为内部绑定；同码重建不会继承。省略或传空设备数组订阅全部当前授权设备。PATCH 省略字段保持原值。",
+            "设备通知不能同时设置非空 channel_ids/channel_codes/labels。需要按通道/标签接收告警时建立另一条订阅；混合订阅可同时选择告警与设备类型，但只能按设备筛选。",
+            "先查询设备详情 is_online 建立初始状态；订阅只通知之后确认的状态变化，不推送当前状态或补发历史。重复注册及正常心跳未改变状态不通知。当前覆盖GB28181和ONVIF的设备状态，RTSP/RTMP仅通道在线变化不在本接口范围。"
+          ],
+          "language": "json",
+          "code": "{\n  \"callback_target_id\": \"target-001\",\n  \"event_types\": [\n    \"device.online\",\n    \"device.offline\"\n  ],\n  \"device_codes\": [\n    \"50010700001110000001\"\n  ]\n}"
+        },
+        {
           "title": "回调请求头",
           "language": "http",
-          "code": "X-Owl-Callback-Key-ID: <独立签名密钥ID>\nX-Owl-Timestamp: <UTC Unix秒>\nX-Owl-Nonce: <随机Base64URL>\nX-Owl-Event-ID: <事件ID>\nX-Owl-Delivery-ID: <持久化投递ID>\nX-Owl-Content-SHA256: <实际body的SHA256小写hex>\nAuthorization: OWL-CALLBACK-HMAC-SHA256 Signature=<HMAC-SHA256小写hex>"
+          "code": "X-Owl-Callback-Key-ID: <独立签名密钥ID>\nX-Owl-Timestamp: <UTC Unix秒>\nX-Owl-Nonce: <随机Base64URL>\nX-Owl-Event-ID: <告警事件ID；设备状态通知固定为0>\nX-Owl-Delivery-ID: <持久化投递ID>\nX-Owl-Content-SHA256: <实际body的SHA256小写hex>\nAuthorization: OWL-CALLBACK-HMAC-SHA256 Signature=<HMAC-SHA256小写hex>"
         },
         {
           "title": "回调六行待签名串",
@@ -284,7 +294,7 @@
           "steps": [
             "限制 body 大小，拒绝重复安全头。按 X-Owl-Callback-Key-ID 选择独立 callback SK（Base64URL 解码32字节）。",
             "核对时间窗 ±300秒、nonce 随机长度、原始 body SHA256 和签名；用常量时间比较签名。",
-            "验签后按当前订阅、key_id、nonce 持久化防重放至 timestamp+360秒，再解析 JSON 并核对 event_id/delivery_id 与头一致。订阅身份由本地目标/密钥映射确定。",
+            "验签后按当前订阅、key_id、nonce 持久化防重放至 timestamp+360秒，再解析 JSON 并核对 delivery_id 与头一致。告警须核对 event_id；设备通知无 event_id，须确认 X-Owl-Event-ID 为0。订阅身份由本地目标/密钥映射确定。",
             "按 delivery_id 幂等事务提交，再返回 2xx。已经处理的同 delivery_id 返回成功，但不重复执行业务。相同 delivery_id 的重试有新 timestamp/nonce/签名。",
             "示例 verifyCallback 仅提供密码学核验；接收服务仍需完成重复头检查、持久化防重放与 delivery_id 去重。"
           ]
@@ -331,6 +341,17 @@
             "POST /events/{id}/process携带Idempotency-Key及{revision,status,note}。event:process是独立权限；revision取事件详情，冲突409后刷新。resolved/ignored先以pending重开，完成、忽略及重开说明必填。GET /events/{id}/actions读取最近100条处理记录。",
             "event.created仅在首次事件新建时产生；新订阅不会补推此前已经分发的历史事件。回调可靠性从A端事件入库开始，不代表B到A断线期间未接收的报警已经得到保障。"
           ]
+        },
+        {
+          "title": "设备状态回调正文",
+          "paragraphs": [
+            "不使用 API envelope。X-Owl-Event-ID 固定为0并参与原六行签名；正文没有 event_id 或告警媒体URL。完整字典见 CallbackDeviceStatus。",
+            "sequence 与 notification_id 相同，是全局递增但不连续的序号；按 delivery_id 幂等，再按 device_id 只应用较大 sequence，以处理并发投递和重试乱序。",
+            "状态和通知共享事务，提交失败由协议持久化流程重试。启动恢复清理旧连接不推送离线通知；设备重新注册/探测后按实际确认状态通知。occurred_at 是OWL确认时刻，离线检测延迟沿用原协议的心跳/注册阈值。",
+            "reason=gateway_unavailable 表示网关链路不可达，不能当成设备断电；gateway_recovered 表示可信网关入口恢复。接收方应兼容未来新增 reason。未授权、凭据撤销、取消订阅或目标禁用时停止后续投递。"
+          ],
+          "language": "json",
+          "code": "{\n  \"event_type\": \"device.offline\",\n  \"notification_id\": 204,\n  \"sequence\": 204,\n  \"delivery_id\": \"delivery-device-001\",\n  \"device_id\": \"device-001\",\n  \"device_code\": \"50010700001110000001\",\n  \"device_name\": \"入口摄像机\",\n  \"device_type\": \"GB28181\",\n  \"previous_is_online\": true,\n  \"is_online\": false,\n  \"occurred_at\": \"2026-11-13T03:00:00Z\",\n  \"reason\": \"heartbeat_timeout\"\n}"
         }
       ]
     },

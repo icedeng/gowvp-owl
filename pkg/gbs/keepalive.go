@@ -206,7 +206,7 @@ func (g *GB28181API) persistKeepaliveObservation(
 ) error {
 	effectiveVersion := GBVersion10
 	var disabledCapabilities []string
-	return g.svr.changeMemory(g.serviceContext(), deviceID, func(device *ipc.Device) error {
+	return g.svr.changeMemory(ipc.WithDeviceStatusReason(g.serviceContext(), "heartbeat"), deviceID, func(device *ipc.Device) error {
 		device.KeepaliveAt = orm.Time{Time: observation.observedAt}
 		device.IsOnline = observation.online
 		device.Address = observation.address

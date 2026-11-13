@@ -815,7 +815,7 @@ func (g *GB28181API) applyDeviceStatusForBinding(deviceID string, in *DeviceStat
 }
 
 func (g *GB28181API) persistDeviceStatusState(deviceID string, online bool, observedAt time.Time) error {
-	return g.svr.changeMemory(g.serviceContext(), deviceID, func(d *ipc.Device) error {
+	return g.svr.changeMemory(ipc.WithDeviceStatusReason(g.serviceContext(), "device_status"), deviceID, func(d *ipc.Device) error {
 		d.IsOnline = online
 		d.KeepaliveAt = orm.Time{Time: observedAt}
 		setPersistedRegistrationClosed(d, false)

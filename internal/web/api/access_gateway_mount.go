@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/gowvp/owl/internal/core/event"
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/internal/core/ipc/store/ipccache"
+	op "github.com/gowvp/owl/internal/core/openplatform"
 	"github.com/gowvp/owl/internal/core/sms"
 	"github.com/gowvp/owl/pkg/gbs"
 	"github.com/ixugo/goddd/domain/version"
@@ -47,6 +50,14 @@ func NewIPCStoreWithGateway(db *gorm.DB, cfg *conf.Bootstrap, _ version.Core, ho
 		return nil, fmt.Errorf("国标设备缓存不支持入口事务")
 	}
 	value.SetIngressGuard(host)
+	if os.Getenv("OWL_OPEN_PLATFORM_ENABLED") == "true" {
+		if err := op.CheckNotificationSchema(db); err != nil {
+			// 与 HTTP 开放平台入口一致：迁移缺失时保持设备服务，但不启用订阅能力。
+			slog.Error("设备状态通知尚未就绪", "err", err)
+		} else {
+			value.SetDeviceStatusHandler(op.EnqueueDeviceStatusChange)
+		}
+	}
 	return cache, nil
 }
 func NewAccessGatewayModule(ctx context.Context, cfg *conf.Bootstrap, db *gorm.DB, server *gbs.Server, host *agowl.Host, media sms.Core) (*agplatform.Module, func(), error) {

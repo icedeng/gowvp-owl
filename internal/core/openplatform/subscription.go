@@ -177,8 +177,26 @@ func (s *Service) SaveSubscription(p Principal, row Subscription, create bool) (
 			return row, e
 		}
 	}
-	if len(row.ChannelIDs) > 10000 || len(row.Labels) > 100 {
+	if len(row.ChannelIDs) > 10000 || len(row.DeviceIDs) > 10000 || len(row.Labels) > 100 || len(row.EventTypes) > 5 {
 		return row, Fail(400, "INVALID_FILTER", "订阅筛选条件过多")
+	}
+	for _, kind := range row.EventTypes {
+		if !Has(alarmNotificationTypes, kind) && !isDeviceNotification(kind) {
+			return row, Fail(400, "INVALID_EVENT_TYPE", "不支持的通知类型")
+		}
+		if isDeviceNotification(kind) {
+			if e := s.Scope(latest.App, "device:read"); e != nil {
+				return row, e
+			}
+			if len(row.ChannelIDs) > 0 || len(row.Labels) > 0 {
+				return row, Fail(400, "INVALID_FILTER", "设备上下线通知不能使用通道或告警标签筛选，请拆分订阅")
+			}
+		}
+	}
+	for _, device := range row.DeviceIDs {
+		if e := s.CheckDevice(latest.App, device); e != nil {
+			return row, e
+		}
 	}
 	if row.ExpiresAt != nil && !row.ExpiresAt.After(time.Now()) {
 		return row, Fail(400, "INVALID_EXPIRY", "订阅到期时间必须在未来")
@@ -216,7 +234,7 @@ func (s *Service) SaveSubscription(p Principal, row Subscription, create bool) (
 			}
 			revision := row.Revision
 			row.Revision++
-			r := tx.Model(&Subscription{}).Where("id = ? AND app_id = ? AND revision = ?", row.ID, p.App.ID, revision).Select("callback_target_id", "channel_ids", "labels", "status", "credential_id", "expires_at", "revision").Updates(&row)
+			r := tx.Model(&Subscription{}).Where("id = ? AND app_id = ? AND revision = ?", row.ID, p.App.ID, revision).Select("callback_target_id", "event_types", "device_ids", "channel_ids", "labels", "status", "credential_id", "expires_at", "revision").Updates(&row)
 			if r.Error != nil {
 				return r.Error
 			}

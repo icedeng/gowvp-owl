@@ -11,6 +11,7 @@ import (
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/web"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const heartbeatTimeout = 70 * time.Second
@@ -131,7 +132,7 @@ func (a *Adapter) checkStatusLocked(ctx context.Context, id string, runtime *Dev
 func (a *Adapter) syncDeviceStatusToDB(ctx context.Context, id string, runtime *Device, online bool) error {
 	return a.adapter.Store().Device().Session(ctx, func(tx *gorm.DB) error {
 		var device ipc.Device
-		if err := tx.WithContext(ctx).Where("id=?", id).First(&device).Error; err != nil {
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=?", id).First(&device).Error; err != nil {
 			return err
 		}
 		updates := map[string]any{"is_online": online}
@@ -140,6 +141,17 @@ func (a *Adapter) syncDeviceStatusToDB(ctx context.Context, id string, runtime *
 		}
 		if err := tx.WithContext(ctx).Model(&ipc.Device{}).Where("id=?", id).Updates(updates).Error; err != nil {
 			return err
+		}
+		if recorder, ok := a.adapter.Store().(ipc.DeviceStatusChangeRecorder); ok {
+			before := device.IsOnline
+			device.IsOnline = online
+			reason := "onvif_probe"
+			if !online {
+				reason = "onvif_timeout"
+			}
+			if err := recorder.RecordDeviceStatusChange(tx, before, &device, reason); err != nil {
+				return err
+			}
 		}
 		channels := tx.WithContext(ctx).Model(&ipc.Channel{}).Where("did=?", id)
 		if online {

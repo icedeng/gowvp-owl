@@ -99,7 +99,7 @@ func (a *API) subscriptionRoutes(g *gin.RouterGroup) {
 	})
 }
 func (a *API) saveSubscription(c *gin.Context, create bool) {
-	row := op.Subscription{Status: "paused", ChannelIDs: []string{}, Labels: []string{}}
+	row := op.Subscription{Status: "paused", EventTypes: []string{}, DeviceIDs: []string{}, ChannelIDs: []string{}, Labels: []string{}}
 	if !create {
 		var e error
 		row, e = owned[op.Subscription](a, c, c.Param("subscription"))
@@ -114,10 +114,42 @@ func (a *API) saveSubscription(c *gin.Context, create bool) {
 		return
 	}
 	for k := range values {
-		if !op.Has([]string{"callback_target_id", "channel_ids", "channel_codes", "labels", "status", "expires_at", "revision"}, k) {
+		if !op.Has([]string{"callback_target_id", "event_types", "device_ids", "device_codes", "channel_ids", "channel_codes", "labels", "status", "expires_at", "revision"}, k) {
 			respond(c, nil, op.Fail(400, "UNKNOWN_FIELD", "不支持的订阅字段"))
 			return
 		}
+	}
+	for _, field := range []string{"event_types", "device_ids", "device_codes"} {
+		if raw, exists := values[field]; exists {
+			var items []string
+			if err := json.Unmarshal(raw, &items); err != nil || items == nil || len(items) > 10000 {
+				respond(c, nil, op.Fail(400, "INVALID_FILTER", field+" 须为非 null 的字符串数组，最多 10000 项"))
+				return
+			}
+		}
+	}
+	if raw, exists := values["device_codes"]; exists {
+		if _, mixed := values["device_ids"]; mixed {
+			respond(c, nil, op.Fail(400, "INVALID_RESOURCE_SELECTOR", "device_codes 与 device_ids 不能同时传入"))
+			return
+		}
+		var codes []string
+		_ = json.Unmarshal(raw, &codes)
+		ids := []string{}
+		seen := map[string]bool{}
+		for _, code := range codes {
+			id, _, err := a.resourceByCodes(principal(c).App, code, "", false)
+			if err != nil {
+				respond(c, nil, err)
+				return
+			}
+			if !seen[id] {
+				ids = append(ids, id)
+				seen[id] = true
+			}
+		}
+		delete(values, "device_codes")
+		values["device_ids"], _ = json.Marshal(ids)
 	}
 	if raw, exists := values["channel_codes"]; exists {
 		if _, mixed := values["channel_ids"]; mixed {

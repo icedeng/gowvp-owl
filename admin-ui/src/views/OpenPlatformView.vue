@@ -102,7 +102,7 @@ const scopeNames: Record<string, string> = {
   "event:process": "事件处理",
   "snapshot:capture": "抓拍",
   "ptz:control": "云台控制",
-  "event:subscribe": "告警订阅",
+  "event:subscribe": "事件与设备状态订阅",
 };
 const tabs = [
   {
@@ -131,7 +131,7 @@ const tabs = [
   },
   {
     id: "subscriptions",
-    name: "告警订阅",
+    name: "事件订阅",
     note: "应用订阅与当前状态",
     icon: Bell,
   },
@@ -189,6 +189,9 @@ const recordLabels: Record<string, string> = {
   channel_id: "通道 ID",
   action: "操作",
   event_id: "事件 ID",
+  event_type: "通知类型",
+  event_types: "通知类型范围",
+  device_ids: "设备范围",
   callback_target_id: "回调目标 ID",
   subscription_id: "订阅 ID",
   attempts: "尝试次数",
@@ -247,7 +250,7 @@ const recordHeadings = computed(
       credentials: ["AK / 凭据", "状态", "创建时间"],
       "callback-targets": ["目标 ID", "审核状态", "回调地址"],
       subscriptions: ["订阅 ID", "状态", "回调目标"],
-      deliveries: ["投递 ID", "投递状态", "事件 ID"],
+      deliveries: ["投递 ID", "投递状态", "通知类型 / 事件 ID"],
       "snapshot-tasks": ["任务 ID", "任务状态", "通道 ID"],
       "ptz-commands": ["命令 ID", "执行状态", "动作 / 通道"],
       "audit-logs": ["请求 / 记录 ID", "结果", "操作"],
@@ -643,6 +646,8 @@ function recordSummary(row: OpenRow) {
     ]
       .filter(Boolean)
       .join(" · ");
+  if (tab.value === "deliveries")
+    return [row.event_type, row.event_id].filter(Boolean).join(" · ") || "—";
   return (
     row.url ||
     row.action ||
@@ -1456,7 +1461,7 @@ onBeforeUnmount(() => {
                     tab === "credentials"
                       ? "创建凭据后，三方系统可使用 AK / SK 签名调用已授权接口。"
                       : tab === "callback-targets"
-                      ? "添加回调地址并审核后，应用才能建立告警订阅。"
+                      ? "添加回调地址并审核后，应用才能建立事件与设备状态订阅。"
                       : "该应用的相关记录将显示在这里。"
                   }}</span>
                 </div>

@@ -100,7 +100,7 @@ func (g *GB28181API) persistOptionsProbeActivityForBinding(deviceID string, expe
 		return errOptionsProbeRegistrationChanged
 	}
 	observedAt := time.Now()
-	if err := g.svr.changeMemory(g.serviceContext(), deviceID, func(d *ipc.Device) error {
+	if err := g.svr.changeMemory(ipc.WithDeviceStatusReason(g.serviceContext(), "options_probe"), deviceID, func(d *ipc.Device) error {
 		d.KeepaliveAt = orm.Time{Time: observedAt}
 		d.IsOnline = true
 		setPersistedRegistrationClosed(d, false)

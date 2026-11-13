@@ -231,6 +231,8 @@ type Subscription struct {
 	AppID            string       `gorm:"index;size:64" json:"app_id"`
 	CredentialID     string       `json:"-"`
 	CallbackTargetID string       `json:"callback_target_id"`
+	EventTypes       []string     `gorm:"serializer:json;type:text" json:"event_types"`
+	DeviceIDs        []string     `gorm:"serializer:json;type:text" json:"device_ids"`
 	ChannelIDs       []string     `gorm:"serializer:json;type:text" json:"channel_ids"`
 	Labels           []string     `gorm:"serializer:json;type:text" json:"labels"`
 	Status           string       `json:"status"`

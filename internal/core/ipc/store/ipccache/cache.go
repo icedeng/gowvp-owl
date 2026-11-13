@@ -24,8 +24,21 @@ var (
 type Cache struct {
 	ipc.Storer
 
-	devices      *conc.Map[string, *gbs.Device]
-	ingressGuard ipc.IngressGuard
+	devices       *conc.Map[string, *gbs.Device]
+	ingressGuard  ipc.IngressGuard
+	statusChanged ipc.DeviceStatusChangeHandler
+}
+
+// SetDeviceStatusHandler 在协议启动前装配，避免首批注册早于 HTTP 服务而丢通知。
+func (c *Cache) SetDeviceStatusHandler(handler ipc.DeviceStatusChangeHandler) {
+	c.statusChanged = handler
+}
+
+func (c *Cache) RecordDeviceStatusChange(tx *gorm.DB, before bool, device *ipc.Device, reason string) error {
+	if c.statusChanged == nil || before == device.IsOnline || ipc.DeviceStatusNotificationSuppressed(tx.Statement.Context) {
+		return nil
+	}
+	return c.statusChanged(tx, before, device, reason)
 }
 
 // SetIngressGuard 由启动装配在设备恢复之前调用。
@@ -79,6 +92,7 @@ func (c *Cache) LoadDeviceToMemoryContext(ctx context.Context, conn sip.Connecti
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = ipc.WithoutDeviceStatusNotification(ctx)
 	devices := make([]*ipc.Device, 0, 100)
 	_, err := c.Storer.Device().List(ctx, &devices, web.NewPagerFilterMaxSize(), orm.Where("type != ?", ipc.TypeOnvif))
 	if err != nil {
@@ -197,6 +211,7 @@ func (c *Cache) ChangeContext(ctx context.Context, deviceID string, changeFn fun
 				if err := db.First(&dev).Error; err != nil {
 					return err
 				}
+				before := dev.IsOnline
 				if ingress, ok := ipc.RegistrationIngressFrom(ctx); ok && c.ingressGuard != nil {
 					if err := c.ingressGuard.CommitRegistration(ctx, tx, &dev, ingress); err != nil {
 						return err
@@ -205,7 +220,10 @@ func (c *Cache) ChangeContext(ctx context.Context, deviceID string, changeFn fun
 				if err := changeFn(&dev); err != nil {
 					return err
 				}
-				return tx.Save(&dev).Error
+				if err := tx.Save(&dev).Error; err != nil {
+					return err
+				}
+				return c.RecordDeviceStatusChange(tx, before, &dev, ipc.DeviceStatusReason(ctx))
 			},
 			func(tx *gorm.DB) error {
 				if dev.IsOnline {
