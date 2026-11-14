@@ -679,9 +679,18 @@ func (s *Server) setDeviceOfflineIfCurrent(deviceID string, expected deviceRunti
 	unlock := s.gb.lockRegisterOperation(deviceID)
 	defer unlock()
 	err := s.gb.setDeviceOffline(deviceID, closeRegistration, func(d *ipc.Device) error {
+		// 持久化时间可能丢失亚微秒精度，先用内存原始精度阻止旧扫描覆盖新活动。
+		if current, ok := s.memoryStorer.Load(deviceID); ok && current != nil {
+			current.stateMu.RLock()
+			unchanged := sameOfflineSnapshotLocked(current, expected)
+			current.stateMu.RUnlock()
+			if !unchanged {
+				return errOfflineSnapshotStale
+			}
+		}
 		if d.Expires != expected.Expires ||
-			!d.RegisteredAt.Time.Equal(expected.LastRegisterAt) ||
-			!d.KeepaliveAt.Time.Equal(expected.LastKeepaliveAt) {
+			!sameOfflinePersistedTime(d.RegisteredAt.Time, expected.LastRegisterAt) ||
+			!sameOfflinePersistedTime(d.KeepaliveAt.Time, expected.LastKeepaliveAt) {
 			return errOfflineSnapshotStale
 		}
 		// 迟到的心跳扫描不得重新打开已注销或已撤销凭据的绑定。
@@ -718,7 +727,12 @@ func (s *Server) setDeviceOfflineIfCurrent(deviceID string, expected deviceRunti
 	return marked, err
 }
 
-// sameOfflineSnapshotLocked 必须在持有 current.stateMu 写锁时调用。
+// sameOfflinePersistedTime 兼容 PostgreSQL 往返后截断为微秒的时间，保留其他精度下的精确匹配。
+func sameOfflinePersistedTime(persisted, observed time.Time) bool {
+	return persisted.Equal(observed) || persisted.Equal(observed.Truncate(time.Microsecond))
+}
+
+// sameOfflineSnapshotLocked 必须在持有 current.stateMu 读锁或写锁时调用。
 func sameOfflineSnapshotLocked(current *Device, expected deviceRuntimeState) bool {
 	return current != nil && current.Expires == expected.Expires &&
 		current.LastRegisterAt.Equal(expected.LastRegisterAt) &&

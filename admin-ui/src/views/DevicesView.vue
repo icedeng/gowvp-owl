@@ -435,10 +435,9 @@ watch([query, status, version, gatewayID], () => {
               </td>
               <td data-label="状态">
                 <span class="stacked-value">
-                  <span class="status" :class="registrationState(device).tone">
+                  <span class="status" :class="registrationState(device).tone" :title="registrationState(device).note || undefined">
                     {{ registrationState(device).label }}
                   </span>
-                  <small v-if="registrationState(device).note" class="resource-state-note">{{ registrationState(device).note }}</small>
                 </span>
               </td>
               <td data-label="通道数">{{ device.channels || device.children?.length || 0 }} 路</td>
